@@ -13127,7 +13127,10 @@ function Workspace({
         else if (shortcut === "App: Command Palette")
           run("open_command_palette", a.onOpenCommandPalette);
         else if (shortcut === "View: Reload") run("reload", a.onReload);
-        else if (shortcut === "App: Search") run("open_search", a.onOpenSearch);
+        else if (shortcut === "App: Search") {
+          if (filePickerOpenRef.current) return;
+          run("open_search", a.onOpenSearch);
+        }
         else if (shortcut === "App: Settings")
           run("open_settings", () => a.openSettings());
         else if (shortcut === "App: Find in Files")
@@ -14698,9 +14701,101 @@ function Workspace({
               openPaths={openFilePaths}
               initialQuery={filePickerInitialQuery}
               onOpenFile={onOpenFile}
-              onRunAction={(id) => {
-                if (id === "reload") actions.current.onReload();
+              notesEnabled={notesEnabled}
+              canArchiveConversation={Boolean(
+                tabs.find((tab) => tab.id === activeTabId)?.focusedId,
+              )}
+              archivedConversations={sidebarHistory
+                .filter((session) => session.archived)
+                .map((session) => ({
+                  id: session.id,
+                  title: sessionDisplayTitle(session.title, session.harness),
+                  detail: session.branch ?? "",
+                }))}
+              onRestoreConversation={(id) => {
+                void onArchiveHistorySession(id, false);
+                onOpenArchivedSession(id);
               }}
+              onRunAction={(id) => {
+                const current = actions.current;
+                switch (id) {
+                  case "browse-conversations":
+                  case "browse-projects":
+                    break;
+                  case "search":
+                    current.onOpenSearch();
+                    break;
+                  case "open-project":
+                    void current.pickProject();
+                    break;
+                  case "settings":
+                    current.openSettings();
+                    break;
+                  case "inbox":
+                    current.onOpenInbox();
+                    break;
+                  case "notes":
+                    current.onOpenNotes();
+                    break;
+                  case "automations":
+                    onOpenAutomations();
+                    break;
+                  case "toggle-changes":
+                    onShowSourceControl();
+                    break;
+                  case "zoom-in": {
+                    const next = saveUiScale(zoomInUiScale(loadUiScale()));
+                    void applyUiScale(next);
+                    break;
+                  }
+                  case "zoom-out": {
+                    const next = saveUiScale(zoomOutUiScale(loadUiScale()));
+                    void applyUiScale(next);
+                    break;
+                  }
+                  case "switch-model":
+                    // The palette still holds focus until it unmounts, and the
+                    // model picker ignores that focus target.
+                    requestAnimationFrame(() => {
+                      window.dispatchEvent(new Event("open_model_picker"));
+                    });
+                    break;
+                  case "switch-branch":
+                    requestAnimationFrame(() => {
+                      window.dispatchEvent(new Event("open_branch_picker"));
+                    });
+                    break;
+                  case "new-tab":
+                    onNew();
+                    break;
+                  case "new-terminal":
+                    current.onNewTerminal();
+                    break;
+                  case "toggle-terminal":
+                    current.onToggleProjectTerminal();
+                    break;
+                  case "archive-conversation": {
+                    const tab = tabsRef.current.find(
+                      (entry) => entry.id === activeTabIdRef.current,
+                    );
+                    if (tab?.focusedId) {
+                      void onArchiveHistorySession(tab.focusedId, true);
+                    }
+                    break;
+                  }
+                  case "archive-project": {
+                    const path = projectCwdRef.current;
+                    if (looksLikeProject(path)) {
+                      onRemoveProject(path, { purgeData: false });
+                    }
+                    break;
+                  }
+                  case "reload":
+                    current.onReload();
+                    break;
+                }
+              }}
+              onRestoreArchive={onRestoreProject}
               onClose={() => setFilePickerOpen(false)}
             />
           ) : null}
