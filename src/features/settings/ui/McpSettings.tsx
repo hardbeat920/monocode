@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   useCallback,
@@ -170,6 +172,7 @@ function AddServerModal({
   onClose: () => void;
   onAdded: () => Promise<void>;
 }) {
+  useLanguage();
   const [provider, setProvider] = useState<Provider>(initialProvider);
   const [scope, setScope] = useState<Scope>(SCOPES[initialProvider][0]);
   const [name, setName] = useState("");
@@ -182,7 +185,7 @@ function AddServerModal({
     try {
       const parsed: unknown = JSON.parse(config);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Configuration must be a JSON object");
+        throw new Error(translate("Configuration must be a JSON object"));
       }
       setBusy(true);
       setError("");
@@ -204,15 +207,17 @@ function AddServerModal({
 
   return (
     <Modal
-      title="Add MCP server"
-      description="Paste a server configuration and choose where to add it."
+      title={translate("Add MCP server")}
+      description={translate(
+        "Paste a server configuration and choose where to add it.",
+      )}
       onClose={onClose}
       fitViewport
     >
       <form onSubmit={(event) => void add(event)} className="space-y-4 p-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <McpPicker
-            label="Provider"
+            label={translate("Provider")}
             value={provider}
             options={PROVIDERS.map((option) => ({
               value: option,
@@ -225,19 +230,21 @@ function AddServerModal({
             }}
           />
           <McpPicker
-            label="Scope"
+            label={translate("Scope")}
             value={scope}
             options={SCOPES[provider].map((option) => ({
               value: option,
-              label: option[0].toUpperCase() + option.slice(1),
+              label: translate(
+                option[0].toUpperCase() + option.slice(1),
+              ),
             }))}
             onChange={setScope}
           />
         </div>
         <label className="block text-xs text-content/65">
-          Name{" "}
+          {translate("Name")}{" "}
           <span className="text-content/40">
-            (optional for an mcpServers block)
+            {translate("(optional for an mcpServers block)")}
           </span>
           <input
             value={name}
@@ -248,7 +255,7 @@ function AddServerModal({
           />
         </label>
         <label className="block text-xs text-content/65">
-          JSON configuration
+          {translate("JSON configuration")}
           <textarea
             required
             value={config}
@@ -262,8 +269,9 @@ function AddServerModal({
           />
         </label>
         <p className="text-xs text-content/45">
-          Paste one entry from an mcpServers block, or a single server object
-          with a name above.
+          {translate(
+            "Paste one entry from an mcpServers block, or a single server object with a name above.",
+          )}
         </p>
         {error ? (
           <p
@@ -279,14 +287,14 @@ function AddServerModal({
             onClick={onClose}
             className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5"
           >
-            Cancel
+            {translate("Cancel")}
           </button>
           <button
             type="submit"
             disabled={busy}
             className="rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
           >
-            {busy ? "Adding…" : "Add server"}
+            {busy ? translate("Adding…") : translate("Add server")}
           </button>
         </div>
       </form>
@@ -330,6 +338,7 @@ function McpConnections({
   cwd: string;
   projectPicker: ReactNode;
 }) {
+  useLanguage();
   const cached = getCachedMcpSettings(cwd);
   const [servers, setServers] = useState<ServerRow[]>(cached?.servers ?? []);
   const [filter, setFilter] = useState<Filter>("all");
@@ -418,9 +427,15 @@ function McpConnections({
       ? server.scope
       : (removeScopes[server.name] ?? "local");
     if (
-      !(await ask(`Remove ${server.name} from ${selectedScope} scope?`, {
-        title: "Remove MCP server",
-      }))
+      !(await ask(
+        translate("Remove {name} from {scope} scope?", {
+          name: server.name,
+          scope: selectedScope,
+        }),
+        {
+          title: translate("Remove MCP server"),
+        },
+      ))
     )
       return;
     setBusy(server.name);
@@ -448,12 +463,15 @@ function McpConnections({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-sm font-semibold">MCP connections</h2>
+            <h2 className="text-sm font-semibold">
+              {translate("MCP connections")}
+            </h2>
             {projectPicker}
           </div>
           <p className="mt-1 text-xs text-content/55">
-            Configured servers for the selected project and your provider
-            accounts.
+            {translate(
+              "Configured servers for the selected project and your provider accounts.",
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -464,20 +482,20 @@ function McpConnections({
             className="flex items-center gap-1.5 rounded-md border border-stroke px-3 py-1.5 text-xs hover:bg-content/5 disabled:opacity-50"
           >
             <RefreshCw className="size-3.5" />
-            Refresh
+            {translate("Refresh")}
           </button>
           <button
             type="button"
             aria-label={
               showAllProviders
-                ? "Show available providers"
-                : "Show all providers"
+                ? translate("Show available providers")
+                : translate("Show all providers")
             }
             aria-pressed={showAllProviders}
             title={
               showAllProviders
-                ? "Showing all providers"
-                : "Showing available providers"
+                ? translate("Showing all providers")
+                : translate("Showing available providers")
             }
             onClick={() => setShowAllProviders(!showAllProviders)}
             className={`grid size-7 place-items-center rounded-md border border-content/10 hover:bg-content/5 ${showAllProviders ? "bg-selection text-content" : "text-content/55"}`}
@@ -486,7 +504,7 @@ function McpConnections({
           </button>
           <button
             type="button"
-            aria-label="Add MCP server"
+            aria-label={translate("Add MCP server")}
             onClick={() => setAddOpen(true)}
             className="grid size-7 place-items-center rounded-md border border-stroke hover:bg-content/5"
           >
@@ -497,7 +515,7 @@ function McpConnections({
       <div
         role="group"
         className="inline-flex max-w-full flex-wrap gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
-        aria-label="Filter MCP servers by provider"
+        aria-label={translate("Filter MCP servers by provider")}
       >
         {(["all", ...filterProviders] as const).map((provider) => (
           <button
@@ -512,7 +530,9 @@ function McpConnections({
             ) : (
               <ProviderIcon provider={provider} />
             )}
-            {provider === "all" ? "All" : MCP_PROVIDER_LABELS[provider]}
+            {provider === "all"
+              ? translate("All")
+              : MCP_PROVIDER_LABELS[provider]}
             <span className="opacity-60">
               {provider === "all"
                 ? servers.length
@@ -532,14 +552,18 @@ function McpConnections({
       ) : null}
       {claudeError && (filter === "all" || filter === "claude") ? (
         <p className="text-xs text-content/55">
-          Claude connection status unavailable: {claudeError}
+          {translate("Claude connection status unavailable: {error}", {
+            error: claudeError,
+          })}
         </p>
       ) : null}
       {loading ? (
-        <p className="text-sm text-content/55">Checking servers…</p>
+        <p className="text-sm text-content/55">
+          {translate("Checking servers…")}
+        </p>
       ) : visible.length === 0 ? (
         <p className="text-sm text-content/55">
-          No MCP servers configured for this provider.
+          {translate("No MCP servers configured for this provider.")}
         </p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-content/10 bg-content/3">
@@ -556,8 +580,11 @@ function McpConnections({
                   {server.name}
                 </div>
                 <div className="mt-1 text-[12px] leading-relaxed text-content/45">
-                  {MCP_PROVIDER_LABELS[server.provider]} · {server.scope} ·{" "}
-                  {server.transport || "MCP"} · {server.status}
+                  {MCP_PROVIDER_LABELS[server.provider]} ·{" "}
+                  {translate(
+                    server.scope[0].toUpperCase() + server.scope.slice(1),
+                  )}{" "}
+                  · {server.transport || "MCP"} · {server.status}
                 </div>
                 {server.configPath ? (
                   <div
@@ -577,16 +604,18 @@ function McpConnections({
                   onClick={() => void login(server)}
                   className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
                 >
-                  Sign in
+                  {translate("Sign in")}
                 </button>
               ) : null}
               {server.provider === "claude" ? (
                 <>
                   {!server.configPath ? (
                     <label className="text-xs text-content/55">
-                      Scope{" "}
+                      {translate("Scope")}{" "}
                       <select
-                        aria-label={`Scope to remove ${server.name} from`}
+                        aria-label={translate("Scope to remove {name} from", {
+                          name: server.name,
+                        })}
                         value={removeScopes[server.name] ?? "local"}
                         onChange={(event) =>
                           setRemoveScopes((current) => ({
@@ -596,9 +625,9 @@ function McpConnections({
                         }
                         className="rounded border border-stroke bg-background-base px-1 py-1 text-content"
                       >
-                        <option value="local">Local</option>
-                        <option value="project">Project</option>
-                        <option value="user">User</option>
+                        <option value="local">{translate("Local")}</option>
+                        <option value="project">{translate("Project")}</option>
+                        <option value="user">{translate("User")}</option>
                       </select>
                     </label>
                   ) : null}
@@ -608,7 +637,7 @@ function McpConnections({
                     onClick={() => void remove(server)}
                     className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5 disabled:opacity-50"
                   >
-                    Remove
+                    {translate("Remove")}
                   </button>
                 </>
               ) : (
@@ -621,7 +650,7 @@ function McpConnections({
                   }
                   className="rounded-md border border-stroke px-2 py-1 text-xs hover:bg-content/5"
                 >
-                  Show config
+                  {translate("Show config")}
                 </button>
               )}
             </div>
@@ -629,8 +658,9 @@ function McpConnections({
         </div>
       )}
       <p className="text-xs text-content/45">
-        Claude Code status comes from its CLI. Other providers show configured
-        entries. Sign in opens your browser when supported.
+        {translate(
+          "Claude Code status comes from its CLI. Other providers show configured entries. Sign in opens your browser when supported.",
+        )}
       </p>
       {addOpen ? (
         <AddServerModal

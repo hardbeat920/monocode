@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { translate } from "../../../shared/i18n/locale";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -614,26 +615,26 @@ export function gitlabAttentionLabel(reason: string): string {
   const action = reason.trim().toLowerCase();
   switch (action) {
     case "assigned":
-      return "Assigned to you";
+      return translate("Assigned to you");
     case "mentioned":
     case "directly_addressed":
-      return "Mentioned you";
+      return translate("Mentioned you");
     case "review_requested":
-      return "Review requested";
+      return translate("Review requested");
     case "review_submitted":
-      return "Review submitted";
+      return translate("Review submitted");
     case "approval_required":
-      return "Approval required";
+      return translate("Approval required");
     case "build_failed":
-      return "Pipeline failed";
+      return translate("Pipeline failed");
     case "unmergeable":
-      return "Cannot be merged";
+      return translate("Cannot be merged");
     case "merge_train_removed":
-      return "Removed from merge train";
+      return translate("Removed from merge train");
     case "member_access_requested":
-      return "Access requested";
+      return translate("Access requested");
     case "marked":
-      return "Added to your to-dos";
+      return translate("Added to your to-dos");
     default:
       return action
         .split("_")

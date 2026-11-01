@@ -22,6 +22,8 @@ import { CreateBranchDialog } from "./CreateBranchDialog";
 import { GitPickerTrigger } from "./GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 
 type Props = {
   cwd: string;
@@ -61,6 +63,7 @@ export function BranchPicker({
   onOpenChange,
   popoverSide = "top",
 }: Props) {
+  useLanguage();
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -281,13 +284,13 @@ export function BranchPicker({
   const missingGit = !current && !awaitingBranch;
   const label = current
     ? detached
-      ? `detached ${current}`
+      ? translate("detached {head}", { head: current })
       : current
-    : "No repo";
+    : translate("No repo");
   const title = awaitingBranch
-    ? "Loading branch…"
+    ? translate("Loading branch…")
     : missingGit
-      ? "No git repository"
+      ? translate("No git repository")
       : label;
   const interactive = enabled && !awaitingBranch && !missingGit;
 
@@ -297,10 +300,10 @@ export function BranchPicker({
         title={title}
         aria-label={
           awaitingBranch
-            ? "Loading branch"
+            ? translate("Loading branch")
             : missingGit
-              ? "No git repository"
-              : `Branch ${label}`
+              ? translate("No git repository")
+              : translate("Branch {label}", { label })
         }
         aria-expanded={missingGit ? undefined : open}
         aria-haspopup={missingGit ? undefined : "dialog"}
@@ -368,7 +371,7 @@ export function BranchPicker({
           maxHeight={MENU_MAX_HEIGHT}
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="dialog"
-          aria-label="Branch picker"
+          aria-label={translate("Branch picker")}
           data-branch-picker
           className="flex flex-col overflow-hidden"
         >
@@ -378,8 +381,8 @@ export function BranchPicker({
               ref={search}
               type="text"
               value={query}
-              placeholder="Search or create a branch..."
-              aria-label="Search or create a branch"
+              placeholder={translate("Search or create a branch...")}
+              aria-label={translate("Search or create a branch")}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -398,7 +401,11 @@ export function BranchPicker({
             rows={rows}
             active={active}
             busy={busy}
-            emptyLabel={query.trim() ? "No matching branches" : "No branches"}
+            emptyLabel={
+              query.trim()
+                ? translate("No matching branches")
+                : translate("No branches")
+            }
             onActive={setActive}
             onPick={pick}
           />
@@ -419,8 +426,10 @@ export function BranchPicker({
                 <Plus className="size-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 truncate">
                   {createRow.name
-                    ? `Create and checkout ${createRow.name}`
-                    : "New branch"}
+                    ? translate("Create and checkout {name}", {
+                        name: createRow.name,
+                      })
+                    : translate("New branch")}
                 </span>
               </button>
             </div>
@@ -465,7 +474,7 @@ function BranchList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Branches"
+      aria-label={translate("Branches")}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
     >
       {rows.map((row, index) => {

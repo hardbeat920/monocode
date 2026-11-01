@@ -12,11 +12,19 @@ const child = vi.hoisted(() => ({
   resolveFxBinary: vi.fn(async () => ({ path: "/bin/fx" })),
 }));
 
+const deepseekAuth = vi.hoisted(() => ({
+  startDeepseekOfficialLogin: vi.fn(async () => ({
+    status: "ok",
+    signedIn: true,
+  })),
+}));
+
 vi.mock("./child", () => child);
 vi.mock("../../../platform/tauri/fs", () => ({ homeDir: vi.fn(async () => "/home/alice") }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "test-window" }),
 }));
+vi.mock("../../../features/providers/model/deepseekCredentials", () => deepseekAuth);
 
 import {
   harnessLoginArgs,
@@ -42,6 +50,8 @@ describe("harness login", () => {
     expect(supportsHarnessLogin("opencode")).toBe(false);
     expect(supportsHarnessLogin("pi")).toBe(false);
     expect(supportsHarnessLogin("omp")).toBe(false);
+    expect(supportsHarnessLogin("deepseek")).toBe(true);
+    expect(harnessLoginArgs("deepseek")).toBeNull();
   });
 
   it("recognizes provider authentication failures without matching unrelated errors", () => {
@@ -51,6 +61,7 @@ describe("harness login", () => {
       ),
     ).toBe(true);
     expect(isHarnessAuthError("Claude sign-in expired")).toBe(true);
+    expect(isHarnessAuthError("未登录 DeepSeek 账号")).toBe(true);
     expect(isHarnessAuthError("Provider request timed out")).toBe(false);
   });
 
@@ -123,6 +134,12 @@ describe("harness login", () => {
     await expect(loginHarness("opencode")).rejects.toThrow(
       "does not offer a single browser sign-in flow",
     );
+    expect(child.spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("uses MonoCode official OAuth for DeepSeek instead of spawning dsh", async () => {
+    await expect(loginHarness("deepseek")).resolves.toBeUndefined();
+    expect(deepseekAuth.startDeepseekOfficialLogin).toHaveBeenCalledOnce();
     expect(child.spawnChild).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { Modal } from "../../../shared/ui/Modal";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { TAB_GROUP_COLORS } from "../../workspace/model/tabGroups";
@@ -40,6 +42,7 @@ export function PairPhoneDialog({
   onError: (reason: string) => void;
   onClose: () => void;
 }) {
+  useLanguage();
   const [copied, setCopied] = useState(false);
   const expired = left === 0;
 
@@ -57,7 +60,7 @@ export function PairPhoneDialog({
 
   return (
     <Modal
-      title="Pair a phone"
+      title={translate("Pair a phone")}
       size="md"
       fitViewport
       minimalHeader
@@ -68,14 +71,14 @@ export function PairPhoneDialog({
 
       <div className="flex flex-col items-center px-6 pb-6">
         <h3 className="text-[22px] font-semibold tracking-tight text-content">
-          Connect a phone to this desktop
+          {translate("Connect a phone to this desktop")}
         </h3>
         <p className="mt-1.5 text-center text-[12px] leading-relaxed text-content/50">
-          Open MonoCode on your phone, tap{" "}
+          {translate("Open MonoCode on your phone, tap")}{" "}
           <span className="font-medium text-content/80">
-            Connect to desktop
+            {translate("Connect to desktop")}
           </span>
-          , and scan the code.
+          {translate(", and scan the code.")}
         </p>
 
         <div className="mt-5 flex w-fit flex-col items-center">
@@ -84,7 +87,9 @@ export function PairPhoneDialog({
               <img
                 src={image}
                 className={`size-full [image-rendering:pixelated] ${expired ? "opacity-15 blur-[2px]" : ""}`}
-                alt="Scan this one-use pairing code in the MonoCode mobile app"
+                alt={translate(
+                  "Scan this one-use pairing code in the MonoCode mobile app",
+                )}
               />
             ) : null}
             {expired && (
@@ -94,7 +99,7 @@ export function PairPhoneDialog({
                   disabled={busy}
                   onClick={onNewCode}
                 >
-                  New code
+                  {translate("New code")}
                 </button>
               </div>
             )}
@@ -104,14 +109,16 @@ export function PairPhoneDialog({
             <Clock className="size-3.5 shrink-0" />
             <span className="flex-1 tabular-nums" role="status">
               {expired
-                ? "Code expired"
-                : `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`}
+                ? translate("Code expired")
+                : translate("Expires in {time}", {
+                    time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`,
+                  })}
             </span>
             <button
               className={iconButton}
               disabled={expired}
-              aria-label="Copy pairing link"
-              title="Copy pairing link"
+              aria-label={translate("Copy pairing link")}
+              title={translate("Copy pairing link")}
               onClick={copy}
             >
               {copied ? (
@@ -123,8 +130,8 @@ export function PairPhoneDialog({
             <button
               className={iconButton}
               disabled={busy}
-              aria-label="Make a new code"
-              title="Make a new code"
+              aria-label={translate("Make a new code")}
+              title={translate("Make a new code")}
               onClick={onNewCode}
             >
               <RefreshCw className="size-3.5" />
@@ -133,8 +140,9 @@ export function PairPhoneDialog({
         </div>
 
         <p className="mt-4 text-center text-[12px] leading-relaxed text-content/45">
-          Can’t scan? Copy the link and open it on your phone. Each code works
-          once.
+          {translate(
+            "Can’t scan? Copy the link and open it on your phone. Each code works once.",
+          )}
         </p>
       </div>
     </Modal>

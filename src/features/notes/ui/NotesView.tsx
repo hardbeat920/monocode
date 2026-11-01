@@ -1,4 +1,6 @@
 import { LoaderCircle, Plus, Search, File, Trash2, X } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   useCallback,
@@ -109,6 +111,7 @@ export function NotesView({
   onClose,
   onToggleSidebar,
 }: Props) {
+  useLanguage();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const listLock = useLockOverscroll<HTMLDivElement>();
@@ -270,8 +273,8 @@ export function NotesView({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter notes"
-            aria-label="Filter notes"
+            placeholder={translate("Filter notes")}
+            aria-label={translate("Filter notes")}
             spellCheck={false}
             autoComplete="off"
             className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
@@ -279,8 +282,8 @@ export function NotesView({
         </div>
         <button
           type="button"
-          title="New note"
-          aria-label="New note"
+          title={translate("New note")}
+          aria-label={translate("New note")}
           disabled={creating}
           onClick={() => void onCreate()}
           className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-40"
@@ -308,8 +311,8 @@ export function NotesView({
         ) : visible.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">
             {query.trim()
-              ? "No matching notes"
-              : "No notes yet. Save a turn from the transcript, or create one here."}
+              ? translate("No matching notes")
+              : translate("No notes yet. Save a turn from the transcript, or create one here.")}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
@@ -332,7 +335,7 @@ export function NotesView({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize notes list"
+        aria-label={translate("Resize notes list")}
         className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
@@ -345,7 +348,7 @@ export function NotesView({
   return (
     <div
       role="region"
-      aria-label="Notes"
+      aria-label={translate("Notes")}
       data-app-notes
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -365,7 +368,7 @@ export function NotesView({
               className="size-3.5 shrink-0 text-content/45"
               strokeWidth={1.75}
             />
-            <span className="min-w-0 truncate text-content">Notes</span>
+            <span className="min-w-0 truncate text-content">{translate("Notes")}</span>
           </div>
           {IS_MAC ? null : <WindowControls />}
         </div>
@@ -549,7 +552,7 @@ function NoteDetail({
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
         <File className="mb-3 size-6 text-content/30" strokeWidth={1.75} />
-        <p className="text-[13px] text-content/45">Select a note</p>
+        <p className="text-[13px] text-content/45">{translate("Select a note")}</p>
       </div>
     );
   }
@@ -854,7 +857,7 @@ function NoteEditor({
         <header className="flex flex-col gap-3">
           <div className="flex min-w-0 items-center gap-2 text-[12px] text-content/50">
             <File className="size-3.5 shrink-0" strokeWidth={1.75} />
-            <span>Note</span>
+            <span>{translate("Note")}</span>
             {note.slug ? (
               <span className="min-w-0 truncate">{note.slug}</span>
             ) : null}
@@ -889,9 +892,9 @@ function NoteEditor({
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
-            aria-label="Note title"
+            aria-label={translate("Note title")}
             className="w-full border-0 bg-transparent p-0 text-[20px] font-semibold leading-tight text-content outline-none placeholder:text-content/35"
-            placeholder="Untitled"
+            placeholder={translate("Untitled")}
           />
           {time ? (
             <div className="text-[12px] text-content/50">Updated {time}</div>
@@ -947,7 +950,7 @@ function NoteEditor({
         </header>
         <div
           role="tablist"
-          aria-label="Note sections"
+          aria-label={translate("Note sections")}
           className="flex h-9 items-stretch gap-4 border-b border-stroke"
         >
           <NoteDetailTab
@@ -1011,7 +1014,7 @@ function NoteEditor({
           ) : body.trim() ? (
             <AgentMarkdown text={body} cwd={sourceCwd} hardBreaks />
           ) : (
-            <p className="text-[13px] text-content/45">No description</p>
+            <p className="text-[13px] text-content/45">{translate("No description")}</p>
           )}
         </div>
       </div>
@@ -1037,9 +1040,9 @@ function NoteTagsEditor({
   return (
     <div
       className="flex min-w-0 flex-wrap items-center gap-1.5"
-      aria-label="Tags"
+      aria-label={translate("Tags")}
     >
-      <span className="mr-0.5 text-[11px] text-content/45">Tags</span>
+      <span className="mr-0.5 text-[11px] text-content/45">{translate("Tags")}</span>
       {tags.map((tag) => (
         <span
           key={tag}
@@ -1078,8 +1081,8 @@ function NoteTagsEditor({
               onChange(tags.slice(0, -1));
             }
           }}
-          aria-label="Add note tag"
-          placeholder="Add tag…"
+          aria-label={translate("Add note tag")}
+          placeholder={translate("Add tag…")}
           spellCheck={false}
           autoComplete="off"
           className="h-6 min-w-20 flex-1 border-0 bg-transparent px-1 text-[11px] text-content outline-none placeholder:text-content/35"

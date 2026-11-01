@@ -49,6 +49,7 @@ vi.mock("../../source-control/model/worktrees", () => ({
   })),
 }));
 
+import { translate } from "../../../shared/i18n/locale";
 import { MonoChangesView } from "./MonoChangesView";
 import {
   gitCommit,
@@ -206,7 +207,9 @@ it("preserves repo drafts and stages, commits and pushes only in the chosen repo
   await render();
   await message("Draft A");
   const extra = active().querySelector('[title="extra.txt"]')!.closest("li")!;
-  await click(extra.querySelector('[title="Stage Changes"]'));
+  await click(
+    extra.querySelector(`[title="${translate("Stage Changes")}"]`),
+  );
   expect(gitStageFile).toHaveBeenCalledExactlyOnceWith("/home/a", "extra.txt");
   await switchRepo("b");
   await message("Draft B");
@@ -214,11 +217,15 @@ it("preserves repo drafts and stages, commits and pushes only in the chosen repo
   expect(active().querySelector("textarea")!.value).toBe("Draft A");
   await switchRepo("b");
   expect(active().querySelector("textarea")!.value).toBe("Draft B");
-  await click(active().querySelector('[aria-label="Commit options"]'));
+  await click(
+    active().querySelector(
+      `[aria-label="${translate("Commit options")}"]`,
+    ),
+  );
   await click(
     Array.from(
       active().querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ).find((button) => button.textContent === "Commit & Push")!,
+    ).find((button) => button.textContent === translate("Commit & Push"))!,
   );
   expect(gitCommit).toHaveBeenCalledExactlyOnceWith("/home/b", "Draft B", false);
   expect(keepSessionChanges).toHaveBeenCalledExactlyOnceWith(
@@ -239,25 +246,29 @@ it("lists the Git index's staged and unstaged files", async () => {
   expect(sections).toEqual(
     expect.arrayContaining(["other.txt", "same.txt", "extra.txt"]),
   );
-  expect(active().textContent).toContain("Staged Changes");
+  expect(active().textContent).toContain(translate("Staged Changes"));
   expect(
     active()
       .querySelector('[title="other.txt"]')!
       .closest("li")!
-      .querySelector('[title="Unstage Changes"]'),
+      .querySelector(`[title="${translate("Unstage Changes")}"]`),
   ).not.toBeNull();
   expect(
     active()
       .querySelector('[title="same.txt"]')!
       .closest("li")!
-      .querySelector('[title="Stage Changes"]'),
+      .querySelector(`[title="${translate("Stage Changes")}"]`),
   ).not.toBeNull();
 });
 
 it("generates from the active repo's staged changes", async () => {
   await render();
   await switchRepo("b");
-  await click(active().querySelector('[aria-label="Generate commit message"]'));
+  await click(
+    active().querySelector(
+      `[aria-label="${translate("Generate commit message")}"]`,
+    ),
+  );
   expect(generateCommitMessage).toHaveBeenCalledExactlyOnceWith(
     "/home/b",
     undefined,

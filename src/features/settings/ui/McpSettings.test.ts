@@ -3,6 +3,7 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { McpSettings } from "./McpSettings";
+import { translate } from "../../../shared/i18n/locale";
 import { clearMcpSettingsCache } from "../model/mcpSettingsCache";
 
 const invoke = vi.fn();
@@ -64,11 +65,15 @@ afterEach(async () => {
 async function selectProject(path: string) {
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label^="Switch project"]')!
+      .querySelector<HTMLButtonElement>(
+        `[aria-label^="${translate("Switch project")}"]`,
+      )!
       .click(),
   );
   expect(
-    document.querySelector('input[placeholder="Search projects..."]'),
+    document.querySelector(
+      `input[placeholder="${translate("Search projects...")}"]`,
+    ),
   ).not.toBeNull();
   await act(async () =>
     document
@@ -87,7 +92,7 @@ it("lists servers and routes sign in through Claude MCP", async () => {
   expect(container.textContent).toContain("Needs authentication");
   expect(container.textContent).toContain("Codex");
   const signIn = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Sign in",
+    (button) => button.textContent === translate("Sign in"),
   )!;
   await act(async () => signIn.click());
   expect(invoke).toHaveBeenCalledWith("mcp_provider_login", {
@@ -108,7 +113,7 @@ it("filters connections by provider", async () => {
   expect(container.textContent).toContain("docs");
   expect(container.textContent).not.toContain("sentry");
   const signIn = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Sign in",
+    (button) => button.textContent === translate("Sign in"),
   )!;
   await act(async () => signIn.click());
   expect(invoke).toHaveBeenCalledWith("mcp_provider_login", {
@@ -152,12 +157,12 @@ it("adds a standard mcpServers entry to the selected provider and project", asyn
   await selectProject("/other");
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Add MCP server"]')!
+      .querySelector<HTMLButtonElement>(`[aria-label="${translate("Add MCP server")}"]`)!
       .click(),
   );
-  expect(document.body.textContent).toContain("Add MCP server");
+  expect(document.body.textContent).toContain(translate("Add MCP server"));
   const provider = document.body.querySelector<HTMLButtonElement>(
-    '[aria-label="Provider: Claude Code"]',
+    `[aria-label="${translate("Provider")}: Claude Code"]`,
   )!;
   await act(async () => provider.click());
   const cursor = [
@@ -195,16 +200,18 @@ it("navigates provider choices with arrow keys", async () => {
   );
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Add MCP server"]')!
+      .querySelector<HTMLButtonElement>(`[aria-label="${translate("Add MCP server")}"]`)!
       .click(),
   );
   await act(async () =>
     document.body
-      .querySelector<HTMLButtonElement>('[aria-label="Provider: Claude Code"]')!
+      .querySelector<HTMLButtonElement>(
+        `[aria-label="${translate("Provider")}: Claude Code"]`,
+      )!
       .click(),
   );
   const list = document.body.querySelector<HTMLElement>(
-    '[role="listbox"][aria-label="Provider"]',
+    `[role="listbox"][aria-label="${translate("Provider")}"]`,
   )!;
   const options = list.querySelectorAll<HTMLButtonElement>('[role="option"]');
   await act(async () =>
@@ -241,7 +248,7 @@ it("hides Sign in when a server has no known transport", async () => {
   expect(container.textContent).toContain("unknown");
   expect(
     [...container.querySelectorAll("button")].some(
-      (button) => button.textContent === "Sign in",
+      (button) => button.textContent === translate("Sign in"),
     ),
   ).toBe(false);
 });
@@ -251,20 +258,22 @@ it("shows only configured provider chips until the filter button reveals all", a
     root.render(createElement(McpSettings, { cwd: "/repo" })),
   );
   const chips = container.querySelector(
-    '[aria-label="Filter MCP servers by provider"]',
+    `[aria-label="${translate("Filter MCP servers by provider")}"]`,
   )!;
   expect(chips.textContent).toContain("Codex");
   expect(chips.textContent).not.toContain("Cursor");
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Show all providers"]')!
+      .querySelector<HTMLButtonElement>(
+        `[aria-label="${translate("Show all providers")}"]`,
+      )!
       .click(),
   );
   expect(chips.textContent).toContain("Cursor");
   await act(async () =>
     container
       .querySelector<HTMLButtonElement>(
-        '[aria-label="Show available providers"]',
+        `[aria-label="${translate("Show available providers")}"]`,
       )!
       .click(),
   );
@@ -336,7 +345,7 @@ it("reuses the loaded list when returning to the page and reloads on Refresh", a
       : "",
   );
   const refresh = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Refresh",
+    (button) => button.textContent === translate("Refresh"),
   )!;
   await act(async () => refresh.click());
   expect(invoke).toHaveBeenCalledTimes(4);
@@ -395,7 +404,9 @@ it("caches an empty list until manually refreshed", async () => {
   );
   await act(async () => root.render(null));
   await act(() => root.render(createElement(McpSettings, { cwd: "/repo" })));
-  expect(container.textContent).toContain("No MCP servers configured");
+  expect(container.textContent).toContain(
+    translate("No MCP servers configured for this provider."),
+  );
   expect(container.textContent).not.toContain("Checking servers…");
   expect(invoke).toHaveBeenCalledTimes(2);
 });
@@ -410,7 +421,7 @@ it("caches discovery failures and lets Refresh retry", async () => {
   expect(container.textContent).toContain("Discovery failed");
   expect(invoke).toHaveBeenCalledTimes(1);
   const refresh = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Refresh",
+    (button) => button.textContent === translate("Refresh"),
   )!;
   await act(async () => refresh.click());
   expect(container.textContent).toContain("sentry");
@@ -453,7 +464,7 @@ it("uses the shared project picker and caches each project's list", async () => 
   expect(invoke).toHaveBeenCalledTimes(4);
   await selectProject("/other");
   const refresh = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Refresh",
+    (button) => button.textContent === translate("Refresh"),
   )!;
   await act(async () => refresh.click());
   expect(invoke).toHaveBeenCalledTimes(6);

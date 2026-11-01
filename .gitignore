@@ -58,3 +58,6 @@ Desktop.ini
 
 # Local document preview mockup
 /work/mono-document-preview.html
+
+# Local verification screenshots
+/.shots/

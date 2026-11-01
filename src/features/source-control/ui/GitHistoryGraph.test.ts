@@ -8,6 +8,7 @@ vi.mock("../../../platform/tauri/fs", () => ({
   subscribeGitChanged: () => () => {},
 }));
 
+import { translate } from "../../../shared/i18n/locale";
 import { gitHistory, type GitHistory } from "../../../platform/tauri/fs";
 import { GitHistoryGraph } from "./GitHistoryGraph";
 
@@ -75,7 +76,7 @@ it("keeps loaded commits on refresh failure and clears the error after retry", a
   vi.mocked(gitHistory).mockResolvedValueOnce(history("loaded"));
   await render("/refresh-history-project");
   const refresh = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Refresh history"]',
+    `[aria-label="${translate("Refresh history")}"]`,
   )!;
   vi.mocked(gitHistory).mockRejectedValueOnce(new Error("History unavailable"));
   await act(async () => refresh.click());

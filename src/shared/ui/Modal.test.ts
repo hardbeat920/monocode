@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { translate } from "../i18n/locale";
 import { ModalPanel } from "./Modal";
 
 describe("ModalPanel", () => {
@@ -19,7 +20,7 @@ describe("ModalPanel", () => {
     expect(markup).toContain("Example");
     expect(markup).toContain("A reusable shell");
     expect(markup).toContain("Body");
-    expect(markup).toContain('aria-label="Close"');
+    expect(markup).toContain(`aria-label="${translate("Close")}"`);
   });
 
   it("can preserve an accessible title with a minimal visual header", () => {

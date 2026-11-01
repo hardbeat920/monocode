@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, FolderTree } from "../../../shared/ui/icons";
@@ -28,6 +30,7 @@ export function QuickWorkspaceControls({
   onClose: () => void;
   onError?: (error: string) => void;
 }) {
+  useLanguage();
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState<QuickGitKind | null>(null);
   const activeKind = useRef<QuickGitKind | null>(null);
@@ -143,13 +146,16 @@ export function QuickWorkspaceControls({
   };
   const disabled = !enabled || !ready || !branches?.current;
   const Icon = value.mode === "worktree" ? FolderTree : Folder;
-  const label = value.mode === "worktree" ? "New worktree" : "Current checkout";
+  const label =
+    value.mode === "worktree"
+      ? translate("New worktree")
+      : translate("Current checkout");
   return (
     <div className="flex min-w-0 items-center gap-2">
       <button
         type="button"
         disabled={disabled}
-        aria-label={`Workspace ${label}`}
+        aria-label={translate("Workspace {label}", { label })}
         aria-haspopup="dialog"
         aria-expanded={open === "workspace"}
         onMouseDown={(event) => {
@@ -165,13 +171,14 @@ export function QuickWorkspaceControls({
       <GitPickerTrigger
         label={
           value.mode === "worktree"
-            ? `From ${base}`
-            : branches?.current || (settled ? "No repo" : "Loading…")
+            ? translate("From {name}", { name: base })
+            : branches?.current ||
+              (settled ? translate("No repo") : translate("Loading…"))
         }
         aria-label={
           value.mode === "worktree"
-            ? `Create worktree from ${base}`
-            : "Choose branch"
+            ? translate("Create worktree from {name}", { name: base })
+            : translate("Choose branch")
         }
         aria-haspopup="dialog"
         aria-expanded={open === "branch" || open === "base"}
