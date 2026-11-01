@@ -204,6 +204,11 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
+    stats_hovered: bool,
+    stats_anchor: AnchorSlot,
+    /// A one-second repaint loop runs while the cache countdown is on screen.
+    stats_ticker: std::cell::Cell<bool>,
+    stats_wanted: std::cell::Cell<bool>,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -652,6 +657,10 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
+            stats_hovered: false,
+            stats_anchor: AnchorSlot::default(),
+            stats_ticker: Default::default(),
+            stats_wanted: Default::default(),
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -3025,6 +3034,170 @@ impl Conversation {
             .child(self.workspace_bar(cx))
             .into_any_element()
     }
+    /// `$0.84 · Cache 4:12`: session spend and time left on the prompt
+    /// cache, each hidden when the provider cannot tell.
+    fn session_stats_chip(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use monocode_core::context::{self as stats_mod, CacheState};
+        let stats = stats_mod::SessionStats::from_turns(self.settings.turns.values());
+        stats.started_at?;
+        let now = monocode_core::time::now_ms();
+        let ttl = self.context.and_then(|usage| usage.cache_ttl_ms);
+        let cache = stats_mod::cache_state(&stats, ttl, now, self.busy);
+        let amber: gpui::Hsla = gpui::rgb(0xfbbf24).into();
+        let approx = if stats.cost_partial { "≥" } else { "" };
+        let cost = stats
+            .cost_usd
+            .map(|usd| format!("{approx}{}", stats_mod::format_cost(usd)));
+        let (cache_label, cache_color) = match cache {
+            Some(CacheState::Live) => (Some("Cache live".to_string()), content(0.45)),
+            Some(CacheState::Cold) => (Some("Cache cold".to_string()), content(0.3)),
+            Some(CacheState::Warm {
+                remaining_ms,
+                warning,
+            }) => (
+                Some(format!(
+                    "Cache {}",
+                    stats_mod::format_countdown(remaining_ms)
+                )),
+                if warning { amber } else { content(0.45) },
+            ),
+            None => (None, content(0.45)),
+        };
+        if matches!(cache, Some(CacheState::Warm { .. })) {
+            self.stats_wanted.set(true);
+            if !self.stats_ticker.replace(true) {
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(1))
+                            .await;
+                        let keep = this
+                            .update(cx, |this, cx| {
+                                let wanted = this.stats_wanted.replace(false);
+                                if wanted {
+                                    cx.notify();
+                                } else {
+                                    this.stats_ticker.set(false);
+                                }
+                                wanted
+                            })
+                            .unwrap_or(false);
+                        if !keep {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+        }
+        let mut parts: Vec<(String, gpui::Hsla)> = Vec::new();
+        parts.extend(cost.clone().map(|c| (c, content(0.45))));
+        parts.extend(cache_label.clone().map(|c| (c, cache_color)));
+        let percent = |hit: Option<f64>| hit.map_or("n/a".to_string(), |h| format!("{h:.0}%"));
+        let mut rows: Vec<(&str, String)> = Vec::new();
+        if let Some(cost) = &cost {
+            rows.push(("Cost (API list price)", cost.clone()));
+        }
+        if let Some(label) = &cache_label {
+            rows.push((
+                "Cache",
+                label.strip_prefix("Cache ").unwrap_or(label).to_string(),
+            ));
+        }
+        rows.push((
+            "Cache hit",
+            format!(
+                "{} session · {} last turn",
+                percent(stats.session_hit_percent),
+                percent(stats.last_hit_percent)
+            ),
+        ));
+        rows.push((
+            "Cache tokens",
+            format!(
+                "{} read · {} written",
+                stats_mod::format_tokens(stats.cache_read_tokens),
+                stats_mod::format_tokens(stats.cache_write_tokens)
+            ),
+        ));
+        rows.push(("Agent worked", stats_mod::format_span(stats.working_ms)));
+        let rewrite = (cache == Some(CacheState::Cold))
+            .then(|| self.context.map(|usage| usage.used))
+            .flatten()
+            .filter(|used| *used > 0)
+            .map(|used| {
+                format!(
+                    "Next message re-writes ~{} tokens to cache",
+                    stats_mod::format_tokens(used)
+                )
+            });
+        let label = parts
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(
+            div()
+                .id("session-stats")
+                .role(Role::Group)
+                .aria_label(format!("Session {label}"))
+                .child(self.stats_anchor.probe())
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text_size(px(11.))
+                .font_features(crate::right_panel::tabular())
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    this.stats_hovered = *hovered;
+                    cx.notify();
+                }))
+                .children(
+                    parts
+                        .into_iter()
+                        .enumerate()
+                        .flat_map(|(i, (text, color))| {
+                            let dot = (i > 0).then(|| div().text_color(content(0.45)).child("·"));
+                            dot.into_iter()
+                                .map(IntoElement::into_any_element)
+                                .chain([div().text_color(color).child(text).into_any_element()])
+                        }),
+                )
+                .when(self.stats_hovered, |d| {
+                    d.child(
+                        popover(
+                            "session-stats-tooltip",
+                            Anchor::Slot(self.stats_anchor.clone()),
+                        )
+                        .side(Side::Top)
+                        .align(Align::End)
+                        .max_width(300.)
+                        .padding(10.)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .children(rows.into_iter().map(|(name, value)| {
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .gap(px(16.))
+                                        .child(div().text_color(content(0.5)).child(name))
+                                        .child(div().text_color(content(1.)).child(value))
+                                }))
+                                .children(
+                                    rewrite
+                                        .map(|text| div().mt(px(4.)).text_color(amber).child(text)),
+                                ),
+                        ),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     fn workspace_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let draft = !self.summary.has_messages;
         let linked =
@@ -3177,6 +3350,7 @@ impl Conversation {
                             )
                         },
                     )
+                    .children(self.session_stats_chip(cx))
                     .when(show_context, |d| {
                         d.child(
                             div()

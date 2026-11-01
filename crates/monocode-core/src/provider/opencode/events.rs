@@ -550,6 +550,7 @@ impl State {
             cache_read_tokens: tokens["cache"]["read"].as_u64().unwrap_or(0),
             cache_write_tokens: tokens["cache"]["write"].as_u64().unwrap_or(0),
             cache_hit_percent: None,
+            ..Default::default()
         };
         if metrics.reported() {
             events.push(Event::Context {
