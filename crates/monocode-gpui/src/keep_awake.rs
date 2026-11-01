@@ -92,6 +92,13 @@ struct Drag {
     minutes: u32,
 }
 
+/// How a join or leave went.
+enum Outcome {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Join(Result<hotspot::Joined, hotspot::JoinError>),
+    Leave(Result<hotspot::Left, String>),
+}
+
 /// What is actually held on the machine right now.
 #[derive(Default)]
 struct Held {
@@ -504,32 +511,31 @@ impl KeepAwake {
             return;
         }
         self.networking = true;
+        self.hotspot.started(step);
         let ssid = self.prefs.hotspot_ssid.trim().to_string();
+        let record = self.hotspot.record().cloned();
         let work = cx.background_executor().spawn(async move {
             #[cfg(target_os = "macos")]
             return match step {
-                Step::Join => hotspot::mac::join(&ssid),
-                _ => hotspot::mac::leave(),
+                Step::Join => Outcome::Join(hotspot::mac::join(&ssid)),
+                _ => Outcome::Leave(hotspot::mac::leave(record.as_ref())),
             };
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = ssid;
-                Err::<(), String>("Only on macOS.".into())
+                let _ = (ssid, record);
+                Outcome::Leave(Err("Only on macOS.".to_string()))
             }
         });
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let outcome = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.networking = false;
-                match (step, result) {
-                    (Step::Join, Ok(())) => {
-                        this.hotspot.joined();
-                        this.network_error = None;
-                    }
-                    (Step::Join, Err(error)) => this.network_error = Some(error.into()),
-                    // Even if Wi-Fi didn't cycle cleanly, macOS rejoins on its own.
-                    (_, _) => this.hotspot.left(),
+                match outcome {
+                    Outcome::Join(Ok(joined)) => this.hotspot.joined(joined),
+                    Outcome::Join(Err(error)) => this.hotspot.join_failed(error, Instant::now()),
+                    Outcome::Leave(result) => this.hotspot.left(result),
                 }
+                this.network_error = this.hotspot.error().map(|e| e.message().into());
                 ON_HOTSPOT.store(this.hotspot.on_hotspot(), Ordering::Relaxed);
                 cx.notify();
             });
@@ -1702,7 +1708,15 @@ impl KeepAwake {
                     p.hotspot = true;
                     p.hotspot_ssid = "My iPhone".into();
                 });
-                self.hotspot.joined();
+                self.hotspot.joined(hotspot::Joined {
+                    record: hotspot::JoinRecord {
+                        ssid: "My iPhone".into(),
+                        ip: None,
+                        router: None,
+                        at: 0,
+                    },
+                    took: Duration::ZERO,
+                });
                 self.sync(cx);
             }
             "close" => {
@@ -1715,7 +1729,7 @@ impl KeepAwake {
                 self.sync(cx);
             }
             "hot" => {
-                self.hotspot.left();
+                self.hotspot.left(Ok(hotspot::Left::Cycled));
                 self.machine = Machine {
                     lid_closed: true,
                     hot: true,

@@ -196,8 +196,8 @@ impl SettingsView {
             async move {
                 #[cfg(target_os = "macos")]
                 {
-                    let joined = hotspot::mac::join(&ssid);
-                    let _ = hotspot::mac::leave();
+                    let joined = hotspot::mac::join(&ssid).map(|_| ()).map_err(|e| e.message());
+                    let _ = hotspot::mac::leave(None);
                     joined
                 }
                 #[cfg(not(target_os = "macos"))]
