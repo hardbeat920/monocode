@@ -104,7 +104,7 @@ Exactly one of `avatarKey` or `index`.
 
 - `avatarKey` is an opaque key from an `author.avatarKey` or thread author the
   host sent. The host resolves it to the address it received from the provider
-  and returns a PNG of at most 64 px. A key the host did not hand out (or from
+  and returns a PNG of at most 64 px (https addresses only). A key the host did not hand out (or from
   before it restarted) is an error; call `inbox.list` again.
 - `index` is the position of an image in the item's `body`, counting in reading
   order both markdown `![alt](url)` and HTML `<img src="url">`. The host fetches
@@ -167,6 +167,15 @@ baseline). The phone's per-category toggle (`inbox`, next to `agentInput`,
 `agentFinished` and `monoMessages` in `mobile/src/features/settings/notifications.ts`)
 is respected. The desktop doesn't send one while its own Inbox is on screen and
 the window is in front.
+
+## Source of the list
+
+The list is the desktop Inbox's own snapshot: the same fetch, filters and
+polling (every 120 s while the desktop Inbox is on screen, every 300 s in the
+background; a phone asking after 120 s also starts one). It holds open items
+unless the desktop's status filter asks for closed ones, so `status` of
+`closed` and `merged` shows up only then. The background Inbox starts with the
+app once Automations have opened, or when a phone first asks.
 
 ## Security
 

@@ -1291,6 +1291,38 @@ mod tests {
     }
 
     #[test]
+    fn only_new_items_that_need_the_user_are_pushed() {
+        use crate::inbox::{NotificationTracker, Snapshot};
+        let snapshot = |items: Vec<Item>| Snapshot {
+            items,
+            ..Snapshot::default()
+        };
+        let mut tracker = NotificationTracker::default();
+        // The backlog is a baseline: nothing in it is announced, even if it needs me.
+        assert!(tracker
+            .observe(&snapshot(vec![item(1, 5, "review_requested")]), "s".into())
+            .is_empty());
+        let mut merged = item(5, 1, "mentioned");
+        merged.state = "merged".into();
+        let appeared = tracker.observe(
+            &snapshot(vec![
+                item(1, 5, "review_requested"),
+                item(2, 1, "review_requested"),
+                item(3, 1, ""),
+                item(4, 1, "marked"),
+                merged,
+                item(6, 1, "build_failed"),
+            ]),
+            "s".into(),
+        );
+        let pushed: Vec<_> = appeared.iter().filter(|i| pushes(i)).map(|i| i.number).collect();
+        assert_eq!(pushed, [2, 6]);
+        // An update to an item already seen is not new.
+        let again = tracker.observe(&snapshot(vec![item(2, 0, "review_requested")]), "s".into());
+        assert!(again.iter().all(|i| !pushes(i)));
+    }
+
+    #[test]
     fn slim_items_follow_the_contract_shape() {
         let (seen, triage, projects) = (Seen::default(), Triage::default(), projects());
         let view = view(&seen, &triage, &projects);

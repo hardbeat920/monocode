@@ -263,6 +263,7 @@ impl Shell {
                         this.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
                     }
                     inbox::Event::ItemsChanged(items) => {
+                        this.notify_mobile_inbox(items.clone(), cx);
                         this.inbox_automation_events(items.clone(), cx)
                     }
                 },

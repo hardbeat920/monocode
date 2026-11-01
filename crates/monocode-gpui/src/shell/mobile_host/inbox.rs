@@ -9,6 +9,10 @@ use monocode_core::{
     mobile::inbox::{self as wire, ListParams, Mark, ProjectRef, SnapshotState, View},
 };
 
+/// At most this many items are announced in one batch; a flood of new items
+/// after a long offline gap does not become a flood of alerts.
+const MAX_PUSHES: usize = 5;
+
 fn to_value(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|error| error.to_string())
 }
@@ -326,6 +330,46 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// New items that need the user, sent to phones that take the `inbox`
+    /// category. Not while the desktop shows the Inbox in front of the user.
+    pub(in crate::shell) fn notify_mobile_inbox(&mut self, items: Vec<Item>, cx: &mut Context<Self>) {
+        if self.mobile.host.is_none() {
+            return;
+        }
+        if self.window_active
+            && self
+                .inbox
+                .as_ref()
+                .is_some_and(|inbox| inbox.read(cx).is_active())
+        {
+            return;
+        }
+        let done = |item: &Item| {
+            self.inbox.as_ref().is_some_and(|inbox| {
+                let view = inbox.read(cx).phone_view();
+                view.triage.is_done(&item.key())
+                    || view.triage.snoozed_until(&item.key(), now()).is_some()
+            })
+        };
+        for item in items
+            .iter()
+            .filter(|item| wire::pushes(item) && !done(item))
+            .take(MAX_PUSHES)
+        {
+            let (title, body, repo) = wire::notice(item);
+            self.send_mobile_notice(
+                "inbox",
+                notify::Notice {
+                    title,
+                    subtitle: Some(repo).filter(|repo| !repo.is_empty()),
+                    body,
+                    data: json!({"kind": "inbox", "key": item.key()}),
+                },
+                cx,
+            );
+        }
     }
 }
 
