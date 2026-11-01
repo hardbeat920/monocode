@@ -1520,9 +1520,11 @@ impl ExplorerItem {
         // not consistently accept. Make the path absolute without following
         // symlinks or junctions, so Explorer selects the requested link itself.
         let target = std::path::absolute(target).context("Resolving Explorer target")?;
+        // The Shell parser rejects filesystem verbatim prefixes (\\?\).
+        let target = dunce::simplified(&target);
         let mut item = Self(std::ptr::null_mut());
         unsafe {
-            SHParseDisplayName(&HSTRING::from(target.as_path()), None, &mut item.0, 0, None)?;
+            SHParseDisplayName(&HSTRING::from(target), None, &mut item.0, 0, None)?;
         }
         Ok(item)
     }
@@ -1546,7 +1548,8 @@ fn open_target_in_explorer(target: &Path) -> Result<()> {
             // found" even though the file is there.  In these cases, ShellExecute()
             // seems to work as a fallback (although it won't select the file).
             let target = std::path::absolute(target)?;
-            open_target(target.parent().unwrap_or(&target)).context("Opening target parent folder")
+            let target = dunce::simplified(&target);
+            open_target(target.parent().unwrap_or(target)).context("Opening target parent folder")
         } else {
             Err(anyhow::anyhow!("Can not open target path: {}", err))
         }
@@ -1945,6 +1948,9 @@ mod tests {
                 for path in [&folder, &file] {
                     let git_path = path.to_str().unwrap().replace('\\', "/");
                     let item = ExplorerItem::parse(std::path::Path::new(&git_path)).unwrap();
+                    assert!(!item.0.is_null());
+                    let canonical_path = std::fs::canonicalize(path).unwrap();
+                    let item = ExplorerItem::parse(&canonical_path).unwrap();
                     assert!(!item.0.is_null());
                 }
                 assert!(ExplorerItem::parse(&folder.join("missing")).is_err());
