@@ -465,6 +465,22 @@ impl Inbox {
                             .cloned(),
                     );
                 }
+                // The same for a repository that failed while its siblings loaded.
+                let stale = snapshot
+                    .partial
+                    .iter()
+                    .flat_map(|(provider, failures)| {
+                        this.snapshot.items.iter().filter(move |item| {
+                            &item.provider == provider
+                                && failures.iter().any(|failure| {
+                                    failure.kind == item.kind
+                                        && failure.repo.eq_ignore_ascii_case(&item.repo)
+                                })
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                snapshot.items.extend(stale);
                 snapshot
                     .items
                     .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));

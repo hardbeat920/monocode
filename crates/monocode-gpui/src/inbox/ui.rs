@@ -227,6 +227,32 @@ fn message(text: impl Into<SharedString>) -> Div {
         .text_color(content(0.5))
         .child(text.into())
 }
+/// A warning above the list that the rows below it may be incomplete.
+fn notice(text: impl Into<SharedString>) -> Div {
+    message(text)
+        .text_size(px(11.))
+        .line_height(px(16.))
+        .text_color(rgb(0xf59e0b))
+}
+/// Names the repositories a provider could not fetch, with the first reason.
+fn partial_summary(label: &str, failures: &[model::PartialFailure]) -> String {
+    let mut repos = failures
+        .iter()
+        .map(|failure| failure.repo.as_str())
+        .collect::<Vec<_>>();
+    repos.dedup();
+    let shown = repos.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    let more = repos.len().saturating_sub(3);
+    format!(
+        "Couldn't load {label} items from {shown}{}: {}",
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        },
+        failures[0].error
+    )
+}
 fn error(text: impl Into<SharedString>) -> Div {
     message(text).text_color(rgb(0xf87171))
 }
@@ -623,6 +649,54 @@ impl Inbox {
                     .on_click(cx.listener(move |this, _, _, cx| this.select(key.clone(), cx)))
             })
             .collect::<Vec<_>>();
+        let source = &self.state.source;
+        let label = model::provider_label(source);
+        let mut notices = Vec::new();
+        if !rows.is_empty()
+            && let Some(error) = self.snapshot.errors.get(source)
+        {
+            // The empty list already shows the error; with rows it would be
+            // hidden behind a list that looks current.
+            notices.push(
+                notice(format!(
+                    "Couldn't refresh {label}: {error}. Showing the last items that loaded."
+                ))
+                .into_any_element(),
+            );
+        }
+        if let Some(failures) = self.snapshot.partial.get(source) {
+            notices.push(notice(partial_summary(label, failures)).into_any_element());
+        }
+        let footer = self
+            .snapshot
+            .capped
+            .contains(source)
+            .then(|| {
+                let limit = self.state.fetch_limit;
+                if limit < model::MAX_FETCH_LIMIT {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .child(message(format!(
+                            "Showing the newest {limit} per repository."
+                        )))
+                        .child(action("inbox-load-more", "Load more").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.state.fetch_limit = (this.state.fetch_limit
+                                    + model::DEFAULT_FETCH_LIMIT)
+                                    .min(model::MAX_FETCH_LIMIT);
+                                this.refresh(cx);
+                            },
+                        )))
+                        .into_any_element()
+                } else {
+                    message(format!(
+                        "Showing the newest {limit} per repository. Older items aren't loaded."
+                    ))
+                    .into_any_element()
+                }
+            });
         div()
             .relative()
             .w(px(self.state.list_width.clamp(240., 420.)))
@@ -646,8 +720,10 @@ impl Inbox {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
+                    .children(notices)
                     .when(rows.is_empty(), |d| d.child(message(empty)))
-                    .children(rows),
+                    .children(rows)
+                    .children(footer),
             )
             .child(
                 div()
@@ -2912,6 +2988,26 @@ mod tests {
         point, size,
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_partial_failure_names_the_repositories_and_the_first_reason() {
+        let failure = |repo: &str, error: &str| model::PartialFailure {
+            repo: repo.into(),
+            kind: "issue".into(),
+            error: error.into(),
+        };
+        assert_eq!(
+            partial_summary("GitHub", &[failure("acme/up", "issues are disabled")]),
+            "Couldn't load GitHub items from acme/up: issues are disabled"
+        );
+        let many = ["a/1", "a/2", "a/3", "a/4", "a/5"]
+            .map(|repo| failure(repo, "rate limited"))
+            .to_vec();
+        assert_eq!(
+            partial_summary("GitHub", &many),
+            "Couldn't load GitHub items from a/1, a/2, a/3 and 2 more: rate limited"
+        );
+    }
 
     struct Fixture {
         inbox: Entity<Inbox>,

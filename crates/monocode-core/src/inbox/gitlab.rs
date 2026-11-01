@@ -234,18 +234,30 @@ fn gitlab_list_work_items_for(
     } else {
         "opened"
     };
-    let limit = limit.clamp(1, 100);
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT);
     let assigned = if assigned_to_me {
         "&scope=assigned_to_me"
     } else {
         "&scope=all"
     };
-    let path = format!(
-        "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={limit}&with_labels_details=true{assigned}",
-        encode_path_component(repo)
-    );
-    let response = gitlab_get(config, &path)?;
-    parse_work_items(&response.value, kind, repo)
+    let mut items = Vec::new();
+    let mut page = 1;
+    loop {
+        // `page` is relative to `per_page`, so it must not change between pages.
+        let per_page = super::PAGE_SIZE;
+        let path = format!(
+            "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={per_page}&page={page}&with_labels_details=true{assigned}",
+            encode_path_component(repo)
+        );
+        let response = gitlab_get(config, &path)?;
+        items.extend(parse_work_items(&response.value, kind, repo)?);
+        if !response.has_next_page || items.len() >= limit as usize {
+            break;
+        }
+        page += 1;
+    }
+    items.truncate(limit as usize);
+    Ok(items)
 }
 
 fn gitlab_list_todos_for(
@@ -259,10 +271,23 @@ fn gitlab_list_todos_for(
     } else {
         "Issue"
     };
-    let limit = limit.clamp(1, 100);
-    let path = format!("/todos?state=pending&type={target_type}&per_page={limit}");
-    let response = gitlab_get(config, &path)?;
-    parse_todos(&response.value, kind)
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT);
+    let mut items = Vec::new();
+    let mut page = 1;
+    loop {
+        // `page` is relative to `per_page`, so it must not change between pages.
+        let per_page = super::PAGE_SIZE;
+        let path =
+            format!("/todos?state=pending&type={target_type}&per_page={per_page}&page={page}");
+        let response = gitlab_get(config, &path)?;
+        items.extend(parse_todos(&response.value, kind)?);
+        if !response.has_next_page || items.len() >= limit as usize {
+            break;
+        }
+        page += 1;
+    }
+    items.truncate(limit as usize);
+    Ok(items)
 }
 
 fn gitlab_work_item_details_for(
