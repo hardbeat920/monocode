@@ -5,9 +5,7 @@ import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, {
-  interpolate,
   useAnimatedReaction,
-  useAnimatedStyle,
   useSharedValue,
   type EntryOrExitLayoutType,
   type SharedValue,
@@ -15,7 +13,7 @@ import Animated, {
 import { scheduleOnRN } from "react-native-worklets";
 
 import { relativeTime } from "@/features/workspace/relativeTime";
-import { Icon, type IconName } from "@/ui/Icon";
+import { Icon } from "@/ui/Icon";
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { ACTION_GAP, ACTION_SIZE, ActionFace, SwipeAction, SwipeActions } from "@/ui/SwipeAction";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
@@ -254,7 +252,6 @@ function RowActions({
   onSnooze: (until: number) => void;
 }) {
   const colors = useColors();
-  const styles = useStyles();
 
   // Past the buttons by enough, a release is Done: tick once as it arms, and
   // again if the finger comes back.
