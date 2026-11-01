@@ -7,9 +7,21 @@ import { FileTypeIcon } from "./FileTypeIcon";
 vi.mock("react-material-icon-theme", () => ({
   getFileIcon: ({ fileExtension }: { fileExtension?: string }) =>
     fileExtension ?? "",
-  getFolderIcon: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? "folder-open" : "folder",
-  getIconSvg: (name: string) => `<svg data-icon="${name}"><path /></svg>`,
+  getFolderIcon: ({
+    folderName,
+    isOpen,
+  }: {
+    folderName: string;
+    isOpen: boolean;
+  }) => {
+    const base = folderName === "src" ? "folder" : `folder-${folderName}`;
+    return isOpen ? `${base}-open` : base;
+  },
+  // Like the package, returns nothing for icons it names but ships no art for.
+  getIconSvg: (name: string) =>
+    ["folder-features-open", "folder-redis", "folder-redis-open"].includes(name)
+      ? ""
+      : `<svg data-icon="${name}"><path /></svg>`,
 }));
 
 let container: HTMLDivElement;
@@ -89,4 +101,20 @@ describe("FileTypeIcon DOM updates", () => {
       "folder-open",
     );
   });
+
+  it.each([
+    ["features", true, "folder-features"],
+    ["redis", false, "folder"],
+    ["redis", true, "folder-open"],
+  ])(
+    "falls back when the package has no art for %s (open: %s)",
+    async (name, isOpen, icon) => {
+      await act(async () =>
+        root.render(createElement(FileTypeIcon, { name, isDir: true, isOpen })),
+      );
+      expect(container.querySelector("svg")?.getAttribute("data-icon")).toBe(
+        icon,
+      );
+    },
+  );
 });

@@ -35,13 +35,21 @@ pub(crate) fn file_icon_name(name: &str) -> &'static str {
     }
     "file"
 }
-/// `getFolderIcon` with the specific theme, never as a root.
+/// `getFolderIcon` with the specific theme, never as a root. The package names
+/// icons it ships no art for, so fall back from the open glyph to the closed
+/// one, then to the generic folder.
 pub(crate) fn folder_icon_name(name: &str, open: bool) -> String {
-    let base = table().folders.get(name).map_or("folder", String::as_str);
-    if open {
-        format!("{base}-open")
-    } else {
+    let table = table();
+    let base = table.folders.get(name).map_or("folder", String::as_str);
+    let open_icon = format!("{base}-open");
+    if open && table.svgs.contains_key(&open_icon) {
+        open_icon
+    } else if table.svgs.contains_key(base) {
         base.to_owned()
+    } else if open {
+        "folder-open".to_owned()
+    } else {
+        "folder".to_owned()
     }
 }
 /// `mi/<icon>.svg` asset bytes.
@@ -80,6 +88,21 @@ mod tests {
         assert_eq!(folder_icon_name("zzz-unknown", true), "folder-open");
         for icon in ["rust", "file", "folder", "folder-open", "folder-src-open"] {
             assert!(svg(&format!("mi/{icon}.svg")).is_some(), "{icon}");
+        }
+    }
+
+    #[test]
+    fn folders_without_artwork_fall_back_to_a_drawable_icon() {
+        // No `folder-features-open` in the package: stay on the closed glyph.
+        assert_eq!(folder_icon_name("features", true), "folder-features");
+        // No `folder-redis` art at all: use the generic folder.
+        assert_eq!(folder_icon_name("redis", false), "folder");
+        assert_eq!(folder_icon_name("redis", true), "folder-open");
+        for name in table().folders.keys() {
+            for open in [false, true] {
+                let icon = folder_icon_name(name, open);
+                assert!(svg(&format!("mi/{icon}.svg")).is_some(), "{name}: {icon}");
+            }
         }
     }
 }

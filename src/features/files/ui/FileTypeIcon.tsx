@@ -50,12 +50,11 @@ export const FileTypeIcon = memo(function FileTypeIcon({
 }: Props) {
   const icons = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const iconName = icons
-    ? isDir
-      ? icons.getFolderIcon({ folderName: name, isOpen, isRoot })
-      : resolveFileIcon(icons, name)
-    : "";
-  const svg = icons?.getIconSvg(iconName) ?? "";
+  const svg = !icons
+    ? ""
+    : isDir
+      ? resolveFolderSvg(icons, name, isOpen, isRoot)
+      : (icons.getIconSvg(resolveFileIcon(icons, name)) ?? "");
   // React compares this prop by identity. A fresh object replaces the SVG
   // subtree even when the glyph is unchanged (for example, on resize).
   const markup = useMemo(() => ({ __html: svg }), [svg]);
@@ -79,6 +78,27 @@ export const FileTypeIcon = memo(function FileTypeIcon({
     />
   );
 });
+
+/**
+ * The package names icons it ships no art for (`folder-features-open`,
+ * `folder-redis`), so fall back from the requested glyph to the closed one,
+ * then to the generic folder, rather than drawing nothing.
+ */
+function resolveFolderSvg(
+  icons: IconPack,
+  folderName: string,
+  isOpen: boolean,
+  isRoot: boolean,
+): string {
+  const icon = (open: boolean) =>
+    icons.getFolderIcon({ folderName, isOpen: open, isRoot });
+  return (
+    icons.getIconSvg(icon(isOpen)) ||
+    icons.getIconSvg(icon(false)) ||
+    icons.getIconSvg(isOpen ? "folder-open" : "folder") ||
+    ""
+  );
+}
 
 /**
  * The package only checks `fileExtension` when that prop is set — it does not
