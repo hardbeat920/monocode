@@ -189,7 +189,8 @@ Alternatives:
   clock against monotonic clock), logs every event, shows the live status in
   the popover, and publishes it to Settings. Changing the hotspot settings
   resets the backoff.
-- Settings: a live "Status" row. "Test now" refuses while MonoCode has the Mac
+- Settings: a live "Status" row. Saving or removing the password lets a join
+  that gave up try again. "Test now" refuses while MonoCode has the Mac
   on the hotspot, and leaves only when the join may actually have moved the
   Mac. Automatic joins and tests run one at a time behind a lock. The copy
   explains the idle-hotspot catch.
@@ -202,15 +203,22 @@ interface.
 
 | Defect | Test |
 |---|---|
-| 1, 7 | `backs_off_and_caps_attempts`, `retry_waits_from_the_failure_not_the_attempt`, `first_retry_is_quicker_than_a_minute`, `restarting_agents_keeps_the_retry_spacing`, `gives_up_at_once_on_a_wrong_password`, `settings_change_resets_the_backoff` |
-| 2 | `join_fails_when_the_mac_never_moved_even_if_internet_answers`, `join_succeeds_on_an_iphone_subnet`, `join_trusts_a_visible_ssid`, `join_reports_macos_switching_back` |
-| 3, 11 | `classifies_networksetup_output`, `join_stops_when_wifi_is_off`, `join_reports_no_lease` |
+| 1, 7 | `backs_off_and_caps_attempts`, `retry_waits_from_the_failure_not_the_attempt`, `first_retry_is_quicker_than_a_minute`, `restarting_agents_keeps_the_retry_spacing`, `gives_up_at_once_on_a_wrong_password`, `settings_change_resets_the_backoff`, `joins_after_a_sustained_drop_and_retries_slowly` (updated) |
+| 2 | `join_fails_when_the_mac_never_moved_even_if_internet_answers`, `join_succeeds_on_an_iphone_subnet`, `join_trusts_a_visible_ssid`, `join_reports_no_internet_and_macos_switching_back` |
+| 3, 11 | `classifies_networksetup_output`, `keeps_stderr_and_the_status`, `join_stops_when_wifi_is_off_or_missing_or_networksetup_fails`, `join_reports_no_lease`, `reads_networksetup` (updated) |
 | 4 | `a_hung_command_times_out`, `a_hung_probe_does_not_stall_the_answer` |
 | 5 | `the_join_record_survives_a_restart`, `a_restored_join_leaves_after_the_grace` |
-| 6 | `leave_skips_wifi_when_already_moved_or_off`, `leave_reports_macos_rejoining_the_hotspot` |
+| 6 | `leave_skips_wifi_when_already_moved_or_off`, `leave_reports_macos_rejoining_the_hotspot`, `nothing_new_starts_while_a_join_runs`, `goes_back_when_agents_finish_or_the_lid_opens` (updated) |
 | 8 | `no_join_right_after_a_wake`, `detects_sleep_from_the_clocks` |
 | 9 | `a_hung_probe_does_not_stall_the_answer`, `one_answer_is_enough` |
 | 10 | `every_decision_is_an_event`, `summary_says_what_it_is_doing`, `log_rotates` |
+
+All 45 `keep_awake` tests pass. The GUI crate passes
+`cargo check --tests --profile native-dev` with no warnings. Its own tests
+were not run: that needs a full link of the GUI crate, which the disk
+budget on this machine didn't allow. The GUI driver has no fakes. Its logic
+sits in core, and the driver only wires it up: it saves and clears the
+record, compares the clocks for sleep, writes the log and shows the status.
 
 The red tests for 7 (`retry_waits_from_the_failure…`, `first_retry_is_quicker…`,
 `restarting_agents_keeps…`) were run against the old `Hotspot` through its old
@@ -233,7 +241,9 @@ above.
 
 Before you start, set the hotspot in Settings › General › If Wi-Fi drops and
 start an agent that runs for several minutes. Follow along with
-`tail -f ~/Library/Application\ Support/<MonoCode data dir>/keep-awake-hotspot.log`.
+`tail -f ~/Library/Application\ Support/Monocode\ Development/keep-awake-hotspot.log`.
+The join record is `keep-awake-hotspot.json` in the same folder, and only
+exists while MonoCode has the Mac on the hotspot.
 
 1. **Happy path.** Open the iPhone's Personal Hotspot screen. Turn the Mac's
    home router off, or unplug its WAN. Within about 20 s the log shows
@@ -267,3 +277,22 @@ start an agent that runs for several minutes. Follow along with
 10. **Phone without data.** Turn cellular data off on the phone, with the
     hotspot still on: expect `failed` with `no_internet` after about 35 s,
     and backoff after that.
+
+## Risks and follow-ups
+
+- **Confirming a join without the network's name is a heuristic.** On a
+  non-iPhone hotspot, if macOS auto-joins a different network that just came
+  back during the 15 s window, the join counts as done. The check right after
+  the internet answers catches the common case (macOS going back to the old
+  network). Location access for MonoCode would make this exact.
+- **Opening the lid while agents work still leaves** (defect 13). If home
+  Wi-Fi is still down, the Mac rejoins the hotspot within the backoff. Worth
+  deciding whether opening the lid should only leave once agents are done.
+- **Quitting MonoCode doesn't leave the hotspot.** Cycling Wi-Fi during quit
+  could leave Wi-Fi off if the process is killed between "off" and "on".
+  The record makes the next launch go back instead.
+- **The password is still a command-line argument** (defect 12). A CoreWLAN
+  helper behind `Wifi` would fix this, at the cost of a Location prompt.
+- The error classifier is built from codes reported across macOS versions,
+  not from macOS 27 output. Unknown text shows up as "Couldn't join the
+  hotspot: <first line>", and the log keeps it.
