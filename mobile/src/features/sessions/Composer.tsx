@@ -1,5 +1,6 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
+import { useNavigation } from "expo-router";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -154,6 +155,28 @@ export function Composer({
   useEffect(() => {
     if (reply) input.current?.focus();
   }, [reply]);
+
+  // Lets go of the keyboard as the screen starts to leave, or as another
+  // covers it. A popped screen is unmounted without ever losing focus, and
+  // the native back button pops before JS hears of it, so this goes on the
+  // transition's start, while the field is still on screen. Left focused, the
+  // keyboard outlives the chat: the list behind rides it up, and the next
+  // chat's field can't take focus until it is left and entered again.
+  const navigation = useNavigation();
+  useEffect(() => {
+    const letGo = () => input.current?.blur();
+    const offStart = navigation.addListener(
+      "transitionStart" as never,
+      (event: { data?: { closing?: boolean } }) => {
+        if (event.data?.closing) letGo();
+      },
+    );
+    const offBlur = navigation.addListener("blur", letGo);
+    return () => {
+      offStart();
+      offBlur();
+    };
+  }, [navigation]);
 
   // Lets go of the keyboard as the field gives way.
   useEffect(() => {

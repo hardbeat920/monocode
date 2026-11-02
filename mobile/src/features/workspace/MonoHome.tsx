@@ -213,8 +213,9 @@ export function MonoHome() {
 
   const footerBottom = Math.max(insets.bottom, 12);
   const footerTop = footerBottom + FOOTER_HEIGHT + 12;
-  // The search rides the keyboard, resting just above it.
-  const lift = useKeyboardLift(footerBottom - 10);
+  // The search rides its own keyboard, resting just above it.
+  const search = useRef<TextInput>(null);
+  const lift = useKeyboardLift(footerBottom - 10, search);
   const scheme = useScheme();
 
   return (
@@ -322,6 +323,7 @@ export function MonoHome() {
           >
             <Icon name="search" size={18} color={colors.muted} />
             <TextInput
+              ref={search}
               value={query}
               onChangeText={setQuery}
               placeholder="Search"

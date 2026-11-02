@@ -155,6 +155,9 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   frame: vi.fn(),
   shapes: { circle: vi.fn() },
 }));
+vi.mock("expo-router", () => ({
+  useNavigation: () => ({ addListener: () => () => {} }),
+}));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 24 }),
 }));
