@@ -21,6 +21,7 @@ import { hasReadableText } from "../../../features/sessions/model/transcriptActi
 import { taskListText } from "../../../features/sessions/model/taskList";
 import { isReviewablePlan } from "../../../features/sessions/model/plan";
 import { resolveModel } from "../../../features/sessions/model/models";
+import { loadResumeAtReset } from "../../../features/settings/model/settings";
 import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
 
@@ -53,9 +54,15 @@ export function applyHarnessEvents(
   return next;
 }
 
+export type ApplyHarnessEventOptions = {
+  /** The desktop's "Resume at reset" setting, for callers that cannot read it. */
+  resumeAtReset?: boolean;
+};
+
 export function applyHarnessEvent(
   session: Session,
   event: HarnessEvent,
+  options: ApplyHarnessEventOptions = {},
 ): Session {
   switch (event.type) {
     case "message.delta":
@@ -212,7 +219,15 @@ export function applyHarnessEvent(
     case "usage.limited":
       return {
         ...session,
-        usageLimit: event.resetsAt != null ? { resetsAt: event.resetsAt } : {},
+        usageLimit: {
+          ...(event.resetsAt != null ? { resetsAt: event.resetsAt } : {}),
+          // Armed even before the reset time is known; a later lookup fills it in.
+          // A repeated limit event keeps the choice already made for this one.
+          resumeAtReset:
+            session.usageLimit?.resumeAtReset ??
+            options.resumeAtReset ??
+            loadResumeAtReset(),
+        },
       };
     case "interjection":
       // A visible boundary the user must not miss, so unlike status it never

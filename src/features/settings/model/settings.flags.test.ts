@@ -95,6 +95,13 @@ describe.each([
     undefined,
   ],
   [
+    "monocode.resumeAtReset",
+    settings.loadResumeAtReset,
+    settings.saveResumeAtReset,
+    true,
+    undefined,
+  ],
+  [
     "monocode.bodyGlass",
     appearance.loadBodyGlass,
     appearance.saveBodyGlass,
