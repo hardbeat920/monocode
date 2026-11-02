@@ -112,28 +112,16 @@ impl Shell {
             .map(|a| {
                 MenuAction::new(SharedString::from(format!("run:{}", a.id)), a.name.clone())
                     .icon(a.icon())
+                    .trailing(
+                        SharedString::from(format!("edit:{}", a.id)),
+                        "pencil-edit-02",
+                        format!("Edit {}", a.name),
+                    )
                     .into()
             })
             .collect();
         if !actions.is_empty() {
             items.push(MenuItem::Separator);
-            items.push(
-                MenuAction::new("edit", "Edit action")
-                    .icon("pencil-edit-02")
-                    .submenu(
-                        actions
-                            .iter()
-                            .map(|a| {
-                                MenuAction::new(
-                                    SharedString::from(format!("edit:{}", a.id)),
-                                    a.name.clone(),
-                                )
-                                .icon(a.icon())
-                            })
-                            .collect(),
-                    )
-                    .into(),
-            );
         }
         items.push(MenuAction::new("add", "Add action").icon("add-01").into());
         items

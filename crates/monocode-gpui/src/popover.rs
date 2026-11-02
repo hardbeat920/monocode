@@ -813,6 +813,15 @@ pub(crate) struct MenuAction {
     pub keep_open: bool,
     pub submenu: Vec<MenuAction>,
     pub flyout: Option<Flyout>,
+    /// A small icon button at the row's right edge that picks its own id,
+    /// shown while the row is highlighted.
+    pub trailing: Option<TrailingButton>,
+}
+#[derive(Clone)]
+pub(crate) struct TrailingButton {
+    pub id: SharedString,
+    pub icon: &'static str,
+    pub label: SharedString,
 }
 impl MenuAction {
     pub(crate) fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
@@ -887,6 +896,19 @@ impl MenuAction {
     }
     pub(crate) fn flyout(mut self, flyout: Flyout) -> Self {
         self.flyout = Some(flyout);
+        self
+    }
+    pub(crate) fn trailing(
+        mut self,
+        id: impl Into<SharedString>,
+        icon: &'static str,
+        label: impl Into<SharedString>,
+    ) -> Self {
+        self.trailing = Some(TrailingButton {
+            id: id.into(),
+            icon,
+            label: label.into(),
+        });
         self
     }
     fn opens(&self) -> bool {
@@ -1163,6 +1185,12 @@ impl Menu {
             }
         }
     }
+    fn pick_trailing(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(button) = self.action(ix).and_then(|a| a.trailing.clone()) else {
+            return;
+        };
+        self.finish(MenuEvent::Picked(button.id, None), window, cx);
+    }
     fn pick_sub(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(action) = self.submenu_items().get(ix) else {
             return;
@@ -1429,6 +1457,34 @@ impl Menu {
                     d
                 }
             })
+            .when_some(
+                action.trailing.clone().filter(|_| !in_submenu),
+                |d, button| {
+                    d.child(
+                        div()
+                            .id(("menu-trailing", ix))
+                            .role(Role::Button)
+                            .aria_label(button.label)
+                            .flex_shrink_0()
+                            .size(px(22.))
+                            .rounded(px(6.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(content(0.55))
+                            .when(!highlighted, |d| d.opacity(0.))
+                            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .child(icon(button.icon, 14.))
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.pick_trailing(ix, window, cx);
+                            })),
+                    )
+                },
+            )
             .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                 if !*hovered {
                     return;
