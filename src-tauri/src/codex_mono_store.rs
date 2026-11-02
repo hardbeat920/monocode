@@ -804,6 +804,27 @@ mod tests {
     }
 
     #[test]
+    fn does_not_fight_the_codex_subprocess_over_the_session_index_lock() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        // The real codex CLI writes its own lock locally in each home it's
+        // pointed at, independently of this sync.
+        std::fs::write(source.join("session_index.jsonl.lock"), "").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("session_index.jsonl.lock"), "").unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            std::fs::symlink_metadata(home.join("session_index.jsonl.lock"))
+                .unwrap()
+                .file_type()
+                .is_file(),
+            "the mono's own lock must stay a private local file, not get linked to the account home's"
+        );
+    }
+
+    #[test]
     fn rejects_a_private_state_link_to_the_original_home() {
         let fixture = Fixture::new();
         std::fs::create_dir_all(fixture.source().join("sessions")).unwrap();
