@@ -6,9 +6,7 @@
 # with all versions of Cargo and also rewrite `path` dependencies
 # to registry (e.g., crates.io) dependencies.
 #
-# If you are reading this file be aware that the original Cargo.toml
-# will likely look very different (and much more reasonable).
-# See Cargo.toml.orig for the original contents.
+# Upstream packaging-only files and unused benchmarks are omitted.
 
 [package]
 edition = "2024"
@@ -48,11 +46,6 @@ test-support = [
 name = "gpui_wgpu"
 path = "src/gpui_wgpu.rs"
 doctest = false
-
-[[bench]]
-name = "layout_line"
-path = "benches/layout_line.rs"
-harness = false
 
 [dependencies.anyhow]
 version = "1.0.86"
