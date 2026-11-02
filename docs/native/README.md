@@ -136,6 +136,11 @@ the executable from a release build:
 crates/monocode-gpui/target/release/monocode-gpui --check-data
 ```
 
+On Windows, the terminal prefers PowerShell 7 (`pwsh.exe`), then Windows
+PowerShell (`powershell.exe`), with `COMSPEC`/`cmd.exe` as the fallback. A `SHELL`
+environment variable pointing to an installed native executable overrides this
+order. Missing executables and Unix-only shell paths are ignored.
+
 Provider CLI paths can be changed in Settings → Providers. CLI authentication
 continues to use each provider's existing sign-in.
 

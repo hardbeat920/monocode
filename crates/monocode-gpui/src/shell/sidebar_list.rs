@@ -559,6 +559,10 @@ impl Shell {
 impl Shell {
     pub(super) fn sidebar_options_menu_items(&self) -> Vec<MenuItem> {
         vec![
+            MenuAction::new("sidebar-search", "Search")
+                .icon("search")
+                .toggle(self.workspace.sidebar_search_visible)
+                .into(),
             MenuAction::new("sidebar-notes", "Notes")
                 .icon("note")
                 .toggle(self.workspace.sidebar_notes_visible)
@@ -591,6 +595,7 @@ impl Shell {
 
     pub(super) fn change_sidebar_option(&mut self, action: &str, cx: &mut Context<Self>) {
         let value = match action {
+            "sidebar-search" => &mut self.workspace.sidebar_search_visible,
             "sidebar-notes" => &mut self.workspace.sidebar_notes_visible,
             "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
             "sidebar-inbox" => &mut self.workspace.sidebar_inbox_visible,
@@ -627,72 +632,75 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_px()
-            .child(
-                div()
-                    .id("rail-search")
-                    .debug_selector(|| "sidebar-search-field".into())
-                    .group("rail-search")
-                    .w_full()
-                    .h(px(32.))
-                    .mb(px(if self.workspace.classic_layout {
-                        2.
-                    } else {
-                        4.
-                    }))
-                    .px_1p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(content(0.08))
-                    // RailSearch's Tailwind shadow-sm, including
-                    // its tighter second layer below the border.
-                    // The vendored shader keeps it outside the
-                    // box, as CSS does.
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into()).blur_radius(px(3.)),
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
-                            .blur_radius(px(2.))
-                            .spread_radius(px(-1.)),
-                    ])
-                    .text_color(content(if self.sidebar_hover == Some("Search") {
-                        1.
-                    } else {
-                        0.5
-                    }))
-                    .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .on_hover(cx.listener(|this, hovered, _, cx| {
-                        this.sidebar_hover = if *hovered { Some("Search") } else { None };
-                        this.notify_navigation(cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.focus_search(window, cx);
-                        }),
-                    )
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(14.))
-                    .child(
-                        icon("search", 16.)
-                            .text_color(content(0.35))
-                            .group_hover("rail-search", |s| s.text_color(content(0.7))),
-                    )
-                    .child(div().flex_1().min_w_0().h(px(20.)).child("Search"))
-                    .child(
-                        // The shortcut span sits outside the label's `font-medium`.
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(content(0.4))
-                            .child(if cfg!(target_os = "macos") {
-                                "⌘K"
-                            } else {
-                                "Ctrl K"
+            .when(self.workspace.sidebar_search_visible, |d| {
+                d.child(
+                    div()
+                        .id("rail-search")
+                        .debug_selector(|| "sidebar-search-field".into())
+                        .group("rail-search")
+                        .w_full()
+                        .h(px(32.))
+                        .mb(px(if self.workspace.classic_layout {
+                            2.
+                        } else {
+                            4.
+                        }))
+                        .px_1p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.08))
+                        // RailSearch's Tailwind shadow-sm, including
+                        // its tighter second layer below the border.
+                        // The vendored shader keeps it outside the
+                        // box, as CSS does.
+                        .shadow(vec![
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(3.)),
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(2.))
+                                .spread_radius(px(-1.)),
+                        ])
+                        .text_color(content(if self.sidebar_hover == Some("Search") {
+                            1.
+                        } else {
+                            0.5
+                        }))
+                        .font_weight(FontWeight::MEDIUM)
+                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                        .on_hover(cx.listener(|this, hovered, _, cx| {
+                            this.sidebar_hover = if *hovered { Some("Search") } else { None };
+                            this.notify_navigation(cx);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.focus_search(window, cx);
                             }),
-                    ),
-            )
+                        )
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(14.))
+                        .child(
+                            icon("search", 16.)
+                                .text_color(content(0.35))
+                                .group_hover("rail-search", |s| s.text_color(content(0.7))),
+                        )
+                        .child(div().flex_1().min_w_0().h(px(20.)).child("Search"))
+                        .child(
+                            // The shortcut span sits outside the label's `font-medium`.
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(content(0.4))
+                                .child(if cfg!(target_os = "macos") {
+                                    "⌘K"
+                                } else {
+                                    "Ctrl K"
+                                }),
+                        ),
+                )
+            })
             .children(
                 [
                     ("Inbox", "inbox"),
@@ -969,7 +977,9 @@ mod tests {
                 assert_eq!(bounds.size.width, px(184.));
             })
             .unwrap();
+        let search = visual.debug_bounds("menu-action-sidebar-search").unwrap();
         let notes = visual.debug_bounds("menu-action-sidebar-notes").unwrap();
+        assert!(search.bottom() <= notes.top());
         let automations = visual
             .debug_bounds("menu-action-sidebar-automations")
             .unwrap();
@@ -986,6 +996,7 @@ mod tests {
             "a divider separates Compact view"
         );
         for (action, navigation) in [
+            ("menu-action-sidebar-search", "sidebar-search-field"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
                 "menu-action-sidebar-automations",
@@ -1015,6 +1026,7 @@ mod tests {
                 );
                 let menu = shell.menu.as_ref().unwrap().menu.read(cx);
                 for id in [
+                    "sidebar-search",
                     "sidebar-notes",
                     "sidebar-automations",
                     "sidebar-inbox",
@@ -1025,6 +1037,7 @@ mod tests {
                 assert!(!cx.global::<crate::settings::Preferences>().monos);
                 let saved = shell.latest_state.lock().unwrap().clone();
                 let restored = Workspace::restore(Some(&saved), &[], "/work/monocode");
+                assert!(!restored.sidebar_search_visible);
                 assert!(!restored.sidebar_notes_visible);
                 assert!(!restored.sidebar_automations_visible);
                 assert!(!restored.sidebar_inbox_visible);
@@ -1032,6 +1045,7 @@ mod tests {
             })
             .unwrap();
         for (action, navigation) in [
+            ("menu-action-sidebar-search", "sidebar-search-field"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
                 "menu-action-sidebar-automations",

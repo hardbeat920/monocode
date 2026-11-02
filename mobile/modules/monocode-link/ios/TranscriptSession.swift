@@ -197,6 +197,25 @@ final class TranscriptSession {
     var receiving: TranscriptRequest?
     var older: TranscriptRequest?
     let ready: () -> Void = { [weak self] in self?.wake() }
+    var revealScheduled: Date?
+    /// Builds a frame, and comes back to build again when a held-back
+    /// "Thinking…" line is due.
+    func build(_ style: TranscriptStyle, _ viewport: CGRect) -> TranscriptLayoutFrame {
+      let frame = engine.build(style: style, viewport: viewport)
+      if let at = engine.revealAt, at != revealScheduled {
+        revealScheduled = at
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+          deadline: .now() + max(0, at.timeIntervalSinceNow) + 0.01
+        ) { [weak self] in
+          guard let self else { return }
+          self.lock.lock()
+          self.dirtyLayout = true
+          self.signal()
+          self.lock.unlock()
+        }
+      }
+      return frame
+    }
     func update(_ command: [String: Any]) throws -> [String: Any] {
       let output =
         try TranscriptNative.call([
@@ -303,7 +322,7 @@ final class TranscriptSession {
         }
       }
       if nextStyle.width > 0, changed || relayout || latest != nil && !published {
-        onFrame?(engine.build(style: nextStyle, viewport: visible))
+        onFrame?(build(nextStyle, visible))
         published = true
       }
       if !foreground {
@@ -388,7 +407,7 @@ final class TranscriptSession {
                 from = nil
               }
               if latest != nil, nextStyle.width > 0 {
-                onFrame?(engine.build(style: nextStyle, viewport: visible))
+                onFrame?(build(nextStyle, visible))
               }
             }
           }

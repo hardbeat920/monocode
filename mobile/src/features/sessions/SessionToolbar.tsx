@@ -186,29 +186,38 @@ export function SessionToolbar({
           </Pressable>
           <ChoiceMenu
             label="Session actions"
-            actions={[
-              {
-                label: "Rename",
-                disabled: !session,
-                onPress: () => {
-                  if (session) {
-                    setName(session.title);
-                    setRenaming(true);
-                  }
+            title="Session"
+            sections={[
+              [
+                {
+                  label: "Rename",
+                  icon: "edit",
+                  disabled: !session,
+                  onPress: () => {
+                    if (session) {
+                      setName(session.title);
+                      setRenaming(true);
+                    }
+                  },
                 },
-              },
-              { label: "Copy Session ID", onPress: () => void copyId() },
-              { label: "Settings", onPress: onSettings },
-              {
-                label: "Archive",
-                disabled: !session,
-                onPress: () => session && archive(session),
-              },
-              {
-                label: "Delete",
-                disabled: !session,
-                onPress: () => session && remove(session),
-              },
+                { label: "Copy Session ID", icon: "copy", onPress: () => void copyId() },
+                { label: "Settings", icon: "settings", onPress: onSettings },
+              ],
+              [
+                {
+                  label: "Archive",
+                  icon: "archive",
+                  disabled: !session,
+                  onPress: () => session && archive(session),
+                },
+                {
+                  label: "Delete",
+                  icon: "trash",
+                  destructive: true,
+                  disabled: !session,
+                  onPress: () => session && remove(session),
+                },
+              ],
             ]}
           >
             <View style={styles.androidButton}>

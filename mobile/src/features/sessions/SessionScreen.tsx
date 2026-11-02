@@ -13,8 +13,10 @@ import {
   type RefObject,
 } from "react";
 import {
+  findNodeHandle,
   Platform,
   Text,
+  TextInput,
   View,
   type LayoutChangeEvent,
   type StyleProp,
@@ -308,11 +310,15 @@ export function SessionScreen({
 export function SessionFrame({
   children,
   nativeHeaderHeight,
+  standAside = false,
 }: {
   children: ReactNode;
   /** For a screen under the stack's native header: that header's height.
    *  It takes the place of this frame's own. */
   nativeHeaderHeight?: number;
+  /** Draws no header or composer of its own, as for a native header, for
+   *  screens that bring their own frame or none (the Monos-only layout). */
+  standAside?: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
@@ -330,7 +336,12 @@ export function SessionFrame({
   // going the moment the route changes while it is still on screen.
   const holding = swapping && !native && !hasNativeHeader(scene);
   if (scene !== pathname && !isModalRoute(pathname) && !holding) setScene(pathname);
-  const covered = !native && hasNativeHeader(scene);
+  // Android's modals are screens in the same stack, under this frame's
+  // header and composer rather than over them, so those stand aside too.
+  const covered =
+    standAside ||
+    (!native &&
+      (hasNativeHeader(scene) || (Platform.OS === "android" && isModalRoute(pathname))));
   // The loading cover stays up through its own way out, the ring then the
   // ground, once the switch no longer needs it.
   const covering = switching && !covered;
@@ -556,11 +567,12 @@ export function SessionFrame({
     <ChromeContext value={setChrome}>
       <JumpToEndContext value={jump}>
         <SessionLayoutContext value={layout}>
-          <KeyboardGestureArea
-            interpolator="ios"
-            textInputNativeID={COMPOSER_INPUT_ID}
-            style={styles.scene}
-          >
+          {/* No textInputNativeID: with it, iOS gives the focused composer an
+              invisible accessory view and defers its blur a frame. A Mono's
+              chat popped mid-edit then keeps the keyboard over the list, and
+              the next chat's field can't take focus. It only carries an
+              offset, which nothing here sets. */}
+          <KeyboardGestureArea interpolator="ios" style={styles.scene}>
             {/* First, unwrapped: the screens' scroll views lead each view's
                 first-child chain, where iOS looks for what to blur under a
                 native header, and nothing fades their native glass away. */}
@@ -627,7 +639,7 @@ export function SessionFrame({
               <View style={[styles.header, { top: headerTop }]}>
                 <View>
                   <CircleButton
-                    icon="menu"
+                    icon="sidebar"
                     label={unread ? "Projects and monos, new replies" : "Projects and monos"}
                     onPress={drawer.open}
                   />
@@ -738,16 +750,35 @@ export function SessionFrame({
  * `onInteractive` follows a drag. `offset` is how much less than the keyboard
  * height to rise, as KeyboardStickyView's `offset.opened`.
  */
-export function useKeyboardLift(offset: number) {
+export function useKeyboardLift(offset: number, owner?: RefObject<TextInput | null>) {
   const height = useSharedValue(0);
   const progress = useSharedValue(0);
+  // With an owner, only the keyboard raised for it. A Mono's chat popped
+  // mid-edit takes its keyboard out sideways with it, so the keyboard's
+  // height holds until the pop ends; the list's search would wait over it,
+  // then drop.
+  const ownerTag = useSharedValue(-1);
+  const owned = useSharedValue(true);
+  useEffect(() => {
+    if (owner) ownerTag.set(findNodeHandle(owner.current) ?? -1);
+  }, [owner, ownerTag]);
   const follow = (e: { height: number; progress: number }) => {
     "worklet";
+    if (!owned.get()) return;
     height.set(e.height);
     progress.set(e.progress);
   };
   useKeyboardHandler(
-    { onMove: follow, onInteractive: follow, onEnd: follow },
+    {
+      // Decided as it shows, and kept as it hides.
+      onStart: (e) => {
+        "worklet";
+        if (ownerTag.get() !== -1 && e.progress === 1) owned.set(e.target === ownerTag.get());
+      },
+      onMove: follow,
+      onInteractive: follow,
+      onEnd: follow,
+    },
     [],
   );
 

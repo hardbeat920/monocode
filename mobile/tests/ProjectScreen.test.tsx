@@ -36,6 +36,8 @@ vi.mock("@/features/sessions/UsageLimitCard", () => ({
 }));
 vi.mock("@/features/mascots/PixelMascot", () => ({ PixelMascot: () => null }));
 vi.mock("expo-haptics", () => ({}));
+vi.mock("@/ui/useNativeHeaderHeight", () => ({ useNativeHeaderHeight: () => 0 }));
+vi.mock("@/features/settings/monoOnly", () => ({ useMonoOnlyLayout: () => [false] }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
   useConnection: () => ({}),
   useMonoTools: () => false,
@@ -331,6 +333,7 @@ vi.mock("@/ui/theme", () => {
   return {
     useColors: () => colors,
     useScheme: () => "dark",
+    useAccent: () => "theme",
     ACCENTS: {},
     AccentOverride: ({ children }: { children: ReactNode }) => children,
     themedStyles: (create: (value: typeof colors) => object) => () =>

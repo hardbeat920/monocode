@@ -206,6 +206,10 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
+    /// The submit button's morph between square and labelled pill.
+    send_morph: std::cell::RefCell<crate::send_morph::Morph>,
+    /// ⌘ (Ctrl elsewhere) as last seen, which flips Queue and Steer.
+    send_alternate: bool,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -654,6 +658,8 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
+            send_morph: Default::default(),
+            send_alternate: false,
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -1225,6 +1231,13 @@ impl Conversation {
                             this.save_settings(cx);
                             this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
+                        }
+                        // The host renamed the conversation; it is not sent back.
+                        if let Some(title) = update.title
+                            && this.summary.title != title
+                        {
+                            this.summary.title = title;
+                            cx.emit(SessionChanged);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
@@ -3241,35 +3254,62 @@ impl Conversation {
             && (!self.preparing_worktree || self.busy || self.stopping)
             && (busy || (has_value && self.loaded))
             && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none()));
-        send_button(
-            "send-or-stop",
-            if busy {
+        // Something to send grows the button into a pill naming the action;
+        // empty or stopping, it rests as a square.
+        let face = crate::send_morph::Face {
+            label: if busy {
                 "Stop"
             } else if draft {
                 "Save draft"
             } else {
                 follow_up.map_or("Send", |(label, _)| label)
             },
-            busy,
-            follow_up.map_or("send", |(_, glyph)| glyph),
-            enabled,
-        )
-        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-            if !enabled {
-                return;
-            }
-            if busy {
-                this.stop(cx);
-            } else {
-                let modifiers = event.modifiers();
-                let alternate = if cfg!(target_os = "macos") {
-                    modifiers.platform
+            glyph: follow_up.map_or("send", |(_, glyph)| glyph),
+            stop: busy,
+            expanded: !busy && has_value,
+        };
+        let frame = self.send_morph.borrow_mut().frame(
+            face,
+            crate::send_morph::expanded_width(face.label, window),
+            !cx.reduce_motion(),
+        );
+        if frame.moving {
+            window.request_animation_frame();
+        }
+        crate::send_morph::button("send-or-stop", face, &frame, enabled)
+            // Holding ⌘ (Ctrl elsewhere) flips Queue and Steer; redraw so the
+            // label rolls to it while the key is down.
+            // Only ⌘'s own changes matter, and only while it changes the action.
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                    let alternate = if cfg!(target_os = "macos") {
+                        event.modifiers.platform
+                    } else {
+                        event.modifiers.control
+                    };
+                    if std::mem::replace(&mut this.send_alternate, alternate) != alternate
+                        && this.follow_up_action(alternate, cx).is_some()
+                    {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if !enabled {
+                    return;
+                }
+                if busy {
+                    this.stop(cx);
                 } else {
-                    modifiers.control
-                };
-                this.send_follow_up(alternate, cx);
-            }
-        }))
+                    let modifiers = event.modifiers();
+                    let alternate = if cfg!(target_os = "macos") {
+                        modifiers.platform
+                    } else {
+                        modifiers.control
+                    };
+                    this.send_follow_up(alternate, cx);
+                }
+            }))
     }
     // EmptySession.tsx: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than

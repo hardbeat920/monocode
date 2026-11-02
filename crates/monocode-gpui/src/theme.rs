@@ -1,4 +1,4 @@
-use gpui::{Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
+use gpui::{AnyElement, Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
 // Shared appearance tokens. Interaction fills use translucent content ink
 // rather than opaque replacement greys.
 pub(crate) const CHAT: u32 = 0x141414;
@@ -349,11 +349,13 @@ pub(crate) fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
 
 /// The plate for session tabs in the title bar.
 /// Headline ink owns inactive dimming; the plate never fades its children.
+/// Its icon tile sits as far from the left edge as from the top and bottom.
 pub(crate) fn title_tab_plate(selected: bool, hovered: bool) -> Div {
     div()
         .h(px(TAB_PLATE_HEIGHT))
         .rounded_md()
-        .px_2()
+        .pl(px(crate::tab_tile::tab_tile_inset()))
+        .pr_2()
         .flex()
         .items_center()
         .bg(title_tab_fill(selected, hovered))
@@ -429,6 +431,58 @@ pub(crate) fn icon(path: &'static str, side: f32) -> Svg {
         .text_color(content(0.5))
         .flex_shrink_0()
 }
+/// A provider's brand fill for its icon tile, top and bottom of a gentle
+/// gradient. `None` for a multicolour logo that keeps a light tile.
+pub(crate) fn provider_tile(provider: &str) -> Option<(Hsla, Hsla)> {
+    let (top, bottom) = match provider {
+        "claude" => (0xE3876A, 0xD06A49),
+        "antigravity" => return None,
+        // The violet-to-pink of its mark.
+        "omp" => (0xC45BE0, 0x8A5CF2),
+        "cursor" | "grok" | "pi" | "fx" => (0x343434, 0x161616),
+        "opencode" => (0x3B3636, 0x1F1C1C),
+        "hermes" | "devin" => (0x3A3A3E, 0x1E1E22),
+        // Codex: the blue of its mark's gradient.
+        _ => (0x7A8CFF, 0x4048FF),
+    };
+    Some((rgb(top).into(), rgb(bottom).into()))
+}
+
+/// The provider's mark in white, to sit on its [`provider_tile`] colour.
+/// A multicolour logo sits on a neutral tile in that tile's ink.
+pub(crate) fn provider_glyph(provider: &str, side: f32) -> AnyElement {
+    let (path, scale) = match provider {
+        // A multicolour logo on a neutral tile: one colour, like the rest.
+        "antigravity" => {
+            return svg()
+                .path("antigravity.svg")
+                .size(px(side))
+                .text_color(crate::tab_tile::tile_ink())
+                .flex_shrink_0()
+                .into_any_element();
+        }
+        // Codex's mark without the white disc behind it, so the prompt cut
+        // out of it shows the tile's colour.
+        "codex" => ("codex-glyph.svg", 1.),
+        "claude" => ("claude.svg", 1.),
+        "cursor" => ("cursor.svg", 1.),
+        "grok" => ("grok.svg", 1.),
+        "opencode" => ("opencode.svg", 1.),
+        "pi" => ("pi.svg", 1.),
+        "omp" => ("omp.svg", 1.),
+        "fx" => ("fx.svg", 1.),
+        "hermes" => ("hermes.svg", 0.72),
+        "devin" => ("devin.svg", 0.88),
+        _ => ("codex-glyph.svg", 1.),
+    };
+    svg()
+        .path(path)
+        .size(px(side * scale))
+        .text_color(gpui::white())
+        .flex_shrink_0()
+        .into_any_element()
+}
+
 pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
     let (path, monochrome, scale) = match provider {
         "claude" => ("claude.svg", false, 1.),

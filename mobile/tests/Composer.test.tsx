@@ -155,6 +155,9 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   frame: vi.fn(),
   shapes: { circle: vi.fn() },
 }));
+vi.mock("expo-router", () => ({
+  useNavigation: () => ({ addListener: () => () => {} }),
+}));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 24 }),
 }));
@@ -287,9 +290,9 @@ it("opens a content-sized attachment menu with safe-area padding and retains bot
   await act(async () => button("Add photos or files").click());
   const scroll = container.querySelector<HTMLElement>("[data-scroll]")!;
   expect(scroll.style.flexGrow).toBe("0");
-  expect(scroll.style.maxHeight).toBe("75%");
+  expect(scroll.parentElement!.style.maxHeight).toBe("80%");
   expect((scroll.firstElementChild as HTMLElement).style.paddingBottom).toBe(
-    "44px",
+    "40px",
   );
   await act(async () =>
     [...container.querySelectorAll("button")]
