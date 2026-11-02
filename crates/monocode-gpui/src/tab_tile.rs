@@ -232,7 +232,8 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
     let mut placed: Vec<(f32, f32, Div)> = tiles
         .into_iter()
         .filter(|t| t.from < STACK_MAX || t.to < STACK_MAX)
-        .map(|tile| {
+        // A fully faded tile has nothing left to draw.
+        .filter_map(|tile| {
             let (from, to) = (tile.from as f32, tile.to as f32);
             let depth = from + (to - from) * travel;
             // A card out of sight waits behind the last one and fades.
@@ -264,8 +265,6 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
                 .when(opacity < 1., |d| d.opacity(opacity));
             (opacity > 0.).then_some((z, depth, element))
         })
-        // A fully faded tile has nothing left to draw.
-        .flatten()
         .collect();
     placed.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
     div()
