@@ -700,9 +700,13 @@ impl Monos {
             let mut summary = db.create(provider.id(), &home)?;
             summary.title = mono.label();
             db.title(summary.id, &summary.title)?;
+            // A Mono's chat is conversation: it answers quickly at low effort
+            // and hands heavy work to background sessions. Only new chats get
+            // this; existing Monos keep whatever effort they already have.
             let settings = Settings {
                 access: AccessMode::Auto,
                 model: prefs.default_models.get(provider.id()).cloned(),
+                effort: Some("low".into()),
                 ..Default::default()
             };
             db.configure_agent(summary.id, provider.id(), &settings)?;

@@ -167,21 +167,31 @@ fn context_shows_how_to_delegate_without_running_help() {
         projects: vec!["/repo".into()],
         ..Default::default()
     };
-    let text = context(
-        &mono,
-        &files::AgentFiles {
-            id: mono.id.clone(),
-            dir: String::new(),
-            soul: Some(DEFAULT_SOUL.into()),
-            soul_hash: String::new(),
-            memory: String::new(),
-            memory_hash: String::new(),
-            memory_path: String::new(),
-            topics: Vec::new(),
-        },
-        std::path::Path::new("/Applications/Monocode.app/monocode"),
-    );
-    assert!(text.contains(
-        r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#
-    ));
+    let files = files::AgentFiles {
+        id: mono.id.clone(),
+        dir: String::new(),
+        soul: Some(DEFAULT_SOUL.into()),
+        soul_hash: String::new(),
+        memory: String::new(),
+        memory_hash: String::new(),
+        memory_path: String::new(),
+        topics: Vec::new(),
+    };
+    let executable = std::path::Path::new("/Applications/Monocode.app/monocode");
+    let start = r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#;
+    let rules = instructions(&mono, executable);
+    assert!(rules.contains(start));
+    assert!(rules.contains("## Be quick"));
+    assert!(rules.contains("- /repo"));
+    // Without system instructions, the rules ride along in the message.
+    let inline = context(&mono, &files, executable, false);
+    assert!(inline.contains(&rules));
+    assert!(inline.contains("<soul>"));
+    // With them, the message carries only what changes between turns.
+    let system = context(&mono, &files, executable, true);
+    assert!(!system.contains(start));
+    assert!(system.contains("<soul>") && system.contains("<memory>"));
+    assert!(system_instructions_supported(crate::provider::Kind::Claude));
+    assert!(system_instructions_supported(crate::provider::Kind::Codex));
+    assert!(!system_instructions_supported(crate::provider::Kind::Devin));
 }

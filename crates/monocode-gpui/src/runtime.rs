@@ -442,7 +442,12 @@ fn run_turn_using(
             prompt
         } else if let Some(mono) = &settings.mono {
             let files = monocode_core::mono::load_files(&mono.root, &mono.mono)?;
-            let added = monocode_core::mono::context(&mono.mono, &files, &mono.executable);
+            let added = monocode_core::mono::context(
+                &mono.mono,
+                &files,
+                &mono.executable,
+                monocode_core::mono::system_instructions_supported(kind),
+            );
             let fingerprint = monocode_core::mono::files::content_hash(&added);
             mono_fingerprint = Some(fingerprint.clone());
             let rotated = provider_id.is_some() && context.ratio().is_some_and(|r| r >= 0.8);
