@@ -240,11 +240,36 @@ function normalizeImageMime(mime: string): string {
   return mime;
 }
 
+/**
+ * Where a user turn sits in a Claude transcript: the entry it continued from
+ * (empty for a conversation's first turn) and the uuid of its prompt.
+ * `--resume-session-at` keeps the transcript up to `resumeAt`, and
+ * `--resume-drops-turn` refuses that resume if anything other than this
+ * prompt's turn would be cut.
+ */
+export type ClaudeTurnBoundary = { resumeAt: string; prompt: string };
+
+/** Stored as the user block's `providerTurnId`; uuids never contain `_`. */
+export function formatClaudeTurnBoundary(boundary: ClaudeTurnBoundary): string {
+  return `${boundary.resumeAt}_${boundary.prompt}`;
+}
+
+export function parseClaudeTurnBoundary(
+  providerTurnId: string,
+): ClaudeTurnBoundary | null {
+  const separator = providerTurnId.lastIndexOf("_");
+  const prompt = providerTurnId.slice(separator + 1);
+  if (separator < 0 || !prompt) return null;
+  return { resumeAt: providerTurnId.slice(0, separator), prompt };
+}
+
 export function buildClaudeSpawnArgs(input: {
   model?: string;
   effort?: string;
   permissionMode?: ClaudePermissionMode;
   resume?: string;
+  /** Resume `resume` truncated after this turn's boundary. */
+  rewind?: ClaudeTurnBoundary;
   sessionId?: string;
   settings?: ClaudeCliSettings;
   includePartialMessages?: boolean;
@@ -259,7 +284,9 @@ export function buildClaudeSpawnArgs(input: {
     "stream-json",
   ];
   if (!input.isolated) {
-    args.push("--permission-prompt-tool", "stdio");
+    // Replayed prompts carry the uuid Claude stored them under, which a later
+    // rewind needs to name the turn it drops.
+    args.push("--permission-prompt-tool", "stdio", "--replay-user-messages");
   }
   if (input.includePartialMessages !== false) {
     args.push("--include-partial-messages");
@@ -289,6 +316,14 @@ export function buildClaudeSpawnArgs(input: {
     args.push("--allow-dangerously-skip-permissions");
   }
   if (input.resume) args.push("--resume", input.resume);
+  if (input.resume && input.rewind) {
+    args.push(
+      "--resume-session-at",
+      input.rewind.resumeAt,
+      "--resume-drops-turn",
+      input.rewind.prompt,
+    );
+  }
   if (input.sessionId) args.push("--session-id", input.sessionId);
   if (input.maxTurns) args.push("--max-turns", String(input.maxTurns));
   return args;

@@ -32,6 +32,7 @@ import {
   claudeSettingsKey,
   extractAskUserQuestionTitle,
   extractExitPlanModePlan,
+  formatClaudeTurnBoundary,
   inputJsonDeltaFromEvent,
   isAgentTaskType,
   isClaudeUltracodeEffort,
@@ -43,6 +44,7 @@ import {
   isUsageLimitResult,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
+  parseClaudeTurnBoundary,
   parseControlCancelId,
   parseControlRequest,
   parseJsonLine,
@@ -71,6 +73,7 @@ import {
   type ClaudeAgentTaskNotification,
   type ClaudeCliSettings,
   type ClaudeControlRequest,
+  type ClaudeTurnBoundary,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
@@ -84,6 +87,8 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
@@ -176,6 +181,8 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** A user turn was written and its replay has not come back yet. */
+  promptAwaitingReplay: boolean;
 };
 
 type Resume = {
@@ -202,6 +209,20 @@ const tasksByThread = new Map<
   string,
   { providerSessionId: string; tasks: Map<string, TaskListItem> }
 >();
+/**
+ * The last transcript entry Claude streamed on each thread, which the next
+ * user turn continues from. Empty for a conversation with no entries yet.
+ * Absent when MonoCode cannot know it: a conversation from before this run,
+ * or right after a compaction or a stopped turn, which store entries the
+ * stream does not show under their stored uuid.
+ */
+const transcriptLeafByThread = new Map<string, string>();
+/**
+ * A rewind whose replacement turn has not been written yet. Until it is, a
+ * plain resume loads the dropped turn again, so every respawn in between
+ * resumes at the same point.
+ */
+const rewindByThread = new Map<string, ClaudeTurnBoundary>();
 /** Task-list block key for TaskCreate/TaskUpdate items. */
 const CLAUDE_TASKS_KEY = "claude-tasks";
 const cancelledThreads = new Set<string>();
@@ -297,6 +318,57 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   await writeJson(input.sessionId, message);
 }
 
+/**
+ * Drop the last user turn from the Claude conversation so the edited prompt
+ * replaces it. Respawns the CLI truncated at the turn's boundary right away,
+ * so a refused rewind fails here instead of on the replacement turn.
+ */
+export async function rewindClaudeLastTurn(
+  input: RewindLastTurnInput,
+): Promise<RewindLastTurnResult> {
+  if (liveByThread.get(input.sessionId)?.activeTurn) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+  const boundary = input.providerTurnId
+    ? parseClaudeTurnBoundary(input.providerTurnId)
+    : null;
+  if (!boundary) throw new Error("Claude Code cannot rewind this message");
+  if (boundary.resumeAt) {
+    // A conversation bound to another folder or account would start fresh,
+    // so nothing would be rewound.
+    const resume = resumeByThread.get(input.sessionId);
+    if (
+      !resume ||
+      resume.cwd !== input.cwd ||
+      !sameProviderAccountId(resume.providerAccountId, input.providerAccountId)
+    ) {
+      throw new Error("Claude Code cannot rewind this message");
+    }
+  }
+
+  await stopClaudeSession(input.sessionId);
+  if (!boundary.resumeAt) {
+    // Nothing comes before the first turn, so its replacement starts over.
+    resumeByThread.delete(input.sessionId);
+    tasksByThread.delete(input.sessionId);
+    return { submitted: false };
+  }
+
+  rewindByThread.set(input.sessionId, boundary);
+  try {
+    const live = await ensureLive(input);
+    // A refused resume makes Claude exit before it answers initialize.
+    if (liveByThread.get(input.sessionId) !== live) {
+      throw new Error("Claude Code could not rewind this conversation");
+    }
+  } catch (error) {
+    rewindByThread.delete(input.sessionId);
+    throw error;
+  }
+  transcriptLeafByThread.set(input.sessionId, boundary.resumeAt);
+  return { submitted: false };
+}
+
 export function respondClaudeApproval(
   sessionId: string,
   requestId: number,
@@ -327,6 +399,8 @@ export async function cancelClaudeTurn(sessionId: string): Promise<void> {
   }
   live.cancelled = true;
   live.muteUpdates = true;
+  // The interrupt stores entries the muted stream never shows.
+  transcriptLeafByThread.delete(sessionId);
   for (const [, pending] of live.approvals) pending.resolve("deny");
   live.approvals.clear();
   for (const [, pending] of live.questions)
@@ -378,6 +452,8 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
 export async function forgetClaudeSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
   tasksByThread.delete(sessionId);
+  transcriptLeafByThread.delete(sessionId);
+  rewindByThread.delete(sessionId);
   await stopClaudeSession(sessionId);
 }
 
@@ -389,6 +465,10 @@ export function bindClaudeSession(
 ): void {
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
+  if (resumeByThread.get(threadId)?.sessionId !== sessionId) {
+    transcriptLeafByThread.delete(threadId);
+    rewindByThread.delete(threadId);
+  }
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
   // Task ids from another conversation mean nothing in this one.
   if (tasksByThread.get(threadId)?.providerSessionId !== sessionId) {
@@ -456,6 +536,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   ) {
     resumeByThread.delete(input.sessionId);
   }
+  if (!canResume) {
+    transcriptLeafByThread.set(input.sessionId, "");
+    rewindByThread.delete(input.sessionId);
+  }
   const { path } = await resolveClaudeBinaryImpl();
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
@@ -473,6 +557,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     input,
     canResume ? resume?.sessionId : undefined,
     claudeSessionId,
+    rewindByThread.get(input.sessionId),
   );
 
   const live: Live = {
@@ -513,6 +598,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    promptAwaitingReplay: false,
   };
   liveRef.current = live;
 
@@ -603,6 +689,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.activeTurn = true;
   settlePendingTurn(live);
 
+  live.promptAwaitingReplay = !live.manualCompaction;
   try {
     await writeJson(input.sessionId, message);
     input.onAccepted?.();
@@ -668,6 +755,8 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   const sessionIdFromLine = sessionIdFromMessage(rec);
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
+    transcriptLeafByThread.delete(sessionId);
+    rewindByThread.delete(sessionId);
     // A different conversation starts with its own task ids.
     live.claudeTasks = new Map();
     tasksByThread.set(sessionId, {
@@ -716,10 +805,16 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   if (type === "assistant") {
     if (!isSubagentMessage(rec)) noteClaudeTurnStarted(live);
     handleAssistant(live, rec);
+    noteTranscriptEntry(sessionId, rec);
     return;
   }
   if (type === "user") {
+    if (rec.isReplay === true) {
+      handleReplayedPrompt(sessionId, live, rec);
+      return;
+    }
     handleUser(live, rec);
+    noteTranscriptEntry(sessionId, rec);
     return;
   }
   if (type === "result") {
@@ -738,7 +833,44 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       }
       live.onEvent({ type: "status", text });
     }
+    if (stringField(rec, "subtype") === "compact_boundary") {
+      transcriptLeafByThread.delete(sessionId);
+      // Claude cannot resume at an entry from before the compaction.
+      live.onEvent({ type: "turns.sealed" });
+    }
   }
+}
+
+function noteTranscriptEntry(
+  sessionId: string,
+  rec: Record<string, unknown>,
+): void {
+  // Subagent messages live in their own transcript.
+  if (isSubagentMessage(rec)) return;
+  const uuid = stringField(rec, "uuid");
+  if (uuid) transcriptLeafByThread.set(sessionId, uuid);
+}
+
+/** Claude echoes each prompt written to it under the uuid it stored. */
+function handleReplayedPrompt(
+  sessionId: string,
+  live: Live,
+  rec: Record<string, unknown>,
+): void {
+  const prompt = stringField(rec, "uuid");
+  if (!prompt) return;
+  // The replacement turn is stored now, so a plain resume finds it.
+  rewindByThread.delete(sessionId);
+  const resumeAt = transcriptLeafByThread.get(sessionId);
+  transcriptLeafByThread.set(sessionId, prompt);
+  // Steered messages join the running turn rather than start one.
+  if (!live.promptAwaitingReplay) return;
+  live.promptAwaitingReplay = false;
+  if (resumeAt === undefined) return;
+  live.onEvent({
+    type: "turn.started",
+    providerTurnId: formatClaudeTurnBoundary({ resumeAt, prompt }),
+  });
 }
 
 function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
@@ -1776,11 +1908,13 @@ function launchOptions(
   input: HarnessSessionInput,
   resume: string | undefined,
   sessionId: string,
+  rewind: ClaudeTurnBoundary | undefined,
 ): {
   model?: string;
   effort?: string;
   permissionMode?: ReturnType<typeof runtimeModeToPermission>;
   resume?: string;
+  rewind?: ClaudeTurnBoundary;
   sessionId?: string;
   settings?: ClaudeCliSettings;
 } {
@@ -1808,6 +1942,7 @@ function launchOptions(
         ? "plan"
         : runtimeModeToPermission(input.runtimeMode),
     resume,
+    rewind,
     sessionId: resume ? undefined : sessionId,
     settings: Object.keys(settings).length > 0 ? settings : undefined,
   };
@@ -1818,5 +1953,7 @@ export function __claudeTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
   tasksByThread.clear();
+  transcriptLeafByThread.clear();
+  rewindByThread.clear();
   cancelledThreads.clear();
 }

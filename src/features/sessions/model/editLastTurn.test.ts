@@ -222,6 +222,21 @@ describe("editLastTurn", () => {
     expect(canEditLastTurn(session)).toBe(true);
   });
 
+  it("allows edit on Claude sessions only once the turn has a boundary", () => {
+    const blocks: Block[] = [
+      { id: "u1", role: "user", text: "hello" },
+      { id: "a1", role: "assistant", text: "hi" },
+    ];
+    const session = { ...chat(blocks), harness: "claude" as const };
+    expect(canEditLastTurn(session)).toBe(false);
+    expect(
+      canEditLastTurn({
+        ...session,
+        blocks: [{ ...blocks[0], providerTurnId: "_p1" }, blocks[1]],
+      }),
+    ).toBe(true);
+  });
+
   it("blocks edit while busy, queued, or on unsupported harnesses", () => {
     const base = chat([
       { id: "u1", role: "user", text: "hello" },
