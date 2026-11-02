@@ -1,5 +1,5 @@
-//! The frosted icon tile that stands for a tab or a session: a small raised
-//! glass rectangle, a touch wider than tall, holding one mark. A split tab
+//! The icon tile that stands for a tab or a session: a small raised solid
+//! rectangle, a touch wider than tall, holding one mark. A split tab
 //! stacks one tile per pane, the focused one in front and the rest tucked
 //! behind it, each peeking out a little further right.
 use crate::theme::*;
@@ -8,16 +8,16 @@ use gpui::{AnyElement, Corners, Div, Hsla, canvas, div, prelude::*, px};
 /// What a tile is made of.
 #[derive(Clone, Copy)]
 pub(crate) enum Face {
-    /// Frosted glass over whatever is behind it.
-    Glass,
+    /// A solid neutral grey, under the theme's ink or a full-colour mark.
+    Neutral,
     /// A solid brand colour, top to bottom, under a white mark.
     Fill(Hsla, Hsla),
 }
 
 impl Face {
-    /// A provider's brand tile, or glass for a multicolour logo.
+    /// A provider's brand tile, or neutral for a multicolour logo.
     pub(crate) fn provider(provider: &str) -> Self {
-        provider_tile(provider).map_or(Self::Glass, |(top, bottom)| Self::Fill(top, bottom))
+        provider_tile(provider).map_or(Self::Neutral, |(top, bottom)| Self::Fill(top, bottom))
     }
 }
 
@@ -45,9 +45,6 @@ const PEEK: f32 = 4.;
 const SHRINK: f32 = 2.;
 /// Tiles drawn for one stack; further panes fold into the count.
 pub(crate) const STACK_MAX: usize = 3;
-/// The popovers' backdrop-blur-xl, scaled down to the tile.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const BLUR: f32 = 12.;
 
 /// The left inset that matches a tile's gap above and below in a tab plate.
 pub(crate) fn tab_tile_inset() -> f32 {
@@ -55,12 +52,9 @@ pub(crate) fn tab_tile_inset() -> f32 {
 }
 
 /// The whole tile surface, painted in one pass over one rect so every layer
-/// lines up: a hairline lift below it, the glass (a tint over a backdrop
-/// blur of whatever sits behind, the tiles further back included), a faint
-/// sheen and the border. A real drop shadow would sit under the glass and be
-/// blurred into it, darkening the middle, so the lift only shows below the
-/// bottom edge. Without the blur the tile paints opaque, so marks behind it
-/// never bleed through.
+/// lines up: a hairline lift below it, the solid fill (brand colour or
+/// neutral), a faint sheen and the border. Every tile is opaque, so the
+/// ones further back in a stack never show through it.
 fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -99,9 +93,9 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
                     )
                     .corner_radii(corners),
                 ),
-                Face::Glass => paint_glass(bounds, corners, depth, window),
+                Face::Neutral => paint_neutral(bounds, corners, depth, window),
             }
-            // Brighter at the top, like light on glass.
+            // Brighter at the top, like light on a raised face.
             window.paint_quad(
                 gpui::fill(
                     bounds,
@@ -110,8 +104,8 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
                         gpui::linear_color_stop(
                             white(match face {
                                 Face::Fill(..) => 0.16,
-                                Face::Glass if light => 0.35,
-                                Face::Glass => 0.05,
+                                Face::Neutral if light => 0.35,
+                                Face::Neutral => 0.05,
                             }),
                             0.,
                         ),
@@ -127,7 +121,7 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
                     .border_color(match face {
                         // A light rim, as on an app icon.
                         Face::Fill(..) => white(0.14),
-                        Face::Glass => content(if depth == 0 { 0.1 } else { 0.06 }),
+                        Face::Neutral => content(if depth == 0 { 0.1 } else { 0.06 }),
                     }),
             );
         },
@@ -138,37 +132,44 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
     .size_full()
 }
 
-/// A tint over a backdrop blur, or an opaque card where there is no blur.
-fn paint_glass(
+/// The neutral tile: a solid grey gradient in the theme's ink hue, raised
+/// above the surface like the coloured tiles. Each step back is a shade
+/// deeper. Solid, so a stack's front tile hides the ones behind it without
+/// a backdrop blur, which would break the frame's render pass per tile.
+fn paint_neutral(
     bounds: gpui::Bounds<gpui::Pixels>,
     corners: Corners<gpui::Pixels>,
     depth: usize,
     window: &mut gpui::Window,
 ) {
-    let light = is_light();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        let tint = if light {
-            white(if depth == 0 { 0.72 } else { 0.6 })
-        } else {
-            content(if depth == 0 { 0.12 } else { 0.08 })
-        };
-        window.paint_quad(
-            gpui::fill(bounds, tint)
-                .corner_radii(corners)
-                .border_color(gpui::backdrop_blur_marker(BLUR * window.scale_factor())),
-        );
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (light, depth);
-        window.paint_quad(gpui::fill(bounds, floating_fill()).corner_radii(corners));
-    }
+    let shade = |l: f32| {
+        let mut c = content(1.);
+        c.s = c.s.min(0.08);
+        c.l = l - depth as f32 * 0.03;
+        c.a = 1.;
+        c
+    };
+    let (top, bottom) = if is_light() {
+        (shade(1.), shade(0.93))
+    } else {
+        (shade(0.27), shade(0.2))
+    };
+    window.paint_quad(
+        gpui::fill(
+            bounds,
+            gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(top, 0.),
+                gpui::linear_color_stop(bottom, 1.),
+            ),
+        )
+        .corner_radii(corners),
+    );
 }
 
 /// One tile at `depth` in a stack (0 is the front); a shuffle passes
 /// depths in between. Each step back is smaller; the front tile alone
-/// carries the lift and the brighter glass.
+/// carries the lift and the brighter border.
 fn tile(size: &TileSize, depth: f32, face: Face, mark: AnyElement) -> Div {
     tile_lifted(size, depth, face, mark, 0.)
 }
@@ -263,7 +264,7 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
                 .when(opacity < 1., |d| d.opacity(opacity));
             (opacity > 0.).then_some((z, depth, element))
         })
-        // A faded tile still frosts what is behind it, so it isn't drawn.
+        // A fully faded tile has nothing left to draw.
         .flatten()
         .collect();
     placed.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
@@ -275,17 +276,27 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
         .children(placed.into_iter().map(|(_, _, tile)| tile))
 }
 
-/// A tab's icon on glass: app views, Search, Monos, files and diffs.
-pub(crate) fn glass_tile(mark: impl IntoElement) -> Div {
-    mark_tile(&TAB_TILE, Face::Glass, mark)
+/// A tab's icon on a neutral tile: app views, Search, Monos, files and diffs.
+pub(crate) fn neutral_tile(mark: impl IntoElement) -> Div {
+    mark_tile(&TAB_TILE, Face::Neutral, mark)
 }
 
-/// A file tab's tile: its type icon on glass, or the compare mark for a diff.
+/// The ink for a mark on a neutral tile: white on dark, near-black on
+/// light. Coloured tiles carry white marks.
+pub(crate) fn tile_ink() -> Hsla {
+    if is_light() {
+        black(0.85)
+    } else {
+        gpui::white()
+    }
+}
+
+/// A file tab's tile: its type icon on a neutral tile, or the compare mark for a diff.
 pub(crate) fn file_tile(name: Option<&str>) -> Div {
-    glass_tile(match name {
-        Some(name) => crate::file_icons::file_type_icon(name, false, false, 14.),
+    neutral_tile(match name {
+        Some(name) => crate::file_icons::file_type_glyph(name, 14., tile_ink()),
         None => icon("git-compare", 14.)
-            .text_color(content(0.85))
+            .text_color(tile_ink())
             .into_any_element(),
     })
 }
@@ -319,9 +330,9 @@ pub(crate) const ACTIVITY_TILE: TileSize = TileSize {
 
 /// A transcript work phase's tile, coloured by the kind of work like an
 /// app icon: commands on a dark terminal tile, edits amber, reading and
-/// searching blue, sub-agents violet, the app's own visuals on glass.
+/// searching blue, sub-agents violet, the app's own visuals neutral.
 /// A work phase's tile face, its mark and the ink that suits other marks
-/// on it: white on a coloured tile, the theme's ink on glass.
+/// on it: white on a coloured tile, the theme's ink on a neutral one.
 pub(crate) fn activity_face(glyph: &'static str) -> (Face, AnyElement, Hsla) {
     let fill = |top: u32, bottom: u32| Face::Fill(gpui::rgb(top).into(), gpui::rgb(bottom).into());
     let white = |name: &'static str, side: f32| {
@@ -337,10 +348,16 @@ pub(crate) fn activity_face(glyph: &'static str) -> (Face, AnyElement, Hsla) {
         "pencil-line" => (fill(0xF6B44B, 0xE08A12), white("pencil-line", 12.), ink),
         "search" => (fill(0x6AAEFF, 0x2F6FE4), white("search", 12.), ink),
         "bot" => (fill(0xA98BF5, 0x7246E0), white("bot", 12.), ink),
+        // The app's own logo keeps its colours.
+        "monocode" => (
+            Face::Neutral,
+            crate::activity::glyph("monocode", 12.).into_any_element(),
+            tile_ink(),
+        ),
         other => (
-            Face::Glass,
-            crate::activity::glyph(other, 12.).into_any_element(),
-            content(0.9),
+            Face::Neutral,
+            icon(other, 12.).text_color(tile_ink()).into_any_element(),
+            tile_ink(),
         ),
     }
 }

@@ -449,10 +449,18 @@ pub(crate) fn provider_tile(provider: &str) -> Option<(Hsla, Hsla)> {
 }
 
 /// The provider's mark in white, to sit on its [`provider_tile`] colour.
-/// A multicolour logo keeps its own colours.
+/// A multicolour logo sits on a neutral tile in that tile's ink.
 pub(crate) fn provider_glyph(provider: &str, side: f32) -> AnyElement {
     let (path, scale) = match provider {
-        "antigravity" => return provider_icon(provider, side).into_any_element(),
+        // A multicolour logo on a neutral tile: one colour, like the rest.
+        "antigravity" => {
+            return svg()
+                .path("antigravity.svg")
+                .size(px(side))
+                .text_color(crate::tab_tile::tile_ink())
+                .flex_shrink_0()
+                .into_any_element();
+        }
         // Codex's mark without the white disc behind it, so the prompt cut
         // out of it shows the tile's colour.
         "codex" => ("codex-glyph.svg", 1.),

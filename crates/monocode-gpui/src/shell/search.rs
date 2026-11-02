@@ -91,7 +91,11 @@ impl Shell {
                     .group_hover("search-title-tab", |s| {
                         s.text_color(content(1.)).bg(title_tab_fill(active, true))
                     })
-                    .child(mark_tile(&TAB_TILE, Face::Glass, icon("search", 14.)))
+                    .child(mark_tile(
+                        &TAB_TILE,
+                        Face::Neutral,
+                        icon("search", 14.).text_color(crate::tab_tile::tile_ink()),
+                    ))
                     .child(
                         div()
                             .min_w_0()

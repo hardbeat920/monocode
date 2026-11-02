@@ -1511,7 +1511,7 @@ impl Monos {
                         })
                         .child(crate::tab_tile::mark_tile(
                             &crate::tab_tile::TAB_TILE,
-                            crate::tab_tile::Face::Glass,
+                            crate::tab_tile::Face::Neutral,
                             avatar::avatar(&mono.mascot, mono.color, "idle", 14., true),
                         ))
                         .child(

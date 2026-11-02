@@ -5068,8 +5068,8 @@ impl TranscriptView {
                         // the tile holds still while the chevron slides in
                         // from the left and pushes the work's glyph out right.
                         // A running phase keeps its spinner unless pointed at.
-                        let morph = self.phase_morph(group, open && !active);
-                        if morph > 0. && morph < 1. {
+                        let (morph, moving) = self.phase_morph(group, open && !active);
+                        if moving {
                             window.request_animation_frame();
                         }
                         let tile = crate::tab_tile::ACTIVITY_TILE;
@@ -5077,7 +5077,7 @@ impl TranscriptView {
                         // icon until its work settles.
                         let (face, mark, ink) = if active && !cx.reduce_motion() {
                             (
-                                crate::tab_tile::Face::Glass,
+                                crate::tab_tile::Face::Neutral,
                                 crate::session_mark::spinner(
                                     ("phase-loader", group),
                                     crate::pulse::Rate::Half,
@@ -5813,20 +5813,27 @@ impl TranscriptView {
     /// How far phase `group`'s tile has turned into its chevron, eased:
     /// 0 is the work's glyph, 1 the chevron. The chevron shows while the
     /// pointer is on the phase or the phase is open.
-    fn phase_morph(&mut self, group: usize, open: bool) -> f32 {
-        let wanted = open || self.phase_pointer == Some(group);
+    /// Also whether it is still moving, so the caller keeps frames coming
+    /// even on the first frame, when the morph is still exactly 0.
+    fn phase_morph(&mut self, group: usize, open: bool) -> (f32, bool) {
+        let hovered = self.phase_pointer == Some(group);
+        let wanted = open || hovered;
         let now = Instant::now();
         let progress =
             |at: Instant| (now.saturating_duration_since(at).as_secs_f32() / PHASE_MORPH).min(1.);
         match self.phase_hover.get(&group).copied() {
-            // A phase that is already open when it first draws starts there.
-            None if wanted => {
+            // A phase that is already open when it first draws starts there;
+            // only the pointer arriving pushes the chevron in.
+            None if open && !hovered => {
                 self.phase_hover.insert(
                     group,
                     (true, now - std::time::Duration::from_secs_f32(PHASE_MORPH)),
                 );
             }
-            None => return 0.,
+            None if wanted => {
+                self.phase_hover.insert(group, (true, now));
+            }
+            None => return (0., false),
             // Changing course mid-way turns back from where it is.
             Some((was, at)) if was != wanted => {
                 let t = progress(at);
@@ -5841,7 +5848,7 @@ impl TranscriptView {
             self.phase_hover.remove(&group);
         }
         let eased = crate::reveal::bezier(t, 0.22, 1., 0.36, 1.);
-        if on { eased } else { 1. - eased }
+        (if on { eased } else { 1. - eased }, t < 1.)
     }
     fn toggle_phase(&mut self, group: usize, open: bool, cx: &mut Context<Self>) {
         self.phase_toggle = Some(group);
