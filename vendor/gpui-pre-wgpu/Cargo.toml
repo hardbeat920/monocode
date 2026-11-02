@@ -161,6 +161,10 @@ version = "29.0"
 features = ["webgl"]
 default-features = false
 
+[dev-dependencies.naga]
+version = "29.0"
+features = ["wgsl-in"]
+
 [lints.clippy]
 dbg_macro = "deny"
 declare_interior_mutable_const = "deny"
