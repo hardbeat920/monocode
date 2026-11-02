@@ -195,3 +195,18 @@ fn context_shows_how_to_delegate_without_running_help() {
     assert!(system_instructions_supported(crate::provider::Kind::Codex));
     assert!(!system_instructions_supported(crate::provider::Kind::Devin));
 }
+
+#[test]
+fn a_resumed_codex_thread_gets_rules_it_has_not_seen_in_the_message() {
+    use crate::provider::Kind;
+    // A fresh thread takes them as developer instructions.
+    assert!(rules_in_system(Kind::Codex, false, None, "new"));
+    // Codex keeps a thread's first instructions, so a moved app CLI or
+    // rules from before they lived there must come with the message.
+    assert!(!rules_in_system(Kind::Codex, true, None, "new"));
+    assert!(!rules_in_system(Kind::Codex, true, Some("old"), "new"));
+    assert!(rules_in_system(Kind::Codex, true, Some("new"), "new"));
+    // Claude's system prompt is sent with every process.
+    assert!(rules_in_system(Kind::Claude, true, None, "new"));
+    assert!(!rules_in_system(Kind::Devin, false, None, "new"));
+}

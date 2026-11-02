@@ -353,6 +353,21 @@ pub fn system_instructions_supported(kind: crate::provider::Kind) -> bool {
     )
 }
 
+/// Whether this turn can leave a Mono's rules to the system instructions.
+/// Claude's are sent with every process, but Codex keeps the developer
+/// instructions a thread started with and ignores new ones on resume. A
+/// resumed Codex thread that last saw other rules, such as an app CLI path
+/// from a build since moved or removed, gets the current ones in the message.
+pub fn rules_in_system(
+    kind: crate::provider::Kind,
+    resuming: bool,
+    held_rules: Option<&str>,
+    rules: &str,
+) -> bool {
+    system_instructions_supported(kind)
+        && (!resuming || kind != crate::provider::Kind::Codex || held_rules == Some(rules))
+}
+
 /// The context a Mono's turn carries in the user's message: its soul and
 /// memory, which change between turns, and its standing rules too when the
 /// provider has no system instructions to hold them.
