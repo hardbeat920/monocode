@@ -169,6 +169,13 @@ impl Conversation {
         if self.mono_ui.delivered.contains(&message.id) || (self.busy && message.internal) {
             return false;
         }
+        // Its own turn is already running and hasn't reported it delivered.
+        // Taken for a new send, it would steer into itself, or after a
+        // provider switch, which stays armed until the turn takes it up, stop
+        // the turn it just started before the new provider says a word.
+        if self.busy && self.settings.mono_message_id.as_deref() == Some(message.id.as_str()) {
+            return false;
+        }
         if !self.history_ready() {
             self.load(cx);
             return false;

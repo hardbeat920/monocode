@@ -708,8 +708,8 @@ impl Shell {
                                             .flex_1()
                                             .flex()
                                             .items_center()
-                                            .gap(px(6.))
-                                            .px_2()
+                                            .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                                            .pl(px(crate::tab_tile::tab_tile_inset()))
                                             .pr(px(28.))
                                             .rounded_md()
                                             .text_size(px(13.))
@@ -723,18 +723,7 @@ impl Shell {
                                                     d.text_color(content(0.5))
                                                 }
                                             })
-                                            .child(match agent {
-                                                Some(provider) => {
-                                                    provider_icon(provider, 14.).into_any_element()
-                                                }
-                                                None => icon("terminal", 14.)
-                                                    .text_color(if active || hovered {
-                                                        content(1.)
-                                                    } else {
-                                                        content(0.5)
-                                                    })
-                                                    .into_any_element(),
-                                            })
+                                            .child(crate::tab_tile::terminal_tile(agent))
                                             .child(
                                                 div()
                                                     .flex_1()
@@ -829,23 +818,15 @@ impl Shell {
                                                         .w_full()
                                                         .flex()
                                                         .items_center()
-                                                        .gap(px(6.))
-                                                        .px_2()
+                                                        .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                                                        .pl(px(crate::tab_tile::tab_tile_inset()))
+                                                        .pr_2()
                                                         .rounded_md()
                                                         .text_size(px(13.))
                                                         .text_color(content(0.5))
-                                                        .child(
-                                                            match crate::terminal::agent_cli(&ghost)
-                                                            {
-                                                                Some(provider) => {
-                                                                    provider_icon(provider, 14.)
-                                                                        .into_any_element()
-                                                                }
-                                                                None => icon("terminal", 14.)
-                                                                    .text_color(content(0.5))
-                                                                    .into_any_element(),
-                                                            },
-                                                        )
+                                                        .child(crate::tab_tile::terminal_tile(
+                                                            crate::terminal::agent_cli(&ghost),
+                                                        ))
                                                         .child(
                                                             div().min_w_0().truncate().child(ghost),
                                                         ),
@@ -938,6 +919,8 @@ impl Shell {
         let running = self.running_terminals(cx);
         let open = self.dock_open(cx);
         let classic = self.workspace.boxy_layout();
+        let actions = self.actions_button(cx);
+        let has_actions = actions.is_some();
         // The classic footer's own `px-3` and border hold these in place.
         let group = div()
             .flex()
@@ -946,7 +929,7 @@ impl Shell {
             .gap(px(FOOTER_GAP))
             .when(!classic, |d| d.mr(px(6.)).pb(px(2.)))
             .text_size(px(11.))
-            .children(self.actions_button(cx));
+            .children(actions);
         // The right panel's Terminal tab takes over the footer's terminal controls.
         if self.terminal_in_panel(cx) {
             self.live_mark = None;
@@ -966,6 +949,7 @@ impl Shell {
             };
             return Some(
                 group
+                    .when(has_actions, |d| d.child(footer_separator()))
                     .child(
                         div()
                             .id("footer-terminal")
@@ -1028,6 +1012,7 @@ impl Shell {
         let anchor = self.terminal_chip_anchor.clone();
         Some(
             group
+                .when(has_actions, |d| d.child(footer_separator()))
                 .child(
                     div()
                         .id("footer-running-terminals")
@@ -1110,6 +1095,18 @@ impl Shell {
 /// The space between the footer's right-hand buttons: the resource chip,
 /// Actions, and Terminal or the running-terminals chip.
 pub(super) const FOOTER_GAP: f32 = 4.;
+
+/// A short hairline between footer controls: High usage, actions, Terminal.
+pub(super) fn footer_separator() -> gpui::Div {
+    div()
+        .debug_selector(|| "footer-separator".into())
+        .flex_shrink_0()
+        .w(px(1.))
+        .h(px(12.))
+        .mx(px(3.))
+        .rounded_full()
+        .bg(content(0.12))
+}
 const NEW_TERMINAL_LABEL: &str = if cfg!(target_os = "macos") {
     "New Terminal (⌘`)"
 } else {

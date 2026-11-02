@@ -72,6 +72,8 @@ function deferred<T>() {
 vi.mock("@/features/connection/selection", () => ({ selectedWorkspace: (catalog: unknown) => catalog }));
 vi.mock("expo-router", () => ({ useLocalSearchParams: () => ({ monoId: "one" }), useIsFocused: () => true, Redirect: () => null }));
 vi.mock("expo-haptics", () => ({}));
+vi.mock("@/ui/useNativeHeaderHeight", () => ({ useNativeHeaderHeight: () => 0 }));
+vi.mock("@/features/settings/monoOnly", () => ({ useMonoOnlyLayout: () => [false] }));
 vi.mock("@/features/models/useMonoModel", () => ({ useMonoModel: () => ({}) }));
 vi.mock("@/features/workspace/monoAccent", () => ({ useMonoAccent: () => "theme" }));
 vi.mock("@/ui/ScenePager", () => ({ useDrawerSwipe: () => {}, useDrawerActions: () => ({ open: vi.fn() }) }));
@@ -96,6 +98,7 @@ vi.mock("@/ui/theme", () => ({
   AccentOverride: ({ children }: { children: ReactNode }) => children,
   ACCENTS: {},
   useScheme: () => "dark",
+  useAccent: () => "theme",
 }));
 
 describe("Mono approvals through the real workspace provider and card", () => {

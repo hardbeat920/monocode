@@ -8,10 +8,14 @@ import { useMonoModel } from "@/features/models/useMonoModel";
 import { ContributionGraph } from "@/features/visuals/charts";
 import { ProviderLogo } from "@/features/sessions/ProviderLogo";
 import { SettingsPage, SettingsRow } from "@/features/settings/SettingsUI";
+import { MonoDocumentRows } from "@/features/workspace/MonoDocuments";
 import { useMonoProfile, type MonoProfile } from "@/features/workspace/monoProfile";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { Icon } from "@/ui/Icon";
 import { radii, themedStyles, useColors } from "@/ui/theme";
+
+/** Documents shown on the profile before "See all". */
+const DOCUMENTS_SHOWN = 5;
 
 // A Mono's profile, as the desktop's details sidebar has it without its
 // Changes: who it is and the model it runs on, with Edit under, then its day,
@@ -174,38 +178,8 @@ function Overview({ profile, name, monoId }: { profile: MonoProfile; name: strin
 
       <Text style={styles.heading}>Documents</Text>
       <View style={styles.card}>
-        {profile.documents.length ? (
-          profile.documents.map((document, index) => (
-            <Fragment key={document.id}>
-              {index > 0 ? <View style={styles.divider} /> : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${document.title}`}
-                onPress={() =>
-                  router.push({
-                    pathname: "/mono-profile/[monoId]/document",
-                    params: { monoId, documentId: document.id, title: document.title },
-                  })
-                }
-                style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
-              >
-                <View style={styles.listIcon}>
-                  <Icon
-                    name={["html", "visual"].includes(document.kind) ? "metrics" : "edit"}
-                    size={18}
-                    color={colors.content}
-                  />
-                </View>
-                <View style={styles.listText}>
-                  <Text style={styles.listTitle} numberOfLines={1}>{document.title}</Text>
-                </View>
-                <Text style={styles.listDetail}>{ago(document.updatedAt)}</Text>
-              </Pressable>
-            </Fragment>
-          ))
-        ) : (
-          <Text style={styles.empty}>No documents yet.</Text>
-        )}
+        {/* The newest few; "See all" under them opens the rest. */}
+        <MonoDocumentRows monoId={monoId} documents={profile.documents} limit={DOCUMENTS_SHOWN} />
       </View>
     </>
   );
@@ -222,14 +196,6 @@ function Tile({ value, label }: { value: string | React.ReactElement; label: str
 }
 
 /** How long ago, in the desktop's short form: now, 5m, 3h, 2d. */
-function ago(ms: number) {
-  const seconds = Math.max(0, (Date.now() - ms) / 1000);
-  if (seconds < 60) return "now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86400)}d`;
-}
-
 const useStyles = themedStyles((colors) => ({
   // Up under the sheet's header, which has no title of its own here.
   identity: {

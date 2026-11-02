@@ -41,6 +41,8 @@ pub(crate) struct Update {
     pub(crate) model: Option<String>,
     pub(crate) config_model: Option<String>,
     pub(crate) config_settings: Option<std::collections::HashMap<String, String>>,
+    /// A title the host changed since the last update; never written back.
+    pub(crate) title: Option<String>,
     pub(crate) context: Option<monocode_core::context::Usage>,
     pub(crate) metrics: Option<monocode_core::agent::TurnMetrics>,
     pub(crate) usage_limit: Option<monocode_core::usage::Limit>,
@@ -260,6 +262,7 @@ fn run_turn_using(
                 model: None,
                 config_model: None,
                 config_settings: None,
+                title: None,
                 context: None,
                 metrics: None,
                 usage_limit: None,
@@ -314,6 +317,7 @@ fn run_turn_using(
                     model: None,
                     config_model: None,
                     config_settings: None,
+                    title: None,
                     context: None,
                     metrics: None,
                     usage_limit: None,
@@ -361,6 +365,7 @@ fn run_turn_using(
                     model: None,
                     config_model: None,
                     config_settings: None,
+                    title: None,
                     context: None,
                     metrics: None,
                     usage_limit: None,
@@ -420,6 +425,7 @@ fn run_turn_using(
                     model: None,
                     config_model: None,
                     config_settings: None,
+                    title: None,
                     context: None,
                     metrics: None,
                     usage_limit: None,
@@ -454,17 +460,35 @@ fn run_turn_using(
             prompt
         } else if let Some(mono) = &settings.mono {
             let files = monocode_core::mono::load_files(&mono.root, &mono.mono)?;
-            let added = monocode_core::mono::context(&mono.mono, &files, &mono.executable);
-            let fingerprint = monocode_core::mono::files::content_hash(&added);
-            mono_fingerprint = Some(fingerprint.clone());
             let rotated = provider_id.is_some() && context.ratio().is_some_and(|r| r >= 0.8);
             if rotated {
                 provider_id = None;
                 locked(&store)?.reset_provider_id(summary.id)?;
             }
             let receipt = locked(&store)?.setting(&format!("mono-context:{}", summary.id))?;
+            let rules = monocode_core::mono::files::content_hash(
+                &monocode_core::mono::instructions(&mono.mono, &mono.executable),
+            );
+            let held_rules = receipt
+                .as_deref()
+                .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
+                .and_then(|r| r["rules"].as_str().map(str::to_owned));
+            let added = monocode_core::mono::context(
+                &mono.mono,
+                &files,
+                &mono.executable,
+                monocode_core::mono::rules_in_system(
+                    kind,
+                    provider_id.is_some(),
+                    held_rules.as_deref(),
+                    &rules,
+                ),
+            );
+            let fingerprint = monocode_core::mono::files::content_hash(&added);
+            mono_fingerprint = Some((fingerprint.clone(), rules.clone()));
             let expected =
-                serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
+                serde_json::json!({"provider":provider_id,"hash":fingerprint,"rules":rules})
+                    .to_string();
             let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
                 added
             } else {
@@ -877,6 +901,7 @@ fn run_turn_using(
                             model,
                             config_model,
                             config_settings,
+                            title: None,
                             context: context_changed.then_some(context),
                             metrics,
                             usage_limit: None,
@@ -903,11 +928,12 @@ fn run_turn_using(
             })
         });
         if result.is_ok()
-            && let Some(fingerprint) = &mono_fingerprint
+            && let Some((fingerprint, rules)) = &mono_fingerprint
         {
             locked(&store)?.save_setting(
                 &format!("mono-context:{}", summary.id),
-                &serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string(),
+                &serde_json::json!({"provider":provider_id,"hash":fingerprint,"rules":rules})
+                    .to_string(),
             )?;
         }
         if result.is_ok()
@@ -1067,6 +1093,7 @@ fn run_turn_using(
         model: None,
         config_model: None,
         config_settings: None,
+        title: None,
         context: None,
         metrics: None,
         usage_limit: if cancelled { None } else { usage_limit },

@@ -21,6 +21,8 @@ struct TranscriptStyle: Equatable {
   var rail = "#2e2e2e"
   var agent = ""
   var agentRects: [TranscriptPixel] = []
+  /// Its talking frame, swapped with the rest while it works, as PixelMascot.
+  var agentTalkRects: [TranscriptPixel] = []
   /// Reactions the user put on a Mono's replies, by the reply's first row.
   var reactions: [String: String] = [:]
   /// CoreText rounds fixed line heights up to whole points, so a fractional
@@ -71,6 +73,20 @@ struct TranscriptSurface {
   var corners: CACornerMask = [
     .layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner,
   ]
+}
+/// A reaction over a message's bubble, as a Messages tapback: drawn by a view
+/// of its own so it can pop in when it lands on a message already shown.
+struct TranscriptReaction {
+  let badge: CGRect
+  /// Its tail: two shrinking dots trailing off the badge.
+  let dots: [CGRect]
+  let text: NSAttributedString
+  let textSize: CGSize
+  let fill: UIColor
+  let edge: UIColor
+  /// Where it grows from: the tail's far end.
+  var origin: CGPoint { dots.last.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: badge.midX, y: badge.maxY) }
+  var frame: CGRect { dots.reduce(badge) { $0.union($1) } }
 }
 struct TranscriptMark {
   let rect: CGRect
@@ -206,6 +222,7 @@ final class TranscriptRowModel {
   private(set) var hits: [TranscriptHit] = []
   private(set) var liveLabel: TranscriptLiveLabel?
   private(set) var mascotRect: CGRect?
+  private(set) var reactionBadge: TranscriptReaction?
   /// A visual's dithered cells and lines, drawn by the row's canvas.
   private(set) var visualPaints: [TranscriptVisualPaint] = []
   private(set) var userExpandable = false
@@ -385,19 +402,11 @@ final class TranscriptRowModel {
         let badge = CGRect(
           x: cardRect.minX - size * 0.55, y: cardRect.minY - Self.reactionLift, width: width,
           height: size)
-        let fill = UIColor.transcriptHex(style.surfaceRaised)
-        let edge = UIColor.transcriptHex(style.stroke)
         let dot = CGRect(x: badge.minX + 2, y: badge.maxY - 5, width: 10, height: 10)
         let speck = CGRect(x: dot.minX - 5, y: dot.maxY + 1, width: 5, height: 5)
-        for circle in [speck, dot] {
-          surfaces.append(
-            TranscriptSurface(rect: circle, color: fill, radius: circle.width / 2, border: edge))
-        }
-        surfaces.append(
-          TranscriptSurface(rect: badge, color: fill, radius: size / 2, border: edge))
-        add(
-          value, x: badge.midX - measured.width / 2, y: badge.midY - measured.height / 2,
-          width: measured.width, height: measured.height)
+        reactionBadge = TranscriptReaction(
+          badge: badge, dots: [dot, speck], text: value, textSize: measured,
+          fill: UIColor.transcriptHex(style.surfaceRaised), edge: UIColor.transcriptHex(style.stroke))
       }
       if !style.agent.isEmpty, let at = action["at"] as? Double {
         time = (TranscriptTypography.clock(at), cardRect.midY)
@@ -871,18 +880,11 @@ final class TranscriptRowModel {
           let badge = CGRect(
             x: bubble.maxX - width + size * 0.55, y: bubble.minY - Self.reactionLift, width: width,
             height: size)
-          let fill = UIColor.transcriptHex(style.surfaceRaised)
-          let edge = UIColor.transcriptHex(style.stroke)
           let dot = CGRect(x: badge.maxX - 12, y: badge.maxY - 5, width: 10, height: 10)
           let speck = CGRect(x: dot.maxX, y: dot.maxY + 1, width: 5, height: 5)
-          for circle in [speck, dot] {
-            surfaces.append(
-              TranscriptSurface(rect: circle, color: fill, radius: circle.width / 2, border: edge))
-          }
-          surfaces.append(TranscriptSurface(rect: badge, color: fill, radius: size / 2, border: edge))
-          add(
-            value, x: badge.midX - measured.width / 2, y: badge.midY - measured.height / 2,
-            width: measured.width, height: measured.height)
+          reactionBadge = TranscriptReaction(
+            badge: badge, dots: [dot, speck], text: value, textSize: measured,
+            fill: UIColor.transcriptHex(style.surfaceRaised), edge: UIColor.transcriptHex(style.stroke))
         }
       }
     }

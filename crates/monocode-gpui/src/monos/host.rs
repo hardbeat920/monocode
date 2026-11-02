@@ -251,8 +251,15 @@ impl Monos {
             self.finish_call(call, Err("Input must be a JSON object".into()), cx);
             return;
         }
-        let input = call.input.clone();
+        let mut input = call.input.clone();
         let action = call.action.clone();
+        // A session it starts without naming a model takes the one set for
+        // its sessions, if any; the receipt still keys on what it sent.
+        if action == "sessions.start"
+            && let Some(subsessions) = &mono.subsessions
+        {
+            subsessions.fill(&mut input);
+        }
         let root = self.root.clone();
         let target = mono.id.clone();
         let project = if action.starts_with("sessions.")

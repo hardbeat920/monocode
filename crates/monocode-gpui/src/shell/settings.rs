@@ -334,18 +334,19 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn default_kind(&self) -> Kind {
-        let p = &self.workspace.preferences;
-        p.project_providers
-            .get(&self.workspace.project)
-            .and_then(|p| p.provider.as_deref())
-            .or(p.default_provider.as_deref())
-            .and_then(Kind::parse)
-            .unwrap_or(Kind::Codex)
-    }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
+        // Switching search styles closes an open search of the other style.
+        if self
+            .app_search
+            .as_ref()
+            .is_some_and(|s| s.panel != self.workspace.preferences.search_panel)
+        {
+            self.leave_app_search(cx);
+            self.update_chat_visibility(cx);
+            self.invalidate_chrome(cx);
+        }
         monocode_core::cli::initialize(&self.workspace.preferences.binary_paths);
         self.keep_visible_idle_agents(cx);
         monocode_core::provider::configure_idle_agents(

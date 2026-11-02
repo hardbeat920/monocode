@@ -289,7 +289,7 @@ export function ProjectScreen({
       onPress={drawer.open}
     >
       {/* The drawer's button, as on every screen it opens from. */}
-      <Icon name="menu" size={22} color={colors.content} />
+      <Icon name="sidebar" size={22} color={colors.content} />
       {unread ? <UnreadDot /> : null}
     </ProjectHeaderButton>
   );

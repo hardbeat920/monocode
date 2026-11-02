@@ -120,6 +120,8 @@ pub(crate) struct Monos {
     picker: Option<OpenPicker>,
     settings_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
+    subsession_model_anchor: AnchorSlot,
+    subsession_effort_anchor: AnchorSlot,
     projects_anchor: AnchorSlot,
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
@@ -352,6 +354,8 @@ impl Monos {
             picker: None,
             settings_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
+            subsession_model_anchor: AnchorSlot::default(),
+            subsession_effort_anchor: AnchorSlot::default(),
             projects_anchor: AnchorSlot::default(),
             access_anchor: AnchorSlot::default(),
             menu: None,
@@ -700,9 +704,13 @@ impl Monos {
             let mut summary = db.create(provider.id(), &home)?;
             summary.title = mono.label();
             db.title(summary.id, &summary.title)?;
+            // A Mono's chat is conversation: it answers quickly at low effort
+            // and hands heavy work to background sessions. Only new chats get
+            // this; existing Monos keep whatever effort they already have.
             let settings = Settings {
                 access: AccessMode::Auto,
                 model: prefs.default_models.get(provider.id()).cloned(),
+                effort: Some("low".into()),
                 ..Default::default()
             };
             db.configure_agent(summary.id, provider.id(), &settings)?;
@@ -1497,11 +1505,15 @@ impl Monos {
                         .w_full()
                         .min_w_0()
                         .pr_7()
-                        .gap(px(6.))
+                        .gap(px(crate::tab_tile::TAB_TILE_GAP))
                         .group_hover(group.clone(), move |s| {
                             s.opacity(1.).bg(title_tab_fill(active, true))
                         })
-                        .child(avatar::avatar(&mono.mascot, mono.color, "idle", 16., true))
+                        .child(crate::tab_tile::mark_tile(
+                            &crate::tab_tile::TAB_TILE,
+                            crate::tab_tile::Face::Neutral,
+                            avatar::avatar(&mono.mascot, mono.color, "idle", 14., true),
+                        ))
                         .child(
                             div()
                                 .flex_1()

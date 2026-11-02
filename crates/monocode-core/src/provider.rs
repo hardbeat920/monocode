@@ -512,6 +512,20 @@ impl Protocol {
                             )
                             .into();
                         }
+                        if let Some(mono) = self
+                            .request
+                            .settings
+                            .mono
+                            .as_ref()
+                            .filter(|_| !self.request.settings.text_only)
+                        {
+                            params["developerInstructions"] = format!(
+                                "{}\n\n{}",
+                                params["developerInstructions"].as_str().unwrap_or_default(),
+                                crate::mono::instructions(&mono.mono, &mono.executable)
+                            )
+                            .into();
+                        }
                         if self.request.settings.text_only {
                             params["ephemeral"] = true.into();
                             params["developerInstructions"] = "Answer the supplied text request directly. Do not call tools or inspect the workspace.".into();
@@ -1390,6 +1404,11 @@ fn run_operation(
         Kind::Codex => {
             command.arg("app-server");
             crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            crate::mono::bridge::configure_codex(
+                &mut command,
+                request.settings.mono.as_ref(),
+                &request.settings.environment,
+            );
             if let Some(mono) = &request.settings.mono {
                 if let Some(home) =
                     crate::mono::codex_home(&mono.root, &request.settings.account.id)?
@@ -1440,17 +1459,34 @@ fn run_operation(
                 command.args(["--tools", "Read,Glob,Grep,Bash"]);
                 allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)");
             }
+            let app_server = (!settings.text_only)
+                .then(|| {
+                    crate::mono::bridge::mcp_server(settings.mono.as_ref(), &settings.environment)
+                })
+                .flatten();
+            let mut servers = serde_json::Map::new();
+            if let Some(server) = app_server {
+                servers.insert(crate::mono::bridge::MCP_SERVER.into(), server);
+                allowed.push(crate::mono::bridge::CLAUDE_ALLOWED_TOOLS);
+            }
+            let mut system = Vec::new();
+            if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
+                system.push(crate::mono::instructions(&mono.mono, &mono.executable));
+            }
             if let Some(server) = visual_server {
-                command.args([
-                    "--mcp-config",
-                    &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
-                ]);
+                servers.insert("monocode_visual".into(), server);
                 allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
                 if let Some(instructions) =
                     crate::visual_bridge::instructions(&settings.environment, true)
                 {
-                    command.args(["--append-system-prompt", &instructions]);
+                    system.push(instructions);
                 }
+            }
+            if !system.is_empty() {
+                command.args(["--append-system-prompt", &system.join("\n\n")]);
+            }
+            if !servers.is_empty() {
+                command.args(["--mcp-config", &json!({"mcpServers":servers}).to_string()]);
             }
             if !allowed.is_empty() {
                 command.args(["--allowedTools", &allowed.join(",")]);
@@ -1861,6 +1897,29 @@ mod tests {
         assert_eq!(tool.state, ToolState::Completed);
         assert_eq!(input["path"], "/repo/a.rs");
         assert_eq!(input["paths"], json!(["/repo/a.rs", "/repo/b.rs"]));
+    }
+    #[test]
+    fn a_monos_rules_reach_codex_as_developer_instructions() {
+        let mut p = protocol(Kind::Codex);
+        p.request.settings.mono = Some(crate::agent::MonoContext {
+            mono: crate::mono::Mono {
+                projects: vec!["/repo".into()],
+                ..Default::default()
+            },
+            root: "/monos".into(),
+            executable: "/bin/monocode-gpui".into(),
+        });
+        let mut out = Vec::new();
+        p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
+        let started: Value = String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|message| message["method"] == "thread/start")
+            .unwrap();
+        let instructions = started["params"]["developerInstructions"].as_str().unwrap();
+        assert!(instructions.starts_with("You are the coding agent in Monocode."));
+        assert!(instructions.contains("## Be quick"));
+        assert!(instructions.contains("- /repo"));
     }
     #[test]
     fn operator_thread_access_keeps_the_codex_app_bridge_reachable_on_later_turns() {
