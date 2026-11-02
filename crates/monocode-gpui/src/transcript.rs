@@ -5998,13 +5998,13 @@ impl Render for TranscriptView {
                     move |bounds, window, cx| {
                         let _ = view.update(cx, |this, cx| {
                             if this.viewport != bounds {
-                                // The prompt outline shows only in a wide
-                                // enough pane, and this is where the width is
-                                // learned, after this frame's outline was
-                                // decided. A new width redraws once the frame
-                                // is done, so it can; a redraw asked for
-                                // mid-draw is lost.
-                                if this.viewport.size.width != bounds.size.width {
+                                // Layout learns the width after the outline
+                                // was built. Redraw after this frame only if
+                                // its visibility changes; an extra layout
+                                // otherwise advances chat motion needlessly.
+                                if this.outline_visible_at(this.viewport.size.width)
+                                    != this.outline_visible_at(bounds.size.width)
+                                {
                                     let view = cx.entity();
                                     cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
                                 }
