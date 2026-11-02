@@ -811,9 +811,9 @@ mod tests {
         std::fs::create_dir_all(source.join("sessions")).unwrap();
         // The real codex CLI writes its own lock locally in each home it's
         // pointed at, independently of this sync.
-        std::fs::write(source.join("session_index.jsonl.lock"), "").unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
         std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(home.join("session_index.jsonl.lock"), "").unwrap();
+        std::fs::write(home.join("session_index.jsonl.lock"), "mono").unwrap();
         prepare_files(&source, &home).unwrap();
         assert!(
             std::fs::symlink_metadata(home.join("session_index.jsonl.lock"))
@@ -821,6 +821,13 @@ mod tests {
                 .file_type()
                 .is_file(),
             "the mono's own lock must stay a private local file, not get linked to the account home's"
+        );
+        // A hard link would also report is_file(), so prove independence by
+        // content: writing to the account's lock must not reach the mono's.
+        std::fs::write(source.join("session_index.jsonl.lock"), "account changed").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl.lock")).unwrap(),
+            "mono"
         );
     }
 
