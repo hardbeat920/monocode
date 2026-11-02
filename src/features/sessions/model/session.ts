@@ -288,6 +288,15 @@ export type QueuedMessage = {
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";
 
+/** A shell, monitor or subagent the agent left running in the background. */
+export type BackgroundJob = {
+  id: string;
+  title: string;
+  /** The command a shell or monitor runs, when known. */
+  command?: string;
+  startedAt: number;
+};
+
 /** The provider stopped the last turn at a usage limit. */
 export type UsageLimit = {
   /** Epoch ms when the provider's window resets, once known. */
@@ -469,6 +478,11 @@ export type Session = {
    * running in the background. In-memory only.
    */
   backgroundTasks?: string[];
+  /**
+   * Everything the agent still runs in the background, whichever turn started
+   * it. In-memory only.
+   */
+  backgroundJobs?: BackgroundJob[];
   /** Follow-ups retained until they have been delivered. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
