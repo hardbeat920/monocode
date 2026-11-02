@@ -34,9 +34,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AvailableSpace, Bounds, ClipboardItem, Context, FollowMode, ListAlignment, ListOffset,
-    ListState, Pixels, Role, SharedString, Transformation, Window, canvas, div, list, percentage,
-    prelude::*, px, rgb, size,
+    AvailableSpace, Bounds, ClipboardItem, Context, Entity, FollowMode, ListAlignment, ListOffset,
+    ListState, Pixels, Role, SharedString, StyleRefinement, Window, canvas, div, list, prelude::*,
+    px, rgb, size,
 };
 use monocode_core::tool::{ToolCall, ToolState, tasks::Panel};
 use monocode_core::transcript::Row;
@@ -747,11 +747,8 @@ pub(crate) struct TranscriptView {
     note_feedback: HashMap<usize, Result<(), String>>,
     action_anchors: HashMap<(usize, &'static str), AnchorSlot>,
     hovered_action: Option<(usize, &'static str)>,
-    /// Work phases whose tile is morphing into, or back from, the chevron:
-    /// whether the pointer is on it and when that changed.
-    phase_hover: HashMap<usize, (bool, Instant)>,
-    /// The work phase under the pointer.
-    phase_pointer: Option<usize>,
+    /// Each work phase's tile, its own view so a hover redraws only it.
+    phase_tiles: HashMap<usize, Entity<crate::phase_tile::PhaseTile>>,
     pub(crate) target_action: Option<(usize, monocode_core::response::TransferKind)>,
     document: bool,
     side_question: bool,
@@ -2580,8 +2577,7 @@ impl TranscriptView {
             note_feedback: HashMap::new(),
             action_anchors: HashMap::new(),
             hovered_action: None,
-            phase_hover: HashMap::new(),
-            phase_pointer: None,
+            phase_tiles: HashMap::new(),
             target_action: None,
             document: false,
             side_question: false,
@@ -5047,6 +5043,16 @@ impl TranscriptView {
                     .values()
                     .find(|m| m.group == Some(group))
                     .map_or(if open { 1. } else { 0. }, |m| m.rotation(self.frame_now));
+                let phase_tile = self
+                    .phase_tiles
+                    .entry(group)
+                    .or_insert_with(|| cx.new(|_| crate::phase_tile::PhaseTile::new(group)))
+                    .clone();
+                let spinning = active && !cx.reduce_motion();
+                // A running phase keeps its spinner unless pointed at.
+                phase_tile.update(cx, |tile, cx| {
+                    tile.set(glyph, spinning, open && !active, rotation, cx)
+                });
                 div()
                     .id(("phase", group))
                     .role(Role::Button)
@@ -5063,39 +5069,16 @@ impl TranscriptView {
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .text_color(content(0.5))
-                    .child({
-                        // Hovering turns the tile into the expand control:
-                        // the tile holds still while the chevron slides in
-                        // from the left and pushes the work's glyph out right.
-                        // A running phase keeps its spinner unless pointed at.
-                        let (morph, moving) = self.phase_morph(group, open && !active);
-                        if moving {
-                            window.request_animation_frame();
-                        }
-                        let tile = crate::tab_tile::ACTIVITY_TILE;
-                        // The compaction step's dots stand in for the group's
-                        // icon until its work settles.
-                        let (face, mark, ink) = if active && !cx.reduce_motion() {
-                            (
-                                crate::tab_tile::Face::Neutral,
-                                crate::session_mark::spinner(
-                                    ("phase-loader", group),
-                                    crate::pulse::Rate::Half,
-                                )
-                                .into_any_element(),
-                                content(0.9),
-                            )
-                        } else {
-                            crate::tab_tile::activity_face(glyph)
-                        };
-                        let chevron = icon("chevron-right", 14.)
-                            .text_color(ink)
-                            .with_transformation(Transformation::rotate(percentage(
-                                rotation * 0.25,
-                            )))
-                            .into_any_element();
-                        crate::tab_tile::push_tile(&tile, face, mark, chevron, morph)
-                    })
+                    // The tile animates itself; the transcript only tells it
+                    // what the phase is doing.
+                    .child(
+                        phase_tile.clone().cached(
+                            StyleRefinement::default()
+                                .w(px(crate::tab_tile::ACTIVITY_TILE.w))
+                                .h(px(crate::tab_tile::ACTIVITY_TILE.h))
+                                .flex_shrink_0(),
+                        ),
+                    )
                     .child(div().min_w_0().flex_1().truncate().child(
                         if active && !cx.reduce_motion() {
                             crate::activity::shimmer(
@@ -5107,14 +5090,12 @@ impl TranscriptView {
                         },
                     ))
                     .hover(|s| s.text_color(content(0.8)))
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.phase_pointer = Some(group);
-                        } else if this.phase_pointer == Some(group) {
-                            this.phase_pointer = None;
+                    .on_hover({
+                        let tile = phase_tile.clone();
+                        move |hovered: &bool, _, cx| {
+                            tile.update(cx, |tile, cx| tile.hover(*hovered, cx));
                         }
-                        cx.notify();
-                    }))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_phase(group, !open, cx);
                     }))
@@ -5810,46 +5791,6 @@ impl TranscriptView {
     }
     /// How far phase `group`'s tile has morphed into its chevron, eased:
     /// 0 is the tile, 1 the chevron.
-    /// How far phase `group`'s tile has turned into its chevron, eased:
-    /// 0 is the work's glyph, 1 the chevron. The chevron shows while the
-    /// pointer is on the phase or the phase is open.
-    /// Also whether it is still moving, so the caller keeps frames coming
-    /// even on the first frame, when the morph is still exactly 0.
-    fn phase_morph(&mut self, group: usize, open: bool) -> (f32, bool) {
-        let hovered = self.phase_pointer == Some(group);
-        let wanted = open || hovered;
-        let now = Instant::now();
-        let progress =
-            |at: Instant| (now.saturating_duration_since(at).as_secs_f32() / PHASE_MORPH).min(1.);
-        match self.phase_hover.get(&group).copied() {
-            // A phase that is already open when it first draws starts there;
-            // only the pointer arriving pushes the chevron in.
-            None if open && !hovered => {
-                self.phase_hover.insert(
-                    group,
-                    (true, now - std::time::Duration::from_secs_f32(PHASE_MORPH)),
-                );
-            }
-            None if wanted => {
-                self.phase_hover.insert(group, (true, now));
-            }
-            None => return (0., false),
-            // Changing course mid-way turns back from where it is.
-            Some((was, at)) if was != wanted => {
-                let t = progress(at);
-                let at = now - std::time::Duration::from_secs_f32((1. - t) * PHASE_MORPH);
-                self.phase_hover.insert(group, (wanted, at));
-            }
-            Some(_) => {}
-        }
-        let (on, at) = self.phase_hover[&group];
-        let t = progress(at);
-        if !on && t >= 1. {
-            self.phase_hover.remove(&group);
-        }
-        let eased = crate::reveal::bezier(t, 0.22, 1., 0.36, 1.);
-        (if on { eased } else { 1. - eased }, t < 1.)
-    }
     fn toggle_phase(&mut self, group: usize, open: bool, cx: &mut Context<Self>) {
         self.phase_toggle = Some(group);
         self.phases.insert(group, open);
@@ -5857,8 +5798,6 @@ impl TranscriptView {
         self.rebuild(group, cx);
     }
 }
-/// Seconds a work phase's tile takes to morph into its chevron.
-const PHASE_MORPH: f32 = 0.3;
 impl gpui::EventEmitter<ResponseRequest> for TranscriptView {}
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

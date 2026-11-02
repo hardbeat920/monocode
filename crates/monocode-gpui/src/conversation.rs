@@ -206,6 +206,8 @@ pub(crate) struct Conversation {
     context_hovered: bool,
     /// The submit button's morph between square and labelled pill.
     send_morph: std::cell::RefCell<crate::send_morph::Morph>,
+    /// ⌘ (Ctrl elsewhere) as last seen, which flips Queue and Steer.
+    send_alternate: bool,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -655,6 +657,7 @@ impl Conversation {
             context: None,
             context_hovered: false,
             send_morph: Default::default(),
+            send_alternate: false,
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -3274,7 +3277,21 @@ impl Conversation {
         crate::send_morph::button("send-or-stop", face, &frame, enabled)
             // Holding ⌘ (Ctrl elsewhere) flips Queue and Steer; redraw so the
             // label rolls to it while the key is down.
-            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
+            // Only ⌘'s own changes matter, and only while it changes the action.
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                    let alternate = if cfg!(target_os = "macos") {
+                        event.modifiers.platform
+                    } else {
+                        event.modifiers.control
+                    };
+                    if std::mem::replace(&mut this.send_alternate, alternate) != alternate
+                        && this.follow_up_action(alternate, cx).is_some()
+                    {
+                        cx.notify();
+                    }
+                },
+            ))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 if !enabled {
                     return;
