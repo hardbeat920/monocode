@@ -45,6 +45,7 @@ mod sidebar_peek;
 mod space_reorder;
 mod terminal_dock;
 mod terminal_panes;
+mod pinned_tabs;
 use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -715,6 +716,11 @@ pub(crate) struct Shell {
     query: String,
     sidebar_hover: Option<&'static str>,
     tab_hover: Option<i64>,
+    /// The pinned deck at the strip's left edge: how far it has fanned out,
+    /// and the card under the pointer.
+    pin_fan: pinned_tabs::PinFan,
+    pin_deck: pinned_tabs::PinDeck,
+    pin_card_hover: Option<TitleTab>,
     /// Tab animations: opening and closing title tabs, with each tab's last label.
     title_tab_motion: crate::tab_motion::TabMotion<TitleTab, ()>,
     /// Tab animations: the selected tab before the last switch, the one now
@@ -1079,6 +1085,9 @@ impl Shell {
             query: String::new(),
             sidebar_hover: None,
             tab_hover: None,
+            pin_fan: Default::default(),
+            pin_deck: Default::default(),
+            pin_card_hover: None,
             title_tab_motion: Default::default(),
             title_tab_selection: (None, None, std::time::Instant::now()),
             session_hover: None,
@@ -3651,7 +3660,7 @@ impl Shell {
         if !strip.contains(&position) {
             return None;
         }
-        let count = self.visible_tabs(cx).len();
+        let count = self.strip_tabs(cx).len();
         let bounds: Vec<_> = (0..count)
             .filter_map(|ix| self.tab_scroll.bounds_for_item(ix))
             .collect();
@@ -3792,7 +3801,7 @@ impl Shell {
                 }
             }
             (DragSource::Pane(_), _, Some(to)) => {
-                let tabs = self.visible_tabs(cx);
+                let tabs = self.strip_tabs(cx);
                 let session_index = tabs
                     .get(to)
                     .and_then(TitleTab::session)
@@ -5323,7 +5332,14 @@ impl Shell {
                 let ix = tabs.iter().position(|entry| *entry == tab).unwrap_or(0);
                 let count = tabs.len();
                 let closable = tab.session().is_none_or(|id| self.tab_can_close(id, cx));
+                let pinned = self.tab_pinned(&tab);
                 let mut items = vec![
+                    MenuAction::new(
+                        if pinned { "unpin" } else { "pin" },
+                        if pinned { "Unpin Tab" } else { "Pin Tab" },
+                    )
+                    .into(),
+                    MenuItem::Separator,
                     MenuAction::new("close", "Close Tab")
                         .shortcut(format!("{MOD}W"))
                         .disabled(!closable)
@@ -7429,7 +7445,13 @@ impl Shell {
             return false;
         };
         let layout = self.workspace.layout(tab);
-        self.visible_tabs(cx).len() > 1
+        // Beside the pins, the strip's last tab counts as the only one.
+        let tabs = if self.tab_pinned(&TitleTab::Session(tab)) {
+            self.visible_tabs(cx)
+        } else {
+            self.strip_tabs(cx)
+        };
+        tabs.len() > 1
             || layout.is_split()
             || layout.leaf_ids().iter().any(|id| {
                 self.session_summaries.contains_key(id) && {
@@ -7451,7 +7473,7 @@ impl Shell {
     fn start_tab_drag(&mut self, id: TitleTab, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.skip_tab_click = false;
         self.close_menu(cx);
-        let tabs = self.visible_tabs(cx);
+        let tabs = self.strip_tabs(cx);
         let Some(from) = tabs.iter().position(|tab| *tab == id) else {
             return;
         };
@@ -7573,7 +7595,7 @@ impl Shell {
                 self.cancel_pane_drag(cx);
                 // Each tab glides from where it is drawn into its new slot.
                 let now = std::time::Instant::now();
-                let visible = self.visible_tabs(cx);
+                let visible = self.strip_tabs(cx);
                 let drawn: Vec<(TitleTab, f32)> = visible
                     .iter()
                     .enumerate()
@@ -7588,7 +7610,7 @@ impl Shell {
                 self.reorder_title_tab(&drag.id, drag.to, cx);
                 self.tab_shifts.clear();
                 if !cx.reduce_motion() {
-                    for (ix, id) in self.visible_tabs(cx).iter().enumerate() {
+                    for (ix, id) in self.strip_tabs(cx).iter().enumerate() {
                         let (Some((_, left)), Some(slot)) =
                             (drawn.iter().find(|(t, _)| t == id), drag.bounds.get(ix))
                         else {
@@ -7696,8 +7718,8 @@ impl Shell {
             .max(0.)
     }
     fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let viewport = self.tabs_width(window, cx);
-        let tabs = self.visible_tabs(cx);
+        let strip_width = self.tabs_width(window, cx);
+        let tabs = self.strip_tabs(cx);
         let count = tabs.len();
         let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
         let reduced = cx.reduce_motion();
@@ -7708,6 +7730,19 @@ impl Shell {
             animate,
             std::time::Instant::now(),
         );
+        // Pinned tabs leave the strip for the deck at its left edge; as it
+        // fans out it takes more of the strip and the tabs give way.
+        let closing: HashSet<TitleTab> = slots
+            .iter()
+            .filter_map(|s| match s {
+                crate::tab_motion::Slot::Closing { key, .. } => Some(key.clone()),
+                crate::tab_motion::Slot::Live { .. } => None,
+            })
+            .collect();
+        let (dock, dock_width) = self
+            .pinned_dock(&closing, window, cx)
+            .map_or((None, 0.), |(dock, w)| (Some(dock), w));
+        let viewport = (strip_width - dock_width).max(0.);
         // Every tab fits: they share the strip, however many there are. A tab
         // easing in or out holds its share of a slot, so the others give way
         // to it gradually, as flex-shrink does in TitleBar.tsx.
@@ -8177,13 +8212,14 @@ impl Shell {
         div()
             .id("title-tab-strip")
             .debug_selector(|| "title-tab-strip".into())
-            .w(px(viewport))
+            .w(px(strip_width))
             .min_w_0()
             .h(px(TITLE_BAR_HEIGHT))
             .relative()
             .flex()
             .items_center()
             .overflow_hidden()
+            .children(dock)
             .child(
                 div()
                     .id("session-tabs")
@@ -8677,6 +8713,17 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                // A pinned tab stays put: ⌘W only closes what sits inside
+                // it, a dock terminal, a review file or one pane of a split.
+                let pinned = this
+                    .active_title_tab(cx)
+                    .filter(|tab| this.tab_pinned(tab));
+                if pinned
+                    .as_ref()
+                    .is_some_and(|tab| !matches!(tab, TitleTab::Session(_)))
+                {
+                    return;
+                }
                 if let Some(view) = this.active_app_view.filter(|_| this.settings.is_none()) {
                     if this.workspace.classic_layout {
                         this.close_app_view(window, cx);
@@ -8710,6 +8757,14 @@ impl Render for Shell {
                     return;
                 }
                 if let Some(id) = this.workspace.active {
+                    if pinned.is_some()
+                        && !this
+                            .workspace
+                            .tab_of(id)
+                            .is_some_and(|tab| this.workspace.layout(tab).is_split())
+                    {
+                        return;
+                    }
                     // Close Pane (⌘W) in a split; the whole tab otherwise.
                     this.close_pane(id, window, cx);
                 }

@@ -314,6 +314,59 @@ pub(crate) struct StackTile {
     pub to: usize,
 }
 
+/// How far each of the two swapping cards in a shuffle is pulled out to
+/// its side, how far the outgoing one rises, and how far each tilts
+/// (degrees).
+const SHUFFLE_SPREAD: f32 = 9.;
+const SHUFFLE_LIFT: f32 = 2.;
+const SHUFFLE_TILT: f32 = 12.;
+
+/// One card's swing in a deck shuffle, off its place in the stack.
+struct Shuffled {
+    dx: f32,
+    dy: f32,
+    lifted: f32,
+    tilt: f32,
+    /// Drawing order: lower paints later, on top.
+    z: f32,
+}
+
+/// Where a card moving from stack depth `from` to `to` swings, `t` (linear,
+/// 0 to 1) through the shuffle, resting at `depth` meanwhile.
+fn shuffled(from: f32, to: f32, depth: f32, t: f32) -> Shuffled {
+    // Apart and back: widest halfway, where the two cards change places.
+    let arc = (t * std::f32::consts::PI).sin();
+    if from == 0. && to > 0. {
+        // The card being put back: out to the left, tilting back, on top
+        // until the two are apart, then under.
+        Shuffled {
+            dx: -arc * SHUFFLE_SPREAD,
+            dy: -arc * SHUFFLE_LIFT,
+            lifted: arc,
+            tilt: -arc * SHUFFLE_TILT,
+            z: if t < 0.5 { -1. } else { to },
+        }
+    } else if to == 0. && from > 0. {
+        // The card being dealt: out to the right, tilting the other way,
+        // then over the stack and into the front.
+        Shuffled {
+            dx: arc * SHUFFLE_SPREAD,
+            dy: 0.,
+            lifted: arc * 0.6,
+            tilt: arc * SHUFFLE_TILT,
+            z: if t < 0.5 { from } else { -1. },
+        }
+    } else {
+        Shuffled {
+            dx: 0.,
+            dy: 0.,
+            lifted: 0.,
+            tilt: 0.,
+            z: depth,
+        }
+    }
+}
+
 /// A split tab's tiles, shuffled like a deck: `t` (linear, 0 to 1) of
 /// the way from each tile's old depth to its new one. The card leaving the
 /// front is pulled out to the left, tilting back, while the card being
@@ -321,16 +374,9 @@ pub(crate) struct StackTile {
 /// apart they swap places in the deck and push back together, the new
 /// card on top. Settled, `from` equals `to`.
 pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div {
-    /// How far each of the two swapping cards is pulled out to its side,
-    /// how far the outgoing one rises, and how far each tilts (degrees).
-    const SPREAD: f32 = 9.;
-    const LIFT: f32 = 2.;
-    const TILT: f32 = 12.;
     let t = t.clamp(0., 1.);
     // Ease in and out, so cards gather speed and settle.
     let travel = t * t * (3. - 2. * t);
-    // Apart and back: widest halfway, where the two cards change places.
-    let arc = (t * std::f32::consts::PI).sin();
     let last = (STACK_MAX - 1) as f32;
     let shown = tiles
         .iter()
@@ -348,24 +394,13 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
             // A card out of sight waits behind the last one and fades.
             let opacity = (1. - (depth - last)).clamp(0., 1.);
             let depth = depth.min(last);
-            let (mut dx, mut dy, mut lifted, mut tilt) = (0., 0., 0., 0.);
-            let mut z = depth;
-            if from == 0. && to > 0. {
-                // The card being put back: out to the left, tilting back,
-                // on top until the two are apart, then under.
-                dx = -arc * SPREAD;
-                dy = -arc * LIFT;
-                lifted = arc;
-                tilt = -arc * TILT;
-                z = if t < 0.5 { -1. } else { to };
-            } else if to == 0. && from > 0. {
-                // The card being dealt: out to the right, tilting the other
-                // way, then over the stack and into the front.
-                dx = arc * SPREAD;
-                tilt = arc * TILT;
-                lifted = arc * 0.6;
-                z = if t < 0.5 { from } else { -1. };
-            }
+            let Shuffled {
+                dx,
+                dy,
+                lifted,
+                tilt,
+                z,
+            } = shuffled(from, to, depth, t);
             let shrink = depth * SHRINK;
             let element = tile_lifted(size, depth, tile.face, tile.mark, lifted, tilt)
                 .absolute()
@@ -500,4 +535,121 @@ pub(crate) fn push_tile(
         .when(t < 1., |d| d.child(slot(outgoing, t * size.w)))
         .when(t > 0., |d| d.child(slot(incoming, (t - 1.) * size.w)));
     mark_tile(size, face, lane)
+}
+
+/// Between pinned cards once they fan out.
+pub(crate) const FAN_GAP: f32 = 6.;
+
+/// Where one pinned card sits, `fan` (eased, 0 stacked to 1 spread out)
+/// of the way from the deck to its own slot in a row.
+pub(crate) struct FanCard {
+    pub x: f32,
+    pub y: f32,
+    pub depth: f32,
+    pub opacity: f32,
+    pub lifted: f32,
+    pub tilt: f32,
+    /// Drawing order: lower paints later, on top.
+    pub z: f32,
+}
+
+/// The deck the pinned tabs rest in, and the row they fan out into. `front`
+/// is the card on top of the deck; the rest tuck behind it in pin order,
+/// as a split tab's panes do. Fanning out, every card slides straight
+/// along into its own slot in pin order, growing back to full size.
+/// `shuffle` is the card that was on top and how far (linear, 0 to 1) the
+/// deck is through dealing `front` in its place, as a split tab's tiles
+/// shuffle.
+pub(crate) fn fan_card(
+    size: &TileSize,
+    ix: usize,
+    front: usize,
+    fan: f32,
+    shuffle: Option<(usize, f32)>,
+) -> FanCard {
+    let fan = fan.clamp(0., 1.);
+    let place = |front: usize| {
+        if ix == front {
+            0.
+        } else if ix < front {
+            ix as f32 + 1.
+        } else {
+            ix as f32
+        }
+    };
+    let to = place(front);
+    let (from, t) = shuffle.map_or((to, 1.), |(was, t)| (place(was), t.clamp(0., 1.)));
+    let travel = t * t * (3. - 2. * t);
+    let stacked = from + (to - from) * travel;
+    let last = (STACK_MAX - 1) as f32;
+    let resting = stacked.min(last);
+    let swing = shuffled(from, to, resting, t);
+    // The swing belongs to the deck; spread out, the cards lie level.
+    let still = 1. - fan;
+    let depth = resting * still;
+    let shrink = depth * SHRINK;
+    let deck_x = resting * PEEK + resting * SHRINK + swing.dx;
+    let row_x = ix as f32 * (size.w + FAN_GAP);
+    // Past the third card the deck hides them; they surface as it spreads.
+    let hidden = (stacked - last).clamp(0., 1.);
+    let opacity = 1. - hidden * still;
+    FanCard {
+        x: deck_x + (row_x - deck_x) * fan,
+        y: shrink / 2. + swing.dy * still,
+        depth,
+        opacity,
+        lifted: swing.lifted * still,
+        tilt: swing.tilt * still,
+        z: swing.z * still + ix as f32 * fan * 0.01,
+    }
+}
+
+/// How wide the pinned deck is, `fan` of the way to the spread-out row.
+pub(crate) fn fan_width(size: &TileSize, count: usize, fan: f32) -> f32 {
+    if count == 0 {
+        return 0.;
+    }
+    let shown = count.min(STACK_MAX) as f32;
+    let deck = size.w + (shown - 1.) * PEEK;
+    let row = count as f32 * size.w + (count - 1) as f32 * FAN_GAP;
+    deck + (row - deck) * fan.clamp(0., 1.)
+}
+
+/// One pinned card's tile, placed by [`fan_card`].
+pub(crate) fn fan_tile(size: &TileSize, card: &FanCard, face: Face, mark: AnyElement) -> Div {
+    tile_lifted(size, card.depth, face, mark, card.lifted, card.tilt)
+}
+
+#[cfg(test)]
+mod fan_tests {
+    use super::*;
+
+    #[test]
+    fn a_resting_deck_stacks_like_a_split_tab_and_spreads_into_a_row() {
+        // At rest the front card is on top at the left; the others peek out.
+        let front = fan_card(&TAB_TILE, 2, 2, 0., None);
+        assert_eq!((front.x, front.depth, front.z), (0., 0., 0.));
+        let behind = fan_card(&TAB_TILE, 0, 2, 0., None);
+        assert_eq!(behind.depth, 1.);
+        // Past the third card they wait hidden behind the deck.
+        assert_eq!(fan_card(&TAB_TILE, 4, 0, 0., None).opacity, 0.);
+        // Spread, each card sits in its own slot, full size and level.
+        for ix in 0..5 {
+            let card = fan_card(&TAB_TILE, ix, 2, 1., None);
+            assert_eq!(card.x, ix as f32 * (TAB_TILE.w + FAN_GAP));
+            assert_eq!((card.depth, card.opacity), (0., 1.));
+        }
+        // Dealing a new front card swings the two apart, tilting, and
+        // settles with the new one on top.
+        let dealt = fan_card(&TAB_TILE, 1, 1, 0., Some((0, 0.5)));
+        let put_back = fan_card(&TAB_TILE, 0, 1, 0., Some((0, 0.5)));
+        assert!(dealt.tilt > 0. && put_back.tilt < 0.);
+        assert!(put_back.x < dealt.x);
+        let settled = fan_card(&TAB_TILE, 1, 1, 0., Some((0, 1.)));
+        assert!(settled.x.abs() < 1e-4);
+        assert!(settled.tilt.abs() < 1e-4);
+        assert_eq!(fan_width(&TAB_TILE, 1, 1.), TAB_TILE.w);
+        assert_eq!(fan_width(&TAB_TILE, 5, 0.), TAB_TILE.w + 2. * PEEK);
+        assert_eq!(fan_width(&TAB_TILE, 3, 1.), 3. * TAB_TILE.w + 2. * FAN_GAP);
+    }
 }
