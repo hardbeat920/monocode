@@ -20,6 +20,8 @@ const DISCOVERY_TIMEOUT_MS = 45_000;
 const PI_STARTUP_WINDOW_MS = 5_000;
 const PI_CATALOG_QUIET_MS = 1_000;
 const PI_CATALOG_POLL_MS = 500;
+// omp negotiates RPC v2 after its `ready` frame; v1 rejects catalogs over 1 MiB.
+const OMP_READY_TIMEOUT_MS = 15_000;
 
 const inflight = new Map<string, Promise<void>>();
 
@@ -46,7 +48,7 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
  * and stripping them can prevent a configured default provider from loading.
  * Pi merges startup snapshots until the five-second minimum and one-second
  * quiet period are met; this heuristic can miss providers registering later.
- * omp returns its first snapshot. The 45-second deadline starts after spawn
+ * omp waits for its `ready` frame, then returns its first snapshot. The 45-second deadline starts after spawn
  * and returns collected models if any; other failures reject. Every outcome
  * closes RPC requests, cancels polling, and tears down the child probe.
  */
@@ -109,6 +111,7 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     const pollModels = async () => {
       let previousSnapshot = "";
       let lastChange = started;
+      if (flavor.id === "omp") await rpc.waitReady(OMP_READY_TIMEOUT_MS);
       while (!stopped) {
         const response = await rpc.request(
           { type: "get_available_models" },
