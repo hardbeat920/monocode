@@ -321,8 +321,18 @@ pub(crate) fn tile_rail(last: bool) -> impl IntoElement {
         0.,
     )
 }
-/// Children a [`tile_rail`] branches to start past its elbow.
-pub(crate) const TILE_RAIL_INDENT: f32 = 24.;
+/// [`tile_rail`] for a step that may not branch off it.
+pub(crate) fn tile_rail_branch(last: bool, branch: bool) -> impl IntoElement {
+    rail_from(
+        (crate::tab_tile::ACTIVITY_TILE.w / 2.).floor() - 1.,
+        last,
+        branch,
+        0.,
+    )
+}
+/// Children of a [`tile_rail`] start where the group's title does: past the
+/// tile and its gap.
+pub(crate) const TILE_RAIL_INDENT: f32 = crate::tab_tile::ACTIVITY_TILE.w + 8.;
 fn rail_from(left: f32, last: bool, branch: bool, offset: f32) -> impl IntoElement {
     let color = crate::theme::rail_color();
     gpui::div()

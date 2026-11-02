@@ -7247,10 +7247,14 @@ impl Shell {
     /// the deck shuffle that deals the focused pane's tile to the front.
     fn pane_tile_stack(&self, copy: &TabCopy, leaving: Option<usize>, shuffle: f32) -> AnyElement {
         // The focused pane in front, the rest behind in layout order.
+        // A tab with no panes yet (still loading, or closing) has no focus
+        // to put in front, so an index past the end is skipped, never used.
         let depths = |focus: usize| {
-            let mut depth = vec![0; copy.panes.len()];
+            let count = copy.panes.len();
+            let mut depth = vec![0; count];
             for (d, ix) in std::iter::once(focus)
-                .chain((0..copy.panes.len()).filter(|ix| *ix != focus))
+                .filter(|ix| *ix < count)
+                .chain((0..count).filter(|ix| *ix != focus))
                 .enumerate()
             {
                 depth[ix] = d;

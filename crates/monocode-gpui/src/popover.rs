@@ -211,8 +211,13 @@ impl AnchorSlot {
     }
     pub(crate) fn probe(&self) -> impl IntoElement {
         let slot = self.clone();
+        // Pinned to the corner: an absolute child left at its static
+        // position starts inside the trigger's padding, which would shift
+        // every popover by it.
         canvas(move |bounds, _, _| slot.set(Some(bounds)), |_, _, _, _| {})
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
     }
     /// A probe for sizes the next render lays out from: a change of size
@@ -230,6 +235,8 @@ impl AnchorSlot {
             |_, _, _, _| {},
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
 }
