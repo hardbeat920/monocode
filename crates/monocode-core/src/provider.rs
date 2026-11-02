@@ -1390,6 +1390,11 @@ fn run_operation(
         Kind::Codex => {
             command.arg("app-server");
             crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            crate::mono::bridge::configure_codex(
+                &mut command,
+                request.settings.mono.as_ref(),
+                &request.settings.environment,
+            );
             if let Some(mono) = &request.settings.mono {
                 if let Some(home) =
                     crate::mono::codex_home(&mono.root, &request.settings.account.id)?
@@ -1440,17 +1445,27 @@ fn run_operation(
                 command.args(["--tools", "Read,Glob,Grep,Bash"]);
                 allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)");
             }
+            let app_server = (!settings.text_only)
+                .then(|| {
+                    crate::mono::bridge::mcp_server(settings.mono.as_ref(), &settings.environment)
+                })
+                .flatten();
+            let mut servers = serde_json::Map::new();
+            if let Some(server) = app_server {
+                servers.insert(crate::mono::bridge::MCP_SERVER.into(), server);
+                allowed.push(crate::mono::bridge::CLAUDE_ALLOWED_TOOLS);
+            }
             if let Some(server) = visual_server {
-                command.args([
-                    "--mcp-config",
-                    &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
-                ]);
+                servers.insert("monocode_visual".into(), server);
                 allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
                 if let Some(instructions) =
                     crate::visual_bridge::instructions(&settings.environment, true)
                 {
                     command.args(["--append-system-prompt", &instructions]);
                 }
+            }
+            if !servers.is_empty() {
+                command.args(["--mcp-config", &json!({"mcpServers":servers}).to_string()]);
             }
             if !allowed.is_empty() {
                 command.args(["--allowedTools", &allowed.join(",")]);
