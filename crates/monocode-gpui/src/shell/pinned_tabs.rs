@@ -252,11 +252,7 @@ impl Shell {
             .collect();
         let caption = hovered_card.as_ref().and_then(|tab| {
             let (card, place) = cards.iter().find(|(c, _)| c.tab == *tab)?;
-            Some((
-                card.title.clone(),
-                place.x,
-                fan,
-            ))
+            Some((card.title.clone(), place.x, fan))
         });
         let mut order: Vec<usize> = (0..cards.len()).collect();
         order.sort_by(|a, b| cards[*b].1.z.total_cmp(&cards[*a].1.z));
@@ -465,14 +461,14 @@ mod tests {
                 shell.run_menu(MenuTarget::Tab(third), "pin", None, w, cx);
                 shell.run_menu(MenuTarget::Tab(second), "pin", None, w, cx);
                 assert_eq!(shell.visible_tabs(cx), [c.clone(), b.clone(), a.clone()]);
-                assert_eq!(shell.strip_tabs(cx), [a.clone()]);
+                assert_eq!(shell.strip_tabs(cx), std::slice::from_ref(&a));
                 // Dropping onto the strip counts only its own slots.
                 shell.reorder_title_tab(&a, 0, cx);
                 assert_eq!(shell.visible_tabs(cx), [c.clone(), b.clone(), a.clone()]);
                 shell.run_menu(MenuTarget::Tab(first), "others", None, w, cx);
                 assert_eq!(shell.visible_tabs(cx), [c.clone(), b.clone(), a.clone()]);
                 shell.run_menu(MenuTarget::Tab(second), "unpin", None, w, cx);
-                assert_eq!(shell.workspace.pinned_tabs, [c.clone()]);
+                assert_eq!(shell.workspace.pinned_tabs, std::slice::from_ref(&c));
                 assert_eq!(shell.strip_tabs(cx), [b.clone(), a.clone()]);
                 let db = locked(&shell.store).unwrap();
                 (
@@ -532,7 +528,10 @@ mod tests {
         visual.simulate_mouse_move(row.center(), None, Default::default());
         visual.run_until_parked();
         visual.refresh().unwrap();
-        assert_eq!(visual.debug_bounds("pinned-tab-deck").unwrap().size.width, row.size.width);
+        assert_eq!(
+            visual.debug_bounds("pinned-tab-deck").unwrap().size.width,
+            row.size.width
+        );
         visual.simulate_mouse_move(gpui::point(px(900.), px(400.)), None, Default::default());
         visual.run_until_parked();
         // A fourth gathers them into a deck, which spreads on hover.
@@ -656,8 +655,15 @@ mod tests {
         visual.simulate_mouse_move(gpui::point(px(900.), px(400.)), None, Default::default());
         visual.run_until_parked();
         visual.refresh().unwrap();
-        assert!(window.update(visual, |shell, _, _| shell.menu.is_some()).unwrap());
-        assert_eq!(visual.debug_bounds("pinned-tab-deck").unwrap().size.width, spread);
+        assert!(
+            window
+                .update(visual, |shell, _, _| shell.menu.is_some())
+                .unwrap()
+        );
+        assert_eq!(
+            visual.debug_bounds("pinned-tab-deck").unwrap().size.width,
+            spread
+        );
         // Once the menu is gone, the deck gathers back up.
         window
             .update(visual, |shell, _, cx| shell.close_menu(cx))

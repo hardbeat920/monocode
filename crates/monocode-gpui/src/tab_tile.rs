@@ -156,10 +156,7 @@ fn tilted_outline(
     grow: f32,
 ) -> Vec<gpui::Point<gpui::Pixels>> {
     const STEPS: usize = 5;
-    let (cx, cy) = (
-        f32::from(bounds.center().x),
-        f32::from(bounds.center().y),
-    );
+    let (cx, cy) = (f32::from(bounds.center().x), f32::from(bounds.center().y));
     let (hw, hh) = (
         f32::from(bounds.size.width) / 2. + grow,
         f32::from(bounds.size.height) / 2. + grow,

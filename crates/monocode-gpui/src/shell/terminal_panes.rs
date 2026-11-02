@@ -31,7 +31,11 @@ pub(super) fn terminal_drag_ghost(position: Point<Pixels>, title: String) -> Any
 
 impl Shell {
     /// A terminal pane's shell, reopened in its directory after a restart.
-    fn terminal_pane_view(&mut self, pane: i64, cx: &mut Context<Self>) -> Option<Entity<Terminal>> {
+    fn terminal_pane_view(
+        &mut self,
+        pane: i64,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Terminal>> {
         if let Some(view) = self.terminal_pane_views.get(&pane) {
             return Some(view.clone());
         }
@@ -96,7 +100,12 @@ impl Shell {
             return;
         };
         let project = self.workspace.project.clone();
-        let Some(terminal) = self.terminals.get(&project).and_then(|t| t.get(ix)).cloned() else {
+        let Some(terminal) = self
+            .terminals
+            .get(&project)
+            .and_then(|t| t.get(ix))
+            .cloned()
+        else {
             return;
         };
         let over = over.map(|(target, edge)| (self.resolve_mono_target(target, cx), edge));
@@ -176,7 +185,11 @@ impl Shell {
     }
 
     /// The focused terminal pane's shell takes the keyboard.
-    pub(super) fn focus_terminal_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn focus_terminal_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(pane) = self
             .workspace
             .active
@@ -210,13 +223,11 @@ impl Shell {
             .when_some(split.filter(|p| *p > 0.), |d, p| {
                 d.child(self.split_header(pane, p, true, cx))
             })
-            .child(
-                div().flex_1().min_h_0().min_w_0().children(
-                    // The grid shapes every line; redraw it only when the
-                    // terminal itself changes.
-                    view.map(|t| t.cached(StyleRefinement::default().size_full())),
-                ),
-            )
+            .child(div().flex_1().min_h_0().min_w_0().children(
+                // The grid shapes every line; redraw it only when the
+                // terminal itself changes.
+                view.map(|t| t.cached(StyleRefinement::default().size_full())),
+            ))
             .into_any_element()
     }
 }
@@ -279,9 +290,7 @@ mod tests {
     const DOCK_PULL_TEST: Pixels = px(60.);
 
     #[gpui::test]
-    fn a_dock_tab_pulled_onto_a_pane_edge_splits_with_its_running_shell(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_dock_tab_pulled_onto_a_pane_edge_splits_with_its_running_shell(cx: &mut TestAppContext) {
         let (window, _, b) = window(cx);
         let (mut visual, project, shell_id) = dock_with_one_terminal(window, b, cx);
         let panes = window
@@ -316,7 +325,13 @@ mod tests {
                 shell.close_pane(pane, w, cx);
                 assert!(shell.workspace.terminal_panes.is_empty());
                 assert!(shell.terminal_pane_views.is_empty());
-                assert_eq!(shell.workspace.layout(shell.workspace.tab_of(b).unwrap()).leaf_ids(), [b]);
+                assert_eq!(
+                    shell
+                        .workspace
+                        .layout(shell.workspace.tab_of(b).unwrap())
+                        .leaf_ids(),
+                    [b]
+                );
             })
             .unwrap();
     }
@@ -339,7 +354,10 @@ mod tests {
                 let visible = shell.visible_tabs(cx);
                 assert_eq!(visible.last(), Some(&TitleTab::Session(pane)));
                 assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(pane)));
-                assert_eq!(shell.tab_copy(pane, cx).headline, shell.terminal_pane_title(pane, cx).unwrap());
+                assert_eq!(
+                    shell.tab_copy(pane, cx).headline,
+                    shell.terminal_pane_title(pane, cx).unwrap()
+                );
             })
             .unwrap();
     }
@@ -362,9 +380,11 @@ mod tests {
 
     #[test]
     fn restore_keeps_terminal_panes_of_known_sessions_in_open_tabs() {
-        let mut state = Workspace::default();
-        state.tabs = vec![1, -2];
-        state.title_order = vec![TitleTab::Session(1), TitleTab::Session(-2)];
+        let mut state = Workspace {
+            tabs: vec![1, -2],
+            title_order: vec![TitleTab::Session(1), TitleTab::Session(-2)],
+            ..Workspace::default()
+        };
         state
             .layouts
             .insert(1, leaf(1).split_pane(1, SplitDir::Right, -1));

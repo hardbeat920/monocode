@@ -23,6 +23,7 @@ mod new_chat_choice_tests;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
+mod pinned_tabs;
 mod project_rail;
 mod project_removal;
 mod project_settings;
@@ -45,7 +46,6 @@ mod sidebar_peek;
 mod space_reorder;
 mod terminal_dock;
 mod terminal_panes;
-mod pinned_tabs;
 use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -8715,9 +8715,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 // A pinned tab stays put: ⌘W only closes what sits inside
                 // it, a dock terminal, a review file or one pane of a split.
-                let pinned = this
-                    .active_title_tab(cx)
-                    .filter(|tab| this.tab_pinned(tab));
+                let pinned = this.active_title_tab(cx).filter(|tab| this.tab_pinned(tab));
                 if pinned
                     .as_ref()
                     .is_some_and(|tab| !matches!(tab, TitleTab::Session(_)))
@@ -9445,34 +9443,15 @@ mod tests {
             })
             .unwrap();
         cx.refresh().unwrap();
-        cx.update_window(window.into(), |_, w, cx| {
-            let position = gpui::point(px(612.), px(23.));
-            w.simulate_mouse_move(position, cx);
-            w.dispatch_event(
-                gpui::PlatformInput::MouseDown(MouseDownEvent {
-                    position,
-                    button: MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                    first_mouse: false,
-                }),
-                cx,
-            );
-            w.dispatch_event(
-                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                    position,
-                    button: MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                }),
-                cx,
-            );
-        })
-        .unwrap();
-        cx.run_until_parked();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        // The first action overlaps the tab strip. Pin it without selecting it.
+        let pin = visual.debug_bounds("menu-action-pin").unwrap();
+        visual.simulate_click(pin.center(), Default::default());
+        visual.run_until_parked();
         window
-            .update(cx, |shell, _, _| {
-                assert_eq!(shell.workspace.tabs, [a]);
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.tabs, [a, b]);
+                assert_eq!(shell.workspace.pinned_tabs, [TitleTab::Session(b)]);
                 assert_eq!(shell.workspace.active, Some(a));
                 assert!(shell.menu.is_none());
             })
