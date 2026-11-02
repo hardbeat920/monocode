@@ -23,6 +23,7 @@ import { WorkspaceProvider } from "@/features/workspace/WorkspaceProvider";
 import { Timed } from "@/ui/Timed";
 import { codeScreenOptions, HEADER_OWN_BLUR } from "@/features/files/codeScreen";
 import { applySavedAppearance } from "@/features/settings/appearance";
+import { modalSheetOptions } from "@/ui/ModalSheet";
 import { ScenePagerHost } from "@/ui/ScenePager";
 import {
   paletteFor,
@@ -83,6 +84,8 @@ const screenOptions = (colors: Palette) => ({
     animation: "default",
     gestureEnabled: true,
   } satisfies NativeStackNavigationOptions,
+  // A modal sheet with its own stack, as ModalSheet draws it.
+  sheet: modalSheetOptions(colors.sheet),
   // Full-screen modals with their own stacks and headers.
   modal: {
     presentation: "modal",
@@ -175,7 +178,7 @@ function LinkedWorkspace() {
             <Stack.Screen name="session" options={screens.sessionSheet} />
             <Stack.Screen name="projects" options={screens.modal} />
             <Stack.Screen name="settings" options={screens.modal} />
-            <Stack.Screen name="mono-profile/[monoId]" options={screens.modal} />
+            <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
             <Stack.Screen name="models" options={screens.modal} />
             <Stack.Screen name="changes" options={screens.changes} />
           </Stack>

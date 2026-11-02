@@ -91,6 +91,7 @@ vi.mock("@/ui/SceneFade", () => ({
   useHeaderPush: () => ({}),
   useSceneKey: () => "/",
   hasNativeHeader: () => false,
+  isModalRoute: () => false,
   HEADER_PUSH_TOTAL: 350,
   GLASS_PUSH_DURATION: 0.36,
   PUSH_DONE_AFTER: 630,
