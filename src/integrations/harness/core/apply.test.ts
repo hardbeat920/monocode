@@ -1280,12 +1280,14 @@ describe("applyHarnessEvent turn metrics", () => {
       outputTokens: 250,
       cacheReadTokens: 800,
       cacheHitPercent: 44.4,
+      outputTokensPerSecond: 62.5,
     });
     expect(session.blocks[0]?.turnMetrics).toEqual({
       inputTokens: 1_000,
       outputTokens: 250,
       cacheReadTokens: 800,
       cacheHitPercent: 44.4,
+      outputTokensPerSecond: 62.5,
     });
   });
 });

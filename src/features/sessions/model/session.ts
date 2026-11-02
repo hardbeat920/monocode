@@ -311,6 +311,8 @@ export type TurnMetrics = {
   cacheWriteTokens?: number;
   /** Provider-normalized share of input served from cache, as a percentage. */
   cacheHitPercent?: number;
+  /** Output tokens per second of model time, for providers that report it. */
+  outputTokensPerSecond?: number;
 };
 
 export type Block = {
