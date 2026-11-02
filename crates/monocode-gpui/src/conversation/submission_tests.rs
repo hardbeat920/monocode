@@ -112,6 +112,65 @@ fn sending_a_mono_message_clears_a_rejected_attachment_warning(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn launching_another_message_keeps_the_drafts_attachment_warning(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            let draft = std::path::PathBuf::from("/tmp/draft-image.png");
+            view.attachments = vec![draft.clone()];
+            view.attachment_error = Some("Draft warning".into());
+            let message = view.message("Queued message".into(), Vec::new(), None, cx);
+            view.launch_message(message, cx);
+            assert_eq!(view.attachments, vec![draft]);
+            assert_eq!(view.attachment_error.as_deref(), Some("Draft warning"));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn a_rejection_for_a_changed_draft_is_checked_again(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let removed = std::path::PathBuf::from("/tmp/removed-while-checking.png");
+    let fits = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let missing = std::path::PathBuf::from("/missing/rejected-attachment.png");
+    let rejected = || Err("Attachments must total 20 MB or less.".to_owned());
+
+    window
+        .update(cx, |view, _, cx| {
+            view.finish_attachment_check(vec![removed.clone()], vec![fits.clone()], rejected(), cx);
+            assert_eq!(view.attachment_error, None, "the rejection is stale");
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.attachments, vec![fits.clone()]);
+            assert_eq!(view.attachment_error, None);
+
+            // A file that still fails gets the fresh error.
+            let checked = vec![removed.clone(), fits.clone()];
+            view.finish_attachment_check(checked, vec![missing.clone()], rejected(), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.attachments, vec![fits.clone()]);
+            let error = view.attachment_error.clone().unwrap();
+            assert!(error.contains("rejected-attachment.png"), "{error}");
+
+            // Nothing changed, so the result still describes this draft.
+            view.finish_attachment_check(vec![fits.clone()], vec![missing.clone()], rejected(), cx);
+            assert_eq!(
+                view.attachment_error.as_deref(),
+                Some("Attachments must total 20 MB or less.")
+            );
+            assert_eq!(view.attachments, vec![fits.clone()]);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &mut TestAppContext) {
     for text in [
         "First message".to_owned(),

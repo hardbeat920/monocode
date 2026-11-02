@@ -399,12 +399,14 @@ impl Conversation {
         self.orchestration_plan = None;
         self.orchestration_error = None;
         let composer_attachments = std::mem::take(&mut self.attachments);
+        let composer_error = self.attachment_error.take();
         self.settings.attachments = message.attachments;
         let previous_prepared = self.settings.prepared_prompt.take();
         self.settings.prepared_prompt = message.prepared_prompt;
         self.launch_prompt(message.text, cx);
         self.settings.prepared_prompt = previous_prepared;
         self.attachments = composer_attachments;
+        self.attachment_error = composer_error;
         self.settings.attachments.clear();
         (
             self.settings.plan,

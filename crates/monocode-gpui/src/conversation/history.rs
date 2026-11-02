@@ -35,6 +35,7 @@ impl Conversation {
         // The accepted prompt predates this composer draft. Queue it without
         // taking any files the user attached while history was restoring.
         let attachments = std::mem::take(&mut self.attachments);
+        let attachment_error = self.attachment_error.take();
         self.attachments = std::mem::take(&mut self.settings.attachments);
         let mode = if self.settings.orchestrator {
             Some("orchestrator")
@@ -47,6 +48,7 @@ impl Conversation {
         };
         self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
         self.attachments = attachments;
+        self.attachment_error = attachment_error;
     }
     pub(crate) fn history_loaded(&self) -> bool {
         self.loaded && !self.history_unloaded
@@ -335,10 +337,12 @@ mod tests {
             chat.input
                 .update(cx, |input, cx| input.set_text("New draft".into(), cx));
             chat.attachments.push("/tmp/new-draft.png".into());
+            chat.attachment_error = Some("Draft warning".into());
             chat.settings
                 .attachments
                 .push("/tmp/accepted-prompt.png".into());
             chat.enqueue_restored_prompt("Accepted prompt".into(), cx);
+            assert_eq!(chat.attachment_error.as_deref(), Some("Draft warning"));
             assert_eq!(chat.input.read(cx).content, "New draft");
             assert_eq!(
                 chat.attachments,

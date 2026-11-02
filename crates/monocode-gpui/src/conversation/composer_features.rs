@@ -255,20 +255,39 @@ impl Conversation {
             return;
         }
         let incoming = std::mem::take(&mut self.pending_attachments);
-        let mut all = self.attachments.clone();
+        let checked = self.attachments.clone();
+        let mut all = checked.clone();
         all.extend(incoming.iter().cloned());
         self.attaching = true;
-        let work = cx.background_executor().spawn(async move {
-            monocode_core::composer::validate_attachments(&all).map(|_| incoming)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { monocode_core::composer::validate_attachments(&all) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_attachment_read(result, cx);
+                this.finish_attachment_check(checked, incoming, result, cx);
             });
         })
         .detach();
         cx.notify();
+    }
+    pub(super) fn finish_attachment_check(
+        &mut self,
+        checked: Vec<PathBuf>,
+        incoming: Vec<PathBuf>,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        // The rejection was for a draft that has since changed, so check
+        // these files again against the current one.
+        if result.is_err() && self.attachments != checked {
+            self.attaching = false;
+            self.pending_attachments.splice(0..0, incoming);
+            let pending = std::mem::take(&mut self.pending_attachments);
+            self.add_attachments(pending, cx);
+            return;
+        }
+        self.finish_attachment_read(result.map(|()| incoming), cx);
     }
     fn finish_attachment_read(
         &mut self,
@@ -292,8 +311,9 @@ impl Conversation {
         self.add_attachments(pending, cx);
         cx.notify();
     }
-    /// Hand the draft's files to a message. A rejected attach described
-    /// the draft, so its error leaves with it.
+    /// Take the draft's attachments for sending. The attachment error only
+    /// describes the draft, so clear it too. Code that moves the draft aside
+    /// for another message must keep the error with the draft.
     pub(super) fn take_attachments(&mut self) -> Vec<PathBuf> {
         self.attachment_error = None;
         std::mem::take(&mut self.attachments)
