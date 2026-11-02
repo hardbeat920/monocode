@@ -181,6 +181,15 @@ impl TextSelection {
         self.row_text = Some(text);
         self
     }
+    /// Uses `text` unless the caller already named the row's text, as a
+    /// block drawn at an offset into a larger row does.
+    pub(crate) fn or_text(self, text: impl FnOnce() -> SharedString) -> Self {
+        if self.row_text.is_some() {
+            self
+        } else {
+            self.with_text(text())
+        }
+    }
     pub(crate) fn with_cursor(mut self, cursor: gpui::CursorStyle) -> Self {
         self.cursor = cursor;
         self
@@ -506,7 +515,9 @@ impl TranscriptView {
         }) {
             let text = match &row.body {
                 Body::Markdown(md) => crate::markdown::selection_text(md),
-                Body::Plain(text) => text.to_string(),
+                Body::Plain(text) => self
+                    .user_prose_text(self.messages[row.message].start, text)
+                    .map_or_else(|| text.to_string(), |prose| prose.to_string()),
                 Body::Interjection(note) => note.text.clone(),
                 _ => continue,
             };
@@ -674,6 +685,71 @@ mod tests {
             assert_eq!(view.selected_text().as_deref(),Some("café.\nlet x = 1;"));
             view.selection.clear();assert!(view.selected_text().is_none());
         });
+    }
+    #[gpui::test]
+    fn dragging_across_a_formatted_sent_message_selects_its_rendered_text(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::new(
+                        gpui::point(px(0.), px(0.)),
+                        size(px(800.), px(800.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |view, _, cx| {
+                let row = |role: &str, text: &str| Row {
+                    role: role.into(),
+                    text: text.into(),
+                    first: true,
+                    sent_at: None,
+                };
+                view.patch(
+                    0,
+                    vec![
+                        row("user", "Say **hello** there\n\n- then `wave`"),
+                        row("assistant", "Hi"),
+                    ],
+                    cx,
+                );
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let (start, end) = window
+            .update(visual, |view, _, _| {
+                let state = view.selection.0.borrow();
+                let mut fragments: Vec<_> =
+                    state.layouts.values().filter(|f| f.response == 0).collect();
+                fragments.sort_by_key(|f| f.offset);
+                let (first, last) = (fragments.first().unwrap(), fragments.last().unwrap());
+                assert_eq!(&*first.row_text, "Say hello there\nthen wave");
+                let first = first.layout.bounds();
+                let last = last.layout.bounds();
+                (
+                    gpui::point(first.left() + px(1.), first.center().y),
+                    gpui::point(last.right() + px(20.), last.center().y),
+                )
+            })
+            .unwrap();
+        visual.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+        visual.simulate_mouse_move(end, Some(MouseButton::Left), gpui::Modifiers::none());
+        visual.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::none());
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, _| {
+                assert_eq!(
+                    view.selected_text().as_deref(),
+                    Some("Say hello there\nthen wave")
+                );
+            })
+            .unwrap();
     }
     #[test]
     fn selection_ranges_are_direction_independent_and_response_scoped() {

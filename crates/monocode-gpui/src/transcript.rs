@@ -17,8 +17,6 @@ pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
 pub(crate) mod selection;
-#[cfg(test)]
-mod shots;
 pub(crate) mod tasks;
 mod tools;
 mod user_links;
@@ -52,6 +50,15 @@ use std::{
 const PROSE_BYTES: usize = 8000;
 /// A sent message's parsed markdown blocks.
 type ProseRows = Arc<[Arc<MarkdownRow>]>;
+/// A sent message rendered as markdown, for the source text it was parsed from.
+struct UserProse {
+    source: SharedString,
+    rows: ProseRows,
+    /// Where each block starts in `text`.
+    offsets: Arc<[usize]>,
+    /// The rendered blocks' text, one per line, which selection anchors index.
+    text: SharedString,
+}
 /// Animates the transcript on the first display frame at or after `due`.
 fn motion_frame(view: gpui::WeakEntity<TranscriptView>, due: Option<Instant>, window: &Window) {
     window.on_next_frame(move |window, cx| {
@@ -583,7 +590,7 @@ pub(crate) struct TranscriptView {
     measurements: measurements::Measurements,
     markdown_cache: markdown::RenderCache,
     /// A sent message's parsed markdown, by message start, for the text it was parsed from.
-    user_prose: HashMap<usize, (SharedString, ProseRows)>,
+    user_prose: HashMap<usize, UserProse>,
     messages: Vec<Message>,
     rows: Vec<UiRow>,
     streaming: bool,
@@ -4388,14 +4395,22 @@ impl TranscriptView {
         .detach();
     }
     /// A sent message's markdown rows, parsed once per text.
-    fn user_prose_rows(&mut self, message_start: usize, text: &SharedString) -> Option<ProseRows> {
+    fn user_prose_rows(
+        &mut self,
+        message_start: usize,
+        text: &SharedString,
+    ) -> Option<(ProseRows, Arc<[usize]>, SharedString)> {
         if text.len() > PROSE_BYTES || !markdown::looks_like_markdown(text) {
             return None;
         }
-        if let Some((parsed, rows)) = self.user_prose.get(&message_start)
-            && parsed == text
+        if let Some(prose) = self.user_prose.get(&message_start)
+            && prose.source == *text
         {
-            return Some(rows.clone());
+            return Some((
+                prose.rows.clone(),
+                prose.offsets.clone(),
+                prose.text.clone(),
+            ));
         }
         let mut parser = MarkdownParser::new();
         parser.set_text(text);
@@ -4412,9 +4427,35 @@ impl TranscriptView {
                 Arc::new(row)
             })
             .collect();
+        let mut offsets = Vec::with_capacity(rows.len());
+        let mut selection = String::new();
+        for row in rows.iter() {
+            if !offsets.is_empty() {
+                selection.push('\n');
+            }
+            offsets.push(selection.len());
+            selection.push_str(&markdown::selection_text(row));
+        }
+        let prose = UserProse {
+            source: text.clone(),
+            rows,
+            offsets: offsets.into(),
+            text: selection.into(),
+        };
+        let result = (
+            prose.rows.clone(),
+            prose.offsets.clone(),
+            prose.text.clone(),
+        );
+        self.user_prose.insert(message_start, prose);
+        Some(result)
+    }
+    /// The rendered text selection anchors index for a sent message's row.
+    fn user_prose_text(&self, message_start: usize, source: &str) -> Option<SharedString> {
         self.user_prose
-            .insert(message_start, (text.clone(), rows.clone()));
-        Some(rows)
+            .get(&message_start)
+            .filter(|prose| prose.source == source)
+            .map(|prose| prose.text.clone())
     }
     /// One block of a sent message, drawn as an assistant's would be.
     fn user_prose_row(
@@ -4422,17 +4463,20 @@ impl TranscriptView {
         md: &Arc<MarkdownRow>,
         ix: usize,
         first: bool,
+        selection: Option<selection::TextSelection>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let body = if let Part::Code { fence, lines } = &md.part {
-            self.code(fence.clone(), lines.clone(), ix, cx)
+            self.code(fence.clone(), lines.clone(), ix, selection, cx)
         } else {
-            markdown::body(
+            markdown::body_selected(
                 md,
                 format!("user-md-{ix}").into(),
                 markdown::Tone::Normal,
                 None,
                 self.frame_now,
+                selection,
+                None,
             )
         };
         div()
@@ -4460,6 +4504,7 @@ impl TranscriptView {
         fence: Arc<Fence>,
         lines: std::ops::Range<usize>,
         ix: usize,
+        selection: Option<selection::TextSelection>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         self.highlight(&fence, cx);
@@ -4605,12 +4650,7 @@ impl TranscriptView {
                         self.search_match
                             .as_ref()
                             .is_some_and(|(start, _)| *start == self.rows[ix].key.0),
-                        self.text_selection(
-                            self.rows[ix].key,
-                            self.messages[self.rows[ix].message].start,
-                            self.messages[self.rows[ix].message].role == "assistant",
-                            cx,
-                        ),
+                        selection,
                     )),
             )
             .into_any_element()
@@ -5176,7 +5216,13 @@ impl TranscriptView {
                 let prepared = self.markdown_cache.get(row.key, md);
                 let md = &prepared.row;
                 let body = if let Part::Code { fence, lines } = &md.part {
-                    self.code(fence.clone(), lines.clone(), ix, cx)
+                    let selection = self.text_selection(
+                        row.key,
+                        message_start,
+                        self.messages[row.message].role == "assistant",
+                        cx,
+                    );
+                    self.code(fence.clone(), lines.clone(), ix, selection, cx)
                 } else if let Part::Visual { id, caption } = &md.part {
                     self.placed_visual(id, caption, cx)
                 } else {
@@ -5266,7 +5312,8 @@ impl TranscriptView {
                     .flatten();
                 let has_prose = prose.is_some();
                 // A collapsed message shows its first four blocks, whole.
-                let hidden_blocks = clamp && prose.as_ref().is_some_and(|rows| rows.len() > 4);
+                let hidden_blocks =
+                    clamp && prose.as_ref().is_some_and(|(rows, ..)| rows.len() > 4);
                 // Images sent on their own need no bubble beneath them.
                 let bare = photo_body.is_some() && text.is_empty() && attachment_body.is_none();
                 // `overflows`: hidden chunks, or more than four wrapped lines.
@@ -5279,11 +5326,19 @@ impl TranscriptView {
                         || hidden_blocks
                         || self.prompt_lines(&text, window) > 4);
                 let shown_blocks = if clamp { 4 } else { usize::MAX };
-                let prose = prose.map(|rows| {
+                let prose = prose.map(|(rows, offsets, selection_text)| {
+                    // Every block shares the row's anchors, at its offset
+                    // into the rendered text, so a drag spans blocks.
+                    let selection = self
+                        .text_selection(row.key, message_start, false, cx)
+                        .map(|selection| selection.with_text(selection_text));
                     rows.iter()
                         .take(shown_blocks)
                         .enumerate()
-                        .map(|(block, md)| self.user_prose_row(md, ix, block == 0, cx))
+                        .map(|(block, md)| {
+                            let selection = selection.as_ref().map(|s| s.offset(offsets[block]));
+                            self.user_prose_row(md, ix, block == 0, selection, cx)
+                        })
                         .collect::<Vec<_>>()
                 });
                 let bubble = div()

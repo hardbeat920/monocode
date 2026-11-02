@@ -760,10 +760,12 @@ pub(crate) fn body_selected(
     // Share one logical row across its styled fragments. Selection boundaries
     // then span inline code and formatting without scanning transcript history.
     let selection = selection.map(|selection| {
-        selection.with_text(prepared.map_or_else(
-            || selection_text(row).into(),
-            |prepared| prepared.selection.clone(),
-        ))
+        selection.or_text(|| {
+            prepared.map_or_else(
+                || selection_text(row).into(),
+                |prepared| prepared.selection.clone(),
+            )
+        })
     });
     let mut body = div()
         .w_full()
@@ -928,14 +930,14 @@ pub(crate) fn code_lines_selected(
     selection: Option<TextSelection>,
 ) -> Div {
     let selection = selection.map(|selection| {
-        selection.with_text(
+        selection.or_text(|| {
             range
                 .clone()
                 .map(|ix| fence.code[fence.lines[ix].clone()].to_owned())
                 .collect::<Vec<_>>()
                 .join("\n")
-                .into(),
-        )
+                .into()
+        })
     });
     let start = range.start;
     let longest = fence
