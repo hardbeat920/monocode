@@ -133,6 +133,8 @@ pub(crate) struct Workspace {
     pub classic_sidebar_tabs: HashMap<String, String>,
     pub classic_sidebar_tab_order: Vec<String>,
     pub new_layout_prompt_dismissed: bool,
+    /// The rail stops asking for a GitHub star once dismissed.
+    pub github_star_prompt_dismissed: bool,
     pub preferences: crate::settings::Preferences,
     pub session_filters: monocode_core::session_filters::Filters,
     pub project_appearance: HashMap<String, monocode_core::project_appearance::ProjectAppearance>,
@@ -335,6 +337,7 @@ impl Default for Workspace {
             classic_sidebar_tabs: HashMap::new(),
             classic_sidebar_tab_order: Vec::new(),
             new_layout_prompt_dismissed: false,
+            github_star_prompt_dismissed: false,
             preferences: crate::settings::Preferences::default(),
             session_filters: Default::default(),
             project_appearance: Default::default(),

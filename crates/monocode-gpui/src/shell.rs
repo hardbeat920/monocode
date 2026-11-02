@@ -8,6 +8,7 @@ mod classic_sidebar;
 mod classic_surface_tests;
 mod classic_surfaces;
 mod file_panes;
+mod github_star;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
@@ -657,6 +658,7 @@ pub(crate) struct Shell {
     live_next_change: u64,
     busy_sessions: HashSet<i64>,
     notification_state: notifications::State,
+    github_star: github_star::State,
     quick: crate::quick_composer::Controller,
     unseen_finished: HashSet<i64>,
     archiving: HashSet<i64>,
@@ -1020,6 +1022,7 @@ impl Shell {
             live_next_change: 1000,
             busy_sessions: HashSet::new(),
             notification_state,
+            github_star: Default::default(),
             quick: Default::default(),
             unseen_finished: HashSet::new(),
             archiving: HashSet::new(),
@@ -6734,7 +6737,14 @@ impl Shell {
                         )
                         .child(self.virtual_sidebar(cx))
                         .children(live_agents)
-                        .child(self.app_update_footer(cx)),
+                        .child(self.app_update_footer(cx))
+                        // The Focused layout has no project rail footer to hold it.
+                        .when(!self.workspace.classic_layout, |d| {
+                            d.children(
+                                self.github_star_prompt(cx)
+                                    .map(|prompt| div().mx_2().my_2().child(prompt)),
+                            )
+                        }),
                 ),
             )
             .when(!self.workspace.classic_layout, |d| {
@@ -8276,6 +8286,7 @@ impl Render for Shell {
                     cx.notify();
                 }));
             self.start_native_notifications(cx);
+            self.check_github_star(false, cx);
             let shell = cx.entity().downgrade();
             window.on_window_should_close(cx, move |window, cx| {
                 shell
@@ -8308,6 +8319,7 @@ impl Render for Shell {
                         this.close_preview(cx);
                     } else {
                         this.resume_git(cx);
+                        this.check_github_star(true, cx);
                     }
                 }));
             self.observations

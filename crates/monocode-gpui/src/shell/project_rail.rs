@@ -515,6 +515,12 @@ impl Shell {
             .pl(px(if compact { 8. } else { 6. }))
             .pr_2()
             .flex_shrink_0()
+            .when(!compact, |d| {
+                d.children(
+                    self.github_star_prompt(cx)
+                        .map(|prompt| div().mb_1().child(prompt)),
+                )
+            })
             .child(
                 div()
                     .id("rail-settings")
