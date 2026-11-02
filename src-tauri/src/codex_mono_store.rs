@@ -207,9 +207,7 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
         std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
     }
     #[cfg(windows)]
-    if same_file(&mono_lock, &source.join("session_index.jsonl.lock")) {
-        std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
-    }
+    remove_if_same_file(&mono_lock, &source.join("session_index.jsonl.lock"))?;
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
@@ -235,21 +233,31 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// True only when both paths' handles resolve to the same on-disk file
-/// (matching volume serial and file index). `std::os::windows::fs::MetadataExt`
-/// exposes the same fields but is still gated behind the unstable
-/// `windows_by_handle` feature, so this goes through the raw API directly.
-/// Fails closed: any open/query failure returns false so a genuinely
-/// different file is never mistaken for a stale link.
+/// Removes `path` only if it identifies the same on-disk file as
+/// `reference` (matching volume serial and file index) — the Windows
+/// counterpart of the Unix symlink cleanup, for a stale hard link.
+/// `std::os::windows::fs::MetadataExt` exposes the same identity fields but
+/// is still gated behind the unstable `windows_by_handle` feature, so this
+/// goes through the raw API directly.
+///
+/// Deletes through the same handle the identity check was made on, rather
+/// than re-resolving `path` for the delete: `prepare_files` has no lock
+/// serializing concurrent preparations of the same home, so whatever sits
+/// at `path` by the time of a separate path-based delete could already be a
+/// different file — e.g. a fresh private lock the real Codex CLI just wrote.
+/// Fails closed throughout: any open/query failure is treated as "nothing
+/// to remove", never as a reason to fall back to deleting by path.
 #[cfg(windows)]
-fn same_file(a: &Path, b: &Path) -> bool {
+fn remove_if_same_file(path: &Path, reference: &Path) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        GetFileInformationByHandle, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FileDispositionInfo, FILE_DISPOSITION_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
     };
 
-    fn identity(path: &Path) -> Option<(u32, u64)> {
-        let file = std::fs::File::open(path).ok()?;
+    fn identity(file: &std::fs::File) -> Option<(u32, u64)> {
         let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
         let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
         if ok == 0 {
@@ -259,10 +267,39 @@ fn same_file(a: &Path, b: &Path) -> bool {
         Some((info.dwVolumeSerialNumber, index))
     }
 
-    match (identity(a), identity(b)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
+    fn open_shared(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)
     }
+
+    let Ok(target) = open_shared(path) else {
+        return Ok(());
+    };
+    let Ok(reference) = open_shared(reference) else {
+        return Ok(());
+    };
+    let (Some(target_id), Some(reference_id)) = (identity(&target), identity(&reference)) else {
+        return Ok(());
+    };
+    if target_id != reference_id {
+        return Ok(());
+    }
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            target.as_raw_handle() as _,
+            FileDispositionInfo,
+            &disposition as *const FILE_DISPOSITION_INFO as *const core::ffi::c_void,
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
