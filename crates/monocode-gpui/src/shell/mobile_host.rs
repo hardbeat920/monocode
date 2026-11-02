@@ -1190,13 +1190,15 @@ impl Shell {
             watch.from = from;
             let Some((update, baseline)) = watch::update(
                 watch.baseline.as_ref(),
-                busy,
-                older,
-                &question,
-                &built,
+                watch::Conversation {
+                    busy,
+                    older,
+                    question: &question,
+                    turns: &built,
+                    approvals: &approvals,
+                    usage_limit: &usage_limit,
+                },
                 incremental,
-                &approvals,
-                &usage_limit,
             ) else {
                 continue;
             };

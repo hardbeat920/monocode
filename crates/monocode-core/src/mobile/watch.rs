@@ -57,6 +57,16 @@ fn edits_between(before: &Value, after: &Value, path: &mut Vec<Value>, out: &mut
     }
 }
 
+/// Current conversation data to compare with the phone's last frame.
+pub struct Conversation<'a> {
+    pub busy: bool,
+    pub older: bool,
+    pub question: &'a Value,
+    pub turns: &'a [Value],
+    pub approvals: &'a Value,
+    pub usage_limit: &'a Value,
+}
+
 /// The next frame for a watched conversation. While a reply streams that is
 /// the one live turn, not the whole transcript. Capable phones opt into field
 /// edits and text suffixes instead of a growing turn. The pending question
@@ -65,14 +75,17 @@ fn edits_between(before: &Value, after: &Value, path: &mut Vec<Value>, out: &mut
 /// Usage state changes must publish even when no transcript row changes.
 pub fn update(
     baseline: Option<&Baseline>,
-    busy: bool,
-    older: bool,
-    question: &Value,
-    turns: &[Value],
+    conversation: Conversation<'_>,
     incremental: bool,
-    approvals: &Value,
-    usage_limit: &Value,
 ) -> Option<(Value, Baseline)> {
+    let Conversation {
+        busy,
+        older,
+        question,
+        turns,
+        approvals,
+        usage_limit,
+    } = conversation;
     let asked = question.to_string();
     let order: Vec<String> = turns
         .iter()
@@ -191,50 +204,58 @@ mod tests {
         let approvals = json!([{"token":"first","requestId":"7","title":"Run?","detail":"git status","decisions":[{"id":"allow","label":"Allow once"}]}]);
         let (first, baseline) = update(
             None,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &approvals,
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &approvals,
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(first["approvals"], approvals);
         assert!(update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &approvals,
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &approvals,
-            &Value::Null
         )
         .is_none());
         let mut replacement = approvals.clone();
         replacement[0]["token"] = json!("second");
         let (next, baseline) = update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &replacement,
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &replacement,
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(next["approvals"], replacement);
         let (clear, _) = update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(clear["approvals"], json!([]));
@@ -246,13 +267,15 @@ mod tests {
         let approvals = json!([{"token": "approval"}]);
         let (first, baseline) = update(
             None,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &question,
+                turns: &[],
+                approvals: &approvals,
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &question,
-            &[],
-            true,
-            &approvals,
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(first["question"], question);
@@ -260,13 +283,15 @@ mod tests {
 
         let (answered, baseline) = update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &approvals,
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &approvals,
-            &Value::Null,
         )
         .unwrap();
         assert!(answered["question"].is_null());
@@ -274,26 +299,30 @@ mod tests {
 
         let (resolved, baseline) = update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(resolved["approvals"], json!([]));
         assert!(resolved.get("question").is_none());
         assert!(update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &Value::Null,
-            &[],
-            true,
-            &json!([]),
-            &Value::Null
         )
         .is_none());
     }
@@ -303,36 +332,42 @@ mod tests {
         let none = Value::Null;
         let (first, baseline) = update(
             None,
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &none,
+                turns: &[turn("1", "hi")],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &none,
-            &[turn("1", "hi")],
-            false,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
         assert!(update(
             Some(&baseline),
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &none,
+                turns: &[turn("1", "hi")],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &none,
-            &[turn("1", "hi")],
-            false,
-            &json!([]),
-            &Value::Null
         )
         .is_none());
         let (next, _) = update(
             Some(&baseline),
+            Conversation {
+                busy: false,
+                older: false,
+                question: &none,
+                turns: &[turn("1", "hi"), turn("2", "yo")],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            false,
-            &none,
-            &[turn("1", "hi"), turn("2", "yo")],
-            false,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(next["order"], json!(["1", "2"]));
@@ -346,25 +381,29 @@ mod tests {
         let none = Value::Null;
         let (_, baseline) = update(
             None,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &none,
+                turns: &[turn("1", &long)],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &none,
-            &[turn("1", &long)],
-            true,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         let grown = format!("{long} more");
         let (frame, _) = update(
             Some(&baseline),
+            Conversation {
+                busy: true,
+                older: false,
+                question: &none,
+                turns: &[turn("1", &grown)],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            false,
-            &none,
-            &[turn("1", &grown)],
-            true,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
@@ -380,62 +419,72 @@ mod tests {
         let question = json!({"requestId": 7, "questions": []});
         let (first, asked) = update(
             None,
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &question,
+                turns: &turns,
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &question,
-            &turns,
-            false,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert_eq!(first["question"], question);
         // Unchanged: nothing to send, and a frame for other reasons omits it.
         assert!(update(
             Some(&asked),
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &question,
+                turns: &turns,
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &question,
-            &turns,
-            false,
-            &json!([]),
-            &Value::Null
         )
         .is_none());
         let (idle, _) = update(
             Some(&asked),
+            Conversation {
+                busy: false,
+                older: false,
+                question: &question,
+                turns: &turns,
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            false,
-            &question,
-            &turns,
-            false,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert!(idle.get("question").is_none());
         // Answered: null, so the phone drops its card.
         let (answered, cleared) = update(
             Some(&asked),
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &turns,
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &Value::Null,
-            &turns,
-            false,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert!(answered["question"].is_null());
         assert!(update(
             Some(&cleared),
-            true,
+            Conversation {
+                busy: true,
+                older: false,
+                question: &Value::Null,
+                turns: &turns,
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             false,
-            &Value::Null,
-            &turns,
-            false,
-            &json!([]),
-            &Value::Null
         )
         .is_none());
     }
@@ -455,49 +504,57 @@ mod tests {
         let limit = json!({"token":"a", "resetsAt":123456, "resumeAtReset":false});
         let (first, baseline) = update(
             None,
-            false,
-            false,
-            &Value::Null,
-            &[],
+            Conversation {
+                busy: false,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &limit,
+            },
             true,
-            &json!([]),
-            &limit,
         )
         .unwrap();
         assert_eq!(first["usageLimit"], limit);
         assert!(update(
             Some(&baseline),
-            false,
-            false,
-            &Value::Null,
-            &[],
+            Conversation {
+                busy: false,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &limit,
+            },
             true,
-            &json!([]),
-            &limit
         )
         .is_none());
         let armed = json!({"token":"b", "resetsAt":123456, "resumeAtReset":true});
         let (next, baseline) = update(
             Some(&baseline),
-            false,
-            false,
-            &Value::Null,
-            &[],
+            Conversation {
+                busy: false,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &armed,
+            },
             true,
-            &json!([]),
-            &armed,
         )
         .unwrap();
         assert_eq!(next["usageLimit"], armed);
         let (cleared, _) = update(
             Some(&baseline),
-            false,
-            false,
-            &Value::Null,
-            &[],
+            Conversation {
+                busy: false,
+                older: false,
+                question: &Value::Null,
+                turns: &[],
+                approvals: &json!([]),
+                usage_limit: &Value::Null,
+            },
             true,
-            &json!([]),
-            &Value::Null,
         )
         .unwrap();
         assert!(cleared["usageLimit"].is_null());
