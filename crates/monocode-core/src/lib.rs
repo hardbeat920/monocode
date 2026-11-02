@@ -15,6 +15,7 @@ pub mod follow_up;
 pub mod git;
 pub mod harness_updates;
 pub mod inbox;
+pub mod keep_awake;
 pub mod mobile;
 pub mod mono;
 pub mod notes;

@@ -127,6 +127,17 @@ impl Conversation {
             self.tick_usage(cx);
         }
     }
+    pub(super) fn refresh_usage_after_turn(&self, cx: &mut Context<Self>) {
+        let Some(center) = crate::accounts::get(cx) else {
+            return;
+        };
+        let key = crate::accounts::Key::new(
+            Kind::from_id(&self.summary.provider),
+            self.settings.account.clone(),
+            self.account_model(),
+        );
+        center.update(cx, |center, cx| center.refresh_after_turn(key, cx));
+    }
     /// Account recovery also works for saved conversations from before native
     /// limit metadata was recorded, and after dismissing the banner. Inspect
     /// only the final error/notice: an older limit must not affect a later turn.
