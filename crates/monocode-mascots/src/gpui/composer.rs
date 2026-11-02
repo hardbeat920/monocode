@@ -185,6 +185,7 @@ impl Render for ComposerView {
                 canvas(
                     move |bounds, window, cx| {
                         let _ = weak.update(cx, |view, cx| {
+                            let first_measure = view.bounds.is_none();
                             let obstacle = (view.services.obstacle)(bounds, view.props.rim_y, cx);
                             if view.bounds != Some(bounds) || view.obstacle != obstacle {
                                 view.bounds = Some(bounds);
@@ -193,7 +194,13 @@ impl Render for ComposerView {
                                 // The paint closure borrows this prepared buffer in
                                 // the same draw, even with no next motion tick.
                                 view.update_frame(reduced);
-                                cx.defer_in(window, |_, _, cx| cx.notify());
+                                // A first measure already paints the prepared frame in
+                                // this draw. Deferring another frame here would advance
+                                // unrelated zero-elapsed animations (the composer slide)
+                                // before the first painted frame is observed.
+                                if !first_measure {
+                                    cx.defer_in(window, |_, _, cx| cx.notify());
+                                }
                             }
                         });
                     },
