@@ -1,3 +1,4 @@
+import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { markMobileApprovalResolved, respondMobileApproval } from "../features/mobile/model/mobileApprovals";
 import { useMobileWorkspace } from "../features/mobile/hooks/useMobileWorkspace";
@@ -1554,6 +1555,8 @@ function Workspace({
   const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
   const queueDispatchingRef = useRef(new Set<string>());
   const [queueDispatchVersion, setQueueDispatchVersion] = useState(0);
+  const mobileUsageActions = useRef<{ resume: (id: string) => Promise<boolean>; automatic: (id: string, enabled: boolean) => void } | null>(null);
+  const mobileUsagePending = useRef(new Set<string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
   const tabsRef = useRef(tabs);
@@ -9122,6 +9125,18 @@ function Workspace({
       const sessionId = monoSession?.id ?? conversationId;
       const session = monoSession ?? await ensureOpenSessionRef.current(sessionId);
       if (!session) throw new Error("Session is no longer available");
+      if (method === "session.resumeUsage" || method === "session.resumeUsageAtReset") {
+        await recoverMobileUsage({
+          session: sessionsRef.current.find((current) => current.id === session.id),
+          token: params.token,
+          automatic: method === "session.resumeUsageAtReset",
+          enabled: params.enabled,
+          pending: mobileUsagePending.current,
+          resume: mobileUsageActions.current!.resume,
+          setAutomatic: mobileUsageActions.current!.automatic,
+        });
+        return { sessionId: session.id };
+      }
       if (method === "session.cancel") {
         await onStop(session.id);
         return { sessionId: session.id };
@@ -9614,7 +9629,7 @@ function Workspace({
   );
 
   const onUsageLimitDismiss = useCallback((sessionId: string) => {
-    setSessions((prev) =>
+    updateSessionState(sessionsRef, setSessions, (prev) =>
       prev.map((session) =>
         session.id === sessionId && session.usageLimit
           ? { ...session, usageLimit: undefined }
@@ -9625,7 +9640,7 @@ function Workspace({
 
   const onUsageLimitResumeAtReset = useCallback(
     (sessionId: string, enabled: boolean) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((session) =>
           session.id === sessionId && session.usageLimit
             ? {
@@ -9640,24 +9655,30 @@ function Workspace({
   );
 
   const onUsageLimitResume = useCallback(
-    (sessionId: string) => {
-      const session = sessionsRef.current.find(
-        (entry) => entry.id === sessionId,
-      );
-      if (!session?.usageLimit || session.busy) return;
+    async (sessionId: string): Promise<boolean> => {
+      const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+      if (!session?.usageLimit || session.busy) return false;
       if (isMonoSession(sessionId)) {
-        setSessions((prev) =>
-          prev.map((entry) =>
-            entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry,
-          ),
+        updateSessionState(sessionsRef, setSessions, (prev) =>
+          prev.map((entry) => entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry),
         );
-        return;
+        return true;
       }
       onUsageLimitDismiss(sessionId);
-      onSubmit(sessionId, CONTINUE_PROMPT);
+      try {
+        if (await submitSession(sessionId, CONTINUE_PROMPT)) return true;
+      } catch { /* The submission path reports its desktop error. */ }
+      // A rejected continuation previously cleared the limit entirely. Keep
+      // that one-attempt scheduler behavior, but retain a manual retry notice.
+      updateSessionState(sessionsRef, setSessions, (prev) => prev.map((entry) =>
+        entry.id === sessionId && !entry.busy && !entry.usageLimit
+          ? { ...entry, usageLimit: { ...session.usageLimit!, resumeAtReset: false } } : entry));
+      return false;
     },
-    [onSubmit, onUsageLimitDismiss],
+    [submitSession, onUsageLimitDismiss],
   );
+
+  mobileUsageActions.current = { resume: onUsageLimitResume, automatic: onUsageLimitResumeAtReset };
 
   const usageLimitSwitching = useRef(new Set<string>());
   const onUsageLimitAccountChange = useCallback(

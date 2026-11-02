@@ -260,3 +260,14 @@ export type ApprovalPrompt = {
   decisions: { id: ApprovalDecision; label: string }[];
   unsupported?: string | null;
 };
+
+/** Desktop-owned usage recovery state; mobile only renders these capabilities. */
+export type UsageLimitState = {
+  token: string;
+  resetsAt?: number | null;
+  resumeAtReset: boolean;
+  canResume: boolean;
+  canAutoResume: boolean;
+  resetLabel: string;
+  limitation: string;
+};

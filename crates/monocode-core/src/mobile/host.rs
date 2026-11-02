@@ -35,6 +35,8 @@ const APP_METHODS: &[&str] = &[
     "project.gitAction",
     "session.start",
     "conversation.send",
+    "session.resumeUsage",
+    "session.resumeUsageAtReset",
     "session.answerQuestion",
     "session.keepQuestionOpen",
     "session.cancel",
@@ -1008,6 +1010,26 @@ mod tests {
             host.handle(&peer, request).await.unwrap()["sessionId"],
             "mono:m"
         );
+        answering.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn usage_continuation_commands_reach_the_desktop_with_their_state_tokens() {
+        let (host, events, peer) = paired();
+        let answering = tokio::spawn(async move {
+            for method in ["session.resumeUsage", "session.resumeUsageAtReset"] {
+                let Ok(Event::Request(request)) = events.recv().await else {
+                    panic!("expected a request");
+                };
+                assert_eq!(request.method, method);
+                assert_eq!(request.params["token"], "paused");
+                request.reply(Ok(json!({"sessionId":"s"})));
+            }
+        });
+        for method in ["session.resumeUsage", "session.resumeUsageAtReset"] {
+            let result = host.handle(&peer, json!({"version":VERSION,"id":method,"method":method,"params":{"conversationId":"s", "token":"paused", "enabled":true}})).await.unwrap();
+            assert_eq!(result["sessionId"], "s");
+        }
         answering.await.unwrap();
     }
 

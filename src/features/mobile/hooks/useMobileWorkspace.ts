@@ -118,6 +118,7 @@ export function useMobileWorkspace(options: Options) {
               turns: conversation.turns,
               question: conversation.question,
               approvals: conversation.approvals,
+              usageLimit: conversation.usageLimit,
             },
             watch.incremental,
           );

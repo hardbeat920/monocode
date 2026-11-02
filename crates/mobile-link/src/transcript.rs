@@ -367,6 +367,7 @@ pub struct Transcript {
     /// What the agent waits on the user to answer, as the desktop sent it.
     question: Value,
     approvals: Value,
+    usage_limit: Value,
     question_generation: u64,
     older: bool,
     error: Option<String>,
@@ -388,6 +389,7 @@ impl Transcript {
             busy: false,
             question: Value::Null,
             approvals: json!([]),
+            usage_limit: Value::Null,
             question_generation: 0,
             older: false,
             error: None,
@@ -423,6 +425,7 @@ impl Transcript {
                     .get("approvals")
                     .cloned()
                     .unwrap_or_else(|| json!([]));
+                self.usage_limit = command["usageLimit"].clone();
                 // A read says whether turns precede its window, as a watch does.
                 self.older = command["older"].as_bool().unwrap_or(false);
                 self.error = None;
@@ -543,6 +546,9 @@ impl Transcript {
                     self.approvals = approvals.clone();
                 }
                 // Sent when it changes; null once answered.
+                if let Some(limit) = frame.get("usageLimit") {
+                    self.usage_limit = limit.clone();
+                }
                 if let Some(question) = frame.get("question") {
                     self.set_question(question);
                 }
@@ -703,7 +709,7 @@ impl Transcript {
             "order": if order == self.order { None } else { Some(&order) },
             "status": { "busy":self.busy, "error":self.error, "hasTurns":!turns.is_empty(), "ready":self.ready, "lastUserId":self.last_user_id(),
                 "userCount":self.user_count(), "pendingId":self.pending["turn"]["id"], "notice":latest_error,
-                "question":self.question, "questionGeneration":self.question_generation, "approvals":self.approvals },
+                "question":self.question, "questionGeneration":self.question_generation, "approvals":self.approvals, "usageLimit":self.usage_limit },
             "older": self.history_older.unwrap_or(self.older),
             "firstTurnId": self.history.first().or(self.turns.first()).map(|t| string(t,"id")),
             "watchFrom": self.turns.first().map(|t| string(t,"id")),
@@ -1461,6 +1467,29 @@ mod tests {
             .update(json!({"type":"frames","frames":[{"approvals":[]}]}))
             .unwrap();
         assert_eq!(cleared["status"]["approvals"], json!([]));
+    }
+    #[test]
+    fn usage_limit_passes_through_reads_frames_preferences_and_clearing() {
+        let mut transcript = Transcript::new(Vec::new(), false);
+        let limit =
+            json!({"token":"a", "resetsAt":123456, "resumeAtReset":false, "canResume":false});
+        let read = transcript
+            .update(json!({"type":"replace", "turns":[], "usageLimit":limit}))
+            .unwrap();
+        assert_eq!(read["status"]["usageLimit"], limit);
+        let retained = transcript
+            .update(json!({"type":"frames", "frames":[{"busy":false}]}))
+            .unwrap();
+        assert_eq!(retained["status"]["usageLimit"], limit);
+        let armed = json!({"token":"b", "resetsAt":123456, "resumeAtReset":true});
+        let update = transcript
+            .update(json!({"type":"frames", "frames":[{"usageLimit":armed}]}))
+            .unwrap();
+        assert_eq!(update["status"]["usageLimit"], armed);
+        let cleared = transcript
+            .update(json!({"type":"frames", "frames":[{"usageLimit":null}]}))
+            .unwrap();
+        assert!(cleared["status"]["usageLimit"].is_null());
     }
 
     #[test]

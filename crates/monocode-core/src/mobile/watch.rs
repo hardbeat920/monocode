@@ -9,6 +9,7 @@ pub struct Baseline {
     busy: bool,
     approvals: Value,
     older: bool,
+    usage_limit: Value,
     /// The pending question as last sent, as JSON; "null" for none.
     question: String,
     order: Vec<String>,
@@ -61,6 +62,7 @@ fn edits_between(before: &Value, after: &Value, path: &mut Vec<Value>, out: &mut
 /// edits and text suffixes instead of a growing turn. The pending question
 /// comes with the first frame and again whenever it changes, null once it is
 /// answered. None when nothing changed.
+/// Usage state changes must publish even when no transcript row changes.
 pub fn update(
     baseline: Option<&Baseline>,
     busy: bool,
@@ -69,6 +71,7 @@ pub fn update(
     turns: &[Value],
     incremental: bool,
     approvals: &Value,
+    usage_limit: &Value,
 ) -> Option<(Value, Baseline)> {
     let asked = question.to_string();
     let order: Vec<String> = turns
@@ -89,6 +92,7 @@ pub fn update(
         if baseline.busy == busy
             && baseline.older == older
             && baseline.approvals == *approvals
+            && baseline.usage_limit == *usage_limit
             && baseline.question == asked
             && changed.is_empty()
             && baseline.order == order
@@ -121,6 +125,7 @@ pub fn update(
     if baseline.is_none_or(|b| b.approvals != *approvals) {
         frame.insert("approvals".into(), approvals.clone());
     }
+    frame.insert("usageLimit".into(), usage_limit.clone());
     frame.insert("busy".into(), json!(busy));
     frame.insert("older".into(), json!(older));
     frame.insert("order".into(), json!(order));
@@ -137,6 +142,7 @@ pub fn update(
             busy,
             approvals: approvals.clone(),
             older,
+            usage_limit: usage_limit.clone(),
             question: asked,
             order,
             turns: serialized,
@@ -183,8 +189,17 @@ mod tests {
     #[test]
     fn approvals_change_without_transcript_changes_and_clear_after_desktop_resolution() {
         let approvals = json!([{"token":"first","requestId":"7","title":"Run?","detail":"git status","decisions":[{"id":"allow","label":"Allow once"}]}]);
-        let (first, baseline) =
-            update(None, true, false, &Value::Null, &[], true, &approvals).unwrap();
+        let (first, baseline) = update(
+            None,
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &approvals,
+            &Value::Null,
+        )
+        .unwrap();
         assert_eq!(first["approvals"], approvals);
         assert!(update(
             Some(&baseline),
@@ -193,7 +208,8 @@ mod tests {
             &Value::Null,
             &[],
             true,
-            &approvals
+            &approvals,
+            &Value::Null
         )
         .is_none());
         let mut replacement = approvals.clone();
@@ -206,6 +222,7 @@ mod tests {
             &[],
             true,
             &replacement,
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(next["approvals"], replacement);
@@ -217,6 +234,7 @@ mod tests {
             &[],
             true,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(clear["approvals"], json!([]));
@@ -226,8 +244,17 @@ mod tests {
     fn questions_and_approvals_update_independently() {
         let question = json!({"requestId": 7, "questions": []});
         let approvals = json!([{"token": "approval"}]);
-        let (first, baseline) =
-            update(None, true, false, &question, &[], true, &approvals).unwrap();
+        let (first, baseline) = update(
+            None,
+            true,
+            false,
+            &question,
+            &[],
+            true,
+            &approvals,
+            &Value::Null,
+        )
+        .unwrap();
         assert_eq!(first["question"], question);
         assert_eq!(first["approvals"], approvals);
 
@@ -239,6 +266,7 @@ mod tests {
             &[],
             true,
             &approvals,
+            &Value::Null,
         )
         .unwrap();
         assert!(answered["question"].is_null());
@@ -252,6 +280,7 @@ mod tests {
             &[],
             true,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(resolved["approvals"], json!([]));
@@ -264,6 +293,7 @@ mod tests {
             &[],
             true,
             &json!([]),
+            &Value::Null
         )
         .is_none());
     }
@@ -279,6 +309,7 @@ mod tests {
             &[turn("1", "hi")],
             false,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
@@ -289,7 +320,8 @@ mod tests {
             &none,
             &[turn("1", "hi")],
             false,
-            &json!([])
+            &json!([]),
+            &Value::Null
         )
         .is_none());
         let (next, _) = update(
@@ -300,6 +332,7 @@ mod tests {
             &[turn("1", "hi"), turn("2", "yo")],
             false,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(next["order"], json!(["1", "2"]));
@@ -319,6 +352,7 @@ mod tests {
             &[turn("1", &long)],
             true,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         let grown = format!("{long} more");
@@ -330,6 +364,7 @@ mod tests {
             &[turn("1", &grown)],
             true,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
@@ -343,8 +378,17 @@ mod tests {
     fn the_pending_question_comes_first_and_again_only_when_it_changes() {
         let turns = [turn("1", "hi")];
         let question = json!({"requestId": 7, "questions": []});
-        let (first, asked) =
-            update(None, true, false, &question, &turns, false, &json!([])).unwrap();
+        let (first, asked) = update(
+            None,
+            true,
+            false,
+            &question,
+            &turns,
+            false,
+            &json!([]),
+            &Value::Null,
+        )
+        .unwrap();
         assert_eq!(first["question"], question);
         // Unchanged: nothing to send, and a frame for other reasons omits it.
         assert!(update(
@@ -354,7 +398,8 @@ mod tests {
             &question,
             &turns,
             false,
-            &json!([])
+            &json!([]),
+            &Value::Null
         )
         .is_none());
         let (idle, _) = update(
@@ -365,6 +410,7 @@ mod tests {
             &turns,
             false,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert!(idle.get("question").is_none());
@@ -377,6 +423,7 @@ mod tests {
             &turns,
             false,
             &json!([]),
+            &Value::Null,
         )
         .unwrap();
         assert!(answered["question"].is_null());
@@ -387,7 +434,8 @@ mod tests {
             &Value::Null,
             &turns,
             false,
-            &json!([])
+            &json!([]),
+            &Value::Null
         )
         .is_none());
     }
@@ -400,5 +448,58 @@ mod tests {
         assert_eq!(window(&ids, Some("gone"), 20), (0, Some("0".into()), false));
         assert_eq!(before(&ids, "5", 3).unwrap(), (2, 5, true));
         assert!(before(&ids, "missing", 3).is_err());
+    }
+
+    #[test]
+    fn usage_state_changes_publish_without_transcript_changes() {
+        let limit = json!({"token":"a", "resetsAt":123456, "resumeAtReset":false});
+        let (first, baseline) = update(
+            None,
+            false,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+            &limit,
+        )
+        .unwrap();
+        assert_eq!(first["usageLimit"], limit);
+        assert!(update(
+            Some(&baseline),
+            false,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+            &limit
+        )
+        .is_none());
+        let armed = json!({"token":"b", "resetsAt":123456, "resumeAtReset":true});
+        let (next, baseline) = update(
+            Some(&baseline),
+            false,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+            &armed,
+        )
+        .unwrap();
+        assert_eq!(next["usageLimit"], armed);
+        let (cleared, _) = update(
+            Some(&baseline),
+            false,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+            &Value::Null,
+        )
+        .unwrap();
+        assert!(cleared["usageLimit"].is_null());
     }
 }
