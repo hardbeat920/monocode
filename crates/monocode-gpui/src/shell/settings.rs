@@ -334,15 +334,6 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn default_kind(&self) -> Kind {
-        let p = &self.workspace.preferences;
-        p.project_providers
-            .get(&self.workspace.project)
-            .and_then(|p| p.provider.as_deref())
-            .or(p.default_provider.as_deref())
-            .and_then(Kind::parse)
-            .unwrap_or(Kind::Codex)
-    }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);

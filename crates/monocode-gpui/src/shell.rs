@@ -16,6 +16,9 @@ mod live_agents;
 mod mobile_host;
 mod mono_panes;
 pub(crate) mod monos;
+mod new_chat_choice;
+#[cfg(test)]
+mod new_chat_choice_tests;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
@@ -4342,7 +4345,7 @@ impl Shell {
         }) {
             self.activate_session(id, window, cx);
         } else {
-            self.create_session(self.default_kind(), true, cx);
+            self.create_session(self.default_choice(), true, cx);
         }
     }
     fn open_project(&mut self, cx: &mut Context<Self>) {
@@ -4372,18 +4375,26 @@ impl Shell {
         })
         .detach();
     }
-    fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
-        self.create_session(kind, false, cx);
+    fn new_chat(&mut self, cx: &mut Context<Self>) {
+        self.create_session(self.default_choice(), false, cx);
     }
-    fn create_session(&mut self, kind: Kind, only_if_empty: bool, cx: &mut Context<Self>) {
-        self.create_session_target(kind, only_if_empty, None, cx);
+    fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        self.create_session(self.explicit_choice(kind), false, cx);
+    }
+    fn create_session(
+        &mut self,
+        choice: new_chat_choice::NewChatChoice,
+        only_if_empty: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_session_target(choice, only_if_empty, None, cx);
     }
     fn create_in_folder(&mut self, folder: String, cx: &mut Context<Self>) {
-        self.create_session_target(self.default_kind(), false, Some(folder), cx);
+        self.create_session_target(self.default_choice(), false, Some(folder), cx);
     }
     fn create_session_target(
         &mut self,
-        kind: Kind,
+        choice: new_chat_choice::NewChatChoice,
         only_if_empty: bool,
         folder: Option<String>,
         cx: &mut Context<Self>,
@@ -4399,14 +4410,7 @@ impl Shell {
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
-        let model = self
-            .workspace
-            .preferences
-            .project_providers
-            .get(&cwd)
-            .and_then(|p| p.models.get(kind.id()))
-            .or(self.workspace.preferences.default_models.get(kind.id()))
-            .cloned();
+        let new_chat_choice::NewChatChoice { kind, model } = choice;
         let navigation_revision = self.navigation_revision;
         let account = crate::accounts::get(cx)
             .map(|center| center.read(cx).selected(kind, &cwd))
@@ -8049,9 +8053,7 @@ impl Shell {
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),
                             )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                     )
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
@@ -8492,7 +8494,7 @@ impl Render for Shell {
                 if this.dock_focused(window, cx).is_some() {
                     this.new_terminal(window, cx);
                 } else {
-                    this.create(this.default_kind(), cx);
+                    this.new_chat(cx);
                 }
             }))
             .on_action(

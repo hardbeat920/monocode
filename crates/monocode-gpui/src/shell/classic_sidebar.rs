@@ -346,11 +346,7 @@ impl Shell {
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                             cx.stop_propagation()
                                         })
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.create(this.default_kind(), cx)
-                                            }),
-                                        ),
+                                        .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                                     ),
                             ),
                     ),
