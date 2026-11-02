@@ -12,6 +12,8 @@ const desktop = vi.hoisted(() => ({
   startSession: vi.fn(),
   sendMessage: vi.fn(),
   offline: false,
+  page: "chat",
+  focused: true,
   os: "ios",
   usageLimit: undefined as UsageLimitState | undefined,
   cardMounts: 0,
@@ -135,7 +137,7 @@ vi.mock("expo-router", () => ({
     },
     Toolbar: Object.assign(() => null, { View: () => null }),
   },
-  useIsFocused: () => true,
+  useIsFocused: () => desktop.focused,
 }));
 vi.mock("@/features/connection/ConnectionNotice", () => ({
   useOffline: () => desktop.offline,
@@ -176,12 +178,14 @@ vi.mock("@/features/settings/newSessions", () => ({
 vi.mock("@/features/sessions/Composer", () => ({
   Composer: ({
     workspace,
+    active,
     onSend,
   }: {
     workspace?: ReactNode;
+    active?: boolean;
     onSend: (text: string, attachments: never[]) => Promise<void>;
   }) => (
-    <section data-composer>
+    <section data-composer data-active={String(active)}>
       {workspace}
       <button onClick={() => void onSend("Build the app", [])}>Send</button>
     </section>
@@ -236,7 +240,7 @@ vi.mock("@/features/sessions/Transcript", () => ({
   TranscriptLoading: () => null,
 }));
 vi.mock("@/features/workspace/ProjectPages", () => ({
-  useProjectPages: () => ({ progress: { get: () => 0 }, view: "chat" }),
+  useProjectPages: () => ({ progress: { get: () => 0 }, view: desktop.page }),
   ProjectPages: () => null,
   ProjectSwitch: () => null,
 }));
@@ -386,6 +390,8 @@ describe("new session composer workspace", () => {
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
+    desktop.page = "chat";
+    desktop.focused = true;
     desktop.os = "ios";
     desktop.usageLimit = undefined;
     desktop.cardMounts = 0;
@@ -418,6 +424,20 @@ describe("new session composer workspace", () => {
     act(() => root.render(<MonoScreen />));
     expect(container.querySelector("[data-usage-card]")?.textContent).toBe("mono:second:paused");
     expect(desktop.cardMounts).toBe(2);
+  });
+
+  it("permits posture focus only for a visible chat composer", () => {
+    const active = () => container.querySelector("[data-composer]")!.getAttribute("data-active");
+    render();
+    expect(active()).toBe("true");
+    desktop.page = "sessions";
+    render();
+    expect(active()).toBe("false");
+    render("existing-session");
+    expect(active()).toBe("true");
+    desktop.focused = false;
+    render("existing-session");
+    expect(active()).toBe("false");
   });
 
   it("keeps circular Android project/settings controls after switching projects", () => {
@@ -526,6 +546,8 @@ describe("new session composer workspace", () => {
     click("Current checkout");
     expect(container.querySelector('[aria-label="New worktree"]')).toBeNull();
     desktop.offline = false;
+    desktop.page = "chat";
+    desktop.focused = true;
     render("existing-session");
     expect(
       container.querySelector('[aria-label="Current checkout"]'),

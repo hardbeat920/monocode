@@ -5998,6 +5998,16 @@ impl Render for TranscriptView {
                     move |bounds, window, cx| {
                         let _ = view.update(cx, |this, cx| {
                             if this.viewport != bounds {
+                                // Layout learns the width after the outline
+                                // was built. Redraw after this frame only if
+                                // its visibility changes; an extra layout
+                                // otherwise advances chat motion needlessly.
+                                if this.outline_visible_at(this.viewport.size.width)
+                                    != this.outline_visible_at(bounds.size.width)
+                                {
+                                    let view = cx.entity();
+                                    cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
+                                }
                                 this.selection.clear();
                                 this.viewport = bounds;
                                 this.list
