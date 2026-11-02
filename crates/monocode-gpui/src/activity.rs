@@ -313,22 +313,15 @@ pub(crate) fn rail_branch_at(last: bool, branch: bool, offset: f32) -> impl Into
 }
 /// The rail under a work phase's tile, dropping from the tile's centre.
 pub(crate) fn tile_rail(last: bool) -> impl IntoElement {
-    rail_from(
-        // The line's 1px sits just left of centre, so it reads as centred.
-        (crate::tab_tile::ACTIVITY_TILE.w / 2.).floor() - 1.,
-        last,
-        true,
-        0.,
-    )
+    rail_from(TILE_RAIL_X, last, true, 0.)
 }
+/// Where a 1px line under an activity tile starts so it is centred on the
+/// tile: half a pixel either side of its middle, which lands on whole device
+/// pixels on a 2x screen.
+pub(crate) const TILE_RAIL_X: f32 = crate::tab_tile::ACTIVITY_TILE.w / 2. - 0.5;
 /// [`tile_rail`] for a step that may not branch off it.
 pub(crate) fn tile_rail_branch(last: bool, branch: bool) -> impl IntoElement {
-    rail_from(
-        (crate::tab_tile::ACTIVITY_TILE.w / 2.).floor() - 1.,
-        last,
-        branch,
-        0.,
-    )
+    rail_from(TILE_RAIL_X, last, branch, 0.)
 }
 /// Children of a [`tile_rail`] start where the group's title does: past the
 /// tile and its gap.

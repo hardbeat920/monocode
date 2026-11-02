@@ -5562,13 +5562,26 @@ impl TranscriptView {
                     ..
                 }
             );
+        // Unfolded work that opens with a tool group: the header's tile
+        // connects down into that group's tile.
+        let leads_into_group = !self.fold_work
+            && matches!(self.rows[ix].body, Body::WorkLine { .. })
+            && matches!(
+                self.rows.get(ix + 1).map(|r| &r.body),
+                Some(Body::Phase { .. })
+            );
         let receipt_open = match self.rows[ix].body {
             // Only folding work hangs it from the header on a rail.
             Body::WorkLine { turn, .. } if self.fold_work => {
                 self.work_folds.get(&turn).copied().unwrap_or(false)
             }
-            _ => false,
+            _ => leads_into_group,
         };
+        // The other end of that connector: from the row's top into the tile.
+        let joined_to_header = !self.fold_work
+            && matches!(self.rows[ix].body, Body::Phase { .. })
+            && ix > 0
+            && matches!(self.rows[ix - 1].body, Body::WorkLine { .. });
         let prose = matches!(self.rows[ix].body, Body::Markdown(..));
         let rail_branch = matches!(self.rows[ix].body, Body::Phase { .. })
             || (!nested_phase && (thought_header || (prose && first_prose)))
@@ -5681,13 +5694,24 @@ impl TranscriptView {
                                                 .absolute()
                                                 // From under the header's tile,
                                                 // down its centre.
-                                                .left(px((crate::tab_tile::ACTIVITY_TILE.w / 2.)
-                                                    .floor()
-                                                    - 1.))
+                                                .left(px(crate::activity::TILE_RAIL_X))
                                                 .top(px(4. + crate::tab_tile::ACTIVITY_TILE.h))
                                                 .bottom(px(-4.))
                                                 .w(px(1.))
-                                                .bg(rgb(0x323232)),
+                                                .bg(crate::theme::rail_color()),
+                                        )
+                                    })
+                                    .when(joined_to_header, |d| {
+                                        // A tool group's tile sits 5px into its
+                                        // row; the line meets it there.
+                                        d.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(crate::activity::TILE_RAIL_X))
+                                                .top_0()
+                                                .h(px(5.))
+                                                .w(px(1.))
+                                                .bg(crate::theme::rail_color()),
                                         )
                                     })
                                     .child(body),

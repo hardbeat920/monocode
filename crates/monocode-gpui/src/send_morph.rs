@@ -159,30 +159,67 @@ fn shade(color: Hsla, by: f32) -> Hsla {
     c
 }
 
-/// The raised surface: a soft drop and a lift below, the fill brighter at
-/// the top, a light rim along the top edge and a hairline all round. The
-/// glow under an enabled pill grows with it.
+/// The raised surface, built like a key: a 1px ring just outside it so it
+/// separates from any composer behind it, a tight contact shadow and a softer
+/// drop (plus a glow in its own colour that grows with the pill), the fill
+/// brighter at the top, a crisp highlight just inside the top edge and a
+/// faint shade just inside the bottom one. Solid, so nothing behind it needs
+/// blurring. Disabled, it stays flat, keeping only a faint ring.
 fn surface(fill: Hsla, enabled: bool, open: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let radius = px(RADIUS);
-            let corners = Corners::all(radius);
+            let light = is_light();
+            let corners = Corners::all(px(RADIUS));
+            let inner = |by: f32| {
+                gpui::Bounds::new(
+                    bounds.origin + gpui::point(px(by), px(by)),
+                    gpui::size(
+                        bounds.size.width - px(by * 2.),
+                        bounds.size.height - px(by * 2.),
+                    ),
+                )
+            };
             if enabled {
-                let glow = fill.opacity(0.35 * open);
                 window.paint_drop_shadows(
                     bounds,
                     corners,
+                    // Light: a contact line and a small soft drop, plus
+                    // a faint glow of its own colour as the pill opens.
                     &[
-                        gpui::BoxShadow::new(px(0.), px(1.), black(0.25)).blur_radius(px(1.)),
-                        gpui::BoxShadow::new(px(0.), px(3.), glow)
-                            .blur_radius(px(10.))
+                        gpui::BoxShadow::new(px(0.), px(1.), black(if light { 0.1 } else { 0.22 }))
+                            .blur_radius(px(1.)),
+                        gpui::BoxShadow::new(
+                            px(0.),
+                            px(2.),
+                            black(if light { 0.05 } else { 0.12 }),
+                        )
+                        .blur_radius(px(4.))
+                        .spread_radius(px(-1.)),
+                        gpui::BoxShadow::new(px(0.), px(2.), fill.opacity(0.18 * open))
+                            .blur_radius(px(8.))
                             .spread_radius(px(-2.)),
                     ],
                 );
             }
+            // The ring: one pixel proud of the button all round.
+            window.paint_quad(
+                gpui::fill(
+                    inner(-1.),
+                    if light {
+                        black(if enabled { 0.14 } else { 0.06 })
+                    } else {
+                        white(if enabled { 0.22 } else { 0.06 })
+                    },
+                )
+                .corner_radii(Corners::all(px(RADIUS + 1.))),
+            );
+            // Every colour runs from a lighter top down to its main colour.
+            // White has nothing lighter, so its main colour settles a step
+            // below white and the top keeps the white.
             let (top, bottom) = if enabled {
-                (shade(fill, 0.06), shade(fill, -0.07))
+                let base = shade(fill, -(fill.l - 0.9).max(0.));
+                (shade(base, 0.1), base)
             } else {
                 (fill, fill)
             };
@@ -198,25 +235,30 @@ fn surface(fill: Hsla, enabled: bool, open: f32) -> impl IntoElement {
                 .corner_radii(corners),
             );
             if enabled {
-                // The rim: light on the top edge, fading out by the middle.
+                // The bevel: a bright line inside the top edge, a shade
+                // inside the bottom one.
+                let edge = |top: f32, bottom: f32, color: Hsla| {
+                    gpui::fill(inner(0.), gpui::transparent_black())
+                        .corner_radii(corners)
+                        .border_widths(gpui::Edges {
+                            top: px(top),
+                            right: px(0.),
+                            bottom: px(bottom),
+                            left: px(0.),
+                        })
+                        .border_color(color)
+                };
+                window.paint_quad(edge(1., 0., white(0.55)));
+                window.paint_quad(edge(0., 1., black(0.12)));
+                // A hairline just inside the edge gives a white or pale
+                // button a defined shape against its ring.
                 window.paint_quad(
-                    gpui::fill(
-                        bounds,
-                        gpui::linear_gradient(
-                            180.,
-                            gpui::linear_color_stop(white(0.35), 0.),
-                            gpui::linear_color_stop(white(0.), 0.5),
-                        ),
-                    )
-                    .corner_radii(corners),
+                    gpui::fill(inner(0.), gpui::transparent_black())
+                        .corner_radii(corners)
+                        .border_widths(px(1.))
+                        .border_color(black(0.1)),
                 );
             }
-            window.paint_quad(
-                gpui::fill(bounds, gpui::transparent_black())
-                    .corner_radii(corners)
-                    .border_widths(px(1.))
-                    .border_color(black(if enabled { 0.18 } else { 0.08 })),
-            );
         },
     )
     .absolute()
