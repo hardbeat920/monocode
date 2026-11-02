@@ -11,9 +11,7 @@ pub type SourceImage = RgbaImage;
 pub const COLORS: [u32; 9] = [
     0x8b949c, 0x459cf7, 0xea603e, 0xf4bf25, 0x39c363, 0xe45a9f, 0xb168d4, 0x37beb4, 0xef8c39,
 ];
-pub const MASCOTS: [&str; 10] = [
-    "invader", "ghost", "robot", "cat", "skull", "crab", "mushroom", "rocket", "dino", "frog",
-];
+pub use monocode_mascots::MASCOTS;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -46,15 +44,7 @@ impl ProjectAppearance {
         })
     }
     pub fn mascot(&self, project: &str) -> usize {
-        self.mascot
-            .as_ref()
-            .and_then(|name| MASCOTS.iter().position(|m| *m == name))
-            .unwrap_or_else(|| {
-                let hash = project
-                    .encode_utf16()
-                    .fold(0u32, |h, c| h.wrapping_mul(131).wrapping_add(c.into()));
-                hash as usize % MASCOTS.len()
-            })
+        monocode_mascots::project_index(project, self.mascot.as_deref())
     }
     pub fn normalize(&mut self) {
         self.name = self.name.trim().chars().take(200).collect();

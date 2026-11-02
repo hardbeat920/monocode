@@ -1319,6 +1319,7 @@ impl Shell {
         }
         for (&id, view) in &self.sessions {
             view.update(cx, |v, cx| {
+                v.scene_visible = shown.contains(&id);
                 if shown.contains(&id) {
                     v.load(cx);
                 }
@@ -8244,6 +8245,13 @@ fn enter_from(leaf: &LayoutLeaf) -> (Edge, Rect) {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Suspend retained games before assembling the new visible tree. This
+        // includes tabs/panes, settings/search and conversations hidden by Mono.
+        for view in self.sessions.values() {
+            if view.read(cx).has_components() {
+                view.update(cx, |view, cx| view.sync_component_visibility(window, cx));
+            }
+        }
         self.keep_visible_idle_agents(cx);
         self.sync_ui_scale(window, cx);
         if self.mono_panes_unsettled(cx) {

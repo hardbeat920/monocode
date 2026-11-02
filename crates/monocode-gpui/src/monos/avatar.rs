@@ -1,16 +1,7 @@
 //! PixelMascot.tsx / pixelMascots.ts rendered as native quads.
 use gpui::{AnyElement, Hsla, canvas, prelude::*, px, rgb, rgba};
-use serde::Deserialize;
-use std::sync::LazyLock;
-#[derive(Deserialize)]
-struct Sprite {
-    name: String,
-    rest: Vec<String>,
-    talk: Vec<String>,
-    eyes: [Vec<[u32; 2]>; 2],
-}
-static SPRITES: LazyLock<Vec<Sprite>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("sprites.json")).unwrap());
+use monocode_mascots::{CATALOG, MascotId};
+
 fn tone(mut c: Hsla, t: f32) -> Hsla {
     c.l = if t >= 0. {
         c.l + (1. - c.l) * t
@@ -41,7 +32,7 @@ fn material(name: &str, x: usize, y: usize, base: Hsla) -> Hsla {
     }
 }
 pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: bool) -> AnyElement {
-    let index = SPRITES.iter().position(|m| m.name == name).unwrap_or(1);
+    let index = MascotId::find(name).unwrap_or(MascotId::Ghost).index();
     let status = status.to_string();
     canvas(
         |_, _, _| {},
@@ -58,8 +49,9 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
             let animate = moves && crate::pulse::request(rate, window, cx);
             let t = crate::pulse::elapsed(cx).as_secs_f32();
             let talk = animate && status == "working" && (t * 3.).floor() as u64 % 2 == 1;
-            let sprite = &SPRITES[index];
-            let rows = if talk { &sprite.talk } else { &sprite.rest };
+            let sprite = &CATALOG[index];
+            let frame = sprite.frame(talk);
+            let rows = &frame.rows;
             let unit = bounds.size.width / 16.;
             let hop = if animate {
                 if status == "working" {
@@ -99,7 +91,7 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
                             continue;
                         }
                         let face = tone(
-                            material(&sprite.name, x, y, base),
+                            material(sprite.name(), x, y, base),
                             0.04 + (7. - y as f32) * 0.009 + (3. - x as f32) * 0.006,
                         );
                         let offset = if depth { 0.14 } else { 0. };
@@ -136,7 +128,7 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
                     }
                 }
             }
-            for &[x, y] in &sprite.eyes[usize::from(talk)] {
+            for &[x, y] in frame.eyes {
                 let x = 2. + x as f32 * 1.5;
                 let y = 2. + y as f32 * 1.5;
                 let blink =
@@ -149,7 +141,7 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
                         y,
                         1.5,
                         1.5,
-                        rgb(if sprite.name == "rocket" {
+                        rgb(if sprite.name() == "rocket" {
                             0x243e51
                         } else {
                             0x263331
@@ -167,7 +159,7 @@ pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: boo
                     );
                 }
             }
-            if sprite.name == "mushroom" {
+            if sprite.name() == "mushroom" {
                 for (x, y, w, h) in [
                     (3., 0.42, 0.6, 0.35),
                     (1.65, 1.4, 0.5, 0.38),

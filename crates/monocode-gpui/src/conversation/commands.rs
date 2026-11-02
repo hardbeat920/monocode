@@ -134,6 +134,7 @@ impl Conversation {
         let cancel = self.cancel.clone();
         let mut context = self.context.unwrap_or_default();
         self.busy = true;
+        self.configure_runner(cx);
         self.submission_generation = self.submission_generation.wrapping_add(1);
         let generation = self.submission_generation;
         self.status = "Compacting context…".into();
@@ -222,6 +223,7 @@ impl Conversation {
                     return;
                 }
                 this.busy = false;
+                this.configure_runner(cx);
                 this.stopping = false;
                 this.transcript.update(cx, |view, cx| {
                     view.patch(compact_start, vec![compact_row], cx);

@@ -435,6 +435,7 @@ fn main() {
             diff_view::bind(cx);
             fonts::init(cx);
             terminal::bind(cx);
+            monocode_arcade::gpui::bind_keys(cx);
             let modifier = if cfg!(target_os = "macos") {
                 "cmd"
             } else {

@@ -37,6 +37,11 @@ source services or dependencies, run `npm ci` and `npm run build` inside
 `scripts/native-editor/`. Generated bundles and their license notices belong
 in the repository.
 
+Native games use `monocode-arcade`; artwork and composer animation use
+`monocode-mascots`. Both are headless Rust with optional GPUI views. The app
+supplies styling, assets, geometry and scheduling. Neither uses QuickJS or JSON
+frames; unrelated editor/core QuickJS features remain unchanged.
+
 ## Framework patches
 
 GPUI and its platform crate are pinned to `gpui-pre` 0.3.9. Local Apple renderer

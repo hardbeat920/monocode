@@ -229,6 +229,8 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
+    pub(crate) scene_visible: bool,
+    component_release: Option<Subscription>,
     ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
@@ -673,6 +675,8 @@ impl Conversation {
             narrow: false,
             beside_pane: false,
             arcade: None,
+            scene_visible: true,
+            component_release: None,
             ink: None,
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -1442,6 +1446,7 @@ impl Conversation {
                             }
                             this.summary.updated_at = monocode_core::time::now_ms();
                             this.busy = false;
+                            this.configure_runner(cx);
                             this.stopping = false;
                             this.clear_background();
                             if this.is_remote() {
@@ -1528,6 +1533,7 @@ impl Conversation {
             self.composer_motion.capture(self.composer_anchor.get());
         }
         self.busy = true;
+        self.configure_runner(cx);
         self.stopping = false;
         self.notification_cancelled = false;
         self.review
@@ -2706,6 +2712,7 @@ impl Conversation {
         }
         self.stopping = true;
         self.busy = false;
+        self.configure_runner(cx);
         self.follow_ups.resuming = false;
         self.follow_ups.continuations.clear();
         self.notification_cancelled = true;
@@ -2732,6 +2739,7 @@ impl Conversation {
     // field and its toolbar, with the workspace bar sitting under it.
     fn composer_runner(
         &mut self,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<crate::composer_runner::Runner>> {
         // A Mono already signs its turns with its own mascot.
@@ -2744,13 +2752,11 @@ impl Conversation {
         }
         if self.busy && self.runner.is_none() {
             let transcript = self.transcript.clone();
-            self.runner = Some(cx.new(|cx| crate::composer_runner::Runner::new(transcript, cx)));
+            self.runner = Some(cx.new(|cx| crate::composer_runner::new(transcript, cx)));
+            self.ensure_component_release(window, cx);
         }
         let runner = self.runner.clone()?;
-        let name = monocode_core::project_appearance::MASCOTS
-            [self.project_appearance.mascot(&self.summary.cwd)];
-        let color = self.project_appearance.color(&self.summary.cwd);
-        runner.update(cx, |r, cx| r.configure(self.busy, name, color, cx));
+        self.configure_runner(cx);
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2768,7 +2774,7 @@ impl Conversation {
         };
         self.input
             .update(cx, |input, cx| input.selected_command(command, cx));
-        let runner = self.composer_runner(cx);
+        let runner = self.composer_runner(window, cx);
         let beside = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
@@ -3022,7 +3028,7 @@ impl Conversation {
                     .children(self.attachment_drop_overlay(12.)),
             )
             .children(runner.map(|runner| {
-                runner.cached(crate::composer_runner::Runner::placement())
+                runner.cached(crate::composer_runner::placement())
             }))
             .children(self.remote_notice(cx))
             .child(self.workspace_bar(cx))
@@ -3292,10 +3298,63 @@ impl Conversation {
                 }
             }))
     }
+    pub(crate) fn has_components(&self) -> bool {
+        self.arcade.is_some() || self.runner.is_some()
+    }
+    fn ensure_component_release(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.component_release.is_none() {
+            self.component_release = Some(cx.on_release_in(window, |this, window, cx| {
+                if let Some(arcade) = &this.arcade {
+                    arcade.update(cx, |arcade, cx| arcade.set_visible(false, window, cx));
+                }
+                if let Some(runner) = &this.runner {
+                    runner.update(cx, |runner, cx| runner.set_visible(false, cx));
+                }
+            }));
+        }
+    }
+    fn configure_runner(&mut self, cx: &mut Context<Self>) {
+        if let Some(runner) = &self.runner {
+            let visible = self.scene_visible
+                && self.settings.mono.is_none()
+                && !cx
+                    .try_global::<crate::settings::Preferences>()
+                    .is_some_and(|p| !p.composer_mascot);
+            let name = monocode_core::project_appearance::MASCOTS
+                [self.project_appearance.mascot(&self.summary.cwd)];
+            let props = crate::composer_runner::props(self.busy, name);
+            let style =
+                crate::composer_runner::style(self.project_appearance.color(&self.summary.cwd));
+            runner.update(cx, |runner, cx| {
+                runner.set_visible(visible, cx);
+                runner.configure(props, style, cx);
+            });
+        }
+    }
+    pub(crate) fn sync_component_visibility(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.configure_runner(cx);
+        if let Some(arcade) = &self.arcade {
+            let visible = self.scene_visible
+                && self.settings.mono.is_none()
+                && !self.summary.has_messages
+                && cx
+                    .try_global::<crate::settings::Preferences>()
+                    .is_some_and(|p| p.chat_background.is_none() && p.empty_session == "games");
+            arcade.update(cx, |arcade, cx| {
+                arcade.configure_style(crate::arcade::style(), cx);
+                arcade.set_visible(visible, window, cx);
+            });
+        }
+    }
+
     // EmptySession.tsx: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
-    fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn empty(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // A chat background replaces the canvas; the ink only lives in motion.
         let fill = cx
             .try_global::<crate::settings::Preferences>()
@@ -3307,12 +3366,24 @@ impl Conversation {
                 }
             });
         let canvas_fill: Option<AnyElement> = match fill {
-            "games" => Some(
-                self.arcade
-                    .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone()
-                    .into_any_element(),
-            ),
+            "games" => {
+                if self.arcade.is_none() {
+                    let fallback = self.input.focus_handle(cx).downgrade();
+                    self.arcade = Some(cx.new(|cx| crate::arcade::new(Some(fallback), cx)));
+                    self.ensure_component_release(window, cx);
+                }
+                self.sync_component_visibility(window, cx);
+                Some(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h_full()
+                        .child(self.arcade.as_ref().unwrap().clone())
+                        .into_any_element(),
+                )
+            }
             "ink" if !cx.reduce_motion() => Some(
                 self.ink
                     .get_or_insert_with(|| cx.new(crate::ink_field::InkField::new))
@@ -3690,6 +3761,7 @@ mod composer_motion_tests {
 }
 impl Render for Conversation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_component_visibility(window, cx);
         if self._input_focus.is_none() {
             let focus = self.input.focus_handle(cx);
             self._input_focus = Some([

@@ -5771,6 +5771,25 @@ impl TranscriptView {
     pub(crate) fn jump_bounds(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
         self.show_jump.then(|| self.jump_anchor.get()).flatten()
     }
+    fn jump_probe(&self, cx: &Context<Self>) -> impl IntoElement {
+        let anchor = self.jump_anchor.clone();
+        let view = cx.entity().downgrade();
+        canvas(
+            move |bounds, window, cx| {
+                if anchor.get() != Some(bounds) {
+                    anchor.set(Some(bounds));
+                    // Publish moving geometry to the cached composer view, even
+                    // with reduced motion/no further decorative tick scheduled.
+                    window.defer(cx, move |_, cx| {
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
     fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.follow = Follow::default();
         self.list.set_follow_mode(FollowMode::Tail);
@@ -6037,7 +6056,7 @@ impl Render for TranscriptView {
                                 .child(
                                     div()
                                         .id("jump-to-bottom")
-                                        .child(self.jump_anchor.probe())
+                                        .child(self.jump_probe(cx))
                                         .role(Role::Button)
                                         .aria_label("Scroll to bottom")
                                         .relative()

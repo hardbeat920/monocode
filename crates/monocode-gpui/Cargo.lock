@@ -3735,6 +3735,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-arcade"
+version = "0.16.0"
+dependencies = [
+ "gpui-pre",
+ "monocode-mascots",
+]
+
+[[package]]
 name = "monocode-core"
 version = "0.16.0"
 dependencies = [
@@ -3749,6 +3757,7 @@ dependencies = [
  "keyring",
  "libc",
  "minisign-verify",
+ "monocode-mascots",
  "monocode-mobile-link",
  "natpmp",
  "quinn",
@@ -3793,7 +3802,9 @@ dependencies = [
  "libc",
  "mermaid-rs-renderer",
  "mimalloc",
+ "monocode-arcade",
  "monocode-core",
+ "monocode-mascots",
  "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -3829,6 +3840,13 @@ dependencies = [
  "tree-sitter-yaml",
  "tree-sitter-zig",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "monocode-mascots"
+version = "0.16.0"
+dependencies = [
+ "gpui-pre",
 ]
 
 [[package]]
