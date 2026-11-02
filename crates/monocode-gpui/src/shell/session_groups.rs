@@ -760,6 +760,16 @@ impl Shell {
             cx.notify();
             return;
         }
+        if self
+            .workspace
+            .terminal_panes
+            .iter()
+            .any(|(pane, t)| t.owner == id && self.workspace.tab_of(*pane).is_some())
+        {
+            self.error = Some("Close this session's terminal panes before deleting it".into());
+            cx.notify();
+            return;
+        }
         if !self.session_summaries.contains_key(&id) || !self.deleting.insert(id) {
             return;
         }

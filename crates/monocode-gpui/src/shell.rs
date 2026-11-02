@@ -44,6 +44,8 @@ mod sidebar_list;
 mod sidebar_peek;
 mod space_reorder;
 mod terminal_dock;
+mod terminal_panes;
+use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
@@ -466,6 +468,8 @@ enum DragSource {
     Session(i64),
     /// A Mono tab pulled down out of the strip; it has no pane yet.
     MonoTab,
+    /// A dock terminal pulled off the dock's strip; it has no pane yet.
+    DockTerminal(usize),
 }
 impl DragSource {
     fn session(self) -> i64 {
@@ -474,7 +478,7 @@ impl DragSource {
             | DragSource::Review(id)
             | DragSource::Tab(id)
             | DragSource::Session(id) => id,
-            DragSource::MonoTab => i64::MIN,
+            DragSource::MonoTab | DragSource::DockTerminal(_) => i64::MIN,
         }
     }
 }
@@ -545,6 +549,8 @@ enum PaneMark {
     File(Option<String>),
     /// A Mono's mascot and colour.
     Mono(String, u32),
+    /// A terminal pulled out of its dock.
+    Terminal,
 }
 /// A split tab's headline rolling to the newly focused pane: the next pane
 /// rises from below, the previous one drops from above.
@@ -786,6 +792,8 @@ pub(crate) struct Shell {
     skip_session_click: bool,
     /// Live terminals of each project's dock, in the dock's tab order.
     terminals: HashMap<String, Vec<Entity<Terminal>>>,
+    /// Live shells of `workspace.terminal_panes`, spawned when first shown.
+    terminal_pane_views: HashMap<i64, Entity<Terminal>>,
     /// A project's dock sliding open (toward 1) or shut (toward 0).
     dock_slide: Option<(String, PaneSlide)>,
     dock_resize: Option<(f32, f32)>,
@@ -1133,6 +1141,7 @@ impl Shell {
             sidebar_auto_hidden: false,
             sidebar_fitted_room: None,
             terminals: HashMap::new(),
+            terminal_pane_views: HashMap::new(),
             dock_slide: None,
             dock_resize: None,
             dock_hover: None,
@@ -2245,6 +2254,7 @@ impl Shell {
             .get(&id)
             .map(|s| s.read(cx).display_title())
             .or_else(|| self.mono_pane_title(id, cx))
+            .or_else(|| self.terminal_pane_title(id, cx))
             .unwrap_or_default();
         let focused = self.workspace.active == Some(id) && !self.review_focused;
         div()
@@ -2626,6 +2636,9 @@ impl Shell {
     ) -> AnyElement {
         if self.workspace.mono_panes.contains_key(&id) {
             return self.mono_pane_surface(id, split, cx);
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            return self.terminal_pane_surface(id, split, cx);
         }
         let in_split = split.is_some();
         let chat = self.sessions.get(&id).cloned();
@@ -3398,6 +3411,10 @@ impl Shell {
             }
             return;
         }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
+            return;
+        }
         if self.workspace.active == Some(id) {
             return;
         }
@@ -3666,7 +3683,9 @@ impl Shell {
             return;
         }
         let insert = match source {
-            DragSource::Pane(_) | DragSource::Review(_) => self.tab_insert_at(event.position, cx),
+            DragSource::Pane(_) | DragSource::Review(_) | DragSource::DockTerminal(_) => {
+                self.tab_insert_at(event.position, cx)
+            }
             _ => None,
         };
         let over = if insert.is_some() {
@@ -3733,6 +3752,10 @@ impl Shell {
             DragSource::Pane(pane) => self.workspace.mono_panes.get(&pane).cloned(),
             _ => None,
         };
+        if let DragSource::DockTerminal(ix) = drag.source {
+            self.drop_dock_terminal(ix, drag.over, drag.insert, window, cx);
+            return;
+        }
         let mut over = drag
             .over
             .map(|(target, edge)| (self.resolve_mono_target(target, cx), edge));
@@ -3938,6 +3961,10 @@ impl Shell {
         }
     }
     fn persist(&mut self, cx: &mut Context<Self>) {
+        // A terminal pane closed with its tab or pane stops its shell.
+        for pane in self.workspace.prune_terminal_panes() {
+            self.terminal_pane_views.remove(&pane);
+        }
         if let Some(id) = self.workspace.active {
             self.refresh_session_mark(id, cx);
         }
@@ -4023,7 +4050,7 @@ impl Shell {
             monos.update(cx, |m, cx| m.focus_active(window, cx));
             return;
         }
-        if self.focus_mono_pane(window, cx) {
+        if self.focus_mono_pane(window, cx) || self.focus_terminal_pane(window, cx) {
             return;
         }
         if let Some(review) = self
@@ -4047,6 +4074,10 @@ impl Shell {
         }
         if self.workspace.mono_panes.contains_key(&id) {
             self.open_mono_pane(id, window, cx);
+            return;
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
             return;
         }
         if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
@@ -4106,6 +4137,10 @@ impl Shell {
         }
         if self.workspace.mono_panes.contains_key(&id) {
             self.open_mono_pane(id, window, cx);
+            return;
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
             return;
         }
         if let Some(monos) = &self.monos {
@@ -7035,7 +7070,10 @@ impl Shell {
         let file_panes = leaves.iter().filter(|id| review(id).is_some()).count();
         let mono_panes = leaves
             .iter()
-            .filter(|id| self.workspace.mono_panes.contains_key(id))
+            .filter(|id| {
+                self.workspace.mono_panes.contains_key(id)
+                    || self.workspace.terminal_panes.contains_key(id)
+            })
             .count();
         let multi_pane = sessions.len() + file_panes + mono_panes > 1;
         let session_focused = sessions.first() == Some(&focus);
@@ -7052,7 +7090,9 @@ impl Shell {
         let conversation = sessions.first().map(title).unwrap_or_default();
         let file = files.first().cloned().unwrap_or_default();
         let untitled = "New session".to_owned();
-        let mono = self.mono_pane_title(focus, cx);
+        let mono = self
+            .mono_pane_title(focus, cx)
+            .or_else(|| self.terminal_pane_title(focus, cx));
         let headline = if let Some(mono) = mono {
             mono
         } else if multi_pane && file_focused && !file.is_empty() {
@@ -7067,9 +7107,16 @@ impl Shell {
         // right or down rolls the headline up.
         let mut panes = Vec::new();
         for id in self.workspace.layout(tab).leaf_ids() {
-            if let (Some(title), Some(mark)) =
-                (self.mono_pane_title(id, cx), self.mono_pane_mark(id, cx))
-            {
+            if let (Some(title), Some(mark)) = (
+                self.mono_pane_title(id, cx)
+                    .or_else(|| self.terminal_pane_title(id, cx)),
+                self.mono_pane_mark(id, cx).or_else(|| {
+                    self.workspace
+                        .terminal_panes
+                        .contains_key(&id)
+                        .then_some(PaneMark::Terminal)
+                }),
+            ) {
                 panes.push(TabPane {
                     key: (id, false),
                     title,
@@ -7130,6 +7177,7 @@ impl Shell {
                 crate::file_icons::file_type_icon(name, false, false, 14.)
             }
             PaneMark::File(None) => icon("git-compare", 14.).text_color(ink).into_any_element(),
+            PaneMark::Terminal => icon("terminal", 14.).text_color(ink).into_any_element(),
             PaneMark::Mono(mascot, color) => div()
                 .opacity(if active { 1. } else { 0.55 })
                 .child(crate::monos::avatar::avatar(
@@ -7313,6 +7361,12 @@ impl Shell {
                     .text_color(crate::tab_tile::tile_ink())
                     .into_any_element(),
             ),
+            PaneMark::Terminal => (
+                Face::Neutral,
+                icon("terminal", 14.)
+                    .text_color(crate::tab_tile::tile_ink())
+                    .into_any_element(),
+            ),
             // A Mono keeps its mascot's own colours.
             mark => (Face::Neutral, self.pane_mark(mark, true)),
         }
@@ -7320,6 +7374,9 @@ impl Shell {
     /// The dragged session's title, following the pointer.
     fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
         let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
+        if let Some(title) = self.dragged_terminal_title(drag.source, cx) {
+            return Some(terminal_drag_ghost(drag.position, title));
+        }
         let id = drag.source.session();
         let review = (matches!(drag.source, DragSource::Review(_))
             || self.workspace.review_owners.contains_key(&id))

@@ -1,7 +1,7 @@
 // The dock's tab strip (ProjectTerminalDock.tsx over SurfaceTabs.tsx) and the
 // footer's terminal controls (UsageFooter.tsx's Terminal button and
 // RunningTerminalChip).
-use super::{MenuTarget, Shell, TabShift};
+use super::{DragSource, MenuTarget, PaneDrag, Shell, TabShift};
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EntityId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Role, SharedString, StyleRefinement, Task, Window, div, point,
+    MouseMoveEvent, Pixels, Point, Role, SharedString, StyleRefinement, Task, Window, div, point,
     prelude::*, px, rgb,
 };
 use std::{
@@ -20,6 +20,10 @@ use std::{
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
+    /// Where the press landed; pulling far enough off the strip turns the
+    /// drag into a pane drag that can drop the terminal in a split or on
+    /// the title strip.
+    start: Point<Pixels>,
     from: usize,
     to: usize,
     origin: Pixels,
@@ -27,6 +31,10 @@ pub(super) struct DockTabDrag {
     active: bool,
     bounds: Vec<Bounds<Pixels>>,
 }
+
+/// How far off the dock's strip a tab must be pulled before it can leave
+/// the dock.
+const DOCK_PULL: Pixels = px(24.);
 
 /// A terminal whose foreground process is not the shell (listRunningTerminals).
 struct Running {
@@ -424,7 +432,7 @@ impl Shell {
         self.dock_skip_click = false;
         self.select_terminal(ix, window, cx);
         let count = self.live_terminals().len();
-        if count < 2 {
+        if count == 0 {
             return;
         }
         let bounds: Vec<_> = (0..count)
@@ -434,6 +442,7 @@ impl Shell {
             return;
         }
         self.dock_drag = Some(DockTabDrag {
+            start: event.position,
             from: ix,
             to: ix,
             origin: event.position.x,
@@ -448,6 +457,22 @@ impl Shell {
         };
         if event.pressed_button != Some(MouseButton::Left) {
             self.dock_drag = None;
+            cx.notify();
+            return;
+        }
+        if (event.position.y - drag.start.y).abs() > DOCK_PULL {
+            let (source, start) = (DragSource::DockTerminal(drag.from), drag.start);
+            self.dock_drag = None;
+            self.dock_skip_click = true;
+            self.tab_drag = None;
+            self.pane_drag = Some(PaneDrag {
+                source,
+                start,
+                position: event.position,
+                active: false,
+                over: None,
+                insert: None,
+            });
             cx.notify();
             return;
         }
