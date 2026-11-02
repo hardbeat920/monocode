@@ -188,7 +188,7 @@ function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
     <Timed id="mono screen">
     <SessionScreen
       pill={{
-        icon: <PixelMascot name={mono.mascot} color={mono.color} status={mono.status} size={28} />,
+        icon: <PixelMascot name={mono.mascot} color={mono.color} status={headerStatus(mono)} size={28} />,
         label: mono.name,
         // Its profile: the desktop's details, and its look to edit.
         onPress: tools
@@ -286,6 +286,12 @@ function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
   );
 }
 
+/** A Mono's header mascot holds still while it works: its chat shows that,
+ *  beside the "Thinking…" line. The bulb still asks for you. */
+function headerStatus(mono: Mono) {
+  return mono.status === "working" ? "idle" : mono.status;
+}
+
 /** A pushed Mono's title: its mascot and name in a glass pill, which opens
  *  its profile. */
 function MonoTitle({ mono, onPress }: { mono: Mono; onPress?: () => void }) {
@@ -299,7 +305,7 @@ function MonoTitle({ mono, onPress }: { mono: Mono; onPress?: () => void }) {
       accessibilityLabel={onPress ? mono.name : undefined}
       pressedScale={onPress ? 1.04 : undefined}
     >
-      <PixelMascot name={mono.mascot} color={mono.color} status={mono.status} size={28} />
+      <PixelMascot name={mono.mascot} color={mono.color} status={headerStatus(mono)} size={28} />
       <Text style={styles.label} numberOfLines={1}>
         {mono.name}
       </Text>
