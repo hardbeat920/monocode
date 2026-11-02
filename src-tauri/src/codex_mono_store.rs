@@ -198,6 +198,13 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             return Err("Mono Codex state must remain in its private storage directory".into());
         }
     }
+    // Monos provisioned before session_index.jsonl.lock became private may
+    // still have it symlinked to the account home from an earlier sync; drop
+    // the link so a fresh private lock takes its place.
+    let mono_lock = home.join("session_index.jsonl.lock");
+    if std::fs::symlink_metadata(&mono_lock).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
+    }
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
@@ -828,6 +835,37 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(home.join("session_index.jsonl.lock")).unwrap(),
             "mono"
+        );
+    }
+
+    // Windows file sharing uses hard links, not symlinks (see link_entry),
+    // and a hard link is indistinguishable from a regular file via
+    // symlink_metadata — so this cleanup, and this test, are Unix-only.
+    #[cfg(unix)]
+    #[test]
+    fn drops_a_stale_lock_link_from_before_the_lock_became_private() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // A mono provisioned before the lock became private can still have
+        // this symlink left over from an earlier sync.
+        std::os::unix::fs::symlink(
+            source.join("session_index.jsonl.lock"),
+            home.join("session_index.jsonl.lock"),
+        )
+        .unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            !home.join("session_index.jsonl.lock").exists(),
+            "the stale link must be removed, leaving the mono's own writer to recreate a private lock"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "removing the link must not touch its target"
         );
     }
 
