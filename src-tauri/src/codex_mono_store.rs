@@ -253,8 +253,8 @@ fn remove_if_same_file(path: &Path, reference: &Path) -> Result<(), String> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        FileDispositionInfo, FILE_DISPOSITION_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE,
+        FileDispositionInfo, DELETE, FILE_DISPOSITION_INFO, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
     fn identity(file: &std::fs::File) -> Option<(u32, u64)> {
@@ -267,9 +267,11 @@ fn remove_if_same_file(path: &Path, reference: &Path) -> Result<(), String> {
         Some((info.dwVolumeSerialNumber, index))
     }
 
+    // FileDispositionInfo requires DELETE access on the handle; plain read
+    // access (GENERIC_READ via `.read(true)`) does not include it.
     fn open_shared(path: &Path) -> std::io::Result<std::fs::File> {
         std::fs::OpenOptions::new()
-            .read(true)
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .open(path)
     }
