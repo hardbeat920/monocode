@@ -22,7 +22,7 @@ import { Composer } from "@/features/sessions/Composer";
 import { MonoChoose, MonoMessageActions } from "@/features/sessions/MonoCards";
 import { MonoMenu } from "@/features/sessions/MonoMenu";
 import { useMonoAccent } from "@/features/workspace/monoAccent";
-import { AccentOverride, ACCENTS, themedStyles, useScheme } from "@/ui/theme";
+import { AccentOverride, ACCENTS, mix, themedStyles, useAccent, useScheme } from "@/ui/theme";
 import { LiquidView } from "@/ui/LiquidView";
 import { useNativeHeaderHeight } from "@/ui/useNativeHeaderHeight";
 import type { Mono } from "@/features/workspace/types";
@@ -115,7 +115,17 @@ function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
   // The colour picked for this Mono's chat, over the app's accent.
   const monoAccent = useMonoAccent(mono?.id);
   const scheme = useScheme();
-  const chatAccent = monoAccent === "theme" ? null : ACCENTS[monoAccent][scheme];
+  // Monos only, a chat with no colour picked, here or for the app, is drawn
+  // in the Mono's own: as is in the dark, deepened in the light to hold its
+  // contrast on the pale background.
+  const appAccent = useAccent();
+  const ownAccent =
+    monoOnly && appAccent === "theme" && /^#[0-9a-f]{6}$/i.test(color)
+      ? scheme === "light"
+        ? mix(color, "#000000", 0.22)
+        : color
+      : null;
+  const chatAccent = monoAccent === "theme" ? ownAccent : ACCENTS[monoAccent][scheme];
   const choose = useCallback(
     (text: string) => (conversationId ? sendMessage(conversationId, text) : Promise.resolve()),
     [conversationId, sendMessage],
