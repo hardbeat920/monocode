@@ -262,6 +262,8 @@ impl SettingsView {
                     | "show-excluded-files"
                     | "anchor-prompts"
                     | "paced-reveal"
+                    | "collapse-tool-groups"
+                    | "fold-finished-work"
                     | "composer-autocorrect"
                     | "format-on-save"
                     | "composer-mascot"

@@ -1,3 +1,4 @@
+import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
 import {
   Redirect,
   router,
@@ -208,9 +209,13 @@ function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
           {conversation.question ? (
             <QuestionCard conversationId={conversationId} prompt={conversation.question} />
           ) : null}
+          {conversationId && conversation.usageLimit ? (
+            <UsageLimitCard key={`usage:${conversationId}`} conversationId={conversationId} state={conversation.usageLimit} />
+          ) : null}
           <Composer
             key={mono.id}
             // One line: the header names the Mono, and its model lives in settings.
+            active={focused}
             compact
             context=""
             branch=""
