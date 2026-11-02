@@ -996,6 +996,10 @@ impl Pacman {
     pub fn fade(&self) -> f64 {
         (self.booted / 420.).min(1.)
     }
+    /// Finish only the presentation fade; gameplay and its timers stay put.
+    pub fn reveal(&mut self) {
+        self.booted = self.booted.max(420.);
+    }
     pub fn step(&mut self, dt: f64, random: &mut dyn Random) {
         self.booted += dt;
         self.blink = (self.blink + dt) % 900.;
@@ -1147,7 +1151,7 @@ impl Pacman {
             cx: self.cell_x(self.pac.at_x()) + f64::from(self.tile - 1) / 2.,
             cy: self.cell_y(self.pac.at_y()) + f64::from(self.tile - 1) / 2.,
             size: f64::from(self.tile),
-            dx: self.pac.dx,
+            dx: if self.pac.dx == 0 { 1 } else { self.pac.dx },
             dy: self.pac.dy,
             alpha,
             mouth,

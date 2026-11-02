@@ -2,7 +2,7 @@
 //!
 //! The host must call `set_visible(false, ...)` before hiding/unmounting a
 //! retained view. This releases input/focus and stops renewing animation demand.
-//! Remount the same entity with `set_visible(true, ...)` to resume its idle board
+//! Remount the same entity with `set_visible(true, ...)` to resume its board
 //! without catching up hidden time. A view belongs to one window at a time.
 use crate::{
     controller::{Configuration, Controller},
@@ -114,13 +114,12 @@ impl ArcadeView {
     }
 
     pub fn take_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.visible || self.playing {
+        if !self.visible {
             return;
         }
-        self.previous = window
-            .focused(cx)
-            .filter(|handle| *handle != self.focus)
-            .map(|handle| handle.downgrade());
+        if !self.focus.is_focused(window) {
+            self.previous = window.focused(cx).map(|handle| handle.downgrade());
+        }
         self.playing = true;
         window.focus(&self.focus, cx);
         cx.notify();
@@ -132,6 +131,11 @@ impl ArcadeView {
         // follows. Both games retain their original release/reset semantics.
         self.controller.borrow_mut().release_control();
         self.switched = Some(self.services.clock.elapsed(cx));
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.previous.take();
         // Closing a background view must not steal focus from a newer target.
         if self.focus.is_focused(window) {
@@ -144,7 +148,6 @@ impl ArcadeView {
                 window.blur(cx);
             }
         }
-        cx.notify();
     }
 
     pub fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -152,9 +155,13 @@ impl ArcadeView {
             return;
         }
         if !visible {
-            self.release_control(window, cx);
+            // Hiding pauses the board; only an explicit release resets a game.
+            self.restore_focus(window, cx);
         }
         self.visible = visible;
+        if visible && self.playing {
+            self.take_control(window, cx);
+        }
         self.dimensions = None; // Remeasure on remount, even under reduced motion.
         self.last = None; // Hidden wall time is never replayed as simulation dt.
         self.switched = None;
@@ -187,18 +194,20 @@ impl ArcadeView {
             self.switched = Some(now);
         }
         self.configure_frame();
+        if reduced && !self.playing {
+            self.controller.borrow_mut().reveal();
+        }
         // Sample each clock slot once. Measuring 33ms from the last paint can
         // skip a whole clock wakeup when display timing varies slightly.
         if self.last.is_none_or(|last| {
             now.as_nanos() / TICK.as_nanos() != last.as_nanos() / TICK.as_nanos()
         }) {
-            // Preserve the native host's variable dt, f32 conversion and cap.
-            let dt = if reduced && !self.playing {
-                0.
-            } else {
-                f64::from(elapsed.unwrap_or_default().as_secs_f32().min(0.1) * 1000.)
-            };
-            self.controller.borrow_mut().step(dt);
+            // First draw/remount only configures: even step(0) can mutate a
+            // board. Hidden time and reduced-motion idle time are not replayed.
+            if let Some(elapsed) = elapsed.filter(|_| !reduced || self.playing) {
+                let dt = f64::from(elapsed.as_secs_f32().min(0.1) * 1000.);
+                self.controller.borrow_mut().step(dt);
+            }
             self.last = Some(now);
         }
     }
@@ -226,6 +235,7 @@ impl Render for ArcadeView {
         let measured = cx.entity().downgrade();
         let mut root = div()
             .id("empty-session-arcade")
+            .debug_selector(|| "empty-session-arcade".into())
             .group("empty-session-arcade")
             .relative()
             .w_full()
@@ -239,8 +249,15 @@ impl Render for ArcadeView {
                     .bg(self.style.surface)
                     .occlude()
                     .key_context("Arcade")
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.take_control(window, cx);
+                        }),
+                    )
                     .on_action(cx.listener(|this, _: &ReleaseControl, window, cx| {
                         this.release_control(window, cx);
+                        cx.stop_propagation();
                     }))
             })
             .when(!playing, |d| d.h(px(192.)))
@@ -410,6 +427,7 @@ impl Render for ArcadeView {
                     .child(
                         div()
                             .id("release-arcade")
+                            .debug_selector(|| "release-arcade".into())
                             .role(Role::Button)
                             .aria_label("Release game")
                             .cursor_pointer()
@@ -430,6 +448,7 @@ impl Render for ArcadeView {
                     .child(
                         div()
                             .id("play-arcade")
+                            .debug_selector(|| "play-arcade".into())
                             .role(Role::Button)
                             .aria_label(format!("Take control of {}", descriptor.label))
                             .cursor_pointer()

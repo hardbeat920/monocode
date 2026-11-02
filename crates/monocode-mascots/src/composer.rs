@@ -95,14 +95,13 @@ impl<R: Random> Composer<R> {
         }
     }
 
-    /// The old runnerFrame call order, including the retained state that was in
-    /// the bundler rather than composerRunner.ts. Repeated calls are real steps;
-    /// the view must not use `advance` for same-tick repaint/configuration.
+    /// Advance one physics tick. Repeated calls are real steps; the view must
+    /// use `configure` for same-tick repaint/configuration.
     pub fn advance(&mut self, input: Input) -> Frame<'_> {
         Self::validate(input);
+        self.apply_configuration(input);
         let dt = (input.now_ms - self.last_ms).clamp(0., 80.);
         self.last_ms = input.now_ms;
-        self.apply_configuration(input);
         let pose = if input.busy && self.exit_at.is_none() {
             Some(self.simulate(input, dt))
         } else {
@@ -174,6 +173,8 @@ impl<R: Random> Composer<R> {
         }
         self.previous_width = input.width;
         if input.busy && !self.was_busy {
+            // Idle time is not running time, including configure-before-tick.
+            self.last_ms = input.now_ms;
             self.exit_at = None;
             self.stun_at = None;
             self.learned = input.reduced_motion;
@@ -333,4 +334,52 @@ fn coin_visual(coin: Coin, now_ms: f64) -> Option<CoinVisual> {
             + COLLECT_POP_PX * pop,
         alpha: 1. - pop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runner_starts_without_catch_up_then_moves_and_exits() {
+        // Exercise both entry points: the host can configure before its next tick.
+        for configure_first in [false, true] {
+            let mut runner = Composer::new(7);
+            let mut input = Input {
+                now_ms: 0.,
+                width: 600.,
+                busy: false,
+                obstacle: None,
+                reduced_motion: false,
+                mascot: Some(MascotId::Invader),
+            };
+            assert!(!runner.advance(input).active);
+            input.now_ms = 5000.;
+            input.busy = true;
+            if configure_first {
+                runner.configure(Input { width: 0., ..input });
+            }
+            let first = runner.advance(input);
+            assert!(first.active && first.artwork.is_some());
+            assert_eq!(first.pose.unwrap().x, RUNNER_INSET);
+            input.now_ms += 33.;
+            let moving = runner.advance(input).pose.unwrap();
+            assert!(moving.x > RUNNER_INSET);
+            assert_eq!(runner.configure(input).pose, Some(moving));
+
+            input.busy = false;
+            assert_eq!(runner.configure(input).pose.unwrap().x, moving.x);
+            input.now_ms += EXIT_MS;
+            assert!(!runner.advance(input).active);
+            input.now_ms += 5000.;
+            input.busy = true;
+            assert_eq!(runner.advance(input).pose.unwrap().x, moving.x);
+
+            input.reduced_motion = true;
+            input.now_ms += 33.;
+            assert_eq!(runner.advance(input).pose.unwrap().x, moving.x);
+            input.busy = false;
+            assert!(!runner.configure(input).active);
+        }
+    }
 }

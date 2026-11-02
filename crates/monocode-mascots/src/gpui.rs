@@ -33,7 +33,7 @@ pub fn paint_rim_mask(
         if py >= sprite.rim_y {
             continue;
         }
-        for (x, pixel) in row.bytes().enumerate() {
+        for (x, pixel) in row.bytes().take(8).enumerate() {
             if pixel != b'#' {
                 continue;
             }

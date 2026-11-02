@@ -233,7 +233,8 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
-    pub(crate) scene_visible: bool,
+    scene_visible: bool,
+    component_visibility_dirty: bool,
     component_release: Option<Subscription>,
     ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
@@ -681,6 +682,7 @@ impl Conversation {
             beside_pane: false,
             arcade: None,
             scene_visible: true,
+            component_visibility_dirty: false,
             component_release: None,
             ink: None,
             runner: None,
@@ -3317,8 +3319,14 @@ impl Conversation {
                 }
             }))
     }
-    pub(crate) fn has_components(&self) -> bool {
-        self.arcade.is_some() || self.runner.is_some()
+    pub(crate) fn set_scene_visible(&mut self, visible: bool) {
+        if self.scene_visible != visible {
+            self.scene_visible = visible;
+            self.component_visibility_dirty = true;
+        }
+    }
+    pub(crate) fn needs_component_visibility_sync(&self) -> bool {
+        self.component_visibility_dirty && (self.arcade.is_some() || self.runner.is_some())
     }
     fn ensure_component_release(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.component_release.is_none() {
@@ -3355,6 +3363,7 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.component_visibility_dirty = false;
         self.configure_runner(cx);
         if let Some(arcade) = &self.arcade {
             let visible = self.scene_visible
@@ -3390,8 +3399,8 @@ impl Conversation {
                     let fallback = self.input.focus_handle(cx).downgrade();
                     self.arcade = Some(cx.new(|cx| crate::arcade::new(Some(fallback), cx)));
                     self.ensure_component_release(window, cx);
+                    self.sync_component_visibility(window, cx);
                 }
-                self.sync_component_visibility(window, cx);
                 Some(
                     div()
                         .absolute()
@@ -3684,6 +3693,10 @@ mod composer_motion_tests {
             (initial.top() - from.top()).abs() < px(1.),
             "the first docked frame must stay at the empty-session slot"
         );
+        {
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("native-composer-mascot").is_some());
+        }
         window
             .update(cx, |c, _, cx| {
                 c.composer_motion.elapsed(Duration::from_millis(120));
@@ -3734,6 +3747,32 @@ mod composer_motion_tests {
             transcript,
             "composer motion must not relayout the transcript"
         );
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for visible in [false, true] {
+            window
+                .update(visual, |c, window, cx| {
+                    c.set_scene_visible(visible);
+                    c.sync_component_visibility(window, cx);
+                    cx.notify();
+                })
+                .unwrap();
+            visual.refresh().unwrap();
+            visual.run_until_parked();
+            window
+                .update(visual, |c, window, _| {
+                    let ink =
+                        crate::composer_runner::style(c.project_appearance.color(&c.summary.cwd))
+                            .color;
+                    let scale = window.scale_factor();
+                    let painted = window.painted_quads().iter().any(|quad| {
+                        quad.background.as_solid() == Some(ink)
+                            && (quad.bounds.size.width.0 / scale - 2.).abs() < 0.1
+                            && (quad.bounds.size.height.0 / scale - 2.).abs() < 0.1
+                    });
+                    assert_eq!(painted, visible, "mascot paint must follow visibility");
+                })
+                .unwrap();
+        }
     }
     #[gpui::test]
     fn narrow_layout_and_opening_history_do_not_slide(cx: &mut TestAppContext) {

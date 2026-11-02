@@ -5866,6 +5866,8 @@ impl TranscriptView {
             |_, _, _, _| {},
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
     fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {

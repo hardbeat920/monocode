@@ -1326,6 +1326,11 @@ impl Shell {
                     .and_then(|m| m.read(cx).routed_session()),
             );
         }
+        shown.retain(|id| {
+            self.reviews
+                .get(id)
+                .is_none_or(|review| !review.read(cx).state.chat_hidden)
+        });
         // Hidden tabs keep their prepared image and any in-flight load. Only
         // closing a tab/pane should discard its background.
         let open: HashSet<i64> = self.workspace.open_sessions().into_iter().collect();
@@ -1337,7 +1342,7 @@ impl Shell {
         }
         for (&id, view) in &self.sessions {
             view.update(cx, |v, cx| {
-                v.scene_visible = shown.contains(&id);
+                v.set_scene_visible(shown.contains(&id));
                 if shown.contains(&id) {
                     v.load(cx);
                 }
@@ -8345,7 +8350,7 @@ impl Render for Shell {
         // Suspend retained games before assembling the new visible tree. This
         // includes tabs/panes, settings/search and conversations hidden by Mono.
         for view in self.sessions.values() {
-            if view.read(cx).has_components() {
+            if view.read(cx).needs_component_visibility_sync() {
                 view.update(cx, |view, cx| view.sync_component_visibility(window, cx));
             }
         }
@@ -11795,6 +11800,139 @@ mod tests {
             })
             .unwrap();
     }
+    #[gpui::test]
+    fn arcade_is_visible_with_reduced_motion_and_resumes_after_hiding(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_reduce_motion(true);
+            super::bind_keys(cx);
+            monocode_arcade::gpui::bind_keys(cx);
+        });
+        let (window, other, id) = window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.workspace.preferences.empty_session = "games".into();
+                shell.workspace.preferences.chat_background = None;
+                shell.apply_preferences(cx);
+                shell.persist(cx);
+                shell.sessions[&id].update(cx, |_, cx| cx.notify());
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        let board = visual.debug_bounds("empty-session-arcade").unwrap();
+        window
+            .update(visual, |_, window, _| {
+                let scale = window.scale_factor();
+                assert!(
+                    window.painted_quads().iter().any(|quad| {
+                        (quad.bounds.size.width.0 / scale - 6.).abs() < 0.1
+                            && quad
+                                .background
+                                .as_solid()
+                                .is_some_and(|ink| (ink.a - 0.06).abs() < 0.001)
+                    }),
+                    "the idle grid must not stay transparent with Reduce Motion"
+                );
+            })
+            .unwrap();
+        let play = visual.debug_bounds("play-arcade").unwrap();
+        visual.simulate_click(play.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("release-arcade").is_some());
+        assert!(
+            visual
+                .debug_bounds("empty-session-arcade")
+                .unwrap()
+                .size
+                .height
+                > board.size.height
+        );
+        visual.simulate_keystrokes("down");
+        visual
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(99));
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+        let board_cells = |visual: &mut gpui::VisualTestContext| {
+            let bounds = visual.debug_bounds("empty-session-arcade").unwrap();
+            window
+                .update(visual, |_, window, _| {
+                    let scale = window.scale_factor();
+                    window
+                        .painted_quads()
+                        .into_iter()
+                        .filter_map(|quad| {
+                            let x = quad.bounds.left().0 / scale - f32::from(bounds.left());
+                            let y = quad.bounds.top().0 / scale - f32::from(bounds.top());
+                            (x >= 0.
+                                && y >= 0.
+                                && x < f32::from(bounds.size.width)
+                                && y < f32::from(bounds.size.height)
+                                && (quad.bounds.size.width.0 / scale - 6.).abs() < 0.1
+                                && (quad.bounds.size.height.0 / scale - 6.).abs() < 0.1)
+                                .then_some((x, y, quad.background.as_solid()))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap()
+        };
+        let before_hide = board_cells(visual);
+        assert!(!before_hide.is_empty());
+
+        // Switching tabs suspends input, but returning must not reset the game.
+        window
+            .update(visual, |shell, window, cx| shell.open(other, window, cx))
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("empty-session-arcade").is_none());
+        window
+            .update(visual, |shell, window, cx| shell.open(id, window, cx))
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("release-arcade").is_some());
+        assert_eq!(board_cells(visual), before_hide);
+
+        // A review can unmount the chat without changing the active tab.
+        window
+            .update(visual, |shell, window, cx| {
+                shell.open_review(
+                    crate::review::ReviewTab::Commit {
+                        cwd: "/work/monocode".into(),
+                        sha: "abcdef1".into(),
+                        short_sha: "abcdef1".into(),
+                        subject: "Fix".into(),
+                    },
+                    window,
+                    cx,
+                );
+                shell.reviews[&id].update(cx, |review, cx| {
+                    review.state.chat_hidden = true;
+                    cx.emit(crate::review::ReviewEvent::Changed);
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("empty-session-arcade").is_none());
+        let previous_focus = window
+            .update(visual, |_, window, cx| window.focused(cx))
+            .unwrap();
+        window
+            .update(visual, |shell, _, cx| shell.chat_hidden_off(id, cx))
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("release-arcade").is_some());
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("play-arcade").is_some());
+        window
+            .update(visual, |_, window, cx| {
+                assert_eq!(window.focused(cx), previous_focus);
+            })
+            .unwrap();
+    }
+
     pub(super) fn window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
         let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let mut a = store.create("codex", "/work/another-project").unwrap();

@@ -82,7 +82,11 @@ impl ComposerView {
     /// view is cached/reduced-motion. Observation doesn't retain the source or
     /// lease a timer, and ends when the view is dropped/rebound.
     pub fn watch_geometry<T: 'static>(&mut self, source: &Entity<T>, cx: &mut Context<Self>) {
-        self.geometry_watch = Some(cx.observe(source, |_, _, cx| cx.notify()));
+        self.geometry_watch = Some(cx.observe(source, |view, _, cx| {
+            if view.visible {
+                cx.notify();
+            }
+        }));
     }
     pub fn configure(&mut self, props: Props, style: Style, cx: &mut Context<Self>) {
         if self.props != props || self.style != style {
@@ -131,24 +135,24 @@ impl ComposerView {
         self.base_tick + (self.elapsed.as_secs_f64() * 1000. / TICK_MS) as u64
     }
     fn prepare_frame(&mut self, reduced: bool, advance: bool) {
-        if let Some(width) = self.width {
-            let tick = self.tick();
-            let input = Input {
-                now_ms: tick as f64 * TICK_MS,
-                width,
-                busy: self.props.busy,
-                obstacle: self.obstacle,
-                reduced_motion: reduced,
-                mascot: self.props.mascot,
-            };
-            let mut simulation = self.simulation.borrow_mut();
-            if advance {
-                simulation.advance(input);
-            } else {
-                simulation.configure(input);
-            }
-            self.frame_tick = Some(tick);
+        // Preserve busy edges even when a short turn ends before first layout.
+        let width = self.width.unwrap_or(0.);
+        let tick = self.tick();
+        let input = Input {
+            now_ms: tick as f64 * TICK_MS,
+            width,
+            busy: self.props.busy,
+            obstacle: self.obstacle,
+            reduced_motion: reduced,
+            mascot: self.props.mascot,
+        };
+        let mut simulation = self.simulation.borrow_mut();
+        if advance {
+            simulation.advance(input);
+        } else {
+            simulation.configure(input);
         }
+        self.frame_tick = Some(tick);
     }
     fn update_frame(&mut self, reduced: bool) {
         if self.bounds.is_none() {
@@ -180,6 +184,7 @@ impl Render for ComposerView {
         let color = self.style.color;
         div()
             .id("native-composer-mascot")
+            .debug_selector(|| "native-composer-mascot".into())
             .size_full()
             .child(
                 canvas(
@@ -194,10 +199,9 @@ impl Render for ComposerView {
                                 // The paint closure borrows this prepared buffer in
                                 // the same draw, even with no next motion tick.
                                 view.update_frame(reduced);
-                                // A first measure already paints the prepared frame in
-                                // this draw. Deferring another frame here would advance
-                                // unrelated zero-elapsed animations (the composer slide)
-                                // before the first painted frame is observed.
+                                // First measure after mount/show paints in this draw;
+                                // an extra repaint would advance the composer slide
+                                // before its initial frame is observed.
                                 if !first_measure {
                                     cx.defer_in(window, |_, _, cx| cx.notify());
                                 }

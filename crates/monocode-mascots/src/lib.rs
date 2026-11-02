@@ -20,3 +20,27 @@ pub fn project_index(seed: &str, explicit: Option<&str>) -> usize {
         MascotId::index,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_preserves_saved_names_hashes_and_eight_pixel_art() {
+        assert_eq!(project_hash("A😀"), 8_424_064); // Legacy JS UTF-16 hash.
+        assert_eq!(project_index("A😀", Some("unknown")), 4);
+        for (i, mascot) in CATALOG.iter().enumerate() {
+            assert_eq!(mascot.id.index(), i);
+            assert_eq!(MascotId::find(MASCOTS[i]), Some(mascot.id));
+            assert_eq!(project_index("any project", Some(MASCOTS[i])), i);
+            for frame in [&mascot.rest, &mascot.talk] {
+                assert!(frame
+                    .rows
+                    .iter()
+                    .all(|row| row.len() == 8
+                        && row.bytes().all(|pixel| matches!(pixel, b'.' | b'#'))));
+                assert!(frame.eyes.iter().all(|[x, y]| *x < 8 && *y < 8));
+            }
+        }
+    }
+}

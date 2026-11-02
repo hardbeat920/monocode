@@ -377,6 +377,10 @@ impl Snake {
     pub fn fade(&self) -> f64 {
         (self.booted / 420.).min(1.)
     }
+    /// Finish only the presentation fade; gameplay and its timers stay put.
+    pub fn reveal(&mut self) {
+        self.booted = self.booted.max(420.);
+    }
     pub fn step(&mut self, dt: f64, random: &mut dyn Random) {
         if self.cols == 0 || self.play_rows == 0 {
             return;

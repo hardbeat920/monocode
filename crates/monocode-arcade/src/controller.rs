@@ -73,6 +73,12 @@ impl Board {
             Self::Snake(g) => g.fade(),
         }
     }
+    fn reveal(&mut self) {
+        match self {
+            Self::Pacman(g) => g.reveal(),
+            Self::Snake(g) => g.reveal(),
+        }
+    }
     fn step(&mut self, dt: f64, random: &mut dyn crate::random::Random) {
         match self {
             Self::Pacman(g) => g.step(dt, random),
@@ -190,6 +196,12 @@ impl Controller {
             board.write_sprites(&mut self.sprites);
         }
     }
+    /// Finish the selected board's boot fade without advancing simulation.
+    pub fn reveal(&mut self) -> Frame<'_> {
+        self.boards[self.configuration.game.index()].reveal();
+        self.refresh();
+        self.frame()
+    }
     pub fn step(&mut self, dt: f64) -> Frame<'_> {
         assert!(
             dt.is_finite() && dt >= 0.,
@@ -237,6 +249,81 @@ impl Controller {
             },
             fade: board.fade(),
             game_over: board.game_over(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn board_lifecycle() {
+        let same_frame = |a: Frame<'_>, b: Frame<'_>| {
+            assert_eq!((a.cols, a.rows), (b.cols, b.rows));
+            assert_eq!(a.stamp, b.stamp);
+            assert_eq!(a.sprites, b.sprites);
+            assert_eq!(a.pickup, b.pickup);
+            assert_eq!(a.bubble, b.bubble);
+            assert_eq!(
+                (a.score, a.lives, a.game_over),
+                (b.score, b.lives, b.game_over)
+            );
+            assert_eq!((a.dim, a.fade), (b.dim, b.fade));
+        };
+        for (game, heading, dt) in [
+            (GameId::Pacman, Cell::new(0, 1), 92.5),
+            (GameId::Snake, Cell::new(1, 0), 38.),
+        ] {
+            let mut input = Configuration {
+                cols: 80,
+                rows: 40,
+                playing: false,
+                game,
+                mode: Mode::Mid,
+            };
+            let mut controller = Controller::new(vec!["test".into()], 0);
+            let mut reference = Controller::new(vec!["test".into()], 0);
+            let frame = controller.configure(input);
+            assert_eq!(frame.stamp.len(), input.cols * input.rows);
+            assert_eq!(frame.fade, 0.);
+            if game == GameId::Pacman {
+                assert_eq!(frame.sprites[0].dx, 1); // JS fallback for zero dx.
+            }
+            same_frame(controller.frame(), reference.configure(input));
+
+            let frame = controller.reveal();
+            assert_eq!(frame.fade, 1.);
+            assert!(frame.stamp.iter().any(|&value| value > 0.));
+            assert!(frame.stamp.iter().all(|value| (0. ..=1.).contains(value)));
+            assert!(frame.sprites.iter().all(|sprite| sprite.alpha == 1.));
+            // Only one board was revealed: matching after the natural fade
+            // proves reveal did not move gameplay, advance timers or draw RNG.
+            same_frame(controller.step(420.), reference.step(420.));
+
+            input.playing = true;
+            for board in [&mut controller, &mut reference] {
+                board.configure(input);
+                assert!(board.boards[game.index()].controlled());
+                board.reveal();
+                board.steer(heading);
+            }
+            same_frame(controller.step(dt), reference.step(dt));
+            assert!(controller.frame().stamp.iter().any(|&value| value > 0.));
+            same_frame(controller.configure(input), reference.frame());
+
+            input.cols = 72;
+            input.rows = 36;
+            let frame = controller.configure(input);
+            assert_eq!(
+                (frame.cols, frame.rows, frame.stamp.len()),
+                (72, 36, 72 * 36)
+            );
+            same_frame(controller.frame(), reference.configure(input));
+            assert_eq!(controller.release_control().dim, game.descriptor().idle_dim);
+            assert!(!controller.boards[game.index()].controlled());
+            assert!(!controller.configuration.playing);
+            same_frame(controller.frame(), reference.release_control());
         }
     }
 }
