@@ -460,7 +460,7 @@ impl Shell {
                 .into_iter()
                 .any(|pane| {
                     self.workspace.session_for_pane(pane) == id
-                        && !self.workspace.review_owners.contains_key(&pane)
+                        && !self.workspace.is_detached_pane(pane)
                 })
         })
     }
