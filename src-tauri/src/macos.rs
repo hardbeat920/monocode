@@ -98,7 +98,17 @@ pub fn install(window: &WebviewWindow) {
     // Opaque for the dock bounce so the first frames are a solid field,
     // not a frosted desktop. Glass turns on after the first UI paint.
     prepare_launch(window);
-    let _ = pin(window);
+    // Later windows are built off the main thread (e.g. the async
+    // `open_new_window` command), and AppKit constraints are main-thread only.
+    let pin_window = window.clone();
+    let apply = move || {
+        pin(&pin_window);
+    };
+    if MainThreadMarker::new().is_some() {
+        apply();
+    } else {
+        let _ = window.app_handle().run_on_main_thread(apply);
+    }
 
     let event_window = window.clone();
     window.on_window_event(move |event| match event {
