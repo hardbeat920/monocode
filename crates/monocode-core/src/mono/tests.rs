@@ -210,3 +210,38 @@ fn a_resumed_codex_thread_gets_rules_it_has_not_seen_in_the_message() {
     assert!(rules_in_system(Kind::Claude, true, None, "new"));
     assert!(!rules_in_system(Kind::Devin, false, None, "new"));
 }
+
+#[test]
+fn subsessions_fill_only_a_start_that_names_no_model() {
+    let set = Subsessions {
+        harness: Some("claude".into()),
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+    };
+    let mut bare = serde_json::json!({"prompt": "x"});
+    set.fill(&mut bare);
+    assert_eq!(
+        bare,
+        serde_json::json!({"prompt": "x", "harness": "claude", "model": "opus", "effort": "high"})
+    );
+    for chosen in ["harness", "model", "modelSettings", "effort"] {
+        let mut named = serde_json::json!({"prompt": "x", chosen: "codex"});
+        let before = named.clone();
+        set.fill(&mut named);
+        assert_eq!(named, before, "{chosen} is the agent's own choice");
+    }
+    let effort_only = Subsessions { effort: Some("low".into()), ..Default::default() };
+    let mut input = serde_json::json!({"prompt": "x"});
+    effort_only.fill(&mut input);
+    assert_eq!(input, serde_json::json!({"prompt": "x", "effort": "low"}));
+}
+
+#[test]
+fn subsessions_normalize_away_when_everything_is_inherited() {
+    assert_eq!(Subsessions::default().normalized(), None);
+    let blank = Subsessions { harness: Some(" ".into()), ..Default::default() };
+    assert_eq!(blank.normalized(), None);
+    // A model without its provider can't be named.
+    let orphan = Subsessions { model: Some("opus".into()), ..Default::default() };
+    assert_eq!(orphan.normalized(), None);
+}

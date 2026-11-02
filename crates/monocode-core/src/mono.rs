@@ -62,6 +62,54 @@ pub struct Mono {
     pub seen_rows: usize,
     /// Minutes of inactivity before a heartbeat; zero turns heartbeats off.
     pub heartbeat_minutes: u32,
+    /// The model and effort for sessions it starts without naming any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subsessions: Option<Subsessions>,
+}
+
+/// What a Mono's sessions start with when it names no provider, model or
+/// effort itself. Each part left unset is inherited from the Mono, as before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Subsessions {
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+impl Subsessions {
+    /// None when every part is inherited, as a cleared setting is kept.
+    pub fn normalized(self) -> Option<Self> {
+        let keep = |v: Option<String>| v.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+        let harness = keep(self.harness);
+        let next = Self {
+            // A model belongs to its provider; without one it can't be named.
+            model: harness.as_ref().and(keep(self.model)),
+            harness,
+            effort: keep(self.effort),
+        };
+        (next != Self::default()).then_some(next)
+    }
+    /// Fills a `sessions.start` request that names no provider, model or
+    /// settings. One that names any is the agent's own choice and is left
+    /// as it is, rather than mixing an effort into a model it doesn't fit.
+    pub fn fill(&self, input: &mut serde_json::Value) {
+        const CHOSEN: [&str; 4] = ["harness", "model", "modelSettings", "effort"];
+        if CHOSEN.iter().any(|key| input.get(key).is_some()) {
+            return;
+        }
+        let Some(object) = input.as_object_mut() else {
+            return;
+        };
+        for (key, value) in [
+            ("harness", &self.harness),
+            ("model", &self.model),
+            ("effort", &self.effort),
+        ] {
+            if let Some(value) = value {
+                object.insert(key.into(), value.clone().into());
+            }
+        }
+    }
 }
 impl Default for Mono {
     fn default() -> Self {
@@ -85,6 +133,7 @@ impl Default for Mono {
             habit_sessions: Vec::new(),
             seen_rows: 0,
             heartbeat_minutes: heartbeat::DEFAULT_MINUTES,
+            subsessions: None,
         }
     }
 }

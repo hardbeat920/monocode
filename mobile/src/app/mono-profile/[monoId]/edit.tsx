@@ -6,6 +6,7 @@ import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-nativ
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { PIXEL_MASCOT_NAMES } from "@/features/mascots/pixelMascots";
 import { useMonoModel } from "@/features/models/useMonoModel";
+import { useMonoSubsessions } from "@/features/models/useMonoSubsessions";
 import { ProviderLogo } from "@/features/sessions/ProviderLogo";
 import { SettingsPage, SettingsRow } from "@/features/settings/SettingsUI";
 import { useOffline } from "@/features/connection/ConnectionNotice";
@@ -27,6 +28,7 @@ export default function EditMonoScreen() {
   const mono = monos.find((m) => m.id === monoId);
   const offline = useOffline();
   const { model, harness } = useMonoModel(mono);
+  const subsessions = useMonoSubsessions(mono);
   // The older desktop app can't hand the phone its soul and memory.
   const files = useMonoFiles();
   const styles = useStyles();
@@ -102,6 +104,19 @@ export default function EditMonoScreen() {
           onPress={() => router.push({ pathname: "/mono-profile/[monoId]/model", params: { monoId } })}
         />
       </View>
+
+      <Text style={styles.heading}>Sessions it starts</Text>
+      <View style={[styles.card, offline && styles.off]} pointerEvents={offline ? "none" : "auto"}>
+        <SettingsRow
+          icon={subsessions.harness ? <ProviderLogo harness={subsessions.harness} size={18} /> : "sparkle"}
+          label={subsessions.modelLabel || "Choose a model"}
+          value={subsessions.effort ? subsessions.effortLabel : undefined}
+          onPress={() =>
+            router.push({ pathname: "/mono-profile/[monoId]/subsessions", params: { monoId } })
+          }
+        />
+      </View>
+      <Text style={styles.note}>The model and effort for sessions it starts without naming one.</Text>
 
       {files ? (
         <>

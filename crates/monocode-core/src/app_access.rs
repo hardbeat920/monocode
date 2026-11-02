@@ -114,6 +114,14 @@ pub fn model_controls(kind: Kind, model: &Model) -> Vec<ModelControl> {
     }
     controls
 }
+/// A model's effort levels as `sessions.start` accepts them, value and name.
+pub fn effort_choices(kind: Kind, model: &Model) -> Vec<(String, String)> {
+    model_controls(kind, model)
+        .into_iter()
+        .find(|c| is_effort(&c.id))
+        .map(|c| c.choices)
+        .unwrap_or_default()
+}
 fn is_effort(key: &str) -> bool {
     matches!(
         key,

@@ -65,6 +65,10 @@ export default function MonoProfileLayout() {
           options={{ title: "Options", ...androidBackHeader("Options") }}
         />
         <Stack.Screen
+          name="subsessions"
+          options={{ title: "Sessions it starts", ...androidBackHeader("Sessions it starts") }}
+        />
+        <Stack.Screen
           name="projects"
           options={{ title: "Projects", ...androidBackHeader("Projects") }}
         />

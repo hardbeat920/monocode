@@ -582,6 +582,9 @@ impl Shell {
                     if let Some(session) = mono.session_id.and_then(|id| ids.get(&id)) {
                         value["sessionId"] = json!(session);
                     }
+                    if let Some(subsessions) = &mono.subsessions {
+                        value["subsessions"] = json!(subsessions);
+                    }
                     if let Some(preview) = mono.session_id.and_then(|id| previews.get(&id)) {
                         value["lastMessage"] = preview.text.clone();
                         value["lastActiveAt"] = json!(preview.updated_at);
