@@ -229,6 +229,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // suppression token once no alias still carries a pre-response snapshot.
   const approvalSnapshots = useRef(new Map<string, Set<string>>());
   const approvalFlights = useRef(new Map<string, Promise<void>>());
+  const approvalWatchVersions = useRef(new Map<string, number>());
   const showApprovals = useCallback((id: string, prompts: ApprovalPrompt[] | undefined) => {
     approvalSnapshots.current.set(id, new Set((prompts ?? []).map((prompt) => prompt.token)));
     for (const token of resolvedApprovals.current) {
@@ -298,6 +299,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const desktop = connection.pairing?.desktop.fingerprint;
   const read = useCallback(async (id: string) => {
     const paired = current.current.pairing;
+    const approvalVersion = approvalWatchVersions.current.get(id) ?? 0;
     try {
       const result = await current.current.command<Conversation>(
         "conversation.read",
@@ -315,7 +317,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
       showQuestion(id, result.question);
-      showApprovals(id, result.approvals);
+      // Approval frames are deltas: a stale read could otherwise replace a
+      // newer card with state that the watch will never send again.
+      if ((approvalWatchVersions.current.get(id) ?? 0) === approvalVersion)
+        showApprovals(id, result.approvals);
       showUsageLimit(id, result.usageLimit);
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
@@ -365,7 +370,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
       if (applied.usageLimit !== undefined) showUsageLimit(id, applied.usageLimit);
       for (const question of applied.questions) showQuestion(id, question);
-      for (const prompts of applied.approvals) showApprovals(id, prompts);
+      for (const prompts of applied.approvals) {
+        approvalWatchVersions.current.set(
+          id, (approvalWatchVersions.current.get(id) ?? 0) + 1,
+        );
+        showApprovals(id, prompts);
+      }
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
       const error = applied.error && !startupCatalogError(starting.current, id, applied.error)

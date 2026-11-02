@@ -256,6 +256,47 @@ describe("starting mobile sessions", () => {
 
   const approval = (token = "first") => ({ token, requestId: 7, title: "Run command?", detail: "git status",
     decisions: [{ id: "allow" as const, label: "Allow once" }] });
+  it.each(["new", "cleared", "replaced", "batched"] as const)(
+    "keeps %s watch approvals when an older read completes",
+    async (transition) => {
+      const reading = deferred<object>();
+      link.command.mockImplementation(async (method: string) =>
+        method === "conversation.read" ? reading.promise : {});
+      await render("existing");
+      const before = transition === "new" ? [] : [approval("old")];
+      await frame([{ approvals: before }]);
+      let stopped!: Promise<void>;
+      await act(async () => { stopped = workspace.stop("existing"); });
+      expect(link.command).toHaveBeenCalledWith("conversation.read", { conversationId: "existing" });
+      const latest = transition === "cleared" ? [] : [approval("new")];
+      await frame(transition === "batched"
+        ? [{ approvals: [] }, { approvals: latest }]
+        : [{ approvals: latest }]);
+      const turns: Turn[] = [{ id: "read", items: [{ type: "text", id: "read:text", text: "Read result" }] }];
+      await act(async () => {
+        reading.resolve({ id: "existing", messages: [], turns, busy: false, approvals: before });
+        await stopped;
+      });
+      expect(conversation.approvals).toEqual(latest);
+      expect(conversation.turns).toEqual(turns); // Other read fields are still accepted.
+    },
+  );
+  it("accepts read approvals when intervening frames do not carry approval state", async () => {
+    const reading = deferred<object>();
+    link.command.mockImplementation(async (method: string) =>
+      method === "conversation.read" ? reading.promise : {});
+    await render("existing");
+    await frame([{ approvals: [approval("old")] }]);
+    let stopped!: Promise<void>;
+    await act(async () => { stopped = workspace.stop("existing"); });
+    await frame([{ busy: true }]);
+    await act(async () => {
+      reading.resolve({ id: "existing", messages: [], turns: [], busy: false, approvals: [approval("read")] });
+      await stopped;
+    });
+    expect(conversation.approvals).toEqual([approval("read")]);
+  });
+
   it("responds once while in flight, keeps failures for retry, and suppresses pre-response frames", async () => {
     link.command.mockResolvedValue({});
     await render("existing");

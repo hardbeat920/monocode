@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { mobileQuestionReply } from "./mobileWorkspace";
+import { describe, expect, it, vi } from "vitest";
+import { newSession } from "../../sessions/model/session";
+import { mobileConversation, mobileQuestionReply } from "./mobileWorkspace";
+
+const storage = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: storage.invoke }));
 
 const prompt = {
   requestId: 1,
@@ -55,4 +59,29 @@ describe("mobile question replies", () => {
     expect(mobileQuestionReply({ kind: "maybe" }, prompt)).toBeUndefined();
     expect(mobileQuestionReply(null, prompt)).toBeUndefined();
   });
+});
+
+it("hydrates saved tool approvals as history, while live sessions remain answerable", async () => {
+  const record = newSession("pi", "/tmp/project");
+  record.id = "saved-approval";
+  record.blocks = [
+    { id: "user", role: "user", text: "Inspect" },
+    { id: "tool", role: "tool", text: "Run command", tool: { title: "git status", kind: "shell" }, approval: { requestId: 7 } },
+    { id: "standalone", role: "approval", text: "Approve?", approval: { requestId: 8 } },
+    { id: "decided", role: "tool", text: "Done", approval: { requestId: 9, decided: "allow" } },
+  ];
+  storage.invoke.mockResolvedValue(record);
+  const saved = new Map<string, typeof record>();
+  const first = await mobileConversation(record.id, [], saved);
+  expect(first.approvals).toEqual([]);
+  const hydrated = saved.get(record.id)!;
+  expect(hydrated.blocks.find((block) => block.id === "tool")).toMatchObject({ tool: { title: "git status" } });
+  expect(hydrated.blocks.find((block) => block.id === "tool")!.approval).toBeUndefined();
+  expect(hydrated.blocks.find((block) => block.id === "standalone")).toBeUndefined();
+  expect(hydrated.blocks.find((block) => block.id === "decided")!.approval?.decided).toBe("allow");
+  const calls = storage.invoke.mock.calls.length;
+  expect((await mobileConversation(record.id, [], saved)).approvals).toEqual([]);
+  expect(storage.invoke).toHaveBeenCalledTimes(calls);
+  const live = await mobileConversation(record.id, [{ ...record, busy: true }], saved);
+  expect(live.approvals.map((approval) => approval.requestId)).toEqual([7, 8]);
 });
