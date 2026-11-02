@@ -5,7 +5,17 @@ import { Pressable, Text, View } from "react-native";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { SessionScreen } from "@/features/sessions/SessionScreen";
 import { useConnectionStyles } from "@/features/connection/ConnectScreen";
+import { useMonoOnlyLayout } from "@/features/settings/monoOnly";
+import { MonoHome } from "@/features/workspace/MonoHome";
 export default function Index() {
+  const [monoOnly] = useMonoOnlyLayout();
+  // Monos only: the list of them, each chat pushed over it.
+  if (monoOnly)
+    return <MonoHome />;
+  return <WorkspaceIndex />;
+}
+
+function WorkspaceIndex() {
   const styles = useConnectionStyles();
   const { projects, monos } = useWorkspace();
   // Back where the user last was, while it is still on the phone.

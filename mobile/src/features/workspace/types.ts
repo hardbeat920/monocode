@@ -103,6 +103,15 @@ export type Mono = {
   lastActiveAt: number;
   harness?: Harness;
   model?: string;
+  /** What sessions it starts run on when it names no model; unset parts
+   *  are its own. Missing on desktops that predate it. */
+  subsessions?: MonoSubsessions | null;
+};
+
+export type MonoSubsessions = {
+  harness?: Harness;
+  model?: string;
+  effort?: string;
 };
 
 // The desktop's RuntimeMode (src/features/sessions/model/session.ts).

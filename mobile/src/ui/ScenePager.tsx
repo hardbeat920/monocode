@@ -380,6 +380,15 @@ export function ScenePagerHost({
   }, [open, animateTo]);
 
   const hasDrawer = !!drawer;
+  // The drawer going away (the Monos-only layout) takes its state with it:
+  // shut at once, with no motion, as the app is reset under a cover, so the
+  // scene isn't left aside with nothing beside it.
+  if (!hasDrawer && open) setOpen(false);
+  useEffect(() => {
+    if (hasDrawer) return;
+    translateX.set(0);
+    isOpen.set(false);
+  }, [hasDrawer, translateX, isOpen]);
   // Built once per size: a new gesture each render would be attached anew.
   const pan = useMemo(
     () =>

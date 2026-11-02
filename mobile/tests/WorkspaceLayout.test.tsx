@@ -154,3 +154,14 @@ it("uses window width before measurement, then the local pane width", () => {
   resize(1000, 740);
   expect(container.querySelector("[data-width]")!.getAttribute("data-width")).toBe("740");
 });
+
+it("hides the workspace sidebar for Mono-only mode without replacing the conversation", () => {
+  act(() => root.render(<WorkspaceLayout><input defaultValue="Keep my draft" /></WorkspaceLayout>));
+  resize(1000, 740);
+  expect(container.querySelector('[data-testid="workspace-sidebar"]')).not.toBeNull();
+  const composer = container.querySelector("input");
+  act(() => root.render(<WorkspaceLayout sidebar={false}><input defaultValue="Keep my draft" /></WorkspaceLayout>));
+  expect(container.querySelector('[data-testid="workspace-sidebar"]')).toBeNull();
+  expect(container.querySelector("input")).toBe(composer);
+  expect(composer!.value).toBe("Keep my draft");
+});

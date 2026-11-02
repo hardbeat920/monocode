@@ -388,6 +388,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "streaming pacing immediate latency performance animation",
     ),
     (
+        "collapse-tool-groups",
+        Section::Chat,
+        "Collapse tool groups",
+        "tool calls commands steps expand closed mobile compact activity",
+    ),
+    (
+        "fold-finished-work",
+        Section::Chat,
+        "Fold finished work",
+        "worked for collapse tool calls reply inline expanded history turns",
+    ),
+    (
         "follow-up",
         Section::Chat,
         "Follow-up behavior",

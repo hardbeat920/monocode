@@ -45,13 +45,16 @@ fn search_pill() -> Div {
 }
 
 impl TranscriptView {
+    /// `tiled`: the row leads with its own tile, so the line drops the
+    /// inline logo a Monocode tool would otherwise carry.
     pub(super) fn tool(
         &mut self,
         tool: ToolCall,
         start: usize,
+        tiled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.tool_in(tool, start, None, None, cx)
+        self.tool_line(tool, start, None, None, tiled, cx)
     }
 
     pub(super) fn tool_in(
@@ -60,6 +63,18 @@ impl TranscriptView {
         start: usize,
         scope: Option<&str>,
         width: Option<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.tool_line(tool, start, scope, width, false, cx)
+    }
+
+    fn tool_line(
+        &mut self,
+        tool: ToolCall,
+        start: usize,
+        scope: Option<&str>,
+        width: Option<gpui::Pixels>,
+        tiled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(panel) = tasks::render(self, &tool, start, width, cx) {
@@ -229,7 +244,9 @@ impl TranscriptView {
             .line_height(px(20.))
             // React's activity rows are always bare: no status glyph, only
             // a failure stays marked. Monocode's own tools carry its logo.
-            .when(visual, |d| d.child(crate::activity::glyph("monocode", 14.)))
+            .when(visual && !tiled, |d| {
+                d.child(crate::activity::glyph("monocode", 14.))
+            })
             .when(shown.action != "Run", |d| {
                 d.child(
                     div()
@@ -835,7 +852,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_settled_lone_step_keeps_its_loader_until_the_next_one_arrives(cx: &mut TestAppContext) {
+    fn a_lone_tool_call_gets_its_own_group_header(cx: &mut TestAppContext) {
         let view = cx.new(|_| TranscriptView::new());
         let row = |role: &str, text: String| Row {
             role: role.into(),
@@ -849,17 +866,19 @@ mod tests {
             call.state = state;
             row("tool", serde_json::to_string(&call).unwrap())
         };
-        let lone = |view: &TranscriptView| {
+        // The header's activity, if there is one.
+        let header = |view: &TranscriptView| {
             view.rows.iter().find_map(|r| match &r.body {
-                Body::Tool {
-                    group: None, live, ..
-                } => Some(*live),
+                Body::Phase { active, .. } => Some(*active),
                 _ => None,
             })
         };
+        let ungrouped = |view: &TranscriptView| {
+            view.rows
+                .iter()
+                .any(|r| matches!(r.body, Body::Tool { group: None, .. }))
+        };
         view.update(cx, |view, cx| {
-            // Inspect the handoff state without waiting for paced prose, and
-            // keep the work expanded so the settled tool row remains visible.
             view.smooth_reveal = false;
             view.work_folds.insert(1, true);
             view.streaming(true, cx);
@@ -871,27 +890,20 @@ mod tests {
                 ],
                 cx,
             );
-            assert_eq!(lone(view), Some(true), "settled but still the live end");
-
-            view.patch(2, vec![step("second", ToolState::Running)], cx);
-            assert!(
-                view.rows
-                    .iter()
-                    .any(|r| matches!(r.body, Body::Phase { .. })),
-                "the second step hands the loader to its group header"
+            assert_eq!(
+                header(view),
+                Some(true),
+                "one call already has a live header"
             );
-
-            view.patch(1, vec![step("first", ToolState::Completed)], cx);
-            view.patch(2, vec![row("assistant", String::new())], cx);
-            assert_eq!(lone(view), Some(true), "an empty answer keeps the wait");
+            assert!(!ungrouped(view), "the call sits under its header");
 
             view.patch(2, vec![row("assistant", "Done".into())], cx);
-            assert_eq!(lone(view), Some(false), "an answer after it ends the wait");
+            assert_eq!(header(view), Some(false), "an answer settles the header");
 
             cx.set_reduce_motion(true);
             view.work_folds.insert(1, false);
             view.rebuild(1, cx);
-            assert_eq!(lone(view), None, "collapsed work hides the settled step");
+            assert_eq!(header(view), None, "collapsed work hides the header too");
         });
     }
 }

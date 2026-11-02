@@ -13,11 +13,11 @@ const MIN_CONTENT_WIDTH = 480;
 
 /** One navigator for both layouts. Resizing changes only its available space;
  * the connection, route, composer and transcript all keep their identities. */
-export function WorkspaceLayout({ children }: { children: ReactNode }) {
+export function WorkspaceLayout({ children, sidebar = true }: { children: ReactNode; sidebar?: boolean }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [width, setWidth] = useState(0);
-  const expanded = width - insets.left - insets.right >= SIDEBAR_WIDTH + MIN_CONTENT_WIDTH;
+  const expanded = sidebar && width - insets.left - insets.right >= SIDEBAR_WIDTH + MIN_CONTENT_WIDTH;
   return (
     <View
       testID="workspace-layout"

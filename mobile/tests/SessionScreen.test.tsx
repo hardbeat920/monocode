@@ -15,7 +15,7 @@ const layout = vi.hoisted(() => ({
   windowHeight: 1000,
   frameHandler: undefined as undefined | ((event: { endCoordinates: { screenY: number; height: number } }) => void),
   keyboardHandler: undefined as undefined | {
-    onStart: () => void;
+    onStart: (event: { height: number; progress: number; target?: number }) => void;
     onEnd: (event: { height: number; progress: number }) => void;
   },
   onTargetLayout: undefined as undefined | (() => void),
@@ -42,6 +42,7 @@ vi.mock("react-native", () => {
   };
   return {
     Platform: { get OS() { return layout.OS; } },
+    findNodeHandle: () => 42,
     Dimensions: { get: () => ({ height: layout.windowHeight }) },
     Keyboard: { addListener: (_name: string, handler: typeof layout.frameHandler) => {
       layout.frameHandler = handler;
@@ -103,6 +104,7 @@ vi.mock("@/ui/SceneFade", () => ({
   useHeaderPush: () => ({}),
   useSceneKey: () => "/",
   hasNativeHeader: () => false,
+  isModalRoute: () => false,
   HEADER_PUSH_TOTAL: 350,
   GLASS_PUSH_DURATION: 0.36,
   PUSH_DONE_AFTER: 630,
@@ -274,7 +276,7 @@ it("does not apply a previous transition's settled iOS keyboard when onEnd beats
     render();
     act(() => layout.frameHandler!({ endCoordinates: { screenY: 600, height: 400 } }));
     // Dismissal: onEnd lands before UIKit's settled frame.
-    act(() => layout.keyboardHandler!.onStart());
+    act(() => layout.keyboardHandler!.onStart({ height: 0, progress: 0 }));
     act(() => layout.keyboardHandler!.onEnd({ height: 0, progress: 0 }));
     render();
     expect(lift()).toBe("0");
@@ -282,13 +284,45 @@ it("does not apply a previous transition's settled iOS keyboard when onEnd beats
     render();
     expect(lift()).toBe("0");
     // Show again: the dismissed overlap must not hold the composer down.
-    act(() => layout.keyboardHandler!.onStart());
+    act(() => layout.keyboardHandler!.onStart({ height: 0, progress: 0 }));
     act(() => layout.keyboardHandler!.onEnd({ height: 300, progress: 1 }));
     render();
     expect(lift()).toBe("-300");
     act(() => layout.frameHandler!({ endCoordinates: { screenY: 700, height: 300 } }));
     render();
     expect(lift()).toBe("-300");
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it("ignores another input's settled keyboard frame and still corrects its owner's rotation", () => {
+  layout.OS = "ios";
+  layout.windowHeight = 1000;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  // The native-view mock assigns this input tag 42.
+  const owner = { current: null };
+  function Probe() {
+    const style = useKeyboardLift(0, owner) as unknown as { transform: { translateY: number }[] };
+    return <span data-lift={style.transform[0].translateY} />;
+  }
+  const render = () => act(() => root.render(<Probe />));
+  const lift = () => container.querySelector("[data-lift]")!.getAttribute("data-lift");
+  try {
+    render();
+    act(() => layout.keyboardHandler!.onStart({ height: 400, progress: 1, target: 7 }));
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 600, height: 400 } }));
+    act(() => layout.keyboardHandler!.onEnd({ height: 400, progress: 1 }));
+    render();
+    expect(lift()).toBe("0");
+
+    act(() => layout.keyboardHandler!.onStart({ height: 400, progress: 1, target: 42 }));
+    layout.windowHeight = 600;
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 400, height: 200 } }));
+    act(() => layout.keyboardHandler!.onEnd({ height: 400, progress: 1 }));
+    render();
+    expect(lift()).toBe("-200");
   } finally {
     act(() => root.unmount());
   }

@@ -46,6 +46,7 @@ vi.mock("@/features/sessions/useSessionActions", () => ({
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
 }));
+vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("react-native-svg", () => ({
   default: () => <svg />,
   Circle: () => null,
