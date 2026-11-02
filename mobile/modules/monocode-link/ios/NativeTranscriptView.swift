@@ -198,14 +198,14 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
           label.textColor = .transcriptHex(style.muted)
           label.text = time.text
           label.sizeToFit()
-          label.frame.origin = CGPoint(x: bounds.width + 8, y: row.frame.minY + time.y - label.bounds.height / 2)
+          label.frame.origin = CGPoint(x: scroll.bounds.width + 8, y: row.frame.minY + time.y - label.bounds.height / 2)
           label.alpha = 0
           scroll.addSubview(label)
           times[id] = label
           return label
         }()
       label.frame.origin = CGPoint(
-        x: bounds.width - min(reveal, Self.revealWidth) + 8,
+        x: scroll.bounds.width - min(reveal, Self.revealWidth) + 8,
         y: row.frame.minY + time.y - label.bounds.height / 2)
       label.alpha = min(1, reveal / Self.revealWidth)
     }
@@ -278,7 +278,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     publishViewport()
   }
   func updateProps() {
-    guard bounds.width > 0, !configuration.isEmpty else { return }
+    guard scroll.bounds.width > 0, !configuration.isEmpty else { return }
     if startedConfiguration != configuration {
       session?.stop()
       frameData = nil
@@ -298,7 +298,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       {
         input["pending"] = value
       }
-      style.width = bounds.width
+      style.width = scroll.bounds.width
       let created = TranscriptSession(configuration: input, style: style)
       let generation = UUID()
       relayLock.lock()
@@ -325,12 +325,24 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    scroll.frame = bounds
-    spinner.center = CGPoint(x: bounds.midX, y: top + max(0, bounds.height - top - bottom) / 2)
-    style.width = bounds.width
+    // Navigation controls can occupy either side on Duo. Inset the transcript,
+    // not its background, and leave vertical positioning to the existing
+    // header/composer insets. Use this view's safe area, which includes the
+    // enclosing navigation controller's bars, rather than the window's.
+    scroll.frame = CGRect(
+      x: safeAreaInsets.left, y: 0,
+      width: max(0, bounds.width - safeAreaInsets.left - safeAreaInsets.right),
+      height: bounds.height)
+    spinner.center = CGPoint(x: scroll.frame.midX, y: top + max(0, bounds.height - top - bottom) / 2)
+    style.width = scroll.bounds.width
     updateProps()
     updateGeometry()
     displayRows()
+  }
+
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    setNeedsLayout()
   }
 
   private func setForeground(_ value: Bool) {
@@ -656,7 +668,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     if let block {
       let clip = UIView(
         frame: CGRect(
-          x: 0, y: block.y, width: bounds.width, height: block.opening ? 0 : block.height))
+          x: 0, y: block.y, width: scroll.bounds.width, height: block.opening ? 0 : block.height))
       clip.clipsToBounds = true
       clip.isUserInteractionEnabled = block.opening
       scroll.addSubview(clip)
@@ -764,7 +776,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       style.agent.isEmpty ? 0 : max(0, scroll.bounds.height - top - frame.height - bottomInset)
     if abs(scroll.contentInset.top - lead) > 0.5 { scroll.contentInset.top = lead }
     scroll.contentSize = CGSize(
-      width: bounds.width, height: lead > 0 ? height : max(scroll.bounds.height, height))
+      width: scroll.bounds.width, height: lead > 0 ? height : max(scroll.bounds.height, height))
     scroll.verticalScrollIndicatorInsets = UIEdgeInsets(
       top: top, left: 0, bottom: bottomInset, right: 0)
     if initialized && following && !scroll.isDragging && !scroll.isDecelerating {
@@ -898,7 +910,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       let y = top + frame.offsets[index] + (shifts[model.id]?.x ?? 0)
       row.frame = CGRect(
         x: -reveal,
-        y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: bounds.width,
+        y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: scroll.bounds.width,
         height: model.height)
       row.configure(
         // A Mono's reply lands whole as a bubble, so it isn't written in word by word.
@@ -954,7 +966,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       style: style,
       viewport: initialized
         ? CGRect(
-          x: 0, y: max(0, scroll.contentOffset.y - top), width: bounds.width, height: bounds.height)
+          x: 0, y: max(0, scroll.contentOffset.y - top), width: scroll.bounds.width, height: scroll.bounds.height)
         : .zero)
   }
   private func updateAway() {
