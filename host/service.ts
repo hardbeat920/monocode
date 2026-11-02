@@ -167,6 +167,27 @@ type Run = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<unknown>;
 
+export async function ensureLinger(
+  username: string,
+  run: (command: string, args: string[]) => Promise<{ stdout: string }>,
+): Promise<void> {
+  const enabled = () =>
+    run("loginctl", [
+      "show-user",
+      username,
+      "--property=Linger",
+      "--value",
+    ]).then((result) => result.stdout.trim() === "yes");
+  if (await enabled().catch(() => false)) return;
+  await run("loginctl", ["enable-linger", username, "--no-ask-password"]).catch(
+    () => undefined,
+  );
+  if (!(await enabled()))
+    throw new Error(
+      `This host needs systemd user services and lingering to keep sessions running after SSH disconnects. An administrator can enable it with: sudo loginctl enable-linger ${username}`,
+    );
+}
+
 /**
  * Removes the login service or scheduled task so the host no longer starts
  * automatically, stopping it where the service manager owns the process.
@@ -277,23 +298,9 @@ export async function installService(
   } else if (process.platform === "linux") {
     const user = userInfo();
     const env = systemdEnvironment(user.uid);
-    try {
-      await run(
-        "loginctl",
-        ["enable-linger", user.username, "--no-ask-password"],
-        env,
-      );
-      const linger = await run(
-        "loginctl",
-        ["show-user", user.username, "--property=Linger", "--value"],
-        env,
-      );
-      if (linger.stdout.trim() !== "yes") throw new Error("linger disabled");
-    } catch {
-      throw new Error(
-        `This host needs systemd user services and lingering to keep sessions running after SSH disconnects. An administrator can enable it with: sudo loginctl enable-linger ${user.username}`,
-      );
-    }
+    await ensureLinger(user.username, (command, args) =>
+      run(command, args, env),
+    );
     const folder = join(homedir(), ".config/systemd/user");
     await mkdir(folder, { recursive: true });
     const file = join(folder, "monocode-host.service");
