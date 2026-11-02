@@ -18,6 +18,8 @@ pub(crate) struct Preferences {
     pub tab_animations: bool,
     pub notes: bool,
     pub quick_composer: bool,
+    /// Global search floats as a command panel instead of opening a page.
+    pub search_panel: bool,
     pub working_agents: bool,
     pub close_to_tray: bool,
     /// Running an action shows the terminal it runs in.
@@ -112,6 +114,7 @@ impl Default for Preferences {
             tab_animations: false,
             notes: true,
             quick_composer: true,
+            search_panel: false,
             working_agents: true,
             close_to_tray: true,
             action_opens_terminal: true,

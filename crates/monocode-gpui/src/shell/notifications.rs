@@ -443,7 +443,7 @@ impl Shell {
     }
 
     pub(super) fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.app_view_open() || self.settings.is_some() || self.app_search.is_some() {
+        if self.app_view_open() || self.settings.is_some() || self.search_page() {
             return false;
         }
         if self.mono_active(cx) {

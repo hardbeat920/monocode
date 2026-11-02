@@ -154,7 +154,7 @@ impl Shell {
             && !self.workspace.project_rail_open
             && self.settings.is_none()
             && !self.app_view_open()
-            && self.app_search.is_none()
+            && !self.search_page()
             && !self.mono_active(cx)
     }
     /// Switch navigation layouts without changing the new layout's frame style.
@@ -372,7 +372,7 @@ impl Shell {
             && !self.workspace.project_rail_open
             && self.settings.is_none()
             && self.classic_surface_open(cx);
-        let tab_bar = if spans_window || (original && self.app_search.is_some()) {
+        let tab_bar = if spans_window || (original && self.search_page()) {
             None
         } else if original && self.app_view_open() {
             Some(self.titlebar_controls_space(self.classic_app_surface_header(cx), window))
@@ -541,7 +541,7 @@ impl Shell {
         self.workspace.right_panel_open
             && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
+            && !self.search_page()
     }
     /// Classic: the panel toggle holds the corner while Explorer, Terminal (when
     /// it lives in the panel) and History start at the panel's left edge. The
@@ -718,7 +718,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        if let Some(search) = &self.app_search {
+        if let Some(search) = self.app_search.as_ref().filter(|s| !s.panel) {
             return div()
                 .flex_1()
                 .min_h_0()

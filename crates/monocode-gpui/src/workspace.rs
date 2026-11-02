@@ -92,6 +92,8 @@ pub(crate) struct Workspace {
     pub sidebar_visible: bool,
     pub sidebar_width: f32,
     pub compact_session_cards: bool,
+    /// The Search field heading the sidebar; ⌘K opens search either way.
+    pub sidebar_search_visible: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_inbox_visible: bool,
@@ -308,6 +310,7 @@ impl Default for Workspace {
             sidebar_visible: true,
             sidebar_width: 260.,
             compact_session_cards: true,
+            sidebar_search_visible: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
             sidebar_inbox_visible: true,
