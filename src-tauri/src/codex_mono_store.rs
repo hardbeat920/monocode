@@ -174,6 +174,7 @@ fn private_entry(name: &str) -> bool {
         || name.ends_with(".db-wal")
         || name.ends_with(".db-shm")
         || name.starts_with(".monocode-")
+        || name == "session_index.jsonl.lock"
 }
 
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
