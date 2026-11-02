@@ -199,10 +199,15 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
         }
     }
     // Monos provisioned before session_index.jsonl.lock became private may
-    // still have it symlinked to the account home from an earlier sync; drop
-    // the link so a fresh private lock takes its place.
+    // still have it symlinked (or, on Windows, hard-linked) to the account
+    // home from an earlier sync; drop the link so a fresh private lock
+    // takes its place.
     let mono_lock = home.join("session_index.jsonl.lock");
     if std::fs::symlink_metadata(&mono_lock).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
+    }
+    #[cfg(windows)]
+    if same_file(&mono_lock, &source.join("session_index.jsonl.lock")) {
         std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
     }
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
@@ -228,6 +233,36 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     link_entry(&source.join("secrets"), &home.join("secrets"))?;
     std::fs::create_dir_all(home.join("sessions")).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// True only when both paths' handles resolve to the same on-disk file
+/// (matching volume serial and file index). `std::os::windows::fs::MetadataExt`
+/// exposes the same fields but is still gated behind the unstable
+/// `windows_by_handle` feature, so this goes through the raw API directly.
+/// Fails closed: any open/query failure returns false so a genuinely
+/// different file is never mistaken for a stale link.
+#[cfg(windows)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    fn identity(path: &Path) -> Option<(u32, u64)> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        Some((info.dwVolumeSerialNumber, index))
+    }
+
+    match (identity(a), identity(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
@@ -839,8 +874,7 @@ mod tests {
     }
 
     // Windows file sharing uses hard links, not symlinks (see link_entry),
-    // and a hard link is indistinguishable from a regular file via
-    // symlink_metadata — so this cleanup, and this test, are Unix-only.
+    // so the two platforms need separate reproductions of the stale state.
     #[cfg(unix)]
     #[test]
     fn drops_a_stale_lock_link_from_before_the_lock_became_private() {
@@ -866,6 +900,55 @@ mod tests {
             std::fs::read_to_string(source.join("session_index.jsonl.lock")).unwrap(),
             "account",
             "removing the link must not touch its target"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drops_a_stale_lock_hard_link_from_before_the_lock_became_private() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // A mono provisioned before the lock became private can still have
+        // this hard link left over from an earlier sync (link_entry shares
+        // files via hard_link on Windows, not a symlink).
+        std::fs::hard_link(
+            source.join("session_index.jsonl.lock"),
+            home.join("session_index.jsonl.lock"),
+        )
+        .unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            !home.join("session_index.jsonl.lock").exists(),
+            "the stale hard link must be removed, leaving the mono's own writer to recreate a private lock"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "removing the hard link must not touch its target"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn does_not_remove_an_unrelated_lock_with_the_same_name() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // Not a link to the account's lock, just a file that happens to
+        // share its name and content — must be left alone.
+        std::fs::write(home.join("session_index.jsonl.lock"), "account").unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "an unrelated file must survive, only a genuine link to the source should be removed"
         );
     }
 
