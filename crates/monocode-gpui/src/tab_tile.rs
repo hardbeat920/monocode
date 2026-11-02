@@ -54,12 +54,41 @@ pub(crate) fn tab_tile_inset() -> f32 {
 /// The whole tile surface, painted in one pass over one rect so every layer
 /// lines up: a hairline lift below it, the solid fill (brand colour or
 /// neutral), a faint sheen and the border. Every tile is opaque, so the
-/// ones further back in a stack never show through it.
-fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoElement {
+/// ones further back in a stack never show through it. `tilt` (degrees,
+/// clockwise) turns the card about its centre mid-shuffle; quads can't
+/// rotate, so a tilted card is painted as paths instead.
+fn surface(radius: f32, depth: usize, face: Face, lifted: f32, tilt: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let light = is_light();
+            let sheen = white(match face {
+                Face::Fill(..) => 0.16,
+                Face::Neutral if light => 0.35,
+                Face::Neutral => 0.05,
+            });
+            let rim = match face {
+                // A light rim, as on an app icon.
+                Face::Fill(..) => white(0.14),
+                Face::Neutral => content(if depth == 0 { 0.1 } else { 0.06 }),
+            };
+            let (top, bottom) = match face {
+                Face::Fill(top, bottom) => (top, bottom),
+                Face::Neutral => neutral_shades(depth),
+            };
+            if tilt.abs() > 0.05 {
+                paint_tilted(
+                    bounds,
+                    radius,
+                    tilt,
+                    (top, bottom),
+                    sheen,
+                    rim,
+                    lifted,
+                    window,
+                );
+                return;
+            }
             let corners = Corners::all(px(radius));
             // A card picked up off the stack casts a deeper, softer shadow.
             if lifted > 0. {
@@ -81,34 +110,24 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
                     gpui::fill(lift, black(if light { 0.1 } else { 0.3 })).corner_radii(corners),
                 );
             }
-            match face {
-                Face::Fill(top, bottom) => window.paint_quad(
-                    gpui::fill(
-                        bounds,
-                        gpui::linear_gradient(
-                            180.,
-                            gpui::linear_color_stop(top, 0.),
-                            gpui::linear_color_stop(bottom, 1.),
-                        ),
-                    )
-                    .corner_radii(corners),
-                ),
-                Face::Neutral => paint_neutral(bounds, corners, depth, window),
-            }
+            window.paint_quad(
+                gpui::fill(
+                    bounds,
+                    gpui::linear_gradient(
+                        180.,
+                        gpui::linear_color_stop(top, 0.),
+                        gpui::linear_color_stop(bottom, 1.),
+                    ),
+                )
+                .corner_radii(corners),
+            );
             // Brighter at the top, like light on a raised face.
             window.paint_quad(
                 gpui::fill(
                     bounds,
                     gpui::linear_gradient(
                         180.,
-                        gpui::linear_color_stop(
-                            white(match face {
-                                Face::Fill(..) => 0.16,
-                                Face::Neutral if light => 0.35,
-                                Face::Neutral => 0.05,
-                            }),
-                            0.,
-                        ),
+                        gpui::linear_color_stop(sheen, 0.),
                         gpui::linear_color_stop(white(0.), 1.),
                     ),
                 )
@@ -118,11 +137,7 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
                 gpui::fill(bounds, gpui::transparent_black())
                     .corner_radii(corners)
                     .border_widths(px(1.))
-                    .border_color(match face {
-                        // A light rim, as on an app icon.
-                        Face::Fill(..) => white(0.14),
-                        Face::Neutral => content(if depth == 0 { 0.1 } else { 0.06 }),
-                    }),
+                    .border_color(rim),
             );
         },
     )
@@ -132,16 +147,110 @@ fn surface(radius: f32, depth: usize, face: Face, lifted: f32) -> impl IntoEleme
     .size_full()
 }
 
-/// The neutral tile: a solid grey gradient in the theme's ink hue, raised
-/// above the surface like the coloured tiles. Each step back is a shade
-/// deeper. Solid, so a stack's front tile hides the ones behind it without
-/// a backdrop blur, which would break the frame's render pass per tile.
-fn paint_neutral(
+/// The outline of a rounded rect turned `tilt` degrees about its centre,
+/// grown by `grow` on every side (negative to inset it).
+fn tilted_outline(
     bounds: gpui::Bounds<gpui::Pixels>,
-    corners: Corners<gpui::Pixels>,
-    depth: usize,
+    radius: f32,
+    tilt: f32,
+    grow: f32,
+) -> Vec<gpui::Point<gpui::Pixels>> {
+    const STEPS: usize = 5;
+    let (cx, cy) = (
+        f32::from(bounds.center().x),
+        f32::from(bounds.center().y),
+    );
+    let (hw, hh) = (
+        f32::from(bounds.size.width) / 2. + grow,
+        f32::from(bounds.size.height) / 2. + grow,
+    );
+    let r = (radius + grow).clamp(0., hw.min(hh));
+    let (sin, cos) = tilt.to_radians().sin_cos();
+    let mut points = Vec::with_capacity(4 * (STEPS + 1));
+    // Each corner's arc centre, and the angle its quarter turn starts at.
+    for (sx, sy, start) in [
+        (1., -1., -90f32),
+        (1., 1., 0.),
+        (-1., 1., 90.),
+        (-1., -1., 180.),
+    ] {
+        let (ax, ay) = (sx * (hw - r), sy * (hh - r));
+        for step in 0..=STEPS {
+            let a = (start + 90. * step as f32 / STEPS as f32).to_radians();
+            let (x, y) = (ax + r * a.cos(), ay + r * a.sin());
+            points.push(gpui::point(
+                px(cx + x * cos - y * sin),
+                px(cy + x * sin + y * cos),
+            ));
+        }
+    }
+    points
+}
+
+/// [`surface`] for a tilted card: the same layers as paths.
+#[allow(clippy::too_many_arguments)]
+fn paint_tilted(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radius: f32,
+    tilt: f32,
+    (top, bottom): (Hsla, Hsla),
+    sheen: Hsla,
+    rim: Hsla,
+    lifted: f32,
     window: &mut gpui::Window,
 ) {
+    let light = is_light();
+    let fill = |points: &[gpui::Point<gpui::Pixels>]| {
+        let mut path = gpui::PathBuilder::fill();
+        path.add_polygon(points, true);
+        path.build().ok()
+    };
+    // The light falls from straight above, so the face's gradient turns
+    // with the card.
+    let angle = 180. + tilt;
+    let outline = tilted_outline(bounds, radius, tilt, 0.);
+    // A soft shadow: a few widening, fainter rings below the card.
+    let shadow = black((if light { 0.07 } else { 0.16 }) * lifted.max(0.4));
+    for ring in 0..3 {
+        let mut below = bounds;
+        below.origin.y += px(1. + 3. * lifted);
+        if let Some(path) = fill(&tilted_outline(below, radius, tilt, ring as f32)) {
+            window.paint_path(path, shadow);
+        }
+    }
+    if let Some(path) = fill(&outline) {
+        window.paint_path(
+            path,
+            gpui::linear_gradient(
+                angle,
+                gpui::linear_color_stop(top, 0.),
+                gpui::linear_color_stop(bottom, 1.),
+            ),
+        );
+    }
+    if let Some(path) = fill(&outline) {
+        window.paint_path(
+            path,
+            gpui::linear_gradient(
+                angle,
+                gpui::linear_color_stop(sheen, 0.),
+                gpui::linear_color_stop(white(0.), 1.),
+            ),
+        );
+    }
+    let mut stroke = gpui::PathBuilder::stroke(px(1.));
+    stroke.add_polygon(&tilted_outline(bounds, radius, tilt, -0.5), true);
+    if let Ok(path) = stroke.build() {
+        window.paint_path(path, rim);
+    }
+}
+
+/// The neutral tile's top and bottom: a solid grey gradient in the
+/// theme's ink hue, raised above the surface like the coloured tiles. Each
+/// step back is a shade deeper. Solid, so a stack's front tile hides the
+/// ones behind it without a backdrop blur, which would break the frame's
+/// render pass per tile.
+fn neutral_shades(depth: usize) -> (Hsla, Hsla) {
     let shade = |l: f32| {
         let mut c = content(1.);
         c.s = c.s.min(0.08);
@@ -149,33 +258,30 @@ fn paint_neutral(
         c.a = 1.;
         c
     };
-    let (top, bottom) = if is_light() {
+    if is_light() {
         (shade(1.), shade(0.93))
     } else {
         (shade(0.27), shade(0.2))
-    };
-    window.paint_quad(
-        gpui::fill(
-            bounds,
-            gpui::linear_gradient(
-                180.,
-                gpui::linear_color_stop(top, 0.),
-                gpui::linear_color_stop(bottom, 1.),
-            ),
-        )
-        .corner_radii(corners),
-    );
+    }
 }
 
 /// One tile at `depth` in a stack (0 is the front); a shuffle passes
 /// depths in between. Each step back is smaller; the front tile alone
 /// carries the lift and the brighter border.
 fn tile(size: &TileSize, depth: f32, face: Face, mark: AnyElement) -> Div {
-    tile_lifted(size, depth, face, mark, 0.)
+    tile_lifted(size, depth, face, mark, 0., 0.)
 }
 
-/// [`tile`] partway off the stack: `lifted` 0 resting to 1 held up high.
-fn tile_lifted(size: &TileSize, depth: f32, face: Face, mark: AnyElement, lifted: f32) -> Div {
+/// [`tile`] partway off the stack: `lifted` 0 resting to 1 held up high,
+/// turned `tilt` degrees clockwise.
+fn tile_lifted(
+    size: &TileSize,
+    depth: f32,
+    face: Face,
+    mark: AnyElement,
+    lifted: f32,
+    tilt: f32,
+) -> Div {
     let shrink = depth * SHRINK;
     div()
         .w(px(size.w - shrink))
@@ -189,6 +295,7 @@ fn tile_lifted(size: &TileSize, depth: f32, face: Face, mark: AnyElement, lifted
             depth.max(0.).round() as usize,
             face,
             lifted,
+            tilt,
         ))
         .child(mark)
 }
@@ -209,18 +316,20 @@ pub(crate) struct StackTile {
 
 /// A split tab's tiles, shuffled like a deck: `t` (linear, 0 to 1) of
 /// the way from each tile's old depth to its new one. The card leaving the
-/// front is picked up, lifted and swung out to the right, then dropped
-/// behind the stack at the top of its arc; the new card slides forward and
-/// grows into the front as the old one passes over it. Settled, `from`
-/// equals `to`.
+/// front is pulled out to the left, tilting back, while the card being
+/// dealt is drawn out to the right, tilting the other way; once they are
+/// apart they swap places in the deck and push back together, the new
+/// card on top. Settled, `from` equals `to`.
 pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div {
-    /// How high the picked-up card rises, and how far it swings out.
-    const LIFT: f32 = 9.;
-    const SWING: f32 = 12.;
+    /// How far each of the two swapping cards is pulled out to its side,
+    /// how far the outgoing one rises, and how far each tilts (degrees).
+    const SPREAD: f32 = 9.;
+    const LIFT: f32 = 2.;
+    const TILT: f32 = 12.;
     let t = t.clamp(0., 1.);
     // Ease in and out, so cards gather speed and settle.
     let travel = t * t * (3. - 2. * t);
-    // The pick-up arc: up and out, peaking halfway, then down into place.
+    // Apart and back: widest halfway, where the two cards change places.
     let arc = (t * std::f32::consts::PI).sin();
     let last = (STACK_MAX - 1) as f32;
     let shown = tiles
@@ -239,28 +348,28 @@ pub(crate) fn tile_stack(size: &TileSize, tiles: Vec<StackTile>, t: f32) -> Div 
             // A card out of sight waits behind the last one and fades.
             let opacity = (1. - (depth - last)).clamp(0., 1.);
             let depth = depth.min(last);
-            let (mut dx, mut dy, mut lifted, mut grow) = (0., 0., 0., 0.);
-            // Over the stack until halfway, then under it.
-            let mut z = if t < 0.5 { from } else { to };
-            if to > from && from == 0. {
-                // The card being put back: picked up and carried over.
-                dx = arc * SWING;
+            let (mut dx, mut dy, mut lifted, mut tilt) = (0., 0., 0., 0.);
+            let mut z = depth;
+            if from == 0. && to > 0. {
+                // The card being put back: out to the left, tilting back,
+                // on top until the two are apart, then under.
+                dx = -arc * SPREAD;
                 dy = -arc * LIFT;
                 lifted = arc;
-                grow = arc * 0.8;
-                if t < 0.5 {
-                    z = -1.;
-                }
-            } else if to < from {
-                // The card being dealt: drawn out from behind and forward.
-                dy = arc * 1.5;
-            } else {
-                z = depth;
+                tilt = -arc * TILT;
+                z = if t < 0.5 { -1. } else { to };
+            } else if to == 0. && from > 0. {
+                // The card being dealt: out to the right, tilting the other
+                // way, then over the stack and into the front.
+                dx = arc * SPREAD;
+                tilt = arc * TILT;
+                lifted = arc * 0.6;
+                z = if t < 0.5 { from } else { -1. };
             }
-            let shrink = (depth - grow) * SHRINK;
-            let element = tile_lifted(size, depth - grow, tile.face, tile.mark, lifted)
+            let shrink = depth * SHRINK;
+            let element = tile_lifted(size, depth, tile.face, tile.mark, lifted, tilt)
                 .absolute()
-                .left(px(depth * PEEK + depth * SHRINK + dx - grow * SHRINK / 2.))
+                .left(px(depth * PEEK + shrink + dx))
                 .top(px(shrink / 2. + dy))
                 .when(opacity < 1., |d| d.opacity(opacity));
             (opacity > 0.).then_some((z, depth, element))
