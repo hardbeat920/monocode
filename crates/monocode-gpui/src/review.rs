@@ -5,7 +5,6 @@
 use crate::{
     diff_view::{DiffEvent, DiffFile, DiffView},
     file_editor::{FileEditor, FileEvent},
-    file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
     pane_motion::PaneReveal,
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
@@ -1538,16 +1537,16 @@ impl ReviewPane {
                                             .w_full()
                                             .flex()
                                             .items_center()
-                                            .gap(px(6.))
-                                            .px_2()
+                                            .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                                            .pl(px(crate::tab_tile::tab_tile_inset()))
+                                            .pr_2()
                                             .rounded_md()
                                             .text_size(px(13.))
                                             .text_color(content(0.5))
-                                            .child(if let ReviewTab::File { .. } = &ghost {
-                                                file_type_icon(label.as_ref(), false, false, 14.)
-                                            } else {
-                                                icon("git-compare", 14.).into_any_element()
-                                            })
+                                            .child(crate::tab_tile::file_tile(
+                                                matches!(ghost, ReviewTab::File { .. })
+                                                    .then_some(label.as_ref()),
+                                            ))
                                             .child(div().min_w_0().truncate().child(label)),
                                     ),
                             )
@@ -1675,8 +1674,8 @@ impl ReviewPane {
                             .flex_1()
                             .flex()
                             .items_center()
-                            .gap(px(6.))
-                            .px_2()
+                            .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                            .pl(px(crate::tab_tile::tab_tile_inset()))
                             .pr(px(28.))
                             .rounded_md()
                             .text_size(px(13.))
@@ -1689,17 +1688,10 @@ impl ReviewPane {
                                     d.text_color(content(0.5))
                                 }
                             })
-                            .child(if let ReviewTab::File { .. } = &source.tab {
-                                file_type_icon(label.as_ref(), false, false, 14.)
-                            } else {
-                                icon("git-compare", 14.)
-                                    .text_color(if active || hovered {
-                                        content(1.)
-                                    } else {
-                                        content(0.5)
-                                    })
-                                    .into_any_element()
-                            })
+                            .child(crate::tab_tile::file_tile(
+                                matches!(source.tab, ReviewTab::File { .. })
+                                    .then_some(label.as_ref()),
+                            ))
                             .child(
                                 div()
                                     .flex_1()

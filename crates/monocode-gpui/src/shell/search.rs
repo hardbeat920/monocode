@@ -84,12 +84,14 @@ impl Shell {
                     .w_full()
                     .min_w_0()
                     .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
-                    .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
-                    .gap(px(6.))
+                    .when(width < NARROW_TAB, |d| {
+                        d.px(px(((width - TAB_TILE.w) / 2.).max(0.)))
+                    })
+                    .gap(px(TAB_TILE_GAP))
                     .group_hover("search-title-tab", |s| {
                         s.text_color(content(1.)).bg(title_tab_fill(active, true))
                     })
-                    .child(icon("search", 14.))
+                    .child(mark_tile(&TAB_TILE, Face::Glass, icon("search", 14.)))
                     .child(
                         div()
                             .min_w_0()

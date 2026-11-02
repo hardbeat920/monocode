@@ -65,6 +65,7 @@ use crate::{
     right_panel::{PanelEvent, RightPanel},
     runtime::{Database, locked},
     session_mark::{SessionMark, State as MarkState},
+    tab_tile::{Face, NARROW_TAB, TAB_TILE, TAB_TILE_GAP, mark_tile},
     terminal::{Terminal, TerminalEvent},
     theme::*,
     usage_footer::UsageFooter,
@@ -555,6 +556,8 @@ struct PaneTick {
     start: std::time::Instant,
 }
 const PANE_TICK_DURATION: f32 = 0.24;
+/// The tab tiles' deck shuffle on the same focus change.
+const TILE_SHUFFLE_DURATION: f32 = 0.34;
 /// useAnimatedReorder: `--motion-reorder-duration` with `--motion-ease-out`.
 const REORDER_DURATION: f32 = 0.16;
 /// A tab easing from one horizontal offset to another.
@@ -7164,7 +7167,6 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(self.pane_mark(&pane.mark, active))
                 .child(
                     div()
                         .flex_1()
@@ -7192,10 +7194,17 @@ impl Shell {
     }
     /// Where tab `tab`'s headline is in its roll to the focused pane: the
     /// pane leaving, its direction, and the eased progress.
-    fn pane_tick(&mut self, tab: i64, copy: &TabCopy, animate: bool) -> (Option<usize>, f32, f32) {
+    /// Also the tiles' shuffle, linear: it runs longer than the title's
+    /// roll so the card being put back can be seen lifting over the stack.
+    fn pane_tick(
+        &mut self,
+        tab: i64,
+        copy: &TabCopy,
+        animate: bool,
+    ) -> ((Option<usize>, f32, f32), f32) {
         let Some(shown) = copy.panes.get(copy.focus).map(|p| p.key) else {
             self.pane_ticks.remove(&tab);
-            return (None, 0., 1.);
+            return ((None, 0., 1.), 1.);
         };
         let now = std::time::Instant::now();
         let position = |key: (i64, bool)| copy.panes.iter().position(|p| p.key == key);
@@ -7219,13 +7228,79 @@ impl Shell {
         if !animate {
             tick.from = None;
         }
-        let t = now.saturating_duration_since(tick.start).as_secs_f32() / PANE_TICK_DURATION;
-        let from = tick.from.and_then(position).filter(|_| t < 1.);
+        let elapsed = now.saturating_duration_since(tick.start).as_secs_f32();
+        let t = (elapsed / PANE_TICK_DURATION).min(1.);
+        let shuffle = elapsed / TILE_SHUFFLE_DURATION;
+        let from = tick.from.and_then(position).filter(|_| shuffle < 1.);
         if from.is_none() {
             tick.from = None;
-            return (None, 0., 1.);
+            return ((None, 0., 1.), 1.);
         }
-        (from, tick.dir, crate::reveal::bezier(t, 0.22, 1., 0.36, 1.))
+        (
+            (from, tick.dir, crate::reveal::bezier(t, 0.22, 1., 0.36, 1.)),
+            shuffle,
+        )
+    }
+    /// The focused pane's mark on a frosted tile, with the tab's other panes
+    /// tucked behind it.
+    /// `leaving` is the pane that had focus while `shuffle` (linear) runs
+    /// the deck shuffle that deals the focused pane's tile to the front.
+    fn pane_tile_stack(&self, copy: &TabCopy, leaving: Option<usize>, shuffle: f32) -> AnyElement {
+        // The focused pane in front, the rest behind in layout order.
+        let depths = |focus: usize| {
+            let mut depth = vec![0; copy.panes.len()];
+            for (d, ix) in std::iter::once(focus)
+                .chain((0..copy.panes.len()).filter(|ix| *ix != focus))
+                .enumerate()
+            {
+                depth[ix] = d;
+            }
+            depth
+        };
+        let to = depths(copy.focus);
+        let from = leaving.map(depths).unwrap_or_else(|| to.clone());
+        let tiles = copy
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(ix, pane)| {
+                // Only the front tile borrows a lit session's live mark: the
+                // view can draw in one place at a time.
+                let (face, mark) = self.pane_tile(&pane.mark, to[ix] == 0);
+                crate::tab_tile::StackTile {
+                    face,
+                    mark,
+                    from: from[ix],
+                    to: to[ix],
+                }
+            })
+            .collect();
+        crate::tab_tile::tile_stack(
+            &TAB_TILE,
+            tiles,
+            if leaving.is_some() { shuffle } else { 1. },
+        )
+        .debug_selector(|| "title-tab-tile-stack".into())
+        .into_any_element()
+    }
+    /// A pane's tile: a session on its provider's colour with a white mark,
+    /// or, while it works or waits to be seen, its live mark on glass; files
+    /// and Monos on glass.
+    fn pane_tile(&self, mark: &PaneMark, live: bool) -> (Face, AnyElement) {
+        match mark {
+            PaneMark::Session(provider, lit) => {
+                match lit.filter(|_| live).and_then(|id| self.tab_marks.get(&id)) {
+                    Some(view) => (
+                        Face::Glass,
+                        view.clone()
+                            .cached(StyleRefinement::default().size(px(14.)))
+                            .into_any_element(),
+                    ),
+                    None => (Face::provider(provider), provider_glyph(provider, 14.)),
+                }
+            }
+            mark => (Face::Glass, self.pane_mark(mark, true)),
+        }
     }
     /// The dragged session's title, following the pointer.
     fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
@@ -7554,9 +7629,8 @@ impl Shell {
         let count = tabs.len();
         let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
         let reduced = cx.reduce_motion();
-        let animate = self.workspace.preferences.tab_animations
-            && !reduced
-            && !self.tab_drag.as_ref().is_some_and(|d| d.active);
+        let pane_motion = !reduced && !self.tab_drag.as_ref().is_some_and(|d| d.active);
+        let animate = self.workspace.preferences.tab_animations && pane_motion;
         let (slots, opening) = self.title_tab_motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
             animate,
@@ -7699,12 +7773,15 @@ impl Shell {
                 .contains_key(&self.workspace.session_for_pane(id))
             {
                 let copy = self.tab_copy(id, cx);
+                // Moving focus inside a tab rolls its title and shuffles its
+                // tiles whatever the open/close Tab animations setting says;
+                // only Reduce Motion or a drag holds them still.
                 let tick = self.pane_tick(
                     id,
                     &copy,
-                    animate && !selection_changed && selected == Some(TitleTab::Session(id)),
+                    pane_motion && !selection_changed && selected == Some(TitleTab::Session(id)),
                 );
-                moving |= tick.0.is_some();
+                moving |= tick.0.0.is_some();
                 copies.insert(id, (copy, tick));
             }
         }
@@ -7719,7 +7796,7 @@ impl Shell {
                 })
             })
             .filter_map(|(ix, id)| {
-                let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
+                let (copy, ((leaving, dir, progress), shuffle)) = copies.remove(&id)?;
                 let active = self.workspace.active_tab() == Some(id)
                     && !self.app_view_open()
                     && !self.mono_active(cx)
@@ -7767,11 +7844,14 @@ impl Shell {
                                 |d| d.pr_7(),
                             )
                             // Too narrow for the plate's padding: the mark sits centred.
-                            .when(tab_width(&TitleTab::Session(id)) < 30., |d| {
-                                d.px(px(((tab_width(&TitleTab::Session(id)) - 14.) / 2.).max(0.)))
+                            .when(tab_width(&TitleTab::Session(id)) < NARROW_TAB, |d| {
+                                d.px(px(
+                                    ((tab_width(&TitleTab::Session(id)) - TAB_TILE.w) / 2.).max(0.)
+                                ))
                             })
-                            .gap(px(6.))
+                            .gap(px(TAB_TILE_GAP))
                             .group_hover("title-tab", |s| s.bg(title_tab_fill(active, true)))
+                            .child(self.pane_tile_stack(&copy, leaving, shuffle))
                             .child(self.pane_headline(
                                 &copy,
                                 (leaving, dir, progress),
@@ -7994,8 +8074,13 @@ impl Shell {
                         })
                         .map(|id| {
                             let copy = self.tab_copy(id, cx);
-                            self.pane_headline(&copy, (None, 0., 1.), false, false)
-                        });
+                            [
+                                self.pane_tile_stack(&copy, None, 1.),
+                                self.pane_headline(&copy, (None, 0., 1.), false, false),
+                            ]
+                        })
+                        .into_iter()
+                        .flatten();
                     Some(
                         slot(&key, open)
                             .child(
@@ -8008,7 +8093,7 @@ impl Shell {
                                         title_tab_plate(false, false)
                                             .w_full()
                                             .min_w_0()
-                                            .gap(px(6.))
+                                            .gap(px(TAB_TILE_GAP))
                                             .children(headline),
                                     ),
                             )

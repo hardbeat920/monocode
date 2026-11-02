@@ -808,8 +808,20 @@ impl Shell {
                     .clone()
                     .cached(StyleRefinement::default().flex_1().min_w_0().h(px(height))),
             )
-            .children(self.pressure_chip(cx))
-            .children(self.terminal_footer(cx))
+            .map(|d| {
+                let pressure = self.pressure_chip(cx);
+                let terminal = self.terminal_footer(cx);
+                let between = pressure.is_some() && terminal.is_some();
+                d.children(pressure)
+                    .when(between, |d| {
+                        d.child(
+                            super::terminal_dock::footer_separator()
+                                .mr(px(super::terminal_dock::FOOTER_GAP + 3.))
+                                .when(!self.workspace.boxy_layout(), |d| d.mb(px(2.))),
+                        )
+                    })
+                    .children(terminal)
+            })
     }
     /// ResourcePressureNotice's chip, just before the terminal controls.
     fn pressure_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

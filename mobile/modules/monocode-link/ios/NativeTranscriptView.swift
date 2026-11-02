@@ -901,7 +901,8 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
         y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: bounds.width,
         height: model.height)
       row.configure(
-        model, layout: prepared, animate: animate && index >= answer,
+        // A Mono's reply lands whole as a bubble, so it isn't written in word by word.
+        model, layout: prepared, animate: animate && index >= answer && style.agent.isEmpty,
         horizontalWidth: model.group.flatMap { frame.groupWidths[$0] } ?? 0,
         horizontalOffset: model.group.flatMap { horizontalOffsets[$0] } ?? 0)
       row.cadence = cadence

@@ -1505,11 +1505,15 @@ impl Monos {
                         .w_full()
                         .min_w_0()
                         .pr_7()
-                        .gap(px(6.))
+                        .gap(px(crate::tab_tile::TAB_TILE_GAP))
                         .group_hover(group.clone(), move |s| {
                             s.opacity(1.).bg(title_tab_fill(active, true))
                         })
-                        .child(avatar::avatar(&mono.mascot, mono.color, "idle", 16., true))
+                        .child(crate::tab_tile::mark_tile(
+                            &crate::tab_tile::TAB_TILE,
+                            crate::tab_tile::Face::Glass,
+                            avatar::avatar(&mono.mascot, mono.color, "idle", 14., true),
+                        ))
                         .child(
                             div()
                                 .flex_1()

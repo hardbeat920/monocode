@@ -309,11 +309,26 @@ pub(crate) fn rail_branch(last: bool, branch: bool) -> impl IntoElement {
 /// The same rail for a step whose content sits `offset` lower, as the
 /// sidebar's `.orchestration-tree-step` does with its 2px padding.
 pub(crate) fn rail_branch_at(last: bool, branch: bool, offset: f32) -> impl IntoElement {
+    rail_from(6., last, branch, offset)
+}
+/// The rail under a work phase's tile, dropping from the tile's centre.
+pub(crate) fn tile_rail(last: bool) -> impl IntoElement {
+    rail_from(
+        // The line's 1px sits just left of centre, so it reads as centred.
+        (crate::tab_tile::ACTIVITY_TILE.w / 2.).floor() - 1.,
+        last,
+        true,
+        0.,
+    )
+}
+/// Children a [`tile_rail`] branches to start past its elbow.
+pub(crate) const TILE_RAIL_INDENT: f32 = 24.;
+fn rail_from(left: f32, last: bool, branch: bool, offset: f32) -> impl IntoElement {
     let color = crate::theme::rail_color();
     gpui::div()
         .absolute()
         .top_0()
-        .left(gpui::px(6.))
+        .left(gpui::px(left))
         .w(gpui::px(9.))
         .h_full()
         .child(

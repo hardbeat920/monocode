@@ -73,6 +73,7 @@ mod review;
 mod right_panel;
 mod runtime;
 mod search;
+mod send_morph;
 mod session_mark;
 mod session_review;
 mod settings;
@@ -81,6 +82,7 @@ mod sound;
 mod syntax;
 mod tab_label;
 mod tab_motion;
+mod tab_tile;
 mod terminal;
 mod theme;
 #[cfg(target_os = "macos")]
