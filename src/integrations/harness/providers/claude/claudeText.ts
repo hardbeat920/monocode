@@ -171,7 +171,8 @@ async function promptOnLive(input: {
   session.onEvent = input.onEvent;
   session.toolsByIndex = new Map();
   session.toolsById = new Map();
-  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeoutMs =
+    input.timeoutMs ?? (input.signal ? undefined : REQUEST_TIMEOUT_MS);
   let abortHandler: (() => void) | undefined;
   const abortPromise = input.signal
     ? new Promise<never>((_, reject) => {
@@ -201,16 +202,25 @@ async function promptOnLive(input: {
       ),
     );
 
-    await Promise.race([
-      turnPromise,
-      new Promise<void>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Claude text generation timed out")),
-          timeoutMs,
-        );
-      }),
-      ...(abortPromise ? [abortPromise] : []),
-    ]);
+    const racePromises: Promise<void>[] = [turnPromise];
+    if (abortPromise) racePromises.push(abortPromise);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (typeof timeoutMs === "number" && timeoutMs > 0) {
+      racePromises.push(
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Claude text generation timed out")),
+            timeoutMs,
+          );
+        }),
+      );
+    }
+
+    try {
+      await Promise.race(racePromises);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
 
     const output = session.output.trim();
     if (!output) throw new Error("Claude returned empty output.");
