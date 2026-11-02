@@ -6,6 +6,8 @@ import { BinaryFileView } from "./BinaryFileView";
 
 const actions = vi.hoisted(() => ({
   copyFileToClipboard: vi.fn(async () => {}),
+  copyText: vi.fn(async (_text: string) => {}),
+  revealPath: vi.fn(async (_path: string) => {}),
   openPathWithDefaultApp: vi.fn(async () => {}),
   readBinaryFile: vi.fn(
     async () =>
@@ -18,6 +20,14 @@ vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
   copyFileToClipboard: actions.copyFileToClipboard,
   openPathWithDefaultApp: actions.openPathWithDefaultApp,
   readBinaryFile: actions.readBinaryFile,
+  revealPath: actions.revealPath,
+}));
+
+vi.mock("../../../platform/tauri/clipboard", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../platform/tauri/clipboard")
+  >()),
+  copyText: actions.copyText,
 }));
 
 vi.mock("../model/fileWatch", () => ({
@@ -221,5 +231,98 @@ describe("BinaryFileView video playback", () => {
     )!;
     await act(async () => retry.click());
     expect(container.querySelector("video")).not.toBeNull();
+  });
+});
+
+describe("BinaryFileView missing file card", () => {
+  const missing = "/repo/shots/qa/full-page.jpg";
+
+  afterEach(() => {
+    actions.revealPath.mockImplementation(async () => {});
+  });
+
+  function readFails() {
+    actions.readBinaryFile.mockRejectedValueOnce(
+      new Error(`${missing}: No such file or directory (os error 2)`),
+    );
+  }
+
+  async function renderMissing() {
+    readFails();
+    await renderViewer(missing);
+    expect(container.textContent).toContain("Couldn’t open full-page.jpg");
+  }
+
+  function button(label: string) {
+    return [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === label,
+    )!;
+  }
+
+  function status() {
+    return container.querySelector('[role="status"]')!.textContent;
+  }
+
+  it("reveals the closest folder that still exists", async () => {
+    actions.revealPath.mockImplementation(async (path: string) => {
+      if (path !== "/repo/shots") throw "No such file or directory";
+    });
+    await renderMissing();
+
+    await act(async () => button("Reveal").click());
+
+    expect(actions.revealPath.mock.calls.map(([path]) => path)).toEqual([
+      missing,
+      "/repo/shots/qa",
+      "/repo/shots",
+    ]);
+    expect(status()).toBe(
+      "The file is no longer there. Revealed shots instead.",
+    );
+  });
+
+  it("says why Reveal failed instead of doing nothing", async () => {
+    actions.revealPath.mockRejectedValue("Could not reveal in Finder.");
+    await renderMissing();
+
+    await act(async () => button("Reveal").click());
+
+    expect(status()).toBe("Couldn’t reveal it: Could not reveal in Finder.");
+  });
+
+  it("does not climb remote paths", async () => {
+    actions.revealPath.mockRejectedValue("No such file or directory");
+    actions.readBinaryFile.mockRejectedValueOnce(new Error("gone"));
+    await renderViewer("remote://env/repo/shot.png");
+
+    await act(async () => button("Reveal").click());
+
+    expect(actions.revealPath).toHaveBeenCalledOnce();
+    expect(status()).toBe("Couldn’t reveal it: No such file or directory");
+  });
+
+  it("confirms a copied path and reports a failed copy", async () => {
+    await renderMissing();
+
+    await act(async () => button("Copy path").click());
+
+    expect(actions.copyText).toHaveBeenCalledWith(missing);
+    expect(button("Copied")).toBeDefined();
+
+    actions.copyText.mockRejectedValueOnce(new Error("copy failed"));
+    await act(async () => button("Copied").click());
+
+    expect(status()).toBe("Couldn’t copy the path: copy failed");
+  });
+
+  it("says when Retry still cannot read the file", async () => {
+    await renderMissing();
+    expect(status()).toBe("");
+
+    readFails();
+    await act(async () => button("Retry").click());
+
+    expect(actions.readBinaryFile).toHaveBeenCalledTimes(2);
+    expect(status()).toBe("Still couldn’t open it.");
   });
 });
