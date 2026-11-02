@@ -24,7 +24,10 @@ fn draw(cx: &mut gpui::VisualTestContext, state: &ListState) {
 fn pending_wheel_must_not_cancel_jump_to_bottom(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let state = ListState::new(50, ListAlignment::Bottom, px(10.)).measure_all();
-    state.scroll_to(ListOffset { item_ix: 20, offset_in_item: px(0.) });
+    state.scroll_to(ListOffset {
+        item_ix: 20,
+        offset_in_item: px(0.),
+    });
     draw(cx, &state);
     cx.simulate_event(ScrollWheelEvent {
         position: point(px(1.), px(1.)),
@@ -35,15 +38,23 @@ fn pending_wheel_must_not_cancel_jump_to_bottom(cx: &mut TestAppContext) {
     state.scroll_to_end();
     draw(cx, &state);
     std::thread::sleep(std::time::Duration::from_millis(5));
-    cx.update(|window, cx| { window.simulate_next_frame(cx); });
-    assert!(state.is_following_tail(), "old wheel input cancelled the jump to bottom");
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    assert!(
+        state.is_following_tail(),
+        "old wheel input cancelled the jump to bottom"
+    );
 }
 
 #[gpui::test]
 fn pending_wheel_must_not_survive_reset(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let state = ListState::new(50, ListAlignment::Top, px(10.)).measure_all();
-    state.scroll_to(ListOffset { item_ix: 20, offset_in_item: px(0.) });
+    state.scroll_to(ListOffset {
+        item_ix: 20,
+        offset_in_item: px(0.),
+    });
     draw(cx, &state);
     cx.simulate_event(ScrollWheelEvent {
         position: point(px(1.), px(1.)),
@@ -53,7 +64,9 @@ fn pending_wheel_must_not_survive_reset(cx: &mut TestAppContext) {
     state.reset(50);
     draw(cx, &state);
     std::thread::sleep(std::time::Duration::from_millis(5));
-    cx.update(|window, cx| { window.simulate_next_frame(cx); });
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
     assert_eq!(state.logical_scroll_top().offset_in_item, px(0.));
     assert_eq!(state.logical_scroll_top().item_ix, 0);
 }
@@ -70,7 +83,14 @@ fn wheel_glide_must_preserve_input_distance(cx: &mut TestAppContext) {
     });
     for _ in 0..35 {
         std::thread::sleep(std::time::Duration::from_millis(16));
-        cx.update(|window, cx| { window.simulate_next_frame(cx); });
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
     }
-    assert_eq!(state.logical_scroll_top().item_ix, 10);
+    let offset = state.logical_scroll_top();
+    let distance = px(20.) * offset.item_ix as f32 + offset.offset_in_item;
+    assert!(
+        (distance - px(200.)).abs() < px(0.01),
+        "expected 200px of wheel travel, got {distance:?} ({offset:?})"
+    );
 }

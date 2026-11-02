@@ -2166,7 +2166,9 @@ impl Monos {
         } else {
             chat.as_ref().and_then(|v| v.read(cx).mono_model())
         };
-        let entry = model.as_deref().and_then(|id| models.iter().find(|m| m.id == id));
+        let entry = model
+            .as_deref()
+            .and_then(|id| models.iter().find(|m| m.id == id));
         let entry = entry.or_else(|| {
             set.harness
                 .is_some()
@@ -2221,7 +2223,10 @@ impl Monos {
         let Some(mono) = self.current().cloned() else {
             return;
         };
-        let inherited = mono.subsessions.as_ref().is_none_or(|s| s.harness.is_none());
+        let inherited = mono
+            .subsessions
+            .as_ref()
+            .is_none_or(|s| s.harness.is_none());
         let choice = self.subsession_choice(&mono, cx);
         let project = self
             .chat()
@@ -2287,13 +2292,20 @@ impl Monos {
         };
         let choice = self.subsession_choice(&mono, cx);
         let effort = mono.subsessions.as_ref().and_then(|s| s.effort.clone());
-        let unset = if mono.subsessions.as_ref().is_none_or(|s| s.harness.is_none()) {
+        let unset = if mono
+            .subsessions
+            .as_ref()
+            .is_none_or(|s| s.harness.is_none())
+        {
             format!("Same as {}", mono.label())
         } else {
             "Model default".into()
         };
-        let mut items: Vec<MenuItem> =
-            vec![MenuAction::new("effort:", unset).checked(effort.is_none()).into()];
+        let mut items: Vec<MenuItem> = vec![
+            MenuAction::new("effort:", unset)
+                .checked(effort.is_none())
+                .into(),
+        ];
         items.extend(choice.efforts.iter().map(|(value, name)| {
             MenuAction::new(format!("effort:{value}"), name.clone())
                 .checked(effort.as_deref() == Some(value.as_str()))

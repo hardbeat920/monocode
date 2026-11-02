@@ -374,6 +374,7 @@ impl ListState {
             state.measuring_behavior.reset();
             state.logical_scroll_top = None;
             state.pending_scroll = None;
+            state.wheel_glide = None;
             state.scrollbar_drag_start_height = None;
             state.items.summary().count
         };
@@ -619,6 +620,7 @@ impl ListState {
         let state = &mut *self.0.borrow_mut();
         let item_count = state.items.summary().count;
         state.pending_scroll = None;
+        state.wheel_glide = None;
         state.logical_scroll_top = Some(ListOffset {
             item_ix: item_count,
             offset_in_item: px(0.),
@@ -637,6 +639,7 @@ impl ListState {
                 state.follow_state = FollowState::Normal;
             }
             FollowMode::Tail => {
+                state.wheel_glide = None;
                 state.follow_state = FollowState::Tail { is_following: true };
                 if matches!(mode, FollowMode::Tail) {
                     let item_count = state.items.summary().count;
@@ -1632,7 +1635,7 @@ impl Element for List {
                     if glide.remaining.signum() != distance.signum() {
                         glide.remaining = px(0.);
                     }
-                    glide.remaining = (glide.remaining + distance).clamp(-height, height);
+                    glide.remaining += distance;
                     glide.height = height;
                     drop(state);
                     if start {

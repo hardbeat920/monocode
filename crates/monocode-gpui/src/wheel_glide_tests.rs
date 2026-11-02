@@ -19,7 +19,8 @@ impl Render for Rows {
 #[gpui::test]
 fn wheel_notches_glide_and_trackpad_pixels_land_at_once(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
-    let state = ListState::new(50, ListAlignment::Top, px(10.));
+    // Know the full scroll range before asserting an exact pixel distance.
+    let state = ListState::new(50, ListAlignment::Top, px(10.)).measure_all();
     cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, cx| {
         cx.new(|_| Rows(state.clone())).into_any_element()
     });

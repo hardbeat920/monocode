@@ -65,8 +65,6 @@ mod pulse;
 mod questions;
 mod quick_composer;
 mod quick_open;
-#[cfg(test)]
-mod wheel_glide_tests;
 mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
@@ -90,6 +88,8 @@ mod traffic_lights;
 mod transcript;
 mod usage_footer;
 mod visuals;
+#[cfg(test)]
+mod wheel_glide_tests;
 mod window_state;
 mod workspace;
 mod worktree_switcher;

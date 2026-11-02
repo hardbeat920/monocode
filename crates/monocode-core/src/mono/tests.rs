@@ -230,7 +230,10 @@ fn subsessions_fill_only_a_start_that_names_no_model() {
         set.fill(&mut named);
         assert_eq!(named, before, "{chosen} is the agent's own choice");
     }
-    let effort_only = Subsessions { effort: Some("low".into()), ..Default::default() };
+    let effort_only = Subsessions {
+        effort: Some("low".into()),
+        ..Default::default()
+    };
     let mut input = serde_json::json!({"prompt": "x"});
     effort_only.fill(&mut input);
     assert_eq!(input, serde_json::json!({"prompt": "x", "effort": "low"}));
@@ -239,9 +242,15 @@ fn subsessions_fill_only_a_start_that_names_no_model() {
 #[test]
 fn subsessions_normalize_away_when_everything_is_inherited() {
     assert_eq!(Subsessions::default().normalized(), None);
-    let blank = Subsessions { harness: Some(" ".into()), ..Default::default() };
+    let blank = Subsessions {
+        harness: Some(" ".into()),
+        ..Default::default()
+    };
     assert_eq!(blank.normalized(), None);
     // A model without its provider can't be named.
-    let orphan = Subsessions { model: Some("opus".into()), ..Default::default() };
+    let orphan = Subsessions {
+        model: Some("opus".into()),
+        ..Default::default()
+    };
     assert_eq!(orphan.normalized(), None);
 }

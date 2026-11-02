@@ -468,8 +468,13 @@ mod capability_tests {
         assert_eq!(entry["args"], json!(["app-mcp"]));
         let mut codex = std::process::Command::new("codex");
         configure_codex(&mut codex, Some(&mono), &environment);
-        let args: Vec<_> = codex.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert!(args.contains(&r#"mcp_servers.monocode_app.default_tools_approval_mode="approve""#.to_string()));
+        let args: Vec<_> = codex
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(
+            &r#"mcp_servers.monocode_app.default_tools_approval_mode="approve""#.to_string()
+        ));
         let acp = acp_server(Some(&mono), &environment).unwrap();
         assert_eq!(acp["name"], MCP_SERVER);
         assert_eq!(acp["env"].as_array().unwrap().len(), 3);
@@ -482,7 +487,9 @@ mod capability_tests {
         assert_eq!(unknown["result"]["isError"], true);
         let missing = mcp_response(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"app","arguments":{}}})).unwrap();
         assert_eq!(missing["result"]["isError"], true);
-        assert!(mcp_response(json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+        assert!(
+            mcp_response(json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none()
+        );
     }
     #[test]
     fn capability_is_bound_to_its_session_and_only_authenticated_calls_reach_the_app() {

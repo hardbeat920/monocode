@@ -848,22 +848,33 @@ mod tests {
         assert!(!app_tool("mcp__other__app"));
         assert!(!app_tool("mcp__monocode_visual__visual_show"));
         assert_eq!(
-            app_cli_action(r#"'/Applications/Monocode.app/Contents/MacOS/monocode-gpui' app memory.add --json '{"fact":"x"}'"#),
+            app_cli_action(
+                r#"'/Applications/Monocode.app/Contents/MacOS/monocode-gpui' app memory.add --json '{"fact":"x"}'"#
+            ),
             Some("memory.add")
         );
         assert_eq!(app_cli_action("git log app memory.add"), None);
         assert_eq!(app_cli_action("monocode-gpui app help"), None);
 
-        let running = call("mcp__monocode_app__app", json!({"action":"sessions.start","input":{"prompt":"x"}}));
+        let running = call(
+            "mcp__monocode_app__app",
+            json!({"action":"sessions.start","input":{"prompt":"x"}}),
+        );
         let shown = running.presentation();
-        assert_eq!((shown.action.as_str(), shown.target.as_str()), ("Starting", "a session"));
+        assert_eq!(
+            (shown.action.as_str(), shown.target.as_str()),
+            ("Starting", "a session")
+        );
         let mut done = call(
             "Bash",
             json!({"command":"/opt/monocode-gpui app memory.add --json '{\"fact\":\"x\"}'"}),
         );
         done.state = ToolState::Completed;
         let shown = done.presentation();
-        assert_eq!((shown.action.as_str(), shown.target.as_str()), ("Remembered", "that"));
+        assert_eq!(
+            (shown.action.as_str(), shown.target.as_str()),
+            ("Remembered", "that")
+        );
     }
 
     #[test]
