@@ -14,7 +14,7 @@ import type { ModelPick, RuntimeMode } from "./types";
 
 /** What the model picker set for a session, or for a new one in a project. */
 type Picked = {
-  model: { pick: ModelPick; name: string } | null;
+  model: { pick: ModelPick; name: string; effort?: string } | null;
   access: RuntimeMode | null;
   accounts: Partial<Record<Harness, string>>;
 };
@@ -41,6 +41,26 @@ const set = (scope: string, next: Partial<Picked>) => {
   picks.set(scope, { ...(picks.get(scope) ?? NOTHING), ...next });
   listeners.forEach((listener) => listener());
 };
+
+/** A handoff's model is already configured on desktop before its screen opens. */
+export function rememberSessionModel(
+  desktop: string | undefined,
+  projectId: string,
+  sessionId: string,
+  pick: ModelPick,
+  name: string,
+  effort?: string,
+) {
+  const scope = choiceScope(desktop, projectId, sessionId);
+  const model = { pick, name, ...(effort ? { effort } : {}) };
+  set(scope, { model });
+  // Navigation can reject opening a project removed while the handoff was made.
+  return () => {
+    if (picks.get(scope)?.model !== model) return;
+    picks.delete(scope);
+    listeners.forEach((listener) => listener());
+  };
+}
 
 // A slider drag picks step after step; the desktop hears only where it stops.
 const applying = new Map<string, ReturnType<typeof setTimeout>>();
@@ -74,7 +94,7 @@ export function useSessionChoice(
   );
 
   // A new session starts on the phone's default model, if Providers set one.
-  const chosen = picked.model ?? (sessionId ? null : defaultModel);
+  const chosen: Picked["model"] = picked.model ?? (sessionId ? null : defaultModel);
   const access =
     picked.access ??
     (sessionId

@@ -11,8 +11,10 @@ import {
   View,
 } from "react-native";
 
-import { effortSetting, settingsFor } from "@/features/models/modelChoice";
-import type { CatalogModel, ModelCatalog } from "@/features/models/types";
+import { effortLabel, effortSetting, settingsFor } from "@/features/models/modelChoice";
+import { rememberSessionModel } from "@/features/models/sessionChoice";
+import type { CatalogModel, ModelCatalog, ModelPick } from "@/features/models/types";
+import { useConnection } from "@/features/connection/ConnectionProvider";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import type { Harness } from "@/features/workspace/types";
 import { Icon } from "@/ui/Icon";
@@ -39,6 +41,7 @@ export function HandoffProvider({
   const insets = useSafeAreaInsets();
   const styles = useStyles();
   const { listModels, handoffSession } = useWorkspace();
+  const desktop = useConnection().pairing?.desktop.fingerprint;
   const openSession = useOpenLaunchedSession();
   const [request, setRequest] = useState<{
     turnId: string;
@@ -50,7 +53,15 @@ export function HandoffProvider({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const pending = useRef(false);
-  const destination = useRef<string | null>(null);
+  const destination = useRef<{ sessionId: string; forget: () => void } | null>(null);
+  const openHandoff = (created: NonNullable<typeof destination.current>) => {
+    let opened = false;
+    try {
+      opened = openSession(projectId, created.sessionId, undefined, true);
+    } finally {
+      if (!opened) created.forget();
+    }
+  };
   const generation = useRef(0);
   const dismiss = () => {
     if (pending.current) return;
@@ -81,18 +92,21 @@ export function HandoffProvider({
     setSending(true);
     setError(null);
     try {
-      const result = await handoffSession(conversationId, request.turnId, {
+      const target: ModelPick = {
         harness: model.harness,
         model: model.id,
         modelSettings: {
           ...settingsFor(model),
           ...(setting && effort ? { [setting.id]: effort } : {}),
         },
-      });
+      };
+      const result = await handoffSession(conversationId, request.turnId, target);
+      const forget = rememberSessionModel(desktop, projectId, result.sessionId, target, model.name, effortLabel(model, target));
+      const created = { sessionId: result.sessionId, forget };
       setRequest(null);
       // iOS must finish dismissing this sheet before presenting the session.
-      if (Platform.OS === "ios") destination.current = result.sessionId;
-      else openSession(projectId, result.sessionId);
+      if (Platform.OS === "ios") destination.current = created;
+      else openHandoff(created);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -112,9 +126,9 @@ export function HandoffProvider({
         presentationStyle="pageSheet"
         onRequestClose={dismiss}
         onDismiss={() => {
-          const id = destination.current;
+          const created = destination.current;
           destination.current = null;
-          if (id) openSession(projectId, id);
+          if (created) openHandoff(created);
         }}
       >
         <View

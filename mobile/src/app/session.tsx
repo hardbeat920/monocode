@@ -10,11 +10,12 @@ import { useNativeHeaderHeight } from "@/ui/useNativeHeaderHeight";
 // session's own screen, presented over the chat as a native modal, as a file
 // opens (see the root layout).
 export default function SessionSheetRoute() {
-  const { projectId, sessionId, title } = useLocalSearchParams<{
+  const { projectId, sessionId, title, focusComposer } = useLocalSearchParams<{
     projectId: string;
     sessionId: string;
     /** The card's title, for a session the phone's list leaves out. */
     title?: string;
+    focusComposer?: string;
   }>();
   // A Mono can start one in any of the desktop's projects, picked for the
   // phone or not.
@@ -23,7 +24,7 @@ export default function SessionSheetRoute() {
   if (!project || !sessionId) return <Redirect href="/" />;
   return (
     <SessionFrame nativeHeaderHeight={headerHeight}>
-      <ProjectScreen project={project} sessionId={sessionId} sheet title={title} />
+      <ProjectScreen project={project} sessionId={sessionId} sheet title={title} focusComposer={focusComposer === "true"} />
     </SessionFrame>
   );
 }

@@ -88,12 +88,15 @@ export function Composer({
   workspace,
   notice,
   active = true,
+  autoFocus = false,
   compact = false,
   reply,
   onClearReply,
 }: {
   /** Only the visible route may focus its composer in response to folding. */
   active?: boolean;
+  /** Focus once when the owning route has finished opening. */
+  autoFocus?: boolean;
   /** Where this runs: the project, or the mono. */
   context: string;
   branch: string;
@@ -126,6 +129,12 @@ export function Composer({
   const offline = useOffline();
   const blocked = offline ? "offline" : notice ? "error" : null;
   const input = useRef<TextInput>(null);
+  const didAutoFocus = useRef(false);
+  useEffect(() => {
+    if (!autoFocus || !active || blocked || didAutoFocus.current) return;
+    didAutoFocus.current = true;
+    input.current?.focus();
+  }, [autoFocus, active, blocked]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);

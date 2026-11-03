@@ -204,11 +204,12 @@ let root: ReturnType<typeof createRoot>;
 const model = vi.fn();
 const send = vi.fn();
 const stop = vi.fn(async () => {});
-const render = (active = true) =>
+const render = (active = true, autoFocus = false) =>
   act(() =>
     root.render(
       <Composer
         active={active}
+        autoFocus={autoFocus}
         context="Project"
         branch="main"
         model="GPT"
@@ -333,4 +334,19 @@ it("focuses the existing draft on typing posture only for the active route", () 
   act(() => button("Enter typing posture").click());
   expect(document.activeElement).not.toBe(input);
   expect(input.value).toBe("Unsent draft");
+});
+
+
+it("focuses a handoff once after its route opens, without stealing focus on return", () => {
+  render(true, false);
+  const input = container.querySelector("textarea")!;
+  expect(document.activeElement).not.toBe(input);
+  render(false, true);
+  expect(document.activeElement).not.toBe(input);
+  render(true, true);
+  expect(document.activeElement).toBe(input);
+  act(() => input.blur());
+  render(false, true);
+  render(true, true);
+  expect(document.activeElement).not.toBe(input);
 });

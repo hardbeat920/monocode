@@ -22,19 +22,20 @@ import { ProviderLogo } from "./ProviderLogo";
 export function useOpenLaunchedSession() {
   const { allProjects: projects } = useWorkspace();
   return useCallback(
-    (projectId: string, sessionId: string, title?: string) => {
+    (projectId: string, sessionId: string, title?: string, focusComposer = false) => {
       const project = projectForRoute(projects, projectId);
       if (!project) {
         Alert.alert(
           "Open it on your desktop",
           "This session runs in a project the desktop no longer lists.",
         );
-        return;
+        return false;
       }
       router.push({
         pathname: "/session",
-        params: { projectId: project.id, sessionId, ...(title ? { title } : {}) },
+        params: { projectId: project.id, sessionId, ...(title ? { title } : {}), ...(focusComposer ? { focusComposer: "true" } : {}) },
       });
+      return true;
     },
     [projects],
   );

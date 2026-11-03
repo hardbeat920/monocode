@@ -1,3 +1,4 @@
+import type { ModelCatalog, ModelPick } from "@/features/models/types";
 import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,8 @@ import type { Workspace } from "@/features/workspace/WorkspaceMenu";
 import { GlassBlurTarget } from "@/ui/LiquidView";
 
 const desktop = vi.hoisted(() => ({
+  catalog: null as ModelCatalog | null,
+  chosen: null as { pick: ModelPick; name: string; effort?: string } | null,
   startSession: vi.fn(),
   sendMessage: vi.fn(),
   offline: false,
@@ -165,12 +168,13 @@ vi.mock("@/features/mascots/ProjectMascot", () => ({
 vi.mock("@/features/models/sessionChoice", () => ({
   useSessionChoice: (_project: Project, sessionId?: string) => ({
     session: sessionId ? { id: sessionId, branch: "main" } : undefined,
+    chosen: desktop.chosen,
     accounts: {},
   }),
   useForgetChoiceOnLeave: () => {},
 }));
 vi.mock("@/features/models/useModelCatalog", () => ({
-  useModelCatalog: () => ({}),
+  useModelCatalog: () => ({ catalog: desktop.catalog }),
 }));
 vi.mock("@/features/settings/newSessions", () => ({
   useOpenSessionAfterStarting: () => [false],
@@ -179,13 +183,21 @@ vi.mock("@/features/sessions/Composer", () => ({
   Composer: ({
     workspace,
     active,
+    model,
+    harness,
+    autoFocus,
+    effort,
     onSend,
   }: {
     workspace?: ReactNode;
     active?: boolean;
+    model?: string;
+    harness?: string;
+    autoFocus?: boolean;
+    effort?: string;
     onSend: (text: string, attachments: never[]) => Promise<void>;
   }) => (
-    <section data-composer data-active={String(active)}>
+    <section data-composer data-active={String(active)} data-model={model} data-effort={effort} data-harness={harness} data-auto-focus={String(autoFocus)}>
       {workspace}
       <button onClick={() => void onSend("Build the app", [])}>Send</button>
     </section>
@@ -204,6 +216,9 @@ vi.mock("@/features/sessions/LiveSessions", () => ({
 }));
 vi.mock("@/features/sessions/NativeTranscript", () => ({
   NativeTranscript: () => null,
+}));
+vi.mock("@/features/sessions/HandoffSheet", () => ({
+  HandoffProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("@/features/sessions/Markdown", () => ({ FileOpener: () => null }));
 vi.mock("@/features/sessions/activityStore", () => ({
@@ -367,9 +382,9 @@ const project: Project = {
 describe("new session composer workspace", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
-  const render = (sessionId?: string) =>
+  const render = (sessionId?: string, focusComposer = false) =>
     act(() =>
-      root.render(<ProjectScreen project={project} sessionId={sessionId} />),
+      root.render(<ProjectScreen project={project} sessionId={sessionId} focusComposer={focusComposer} />),
     );
   const button = (label: string) => {
     const found = Array.from(container.querySelectorAll("button")).find(
@@ -387,6 +402,8 @@ describe("new session composer workspace", () => {
       await Promise.resolve();
     });
   beforeEach(() => {
+    desktop.catalog = null;
+    desktop.chosen = null;
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
@@ -400,6 +417,30 @@ describe("new session composer workspace", () => {
     root = createRoot(container);
   });
   afterEach(() => act(() => root.unmount()));
+
+  it("shows the remembered handoff effort while its catalog is still loading", () => {
+    desktop.chosen = { name: "Grok 4.7", effort: "Low", pick: { harness: "grok", model: "grok", modelSettings: { effort: "low" } } };
+    render("handoff-draft", true);
+    const composer = container.querySelector("[data-composer]")!;
+    expect(composer.getAttribute("data-model")).toBe("Grok 4.7");
+    expect(composer.getAttribute("data-effort")).toBe("Low");
+  });
+
+  it("uses the draft session's catalog model before it appears in the session list", () => {
+    desktop.catalog = {
+      harnesses: [{ id: "grok", label: "Grok" }],
+      models: [{ id: "grok-4.7", harness: "grok", name: "Grok 4.7", settings: [] }],
+      runtimeModes: [],
+      current: { harness: "grok", model: "grok-4.7", modelSettings: {}, runtimeMode: "supervised" },
+    };
+    render("handoff-draft", true);
+    const composer = container.querySelector("[data-composer]")!;
+    expect(composer.getAttribute("data-model")).toBe("Grok 4.7");
+    expect(composer.getAttribute("data-harness")).toBe("grok");
+    expect(composer.getAttribute("data-auto-focus")).toBe("true");
+    render("handoff-draft");
+    expect(container.querySelector("[data-composer]")!.getAttribute("data-auto-focus")).toBe("false");
+  });
 
   const usageLimit: UsageLimitState = { token: "paused", canResume: true, canAutoResume: false, resumeAtReset: false,
     resetLabel: "Reset time unknown", limitation: "Keep desktop running" };
