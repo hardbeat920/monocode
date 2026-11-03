@@ -2,6 +2,7 @@
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getHarnessUpdateSnapshot } from "../model/harnessUpdateActions";
 import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
 
 let claimed = false;
@@ -18,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("../../../integrations/harness/core/availability", () => ({
   probeHarnessAvailability: vi.fn(async () => undefined),
-  isHarnessAvailable: (id: string) => id === "claude",
+  isHarnessAvailable: (id: string) => id === "claude" || id === "codex",
 }));
 let installed = "2.1.284 (Claude Code)";
 vi.mock("../../../integrations/harness/core/child", () => ({
@@ -31,7 +32,7 @@ vi.mock("../../../integrations/harness/core/child", () => ({
   }),
 }));
 vi.mock("../../sessions/model/models", () => ({
-  isPickerProviderVisible: () => true,
+  isPickerProviderVisible: (id: string) => id !== "codex",
 }));
 const refreshHarnessCatalogs = vi.fn(async () => undefined);
 vi.mock("../../../integrations/harness/core/registry", () => ({
@@ -76,6 +77,11 @@ describe("HarnessUpdateNotice", () => {
     );
     expect(notice?.textContent).toContain("Claude Code");
     expect(notice?.textContent).toContain("2.1.284 → 2.1.285");
+    // Hidden from the picker, so left out of the toast but kept for Settings.
+    expect(notice?.textContent).not.toContain("Codex");
+    expect(
+      getHarnessUpdateSnapshot().checks?.map((check) => check.harness),
+    ).toEqual(["claude", "codex"]);
 
     const update = Array.from(notice!.querySelectorAll("button")).find(
       (button) => button.textContent === "Update",
@@ -85,6 +91,11 @@ describe("HarnessUpdateNotice", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(notice?.textContent).toContain("Updated to 2.1.285");
+    expect(getHarnessUpdateSnapshot().checks?.[0]).toMatchObject({
+      harness: "claude",
+      status: "current",
+      installed: "2.1.285",
+    });
     expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["claude"], {
       force: true,
     });
