@@ -691,7 +691,9 @@ export function SessionFrame({
             {/* Measure inside the native screen: Duo's navigation controls
                 change its safe area without changing the window's insets.
                 Keep the provider full-height and outside the keyboard lift. */}
-            <SafeAreaProvider pointerEvents="box-none" style={styles.composerDock}>
+            {/* The web provider drops the pointerEvents prop, so pass it in
+                style too to keep transcript clicks and scrolling reachable. */}
+            <SafeAreaProvider pointerEvents="box-none" style={[styles.composerDock, { pointerEvents: "box-none" }]}>
               <Animated.View
                 pointerEvents="box-none"
                 style={[
