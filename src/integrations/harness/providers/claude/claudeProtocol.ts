@@ -193,10 +193,11 @@ export function buildClaudeUserMessage(input: {
   text: string;
   attachments?: Attachment[];
   effort?: string | null;
+  command?: boolean;
 }): Record<string, unknown> {
   const text = applyClaudePromptEffortPrefix(
     promptText(input.text, input.attachments ?? []),
-    input.effort,
+    input.command ? null : input.effort,
   );
   const content: Array<Record<string, unknown>> = [];
   if (text) content.push({ type: "text", text });
