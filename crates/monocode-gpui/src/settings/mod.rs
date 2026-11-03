@@ -710,200 +710,185 @@ impl SettingsView {
                 cx.notify();
             });
         }
-                        div()
-                            .id("settings-search")
-                            .debug_selector(|| "settings-search".into())
-                            .relative()
+        div()
+            .id("settings-search")
+            .debug_selector(|| "settings-search".into())
+            .relative()
+            .flex_shrink_0()
+            .when(in_nav, |d| d.w_full())
+            .child(self.search_anchor.probe())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(content(0.1))
+                    .px_2()
+                    // In the nav it lines up with its rows; the
+                    // border takes one pixel of their inset.
+                    .map(|d| {
+                        if in_nav {
+                            d.w_full().h(px(30.)).pl(px(7.))
+                        } else {
+                            d.w(px(192.)).h(px(28.))
+                        }
+                    })
+                    .child(
+                        icon("search-01", if in_nav { 16. } else { 14. })
                             .flex_shrink_0()
-                            .when(in_nav, |d| d.w_full())
-                            .child(self.search_anchor.probe())
-                            .child(
+                            .text_color(content(0.45)),
+                    )
+                    .child(div().min_w_0().flex_1().child(self.search.clone()))
+                    .when(!self.search_query.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("clear-settings-search")
+                                .role(Role::Button)
+                                .aria_label("Clear settings search")
+                                .size_4()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .child(icon("x", 12.).text_color(content(0.45)))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.search
+                                        .update(cx, |i, cx| i.set_text(String::new(), cx));
+                                    this.search_query.clear();
+                                    window.focus(&this.search.focus_handle(cx), cx);
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            // The field binds up/down to its own cursor
+            // actions, which run before key listeners, so
+            // the results take them first.
+            .capture_action(cx.listener(|this, _: &input::Up, _, cx| {
+                if this.step_search(-1, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &input::Down, _, cx| {
+                if this.step_search(1, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if this.search_query.trim().is_empty() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "down" => {
+                        this.step_search(1, cx);
+                    }
+                    "up" => {
+                        this.step_search(-1, cx);
+                    }
+                    "escape" => {
+                        this.search_query.clear();
+                        this.search
+                            .update(cx, |i, cx| i.set_text(String::new(), cx));
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .when(open, |d| {
+                let active = self.search_active;
+                d.child(
+                    popover(
+                        "settings-search-results",
+                        Anchor::Slot(self.search_anchor.clone()),
+                    )
+                    .side(Side::Bottom)
+                    .align(if in_nav { Align::Start } else { Align::End })
+                    .width(300.)
+                    .max_height(320.)
+                    .padding(4.)
+                    .on_dismiss(move |_, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            this.search_query.clear();
+                            this.search
+                                .update(cx, |i, cx| i.set_text(String::new(), cx));
+                            cx.notify();
+                        });
+                    })
+                    .child(
+                        div()
+                            .id("settings-search-list")
+                            .role(Role::ListBox)
+                            .aria_label("Settings search results")
+                            .flex()
+                            .flex_col()
+                            .when(results.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .px_2()
+                                        .py(px(6.))
+                                        .text_size(px(12.))
+                                        .line_height(px(16.))
+                                        .text_color(content(0.45))
+                                        .child("No matching settings"),
+                                )
+                            })
+                            .children(results.into_iter().enumerate().map(|(ix, result)| {
+                                let tag = if result.setting.is_some() {
+                                    result.section.label()
+                                } else {
+                                    "Page"
+                                };
+                                let label = result.label;
                                 div()
+                                    .id(("settings-result", ix))
+                                    .debug_selector(move || format!("settings-result-{ix}"))
+                                    .role(Role::ListBoxOption)
+                                    .aria_label(label)
+                                    .aria_selected(ix == active)
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(content(0.1))
+                                    .rounded_lg()
                                     .px_2()
-                                    // In the nav it lines up with its rows; the
-                                    // border takes one pixel of their inset.
+                                    .py(px(6.))
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(content(1.))
+                                    .cursor_pointer()
                                     .map(|d| {
-                                        if in_nav {
-                                            d.w_full().h(px(30.)).pl(px(7.))
+                                        if ix == active {
+                                            d.bg(content(0.1))
                                         } else {
-                                            d.w(px(192.)).h(px(28.))
+                                            d.hover(|s| s.bg(content(0.05)))
                                         }
                                     })
-                                    .child(
-                                        icon("search-01", if in_nav { 16. } else { 14. })
-                                            .flex_shrink_0()
-                                            .text_color(content(0.45)),
-                                    )
-                                    .child(div().min_w_0().flex_1().child(self.search.clone()))
-                                    .when(!self.search_query.is_empty(), |d| {
-                                        d.child(
-                                            div()
-                                                .id("clear-settings-search")
-                                                .role(Role::Button)
-                                                .aria_label("Clear settings search")
-                                                .size_4()
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .child(icon("x", 12.).text_color(content(0.45)))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.search.update(cx, |i, cx| {
-                                                        i.set_text(String::new(), cx)
-                                                    });
-                                                    this.search_query.clear();
-                                                    window.focus(&this.search.focus_handle(cx), cx);
-                                                    cx.notify();
-                                                })),
-                                        )
-                                    }),
-                            )
-                            // The field binds up/down to its own cursor
-                            // actions, which run before key listeners, so
-                            // the results take them first.
-                            .capture_action(cx.listener(|this, _: &input::Up, _, cx| {
-                                if this.step_search(-1, cx) {
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .capture_action(cx.listener(|this, _: &input::Down, _, cx| {
-                                if this.step_search(1, cx) {
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if this.search_query.trim().is_empty() {
-                                    return;
-                                }
-                                match event.keystroke.key.as_str() {
-                                    "down" => {
-                                        this.step_search(1, cx);
-                                    }
-                                    "up" => {
-                                        this.step_search(-1, cx);
-                                    }
-                                    "escape" => {
-                                        this.search_query.clear();
-                                        this.search
-                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                    }
-                                    _ => return,
-                                }
-                                cx.stop_propagation();
-                                cx.notify();
-                            }))
-                            .when(open, |d| {
-                                let active = self.search_active;
-                                d.child(
-                                    popover(
-                                        "settings-search-results",
-                                        Anchor::Slot(self.search_anchor.clone()),
-                                    )
-                                    .side(Side::Bottom)
-                                    .align(if in_nav { Align::Start } else { Align::End })
-                                    .width(300.)
-                                    .max_height(320.)
-                                    .padding(4.)
-                                    .on_dismiss(move |_, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.search_query.clear();
-                                            this.search
-                                                .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                            cx.notify();
-                                        });
-                                    })
+                                    .child(div().min_w_0().flex_1().truncate().child(label))
                                     .child(
                                         div()
-                                            .id("settings-search-list")
-                                            .role(Role::ListBox)
-                                            .aria_label("Settings search results")
-                                            .flex()
-                                            .flex_col()
-                                            .when(results.is_empty(), |d| {
-                                                d.child(
-                                                    div()
-                                                        .px_2()
-                                                        .py(px(6.))
-                                                        .text_size(px(12.))
-                                                        .line_height(px(16.))
-                                                        .text_color(content(0.45))
-                                                        .child("No matching settings"),
-                                                )
-                                            })
-                                            .children(results.into_iter().enumerate().map(
-                                                |(ix, result)| {
-                                                    let tag = if result.setting.is_some() {
-                                                        result.section.label()
-                                                    } else {
-                                                        "Page"
-                                                    };
-                                                    let label = result.label;
-                                                    div()
-                                                        .id(("settings-result", ix))
-                                                        .debug_selector(move || {
-                                                            format!("settings-result-{ix}")
-                                                        })
-                                                        .role(Role::ListBoxOption)
-                                                        .aria_label(label)
-                                                        .aria_selected(ix == active)
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .rounded_lg()
-                                                        .px_2()
-                                                        .py(px(6.))
-                                                        .text_size(px(12.))
-                                                        .line_height(px(16.))
-                                                        .text_color(content(1.))
-                                                        .cursor_pointer()
-                                                        .map(|d| {
-                                                            if ix == active {
-                                                                d.bg(content(0.1))
-                                                            } else {
-                                                                d.hover(|s| s.bg(content(0.05)))
-                                                            }
-                                                        })
-                                                        .child(
-                                                            div()
-                                                                .min_w_0()
-                                                                .flex_1()
-                                                                .truncate()
-                                                                .child(label),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_shrink_0()
-                                                                .text_size(px(11.))
-                                                                .text_color(content(0.4))
-                                                                .child(tag),
-                                                        )
-                                                        .on_mouse_move(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                if this.search_active != ix {
-                                                                    this.search_active = ix;
-                                                                    cx.notify();
-                                                                }
-                                                            },
-                                                        ))
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                this.go(result.clone(), cx)
-                                                            },
-                                                        ))
-                                                },
-                                            )),
-                                    ),
-                                )
-                            })
-                            .into_any_element()
+                                            .flex_shrink_0()
+                                            .text_size(px(11.))
+                                            .text_color(content(0.4))
+                                            .child(tag),
+                                    )
+                                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                        if this.search_active != ix {
+                                            this.search_active = ix;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.go(result.clone(), cx)
+                                    }))
+                            })),
+                    ),
+                )
+            })
+            .into_any_element()
     }
 }
 

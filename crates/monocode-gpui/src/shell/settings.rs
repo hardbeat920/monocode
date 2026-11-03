@@ -657,7 +657,9 @@ mod tests {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (window, _, _) = window(cx);
         window
-            .update(cx, |shell, w, cx| shell.open_settings(Section::General, w, cx))
+            .update(cx, |shell, w, cx| {
+                shell.open_settings(Section::General, w, cx)
+            })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
@@ -673,7 +675,10 @@ mod tests {
         visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
-                assert_eq!(shell.settings.as_ref().unwrap().read(cx).search_state().1, 1)
+                assert_eq!(
+                    shell.settings.as_ref().unwrap().read(cx).search_state().1,
+                    1
+                )
             })
             .unwrap();
     }
@@ -764,7 +769,10 @@ mod tests {
         let general = visual.debug_bounds("settings-nav-general").unwrap();
         let header = visual.debug_bounds("settings-header").unwrap();
         assert!(back.bottom() <= search.top(), "Back heads the nav");
-        assert!(search.bottom() <= general.top(), "search sits above the pages");
+        assert!(
+            search.bottom() <= general.top(),
+            "search sits above the pages"
+        );
         assert!(search.right() <= header.left(), "search lives in the nav");
 
         let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
@@ -774,7 +782,10 @@ mod tests {
             .update(visual, |shell, _, _| {
                 assert!(shell.settings.is_some());
                 assert_eq!(shell.sidebar_fraction, 0.);
-                assert!(shell.workspace.sidebar_visible, "the project sidebar is untouched");
+                assert!(
+                    shell.workspace.sidebar_visible,
+                    "the project sidebar is untouched"
+                );
             })
             .unwrap();
         let search = visual.debug_bounds("settings-search").unwrap();
