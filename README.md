@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/monocode.png" alt="MonoCode" width="88" />
+  <img width="1680" height="1050" alt="Screenshot 2026-11-03 at 21 16 27" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
 </p>
 
 <h1 align="center">MonoCode</h1>
