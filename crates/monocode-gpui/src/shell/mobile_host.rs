@@ -2433,6 +2433,10 @@ fn older_page(
             if let Some(id) = id {
                 turn["id"] = json!(id);
             }
+            // Handoffs use the loaded transcript; archived page IDs cannot be resolved there.
+            if let Some(turn) = turn.as_object_mut() {
+                turn.remove("handoffFrom");
+            }
         }
         return Ok(json!({"turns": built, "older": start > 0 || page.before.is_some()}));
     }
