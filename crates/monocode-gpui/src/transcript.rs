@@ -3751,7 +3751,14 @@ impl TranscriptView {
                 parser,
                 markdown_blocks,
                 user_link,
-                under_line: has_work && final_answer == Some(at),
+                // Only a settled turn folds its work under the receipt line.
+                // While it streams, the newest reply is the answer so far but
+                // still follows open tool rows, so it keeps prose's 12px gap
+                // instead of jumping when the next tool or the end arrives.
+                under_line: has_work
+                    && final_answer == Some(at)
+                    && self.fold_work
+                    && !(self.streaming && turn_end == self.source.len()),
                 turn: if self.mono {
                     self.mono_group_start(turn)
                 } else {

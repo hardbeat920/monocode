@@ -962,6 +962,19 @@ impl Shell {
             }
             cx.notify();
         });
+        // A real change, such as a discard from the Changes panel: chats in
+        // this checkout reread their recorded changes, which drops reverted
+        // files from the changes pill and its card.
+        let git_changes = cx.subscribe(&git, |this, git, _: &crate::git_status::GitChanged, cx| {
+            let cwd = git.read(cx).root.clone();
+            for view in this.sessions.values() {
+                if view.read(cx).review.read(cx).session().1 == cwd {
+                    view.update(cx, |view, cx| {
+                        view.review.update(cx, |review, cx| review.refresh(cx))
+                    });
+                }
+            }
+        });
         let resources = cx.new(ResourceMonitor::new);
         let resource_observation = cx.observe(&resources, |_, _, cx| cx.notify());
         let resource_stops = cx.subscribe(&resources, |this, _, StopSession(id), cx| {
@@ -1168,6 +1181,7 @@ impl Shell {
             viewport_height: 800.,
             observations: vec![
                 git_observation,
+                git_changes,
                 resource_observation,
                 resource_stops,
                 classic_search_subscription,

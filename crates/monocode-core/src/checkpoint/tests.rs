@@ -126,6 +126,43 @@ fn pending_work_carries_into_later_turns_until_kept_undone_or_committed() {
 }
 
 #[test]
+fn files_discarded_outside_the_app_leave_the_review_for_good() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "agent\n");
+    f.write("new.txt", "created\n");
+    std::fs::remove_file(f.repo.join("delete.txt")).unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert_eq!(f.store.status("session", f.cwd()).unwrap().files.len(), 3);
+    // The Git panel's Discard: restore tracked files, remove the new one.
+    run_git(&f.repo, &["checkout", "--", "a.txt", "delete.txt"]).unwrap();
+    std::fs::remove_file(f.repo.join("new.txt")).unwrap();
+    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
+    // A later edit outside a turn does not bring the old diff back.
+    f.write("a.txt", "agent\n");
+    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
+}
+
+#[test]
+fn discarding_one_file_keeps_the_others_pending() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "agent\n");
+    f.write("b.txt", "agent b\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    run_git(&f.repo, &["checkout", "--", "a.txt"]).unwrap();
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .map(|f| f.relative.as_str())
+            .collect::<Vec<_>>(),
+        ["b.txt"]
+    );
+}
+
+#[test]
 fn kept_committed_and_untouched_files_start_each_turn_fresh() {
     let f = Fixture::new();
     f.store.begin_turn("session", f.cwd(), "first").unwrap();

@@ -528,7 +528,20 @@ impl Store {
             .ok()
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
         let recorded = changes(&root, turn)?;
-        let resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
+        let mut resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
+        // Discarded outside the app, as from the changes panel: the file is
+        // back to its contents before the session, so nothing is pending.
+        resolved.extend(
+            recorded
+                .iter()
+                .filter(|change| {
+                    !turn.dismissed.contains(&change.relative)
+                        && !resolved.contains(&change.relative)
+                        && reverted(&root, change)
+                })
+                .map(|change| change.relative.clone())
+                .collect::<Vec<_>>(),
+        );
         if !resolved.is_empty() {
             // Dismiss accepted work durably so later edits cannot resurrect
             // this turn's card. Its saved snapshots remain available to review.
@@ -1172,6 +1185,39 @@ fn git_paths(root: &Path, args: &[&str]) -> Result<HashSet<String>, String> {
         .collect()
 }
 
+/// The file is back to its recorded baseline: absent when the session
+/// created it, or a regular file with the earlier blob and mode.
+fn reverted(root: &Path, change: &Change) -> bool {
+    if path_contains_symlink(root, &change.relative) {
+        return false;
+    }
+    workspace_matches(root, &change.relative, change.before.as_ref())
+}
+
+fn workspace_matches(root: &Path, relative: &str, blob: Option<&Blob>) -> bool {
+    let path = root.join(relative);
+    match (blob, std::fs::symlink_metadata(&path)) {
+        (None, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
+        (Some(blob), Ok(meta)) if meta.is_file() => {
+            if !matches!(blob.mode.as_str(), "100644" | "100755") {
+                return false;
+            }
+            let mode = if file_mode(&path).is_some_and(|mode| mode & 0o111 != 0) {
+                "100755"
+            } else {
+                "100644"
+            };
+            mode == blob.mode
+                && run_git(
+                    root,
+                    &["hash-object", &format!("--path={relative}"), "--", relative],
+                )
+                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).trim() == blob.oid)
+        }
+        _ => false,
+    }
+}
+
 fn restorable(root: &Path, change: &Change) -> bool {
     if path_contains_symlink(root, &change.relative)
         || [change.before.as_ref(), change.after.as_ref()]
@@ -1181,29 +1227,7 @@ fn restorable(root: &Path, change: &Change) -> bool {
     {
         return false;
     }
-    let path = root.join(&change.relative);
-    match (&change.after, std::fs::symlink_metadata(&path)) {
-        (None, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
-        (Some(after), Ok(meta)) if meta.is_file() => {
-            let mode = if file_mode(&path).is_some_and(|mode| mode & 0o111 != 0) {
-                "100755"
-            } else {
-                "100644"
-            };
-            mode == after.mode
-                && run_git(
-                    root,
-                    &[
-                        "hash-object",
-                        &format!("--path={}", change.relative),
-                        "--",
-                        &change.relative,
-                    ],
-                )
-                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).trim() == after.oid)
-        }
-        _ => false,
-    }
+    workspace_matches(root, &change.relative, change.after.as_ref())
 }
 
 fn read_blob(root: &Path, blob: Option<&Blob>) -> Result<FileState, String> {
