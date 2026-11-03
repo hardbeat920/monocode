@@ -513,6 +513,81 @@ mod tests {
     use super::*;
 
     #[test]
+    fn body_collision_resets_the_player_but_entering_the_vacating_tail_is_safe() {
+        for tail_entry in [false, true] {
+            let mut game = Snake::new(vec![]);
+            let mut random = crate::random::Mulberry32::new(7);
+            game.resize(40, 20, &mut random);
+            game.take_control(&mut random);
+            game.body = [
+                Cell::new(5, 5),
+                Cell::new(4, 5),
+                Cell::new(4, 6),
+                Cell::new(5, 6),
+                Cell::new(6, 6),
+                Cell::new(6, 5),
+            ]
+            .into();
+            if !tail_entry {
+                game.body.push_back(Cell::new(7, 5));
+            }
+            game.sync_occupied();
+            game.pellet = Cell::new(30, 15);
+            game.score = 40;
+            game.steer(1, 0);
+
+            game.step(38., &mut random);
+            if tail_entry {
+                assert_eq!(game.body[0], Cell::new(6, 5));
+                assert_eq!(game.body.len(), 6);
+                assert_eq!(game.score(), 40);
+            } else {
+                assert_eq!(
+                    game.body,
+                    [Cell::new(10, 10), Cell::new(9, 10), Cell::new(8, 10)]
+                );
+                assert_eq!(game.score(), 0);
+                assert_eq!(game.grow, 0);
+            }
+            assert_eq!(game.dir, Cell::new(1, 0));
+            assert!(game.pending.is_none());
+            assert_eq!(game.occupied, game.body.iter().copied().collect());
+            assert!(!game.occupied.contains(&game.pellet));
+            assert!(game.controlled());
+        }
+    }
+
+    #[test]
+    fn turns_wait_for_the_next_tick_and_invalid_input_preserves_the_buffer() {
+        let mut game = Snake::new(vec![]);
+        let mut random = crate::random::Mulberry32::new(7);
+        game.resize(40, 20, &mut random);
+        game.take_control(&mut random);
+        game.steer(0, -1);
+        game.steer(-1, 0); // Reversal against the current direction is ignored.
+        game.steer(1, 1); // Diagonal input is ignored too.
+        assert_eq!(game.pending, Some(Cell::new(0, -1)));
+        game.step(37., &mut random);
+        assert_eq!(game.body[0], Cell::new(10, 10));
+        assert_eq!(game.dir, Cell::new(1, 0));
+        game.step(1., &mut random);
+        assert_eq!(game.body[0], Cell::new(10, 9));
+        assert_eq!(game.dir, Cell::new(0, -1));
+        assert!(game.pending.is_none());
+
+        game.steer(-1, 0);
+        game.steer(1, 0); // The latest valid turn wins; turns are not queued.
+        game.steer(0, 1); // Reversal must not replace that turn.
+        assert_eq!(game.pending, Some(Cell::new(1, 0)));
+        game.step(38., &mut random);
+        assert_eq!(game.body[0], Cell::new(11, 9));
+        assert_eq!(game.dir, Cell::new(1, 0));
+        assert!(game.pending.is_none());
+        game.step(38., &mut random);
+        assert_eq!(game.body[0], Cell::new(12, 9));
+    }
+
+    #[test]
     fn replacement_food_excludes_the_new_head_even_after_random_retries_run_out() {
         struct Candidates {
             head: Cell,

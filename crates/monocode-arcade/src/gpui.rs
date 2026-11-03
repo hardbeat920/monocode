@@ -297,12 +297,13 @@ impl Render for ArcadeView {
                         // grid). Reserve their ordering once, rather than run
                         // the scene's bounds-tree search for every tiny quad.
                         // Keep separate layers: the stamp overlays the grid.
+                        let (background_cols, background_rows) = background_grid_size(bounds);
                         window.paint_layer(bounds, |window| {
-                            for y in 0..frame.rows {
+                            for y in 0..background_rows {
                                 let alpha = 0.06 * frame.fade as f32 * opacity(y as f32 * CELL);
                                 if alpha > 0.005 {
                                     let ink = style.ink(alpha);
-                                    for x in 0..frame.cols {
+                                    for x in 0..background_cols {
                                         window.paint_quad(fill(cell_bounds(bounds, x, y), ink));
                                     }
                                 }
@@ -495,9 +496,14 @@ impl Render for ArcadeView {
 }
 
 fn grid_size(bounds: Bounds<gpui::Pixels>) -> (usize, usize) {
+    let (cols, rows) = background_grid_size(bounds);
+    (cols.clamp(7, 400), rows.clamp(5, 250))
+}
+fn background_grid_size(bounds: Bounds<gpui::Pixels>) -> (usize, usize) {
+    // Only the simulation is capped; the decoration covers the full view.
     (
-        (bounds.size.width.as_f32() / CELL).ceil().clamp(7., 400.) as usize,
-        (bounds.size.height.as_f32() / CELL).ceil().clamp(5., 250.) as usize,
+        (bounds.size.width.as_f32() / CELL).ceil() as usize,
+        (bounds.size.height.as_f32() / CELL).ceil() as usize,
     )
 }
 fn cell_bounds(bounds: Bounds<gpui::Pixels>, x: usize, y: usize) -> Bounds<gpui::Pixels> {
@@ -567,4 +573,28 @@ fn pacman_outline(sprite: &Sprite) -> [gpui::Point<gpui::Pixels>; 33] {
         let a = angle + mouth + (std::f32::consts::TAU - 2. * mouth) * i as f32 / 32.;
         point(px(a.cos() * radius), px(a.sin() * radius))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_covers_the_view_while_simulation_dimensions_stay_capped() {
+        for (width, height, background, simulation) in [
+            (1., 1., (1, 1), (7, 5)),
+            (700., 192., (100, 28), (100, 28)),
+            (2800., 1750., (400, 250), (400, 250)),
+            (2801., 1751., (401, 251), (400, 250)),
+            (3500., 2100., (500, 300), (400, 250)),
+        ] {
+            let bounds = Bounds::new(point(px(13.), px(17.)), size(px(width), px(height)));
+            assert_eq!(background_grid_size(bounds), background, "{width}x{height}");
+            assert_eq!(grid_size(bounds), simulation, "{width}x{height}");
+            let last = cell_bounds(bounds, background.0 - 1, background.1 - 1);
+            assert!(last.left() < bounds.right() && last.top() < bounds.bottom());
+            assert!(last.left() + px(CELL) >= bounds.right());
+            assert!(last.top() + px(CELL) >= bounds.bottom());
+        }
+    }
 }

@@ -1263,6 +1263,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ghost_collision_loses_one_life_then_respawns_or_ends_the_game() {
+        for lives in [3, 1] {
+            let mut game = Pacman::new(vec![]);
+            let mut random = crate::random::Mulberry32::new(7);
+            game.resize(80, 40, &mut random);
+            game.take_control(&mut random);
+            game.score = 70;
+            game.lives = lives;
+            game.ghosts.truncate(1);
+            game.ghosts[0].mover = game.pac;
+            game.ghosts[0].state = GhostState::Hunt;
+            let pellets = game.pellets.clone();
+
+            game.step(0., &mut random);
+            assert_eq!(game.status, Status::Dying);
+            assert_eq!(game.lives(), lives - 1);
+            assert!(!game.game_over());
+            game.step(1499., &mut random);
+            assert_eq!(game.status, Status::Dying);
+            assert_eq!(game.lives(), lives - 1);
+            game.step(1., &mut random);
+            assert_eq!(game.score(), 70);
+            assert_eq!(game.pellets, pellets);
+
+            if lives > 1 {
+                assert_eq!(game.status, Status::Run);
+                assert_eq!(
+                    (game.pac.tx, game.pac.ty),
+                    (game.pac_home.x, game.pac_home.y)
+                );
+                assert_eq!((game.pac.dx, game.pac.dy, game.pac.progress), (0, 0, 0.));
+                assert!(game.pending.is_none());
+                assert_eq!(game.ghosts.len(), 4);
+                assert!(game
+                    .ghosts
+                    .iter()
+                    .all(|ghost| ghost.state == GhostState::Pen));
+            } else {
+                assert!(game.game_over());
+                assert_eq!(game.speech_bubble().unwrap().text, "GAME OVER");
+                game.step(2599., &mut random);
+                assert!(game.game_over());
+                game.step(1., &mut random);
+                assert_eq!(game.status, Status::Run);
+                assert_eq!((game.score(), game.lives()), (0, 3));
+            }
+            assert!(game.controlled());
+        }
+    }
+
+    #[test]
+    fn final_pellet_clears_the_level_then_rebuilds_without_resetting_score_or_lives() {
+        let mut game = Pacman::new(vec![]);
+        let mut random = crate::random::Mulberry32::new(7);
+        game.resize(80, 40, &mut random);
+        game.take_control(&mut random);
+        game.ghosts.clear();
+        let direction = DIRS
+            .into_iter()
+            .find(|dir| game.open(game.pac.tx + dir.x, game.pac.ty + dir.y))
+            .unwrap();
+        game.pac.dx = direction.x;
+        game.pac.dy = direction.y;
+        let next = Cell::new(
+            game.wrap_tx(game.pac.tx + direction.x),
+            game.pac.ty + direction.y,
+        );
+        let at = game.maze.as_ref().unwrap().at(next.x, next.y);
+        game.pellets.fill(0);
+        game.pellets[at] = 1;
+        game.pellets_left = 1;
+        game.score = 90;
+        game.lives = 2;
+
+        game.step(game.pac_tick(), &mut random);
+        assert_eq!(game.status, Status::Clear);
+        assert_eq!(game.pellets_left, 0);
+        assert_eq!(game.speech_bubble().unwrap().text, "LEVEL CLEAR");
+        assert_eq!((game.score(), game.lives()), (100, 2));
+        game.step(1199., &mut random);
+        assert_eq!(game.status, Status::Clear);
+        game.step(1., &mut random);
+        assert_eq!(game.status, Status::Run);
+        assert_eq!((game.score(), game.lives()), (100, 2));
+        assert!(game.pellets_left > 0);
+        assert_eq!(game.ghosts.len(), 4);
+        assert_eq!(
+            (game.pac.tx, game.pac.ty),
+            (game.pac_home.x, game.pac_home.y)
+        );
+        assert!(game.controlled());
+    }
+
+    #[test]
     fn sprites_keep_cardinal_headings_and_only_default_when_stationary() {
         let mut game = Pacman::new(vec![]);
         let mut random = crate::random::Mulberry32::new(7);
