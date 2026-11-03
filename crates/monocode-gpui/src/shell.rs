@@ -383,6 +383,8 @@ pub(crate) enum MenuTarget {
     RunningTerminals,
     /// The footer Actions button's list of saved commands.
     Actions,
+    /// The title strip's new-tab button, when terminals open in the title bar.
+    NewTab,
 }
 pub(crate) struct ShellMenu {
     pub(crate) target: MenuTarget,
@@ -684,6 +686,7 @@ pub(crate) struct Shell {
     link_dialog: Option<session_groups::LinkDialog>,
     action_dialog: Option<actions::ActionDialog>,
     actions_anchor: AnchorSlot,
+    new_tab_anchor: AnchorSlot,
     /// The dock terminal each action last ran in, by project and action id.
     action_terminals: HashMap<(String, String), gpui::WeakEntity<Terminal>>,
     deleting: HashSet<i64>,
@@ -1068,6 +1071,7 @@ impl Shell {
             link_dialog: None,
             action_dialog: None,
             actions_anchor: AnchorSlot::default(),
+            new_tab_anchor: AnchorSlot::default(),
             action_terminals: HashMap::new(),
             deleting: HashSet::new(),
             group_writes: None,
@@ -5349,6 +5353,21 @@ impl Shell {
                 200.,
                 MenuStyle::Explorer,
             ),
+            MenuTarget::NewTab => (
+                "New tab".into(),
+                vec![
+                    MenuAction::new("session", "New Session")
+                        .icon("plus")
+                        .shortcut(format!("{MOD}N"))
+                        .into(),
+                    MenuAction::new("terminal", "New Terminal")
+                        .icon("terminal")
+                        .shortcut(format!("{MOD}J"))
+                        .into(),
+                ],
+                200.,
+                MenuStyle::Explorer,
+            ),
             MenuTarget::Tab(_)
             | MenuTarget::MonoTab(_)
             | MenuTarget::SearchTab
@@ -5765,6 +5784,10 @@ impl Shell {
             MenuTarget::TerminalTab(ix) => self.run_terminal_tab_menu(ix, action, window, cx),
             MenuTarget::RunningTerminals => self.run_running_terminals_menu(action, window, cx),
             MenuTarget::Actions => self.run_actions_menu(action, window, cx),
+            MenuTarget::NewTab => match action {
+                "terminal" => self.new_title_terminal(window, cx),
+                _ => self.new_chat(cx),
+            },
             MenuTarget::TerminalDock => {
                 let side = match action {
                     "top" => DockSide::Top,
@@ -8286,11 +8309,26 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .hover(|s| s.opacity(1.).bg(content(0.07)))
+                            .relative()
+                            .when(self.menu_open(&MenuTarget::NewTab), |d| {
+                                d.opacity(1.).bg(content(0.07))
+                            })
+                            .child(self.new_tab_anchor.probe())
                             .child(
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                // Title bar terminals: pick a session or a terminal.
+                                if !this.terminal_in_title() {
+                                    this.new_chat(cx);
+                                } else if this.menu_open(&MenuTarget::NewTab) {
+                                    this.close_menu(cx);
+                                } else {
+                                    let anchor = Anchor::Slot(this.new_tab_anchor.clone());
+                                    this.open_menu(MenuTarget::NewTab, anchor, window, cx);
+                                }
+                            })),
                     )
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
@@ -8966,11 +9004,14 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)),
             )
-            .on_action(
-                cx.listener(|this, _: &ToggleTerminal, window, cx| {
+            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                // Title bar terminals open a new tab each time.
+                if this.terminal_in_title() {
+                    this.new_title_terminal(window, cx)
+                } else {
                     this.toggle_terminal(window, cx)
-                }),
-            )
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)),
             )

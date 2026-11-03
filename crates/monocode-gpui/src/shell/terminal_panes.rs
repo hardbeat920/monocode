@@ -148,6 +148,26 @@ impl Shell {
         self.open_terminal_pane(pane, window, cx);
     }
 
+    /// Title bar placement: a fresh shell opens as its own title tab. With
+    /// no session to borrow a scope from, it opens in the dock instead.
+    pub(super) fn new_title_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(owner) = self.terminal_owner() else {
+            self.new_terminal(window, cx);
+            return;
+        };
+        let cwd = self.terminal_cwd(cx);
+        let terminal = self.spawn_terminal(cwd.clone(), cx);
+        let pane = self.workspace.next_pane_id();
+        self.workspace
+            .terminal_panes
+            .insert(pane, TerminalPane { owner, cwd });
+        self.terminal_pane_views.insert(pane, terminal);
+        self.workspace.open(pane);
+        self.pane_motion = None;
+        self.fit_sidebar(cx);
+        self.open_terminal_pane(pane, window, cx);
+    }
+
     /// Focus a terminal pane, showing the tab that holds it.
     pub(super) fn open_terminal_pane(
         &mut self,
@@ -360,6 +380,80 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn title_bar_terminals_open_as_their_own_tabs(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::terminal::bind(cx);
+            cx.set_reduce_motion(true);
+        });
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.set_terminal_placement("title");
+                shell.open(b, w, cx);
+                shell.focus_active(w, cx);
+            })
+            .unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        // Each cmd-j opens another terminal tab; the dock stays closed.
+        visual.simulate_keystrokes("cmd-j");
+        visual.run_until_parked();
+        visual.simulate_keystrokes("cmd-j");
+        visual.run_until_parked();
+        let first = window
+            .update(&mut visual, |shell, _, cx| {
+                let project = shell.workspace.project.clone();
+                assert!(shell.terminals.get(&project).is_none_or(|t| t.is_empty()));
+                assert_eq!(shell.workspace.terminal_panes.len(), 2);
+                let mut panes: Vec<i64> = shell.workspace.terminal_panes.keys().copied().collect();
+                panes.sort();
+                for pane in &panes {
+                    assert_eq!(shell.workspace.tab_of(*pane), Some(*pane));
+                    assert_eq!(shell.workspace.terminal_panes[pane].owner, b);
+                }
+                let active = shell.active_title_tab(cx).unwrap();
+                assert!(matches!(active, TitleTab::Session(id) if panes.contains(&id)));
+                panes
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("terminal-dock").is_none());
+        // The tabs replace the footer's terminal button.
+        assert!(visual.debug_bounds("footer-terminal").is_none());
+        // The plus button asks for a session or a terminal.
+        let plus = visual.debug_bounds("new-tab").unwrap().center();
+        visual.simulate_click(plus, Modifiers::default());
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |shell, window, cx| {
+                assert!(shell.menu_open(&MenuTarget::NewTab));
+                shell.close_menu(cx);
+                shell.run_menu(MenuTarget::NewTab, "terminal", None, window, cx);
+                assert_eq!(shell.workspace.terminal_panes.len(), 3);
+                assert!(
+                    first
+                        .iter()
+                        .all(|p| shell.workspace.terminal_panes.contains_key(p))
+                );
+                // Back at the bottom, cmd-j toggles the dock again.
+                shell.workspace.preferences.set_terminal_placement("bottom");
+                assert!(!shell.terminal_in_title());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn terminal_placement_falls_back_to_the_legacy_panel_flag() {
+        let mut p = crate::settings::Preferences::default();
+        assert_eq!(p.terminal_placement(), "bottom");
+        p.terminal_in_panel = true;
+        assert_eq!(p.terminal_placement(), "panel");
+        p.set_terminal_placement("title");
+        assert_eq!(p.terminal_placement(), "title");
+        assert!(!p.terminal_in_panel);
     }
 
     #[gpui::test]
