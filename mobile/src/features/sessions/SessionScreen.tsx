@@ -37,7 +37,7 @@ import Animated, {
   type AnimatedStyle,
   type SharedValue,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CircleButton } from "@/ui/CircleButton";
 import { GradualBlur } from "@/ui/GradualBlur";
@@ -688,52 +688,57 @@ export function SessionFrame({
               Full-height, so the composer stays inside it when the keyboard
               lifts it: Fabric drops touches outside a view's laid-out bounds,
               and the lift is a transform that never re-lays the dock out. */}
-            <Animated.View
-              pointerEvents="box-none"
-              style={[
-                styles.composerDock,
-                (!chrome?.composer || covered) && styles.hidden,
-                chrome?.dockStyle,
-              ]}
-            >
-              {/* Its own view, since its lift and a screen's dockStyle each set a transform. */}
-              <Animated.View style={keyboardLift}>
-                <GradualBlur
-                  edge="bottom"
-                  height={composerHeight + composerBottom + FADE}
-                  color={colors.background}
-                />
-                <View style={{ paddingBottom: composerBottom }}>
-                  <View onLayout={onComposerLayout}>
-                    <GlassBlurTarget
-                      value={androidBlur && blurTargetReady ? blurTarget : undefined}
+            {/* Measure inside the native screen: Duo's navigation controls
+                change its safe area without changing the window's insets.
+                Keep the provider full-height and outside the keyboard lift. */}
+            <SafeAreaProvider pointerEvents="box-none" style={styles.composerDock}>
+              <Animated.View
+                pointerEvents="box-none"
+                style={[
+                  styles.composerDock,
+                  (!chrome?.composer || covered) && styles.hidden,
+                  chrome?.dockStyle,
+                ]}
+              >
+                {/* Its own view, since its lift and a screen's dockStyle each set a transform. */}
+                <Animated.View style={keyboardLift}>
+                  <GradualBlur
+                    edge="bottom"
+                    height={composerHeight + composerBottom + FADE}
+                    color={colors.background}
+                  />
+                  <SafeAreaView edges={["left", "right"]} style={{ paddingBottom: composerBottom }}>
+                    <View onLayout={onComposerLayout}>
+                      <GlassBlurTarget
+                        value={androidBlur && blurTargetReady ? blurTarget : undefined}
+                      >
+                        {chrome?.composer}
+                      </GlassBlurTarget>
+                    </View>
+                  </SafeAreaView>
+                  {/* Only a transcript needs this glass surface. Empty sessions
+                      have no scroll target, so keep it out of the native tree. */}
+                  {hasJumpTarget ? (
+                    <Animated.View
+                      style={[
+                        styles.jump,
+                        { bottom: composerHeight + composerBottom + 10 },
+                        jumpStyle,
+                      ]}
                     >
-                      {chrome?.composer}
-                    </GlassBlurTarget>
-                  </View>
-                </View>
-                {/* Only a transcript needs this glass surface. Empty sessions
-                    have no scroll target, so keep it out of the native tree. */}
-                {hasJumpTarget ? (
-                  <Animated.View
-                    style={[
-                      styles.jump,
-                      { bottom: composerHeight + composerBottom + 10 },
-                      jumpStyle,
-                    ]}
-                  >
-                    <LiquidView
-                      onPress={() => jumpTarget.current?.()}
-                      accessibilityLabel="Scroll to bottom"
-                      borderRadius={JUMP / 2}
-                      innerStyle={styles.jumpButton}
-                    >
-                      <Icon name="chevronDown" size={20} />
-                    </LiquidView>
-                  </Animated.View>
-                ) : null}
+                      <LiquidView
+                        onPress={() => jumpTarget.current?.()}
+                        accessibilityLabel="Scroll to bottom"
+                        borderRadius={JUMP / 2}
+                        innerStyle={styles.jumpButton}
+                      >
+                        <Icon name="chevronDown" size={20} />
+                      </LiquidView>
+                    </Animated.View>
+                  ) : null}
+                </Animated.View>
               </Animated.View>
-            </Animated.View>
+            </SafeAreaProvider>
           </KeyboardGestureArea>
         </SessionLayoutContext>
       </JumpToEndContext>
