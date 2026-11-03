@@ -8,6 +8,7 @@ export type Harness =
   | "claude"
   | "codex"
   | "cursor"
+  | "copilot"
   | "grok"
   | "opencode"
   | "pi"
