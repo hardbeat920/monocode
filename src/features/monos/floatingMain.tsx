@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   applyAccentColor,
   activateWindowAppearance,
@@ -18,6 +17,7 @@ import {
   loadThemeHue,
   loadThemePreference,
   loadThemeSaturation,
+  pinPanelWindowTheme,
   watchSystemColorScheme,
 } from "../settings/model/appearance";
 import { FloatingMonoChat } from "./ui/FloatingMonoChat";
@@ -47,11 +47,10 @@ function applyFloatingAppearance() {
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
-  const scheme = applyThemePreference(loadThemePreference());
+  const preference = loadThemePreference();
+  const scheme = applyThemePreference(preference);
   activateWindowAppearance();
-  void getCurrentWindow()
-    .setTheme(scheme)
-    .catch(() => undefined);
+  pinPanelWindowTheme(preference, scheme);
 }
 
 applyFloatingAppearance();

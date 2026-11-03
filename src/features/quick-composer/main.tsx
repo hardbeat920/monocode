@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IS_MAC } from "../../platform/tauri/platform";
 import { installNativeContextMenuGuard } from "../../shared/lib/nativeContextMenu";
 import {
@@ -13,6 +12,8 @@ import {
   loadThemeHue,
   loadThemePreference,
   loadThemeSaturation,
+  pinPanelWindowTheme,
+  watchSystemColorScheme,
 } from "../settings/model/appearance";
 import { QuickGitPopup } from "./ui/QuickGitPopup";
 import { QuickComposer } from "./ui/QuickComposer";
@@ -28,15 +29,12 @@ function applyAppearance() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
-  const scheme = applyThemePreference(loadThemePreference());
-  // The native blur follows the window's appearance, not the page's, so
-  // match it to the app theme rather than the system one.
-  void getCurrentWindow()
-    .setTheme(scheme)
-    .catch(() => undefined);
+  const preference = loadThemePreference();
+  pinPanelWindowTheme(preference, applyThemePreference(preference));
 }
 
 applyAppearance();
+watchSystemColorScheme();
 installNativeContextMenuGuard();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
