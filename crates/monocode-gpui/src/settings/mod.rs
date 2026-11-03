@@ -1023,7 +1023,8 @@ pub(crate) fn nav(
                 .flex_col()
                 .gap_5()
                 .px_2()
-                .py_3()
+                .pt_2()
+                .pb_3()
                 .children(model::GROUPS.iter().map(|(group, sections)| {
                     div()
                         .flex()
