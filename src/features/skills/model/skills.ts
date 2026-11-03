@@ -306,16 +306,42 @@ function startCatalogLoad(
 async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
   const provider = getHarness(context.harness)?.commands;
   if (provider) {
-    const commands = await provider.discover(context);
-    return commands.map((command): NativeSkill => ({
+    // A provider that only merges (never replaces) file skills shouldn't let
+    // its own discovery failure hide skills that don't depend on it — a
+    // timed-out Claude probe would otherwise blank out every `.claude/skills`
+    // entry too.
+    const commands = await provider.discover(context).catch((error: unknown) => {
+      if (!provider.mergesFileSkills) throw error;
+      return [];
+    });
+    const nativeSkills: Skill[] = commands.map((command): NativeSkill => ({
       kind: "native",
       ...command,
     }));
+    if (!provider.mergesFileSkills) return nativeSkills;
+    // Claude's native commands (built-ins, custom slash commands) sit
+    // alongside its file-based Agent Skills rather than replacing them.
+    const disabledPaths = loadDisabledSkillPaths();
+    const discovered = await listSkills(context.cwd, disabledPaths);
+    const disabled = disabledSkillPathSet();
+    const fileSkills = mergeCatalog(
+      discovered.filter((skill) => !disabled.has(skill.path)),
+    );
+    return dedupeSkillsByName([...nativeSkills, ...fileSkills]);
   }
   const disabledPaths = loadDisabledSkillPaths();
   const discovered = await listSkills(context.cwd, disabledPaths);
   const disabled = disabledSkillPathSet();
   return mergeCatalog(discovered.filter((skill) => !disabled.has(skill.path)));
+}
+
+function dedupeSkillsByName(skills: Skill[]): Skill[] {
+  const out = new Map<string, Skill>();
+  for (const skill of skills) {
+    if (!skill.name || out.has(skill.name)) continue;
+    out.set(skill.name, skill);
+  }
+  return [...out.values()];
 }
 
 export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
