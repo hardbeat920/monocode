@@ -11,7 +11,9 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => {
   return {
     ...original,
     invoke: (command: string, args?: unknown) =>
-      command === "mcp_discover" || command === "claude_mcp_list"
+      command === "mcp_discover" ||
+      command === "claude_mcp_list" ||
+      command === "list_dir"
         ? mcpInvoke(command, args)
         : original.invoke(command, args),
   };
@@ -229,6 +231,56 @@ describe("Composer question focus", () => {
     await typeInto(textarea, "/btw why");
     expect(onBtwCommand).toHaveBeenCalledWith("why", { draft: true });
     expect(textarea.value).toBe("");
+  });
+
+  it("browses folders outside the project for `@../` mentions", async () => {
+    const listed: string[] = [];
+    mcpInvoke.mockImplementation(async (command: string, args: unknown) => {
+      if (command !== "list_dir") return undefined;
+      const path = (args as { path: string }).path;
+      listed.push(path);
+      return path === "/"
+        ? [
+            { name: "other", path: "/other", isDir: true, ignored: false },
+            { name: "notes.md", path: "/notes.md", isDir: false, ignored: false },
+          ]
+        : path === "/other"
+          ? [
+              {
+                name: "main.rs",
+                path: "/other/main.rs",
+                isDir: false,
+                ignored: false,
+              },
+            ]
+          : [];
+    });
+    await renderComposer(undefined, vi.fn());
+    const textarea = container.querySelector("textarea")!;
+    await typeInto(textarea, "see @../oth");
+    expect(listed).toEqual(["/"]);
+    const picker = () => container.querySelector("[data-mention-picker]");
+    expect(picker()?.textContent).toContain("other/");
+    expect(picker()?.textContent).not.toContain("notes.md");
+
+    const press = (key: string) =>
+      act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+        ),
+      );
+    await press("Enter");
+    expect(textarea.value).toBe("see @../other/");
+    expect(listed).toEqual(["/", "/other"]);
+    expect(picker()?.textContent).toContain("main.rs");
+    const highlighted = () =>
+      container.querySelector(".composer-highlight .text-mention")?.textContent;
+    expect(highlighted()).toBe("@../other");
+
+    await press("Enter");
+    expect(textarea.value).toBe("see @../other/main.rs ");
+    expect(picker()).toBeNull();
+    expect(highlighted()).toBe("@../other/main.rs");
   });
 
   it("leaves a typed `/btw ` alone when BTW is unavailable", async () => {
