@@ -14,7 +14,11 @@ type Props = {
   blocks: Block[];
   visible: boolean;
   focused: boolean;
-  onNavigate: (blockId: string | null, query?: string) => boolean;
+  onNavigate: (
+    blockId: string | null,
+    query?: string,
+  ) => boolean | Promise<boolean>;
+  onSearch?: (query: string) => Promise<string[]>;
   side?: "left" | "right";
 };
 
@@ -23,16 +27,62 @@ export function TranscriptFind({
   visible,
   focused,
   onNavigate,
+  onSearch,
   side = "right",
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const matches = useMemo(
+  const [storedMatches, setStoredMatches] = useState<string[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const localMatches = useMemo(
     () => findTranscriptBlocks(blocks, query),
     [blocks, query],
   );
+  const matches = useMemo(() => {
+    if (!onSearch) return localMatches;
+    // Search the archive once per query; streamed blocks keep matching locally.
+    const liveIds = new Set(blocks.map((block) => block.id));
+    const localIds = new Set(localMatches);
+    return [
+      ...new Set([
+        ...storedMatches.filter((id) => !liveIds.has(id) || localIds.has(id)),
+        ...localMatches,
+      ]),
+    ];
+  }, [onSearch, storedMatches, blocks, localMatches]);
+  useEffect(() => {
+    if (!onSearch || !open || !query.trim()) {
+      setStoredMatches([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    setStoredMatches([]);
+    setSearchError(false);
+    const timer = setTimeout(() => {
+      void onSearch(query)
+        .then((ids) => {
+          if (!cancelled) setStoredMatches(ids);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setStoredMatches([]);
+            setSearchError(true);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [onSearch, open, query]);
   const selected = matches[Math.min(active, matches.length - 1)] ?? null;
 
   const openFind = () => {
@@ -44,7 +94,7 @@ export function TranscriptFind({
   };
   const closeFind = () => {
     setOpen(false);
-    onNavigate(null);
+    void Promise.resolve(onNavigate(null)).catch(() => undefined);
   };
   const step = (direction: number) => {
     if (!matches.length) return;
@@ -53,7 +103,9 @@ export function TranscriptFind({
 
   useEffect(() => {
     if (!open || !visible) return;
-    const frame = requestAnimationFrame(() => onNavigate(selected, query));
+    const frame = requestAnimationFrame(() => {
+      void Promise.resolve(onNavigate(selected, query)).catch(() => undefined);
+    });
     return () => cancelAnimationFrame(frame);
   }, [open, visible, selected, query, onNavigate]);
 
@@ -140,11 +192,15 @@ export function TranscriptFind({
           aria-live="polite"
           className="min-w-[10ch] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums text-content/50"
         >
-          {query.trim()
-            ? matches.length
-              ? `${Math.min(active, matches.length - 1) + 1} of ${matches.length}`
-              : "No results"
-            : ""}
+          {searching
+            ? "Searching…"
+            : searchError
+              ? "Search failed"
+              : query.trim()
+                ? matches.length
+                  ? `${Math.min(active, matches.length - 1) + 1} of ${matches.length}`
+                  : "No results"
+                : ""}
         </span>
         <FindButton
           label="Previous match"

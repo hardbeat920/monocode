@@ -24,7 +24,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Git graph layout + per-row SVG paths. Each row is an independent 22px SVG.
+ * Git graph layout + per-row SVG paths. Rows default to an independent 22px SVG.
  * Previous row `outputSwimlanes` become the next row's `inputSwimlanes`.
  * Curves are SVG arcs, not cubics.
  */
@@ -292,10 +292,14 @@ export function historyItemIndex(viewModel: HistoryItemViewModel): number {
   return inputIndex !== -1 ? inputIndex : viewModel.inputSwimlanes.length;
 }
 
-/** One row of graph paths and circles. */
+/** One row of graph paths and circles. Taller rows extend lanes above and below
+ * the node while keeping the circles and curve radii at their original size. */
 export function historyItemGraph(
   viewModel: HistoryItemViewModel,
+  rowHeight = SWIMLANE_HEIGHT,
 ): HistoryItemGraph {
+  const centerY = rowHeight / 2;
+  const verticalPadding = (rowHeight - SWIMLANE_HEIGHT) / 2;
   const { parentIds, inputSwimlanes, outputSwimlanes, kind } = viewModel;
   const inputIndex = inputSwimlanes.findIndex(
     (node) => node.id === viewModel.sha,
@@ -322,7 +326,8 @@ export function historyItemGraph(
         pushPath(
           [
             `M ${SWIMLANE_WIDTH * (index + 1)} 0`,
-            `A ${SWIMLANE_WIDTH} ${SWIMLANE_WIDTH} 0 0 1 ${SWIMLANE_WIDTH * index} ${SWIMLANE_WIDTH}`,
+            ...(verticalPadding > 0 ? [`V ${verticalPadding}`] : []),
+            `A ${SWIMLANE_WIDTH} ${SWIMLANE_WIDTH} 0 0 1 ${SWIMLANE_WIDTH * index} ${centerY}`,
             `H ${SWIMLANE_WIDTH * (circleIndex + 1)}`,
           ].join(" "),
           color,
@@ -335,19 +340,16 @@ export function historyItemGraph(
       inputSwimlanes[index]?.id === outputSwimlanes[outputSwimlaneIndex]?.id
     ) {
       if (index === outputSwimlaneIndex) {
-        pushPath(
-          `M ${SWIMLANE_WIDTH * (index + 1)} 0 V ${SWIMLANE_HEIGHT}`,
-          color,
-        );
+        pushPath(`M ${SWIMLANE_WIDTH * (index + 1)} 0 V ${rowHeight}`, color);
       } else {
         pushPath(
           [
             `M ${SWIMLANE_WIDTH * (index + 1)} 0`,
-            `V 6`,
-            `A ${SWIMLANE_CURVE_RADIUS} ${SWIMLANE_CURVE_RADIUS} 0 0 1 ${SWIMLANE_WIDTH * (index + 1) - SWIMLANE_CURVE_RADIUS} ${SWIMLANE_HEIGHT / 2}`,
+            `V ${centerY - SWIMLANE_CURVE_RADIUS}`,
+            `A ${SWIMLANE_CURVE_RADIUS} ${SWIMLANE_CURVE_RADIUS} 0 0 1 ${SWIMLANE_WIDTH * (index + 1) - SWIMLANE_CURVE_RADIUS} ${centerY}`,
             `H ${SWIMLANE_WIDTH * (outputSwimlaneIndex + 1) + SWIMLANE_CURVE_RADIUS}`,
-            `A ${SWIMLANE_CURVE_RADIUS} ${SWIMLANE_CURVE_RADIUS} 0 0 0 ${SWIMLANE_WIDTH * (outputSwimlaneIndex + 1)} ${SWIMLANE_HEIGHT / 2 + SWIMLANE_CURVE_RADIUS}`,
-            `V ${SWIMLANE_HEIGHT}`,
+            `A ${SWIMLANE_CURVE_RADIUS} ${SWIMLANE_CURVE_RADIUS} 0 0 0 ${SWIMLANE_WIDTH * (outputSwimlaneIndex + 1)} ${centerY + SWIMLANE_CURVE_RADIUS}`,
+            `V ${rowHeight}`,
           ].join(" "),
           color,
         );
@@ -365,9 +367,10 @@ export function historyItemGraph(
       outputSwimlanes[parentOutputIndex]?.color ?? HISTORY_ITEM_REF_FALLBACK;
     pushPath(
       [
-        `M ${SWIMLANE_WIDTH * parentOutputIndex} ${SWIMLANE_HEIGHT / 2}`,
-        `A ${SWIMLANE_WIDTH} ${SWIMLANE_WIDTH} 0 0 1 ${SWIMLANE_WIDTH * (parentOutputIndex + 1)} ${SWIMLANE_HEIGHT}`,
-        `M ${SWIMLANE_WIDTH * parentOutputIndex} ${SWIMLANE_HEIGHT / 2}`,
+        `M ${SWIMLANE_WIDTH * parentOutputIndex} ${centerY}`,
+        `A ${SWIMLANE_WIDTH} ${SWIMLANE_WIDTH} 0 0 1 ${SWIMLANE_WIDTH * (parentOutputIndex + 1)} ${centerY + SWIMLANE_WIDTH}`,
+        ...(verticalPadding > 0 ? [`V ${rowHeight}`] : []),
+        `M ${SWIMLANE_WIDTH * parentOutputIndex} ${centerY}`,
         `H ${SWIMLANE_WIDTH * (circleIndex + 1)} `,
       ].join(" "),
       color,
@@ -376,20 +379,20 @@ export function historyItemGraph(
 
   if (inputIndex !== -1) {
     pushPath(
-      `M ${SWIMLANE_WIDTH * (circleIndex + 1)} 0 V ${SWIMLANE_HEIGHT / 2}`,
+      `M ${SWIMLANE_WIDTH * (circleIndex + 1)} 0 V ${centerY}`,
       inputSwimlanes[inputIndex]?.color ?? HISTORY_ITEM_REF_FALLBACK,
     );
   }
 
   if (parentIds.length > 0) {
     pushPath(
-      `M ${SWIMLANE_WIDTH * (circleIndex + 1)} ${SWIMLANE_HEIGHT / 2} V ${SWIMLANE_HEIGHT}`,
+      `M ${SWIMLANE_WIDTH * (circleIndex + 1)} ${centerY} V ${rowHeight}`,
       circleColor,
     );
   }
 
   const cx = SWIMLANE_WIDTH * (circleIndex + 1);
-  const cy = SWIMLANE_WIDTH;
+  const cy = centerY;
   const circles: GraphCircle[] = [];
   if (kind === "HEAD") {
     circles.push({
@@ -434,7 +437,7 @@ export function historyItemGraph(
     width:
       SWIMLANE_WIDTH *
       (Math.max(inputSwimlanes.length, outputSwimlanes.length, 1) + 1),
-    height: SWIMLANE_HEIGHT,
+    height: rowHeight,
     paths,
     circles,
     kind,

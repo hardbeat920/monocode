@@ -13,7 +13,7 @@ describe("inferShellIntent", () => {
     });
     expect(
       inferShellIntent(
-        'cd /Users/nikolaypetkov/code/agent-terminal && ls && echo "---" && cat package.json | head -60',
+        'cd /repo/example-project && ls && echo "---" && cat package.json | head -60',
       ),
     ).toEqual({ verb: "Read", path: "package.json" });
     expect(

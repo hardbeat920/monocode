@@ -3,18 +3,12 @@ import {
   AiIdea,
   Check,
   CircleDashed,
-  CornerDownRight,
   CursorMagicSelection,
   FilePlus,
-  ListEnd,
-  Pause,
-  Pencil,
-  Play,
   Plus,
   Share,
   Square,
   StickyNote,
-  Trash2,
   X,
 } from "../../../shared/ui/icons";
 import {
@@ -29,25 +23,20 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   attachmentsFromFiles,
-  attachmentsFromPaths,
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
   revokeAttachment,
 } from "../model/attachments";
-import { resizeComposer } from "../model/composerResize";
+import { resizeComposer, restoreComposerSize } from "../model/composerResize";
 import {
   isFileReferenceText,
   messageFilesFromClipboard,
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
-import {
-  EXPLORER_FILE_POINTER_DRAG_EVENT,
-  type ExplorerFilePointerDragDetail,
-} from "../../../shared/lib/drag";
+import { useFileDrop } from "../hooks/useFileDrop";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   loadProjectFiles,
@@ -56,12 +45,12 @@ import {
   subscribeProjectFiles,
 } from "../../files/model/fileIndex";
 import {
-  buildMentionIndex,
   fileMentionParts,
   mentionLabel,
   mentionTokenAt,
   rankMentionFiles,
   replaceMentionToken,
+  sharedMentionIndex,
   type MentionIndex,
   type MentionToken,
 } from "../../files/model/fileMentions";
@@ -128,6 +117,7 @@ import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
+import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
@@ -154,6 +144,7 @@ import { resolveTabGroupLogo } from "../../workspace/model/tabGroups";
 import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "../../../shared/ui/Popover";
 import { UsageLimitNotice } from "./UsageLimitNotice";
+import { UsageLimitAccountPicker } from "./UsageLimitAccountPicker";
 import { consumePlanCommand, PLAN_COMMAND } from "../model/plan";
 import {
   consumeOperatorCommand,
@@ -207,6 +198,12 @@ import {
   type McpSettingsSnapshot,
 } from "../../settings/model/mcpSettingsCache";
 import type { LastTurnRecall } from "../model/editLastTurn";
+import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
+import {
+  INSET_LAYOUT_DEFAULT,
+  loadInsetLayout,
+  subscribeInsetLayout,
+} from "../../settings/model/appearance";
 
 type Props = {
   enabled?: boolean;
@@ -296,6 +293,9 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
+  /** Continue this session under another account of its provider. */
+  onUsageLimitAccountChange?: (accountId: string) => void;
+  providerAccountId?: string;
   onOpenFile?: (path: string) => void;
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
@@ -331,172 +331,6 @@ function ToolButton({
     >
       {children}
     </button>
-  );
-}
-
-function MessageQueue({
-  messages,
-  status,
-  onDelete,
-  onEdit,
-  onEditingChange,
-  onSteer,
-  onResume,
-}: {
-  messages: QueuedMessage[];
-  status?: MessageQueueStatus;
-  onDelete?: (messageId: string) => void;
-  onEdit?: (messageId: string, text: string) => void;
-  onEditingChange?: (messageId?: string) => void;
-  onSteer?: (messageId: string) => void;
-  onResume?: () => void;
-}) {
-  const [editingId, setEditingId] = useState<string>();
-  const [editDraft, setEditDraft] = useState("");
-  const onEditingChangeRef = useRef(onEditingChange);
-  onEditingChangeRef.current = onEditingChange;
-  const editingIdRef = useRef(editingId);
-  editingIdRef.current = editingId;
-  useEffect(() => {
-    return () => {
-      if (editingIdRef.current) onEditingChangeRef.current?.();
-    };
-  }, []);
-  if (messages.length === 0) return null;
-  const paused = status === "paused";
-
-  const startEdit = (message: QueuedMessage) => {
-    setEditingId(message.id);
-    setEditDraft(message.text);
-    onEditingChange?.(message.id);
-  };
-  const cancelEdit = () => {
-    setEditingId(undefined);
-    setEditDraft("");
-    onEditingChange?.();
-  };
-  const saveEdit = (message: QueuedMessage) => {
-    if (!editDraft.trim() && message.attachments.length === 0) return;
-    onEdit?.(message.id, editDraft);
-    setEditingId(undefined);
-    setEditDraft("");
-  };
-
-  return (
-    <div className="px-2 text-content/55" data-message-queue>
-      <div
-        className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
-        data-message-queue-card
-      >
-        {paused ? (
-          <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
-            <Pause className="size-3.5" />
-            <span className="min-w-0 flex-1 truncate">
-              Queue paused because you interrupted
-            </span>
-            <button
-              type="button"
-              onClick={onResume}
-              className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
-            >
-              <Play className="size-3.5" />
-              Resume
-            </button>
-          </div>
-        ) : null}
-        {messages.map((message, index) => {
-          const editing = editingId === message.id;
-          const label =
-            message.text.trim() ||
-            `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
-          return (
-            <div
-              key={message.id}
-              className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-stroke" : ""
-              }`}
-            >
-              <ListEnd className="size-3.5 shrink-0" />
-              {editing ? (
-                <>
-                  <textarea
-                    autoFocus
-                    aria-label="Edit queued message"
-                    value={editDraft}
-                    rows={1}
-                    onChange={(event) => setEditDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isImeComposition(event.nativeEvent)) return;
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelEdit();
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        saveEdit(message);
-                      }
-                    }}
-                    className="min-h-6 min-w-0 flex-1 resize-none rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] text-content outline-none focus:border-content/30"
-                  />
-                  <button
-                    type="button"
-                    title="Save queued message"
-                    aria-label="Save queued message"
-                    disabled={
-                      !editDraft.trim() && message.attachments.length === 0
-                    }
-                    onClick={() => saveEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
-                  >
-                    <Check className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Cancel queued message edit"
-                    aria-label="Cancel queued message edit"
-                    onClick={cancelEdit}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 truncate text-content/80">
-                    {label}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onSteer?.(message.id)}
-                    className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
-                  >
-                    <CornerDownRight className="size-3.5" />
-                    Steer
-                  </button>
-                  <button
-                    type="button"
-                    title="Edit queued message"
-                    aria-label="Edit queued message"
-                    onClick={() => startEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Pencil className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Remove queued message"
-                    aria-label="Remove queued message"
-                    onClick={() => onDelete?.(message.id)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
@@ -577,6 +411,8 @@ export function Composer({
   onUsageLimitResume,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
+  onUsageLimitAccountChange,
+  providerAccountId,
   onOpenFile,
   onDraftChange,
   onRecallLastTurnReady,
@@ -593,15 +429,20 @@ export function Composer({
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
   const draftResetTokenRef = useRef(draftResetToken);
-  /** Bumped when the draft is cleared, so a late paste cannot land on the next one. */
+  /** Bumped when the draft is cleared, so a late file read cannot land on the next one. */
   const pasteGenerationRef = useRef(0);
-  /** Native and file pastes still reading when Send is pressed. */
+  /** Pasted and dropped files still reading when Send is pressed. */
   const pasteFlightRef = useRef<Promise<void> | null>(null);
   const submitLockRef = useRef(false);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  // React rewrites a textarea's text node whenever defaultValue changes, and
+  // WebKit then resets the field, committing any IME composition. Parents
+  // re-render with the latest draft (remote sessions on every poll), so keep
+  // the mount-time value; the effect below applies later changes.
+  const [mountDraft] = useState(initialDraft);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,
@@ -635,7 +476,6 @@ export function Composer({
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pasteError, setPasteError] = useState<string | null>(null);
-  const [fileDrag, setFileDrag] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
   const [operatorSelected, setOperatorSelected] = useState(false);
@@ -661,8 +501,16 @@ export function Composer({
   const remote = remoteSession;
   // Local indexes (files, skills) must never read a remote session's path.
   const localCwd = remote ? "" : executionCwd;
+  // Inactive tabs stay mounted. Their composers let go of the project listing
+  // and pick it up again when shown.
+  const fileCwd = enabled ? localCwd : "";
   const [files, setFiles] = useState<ProjectFile[]>(
-    () => peekProjectFiles(localCwd) ?? [],
+    () => peekProjectFiles(fileCwd) ?? [],
+  );
+  const insetLayout = useSyncExternalStore(
+    subscribeInsetLayout,
+    loadInsetLayout,
+    () => INSET_LAYOUT_DEFAULT,
   );
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
@@ -680,6 +528,7 @@ export function Composer({
   const [mentionActive, setMentionActive] = useState(0);
   const [resendEdited, setResendEdited] = useState(false);
   const [runnerEnabled, setRunnerEnabled] = useState(loadComposerRunner);
+  const autocorrect = useComposerAutocorrect();
   const [runnerLive, setRunnerLive] = useState(
     () => busy && loadComposerRunner(),
   );
@@ -763,13 +612,10 @@ export function Composer({
     // The indent can rewrap the first line after the input already resized.
     if (ref.current) resizeComposer(ref.current);
   }, [modeIndent]);
-  const mentionFiles = useMemo(
-    () => (notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files),
-    [files, notes, notesEnabled],
-  );
   const mentionIndex = useMemo(
-    () => buildMentionIndex(mentionFiles),
-    [mentionFiles],
+    () =>
+      sharedMentionIndex(files, notesEnabled ? notesAsProjectFiles(notes) : []),
+    [files, notes, notesEnabled],
   );
   const mentionIndexRef = useRef<MentionIndex>(mentionIndex);
   mentionIndexRef.current = mentionIndex;
@@ -879,6 +725,60 @@ export function Composer({
     },
     [harness, syncHasValue],
   );
+  // Native listener registration crosses several IPC hops. Keep changing
+  // composer callbacks and capabilities out of its subscription dependencies.
+  const fileDropStateRef = useRef({
+    attachmentsSupported,
+    remote,
+    addAttachments,
+  });
+  fileDropStateRef.current = { attachmentsSupported, remote, addAttachments };
+
+  const rememberAttachmentRead = useCallback((work: Promise<void>) => {
+    const flight = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    const previous = pasteFlightRef.current;
+    const joined = previous ? previous.then(() => flight) : flight;
+    pasteFlightRef.current = joined;
+    void joined.finally(() => {
+      if (pasteFlightRef.current === joined) pasteFlightRef.current = null;
+    });
+  }, []);
+
+  const readDroppedAttachments = useCallback(
+    (read: () => Promise<Attachment[]>) => {
+      const generation = pasteGenerationRef.current;
+      setPasteError(null);
+      rememberAttachmentRead(
+        read()
+          .then((incoming) => {
+            if (
+              pasteGenerationRef.current !== generation ||
+              !fileDropStateRef.current.attachmentsSupported
+            ) {
+              incoming.forEach(revokeAttachment);
+              return;
+            }
+            if (incoming.length === 0) {
+              setPasteError(
+                "Nothing to attach from that drop — the file may have been moved, renamed, or deleted.",
+              );
+              return;
+            }
+            fileDropStateRef.current.addAttachments(incoming);
+          })
+          .catch((reason: unknown) => {
+            if (pasteGenerationRef.current !== generation) return;
+            setPasteError(
+              reason instanceof Error ? reason.message : String(reason),
+            );
+          }),
+      );
+    },
+    [rememberAttachmentRead],
+  );
 
   const removeAttachment = useCallback(
     (id: string) => {
@@ -902,6 +802,7 @@ export function Composer({
     return () => {
       queueMicrotask(() => {
         if (attachmentLifecycleRef.current !== lifecycle) return;
+        pasteGenerationRef.current += 1;
         for (const file of attachmentsRef.current) {
           if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
             revokeAttachment(file);
@@ -961,21 +862,21 @@ export function Composer({
     const apply = (next: ProjectFile[]) => {
       if (!cancelled) setFiles(next);
     };
-    const cached = peekProjectFiles(localCwd);
+    const cached = peekProjectFiles(fileCwd);
     apply(cached ?? []);
-    if (!localCwd) return;
-    void loadProjectFiles(localCwd, mentionOpen)
+    if (!fileCwd) return;
+    void loadProjectFiles(fileCwd, mentionOpen)
       .then(apply)
       .catch(() => undefined);
     const unsub = subscribeProjectFiles(() => {
-      const next = peekProjectFiles(localCwd);
+      const next = peekProjectFiles(fileCwd);
       if (next) apply(next);
     });
     return () => {
       cancelled = true;
       unsub();
     };
-  }, [localCwd, mentionOpen]);
+  }, [fileCwd, mentionOpen]);
 
   useEffect(() => {
     if (!mentionOpen || !notesEnabled) return;
@@ -1010,18 +911,19 @@ export function Composer({
     resizeComposer(el);
   }, [initialDraft]);
 
-  // Drafts changed while hidden could not be measured. Inbox panes are portaled
-  // into place by a parent effect that runs after this one, so the first pass
-  // can still find no layout box; retry once the move has landed.
+  // Measure once the browser has laid out the activated pane. A synchronous
+  // read here forces layout before the pooled transcript has been attached,
+  // then forces it again when that transcript restores its scroll position.
+  // ResizeObserver also handles inbox portals and drafts resized while hidden.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !enabled) return;
-    resizeComposer(el);
-    if (el.scrollHeight !== 0) return;
-    const frame = requestAnimationFrame(() => {
-      if (ref.current === el) resizeComposer(el);
+    const observer = new ResizeObserver((entries) => {
+      if (entries.some((entry) => entry.contentRect.width > 0))
+        restoreComposerSize(el);
     });
-    return () => cancelAnimationFrame(frame);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [enabled]);
 
   useEffect(() => {
@@ -1270,133 +1172,19 @@ export function Composer({
       )
     )
       return;
-    ref.current?.focus();
+    // Pane activation already positions the composer. Native focus scrolling
+    // otherwise walks the entire workspace and can move transcript ancestors.
+    if (ref.current && document.activeElement !== ref.current)
+      ref.current.focus({ preventScroll: true });
   }, [disabled, focused, question, busy, focusToken]);
 
-  useEffect(() => {
-    if (!enabled || disabled) {
-      setFileDrag(false);
-      return;
-    }
-    const dropRoot = () =>
-      boxRef.current?.closest("[data-session-drop]") as HTMLElement | null;
-    let nativeDropAt = 0;
-
-    const toClientPoint = (x: number, y: number) => {
-      const scale = window.devicePixelRatio || 1;
-      // Tauri types this as PhysicalPosition, but macOS wry reports logical
-      // points. Only scale down when the point sits outside the CSS viewport.
-      if (scale !== 1 && (x > window.innerWidth || y > window.innerHeight)) {
-        return { x: x / scale, y: y / scale };
-      }
-      return { x, y };
-    };
-
-    const overTarget = (x: number, y: number) => {
-      const root = dropRoot();
-      if (!root) return false;
-      const point = toClientPoint(x, y);
-      const rect = root.getBoundingClientRect();
-      return (
-        point.x >= rect.left &&
-        point.x <= rect.right &&
-        point.y >= rect.top &&
-        point.y <= rect.bottom
-      );
-    };
-
-    const onDragOver = (event: DragEvent) => {
-      const data = event.dataTransfer;
-      if (!hasFiles(data)) return;
-      event.preventDefault();
-      if (!attachmentsSupported) return;
-      data.dropEffect = "copy";
-      setFileDrag(true);
-    };
-    const onDragLeave = (event: DragEvent) => {
-      const root = dropRoot();
-      if (!root) return;
-      const next = event.relatedTarget as Node | null;
-      if (next && root.contains(next)) return;
-      setFileDrag(false);
-    };
-    const onDrop = (event: DragEvent) => {
-      const data = event.dataTransfer;
-      if (!hasFiles(data)) return;
-      event.preventDefault();
-      setFileDrag(false);
-      if (!attachmentsSupported) return;
-      if (Date.now() - nativeDropAt < 250) return;
-      const files = [...data.files];
-      if (files.length === 0) return;
-      void attachmentsFromFiles(files).then(addAttachments);
-    };
-
-    const onExplorerFilePointerDrag = (event: Event) => {
-      if (remote) return;
-      const detail = (event as CustomEvent<ExplorerFilePointerDragDetail>)
-        .detail;
-      if (!detail || detail.type === "end") {
-        setFileDrag(false);
-        return;
-      }
-      const over = overTarget(detail.x, detail.y);
-      if (detail.type === "move") {
-        setFileDrag(over && attachmentsSupported);
-        return;
-      }
-      setFileDrag(false);
-      if (!over || !attachmentsSupported) return;
-      void attachmentsFromPaths([detail.path]).then(addAttachments);
-    };
-
-    const root = dropRoot();
-    root?.addEventListener("dragover", onDragOver);
-    root?.addEventListener("dragleave", onDragLeave);
-    root?.addEventListener("drop", onDrop);
-    window.addEventListener(
-      EXPLORER_FILE_POINTER_DRAG_EVENT,
-      onExplorerFilePointerDrag,
-    );
-
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "leave") {
-          setFileDrag(false);
-          return;
-        }
-        const { x, y } = event.payload.position;
-        const over = overTarget(x, y);
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setFileDrag(over && attachmentsSupported);
-          return;
-        }
-        if (event.payload.type !== "drop") return;
-        setFileDrag(false);
-        if (!over || !attachmentsSupported) return;
-        nativeDropAt = Date.now();
-        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-      root?.removeEventListener("dragover", onDragOver);
-      root?.removeEventListener("dragleave", onDragLeave);
-      root?.removeEventListener("drop", onDrop);
-      window.removeEventListener(
-        EXPLORER_FILE_POINTER_DRAG_EVENT,
-        onExplorerFilePointerDrag,
-      );
-      unlisten?.();
-    };
-  }, [addAttachments, attachmentsSupported, enabled, remote]);
+  const fileDrag = useFileDrop({
+    anchor: boxRef,
+    enabled: enabled && !disabled,
+    state: fileDropStateRef,
+    read: readDroppedAttachments,
+    onError: setPasteError,
+  });
   const restoreDraft = useCallback(
     (
       text: string,
@@ -1407,8 +1195,7 @@ export function Composer({
       onDraftChange?.(text);
       if (ref.current) {
         ref.current.value = text;
-        ref.current.style.height = "auto";
-        ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
+        resizeComposer(ref.current);
       }
 
       const nextIds = new Set(nextAttachments.map((file) => file.id));
@@ -1501,18 +1288,6 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const rememberPaste = (work: Promise<void>) => {
-    const flight = work.then(
-      () => undefined,
-      () => undefined,
-    );
-    const previous = pasteFlightRef.current;
-    const joined = previous ? previous.then(() => flight) : flight;
-    pasteFlightRef.current = joined;
-    void joined.finally(() => {
-      if (pasteFlightRef.current === joined) pasteFlightRef.current = null;
-    });
-  };
   const submit = (value: string) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
@@ -1881,7 +1656,7 @@ export function Composer({
       const text = e.clipboardData.getData("text/plain");
       if (captured) insertRestoredText(captured, text);
       if (!attachmentsSupported) return;
-      rememberPaste(
+      rememberAttachmentRead(
         attachmentsFromFiles(messageFiles).then((pasted) => {
           if (pasteGenerationRef.current !== generation) {
             pasted.forEach(revokeAttachment);
@@ -1910,7 +1685,7 @@ export function Composer({
       const captured = isFileReferenceText(text)
         ? captureDraft(e.currentTarget)
         : null;
-      rememberPaste(
+      rememberAttachmentRead(
         nativeClipboardAttachments(text)
           .then(({ files: pasted, warning }) => {
             if (pasteGenerationRef.current !== generation) {
@@ -1937,7 +1712,7 @@ export function Composer({
     e.preventDefault();
     if (!attachmentsSupported) return;
     const generation = pasteGenerationRef.current;
-    rememberPaste(
+    rememberAttachmentRead(
       attachmentsFromFiles(files).then((pasted) => {
         if (pasteGenerationRef.current !== generation) {
           pasted.forEach(revokeAttachment);
@@ -1956,6 +1731,103 @@ export function Composer({
     });
   };
 
+  // The inset layout keeps the box to the prompt and its actions; where the
+  // work runs, and how full the context is, sit on the line beneath it. Its
+  // top padding matches the composer's own bottom padding, and the right
+  // padding centres the 14px context ring under the send button (border 1px,
+  // toolbar px-2, half of the 26px button: 22px in, less half the ring).
+  const workspaceBarOutside = insetLayout;
+  // Without the bar above it, the field's own top padding is the box's top
+  // edge. The field also starts two lines tall there, whether it is centred
+  // in an empty session (`shell`) or docked under a transcript, so both look
+  // the same: `rows` sets the natural height and `min-h-16` (two 22px lines
+  // plus the padding) keeps resizing from collapsing it.
+  const fieldPadding = workspaceBarOutside
+    ? "pt-3.5 pb-1.5 min-h-16"
+    : shell
+      ? "py-4"
+      : "py-3";
+  const workspaceBar = hideTopBar ? null : (
+    <div
+      data-composer-workspace-bar={workspaceBarOutside ? "" : undefined}
+      className={`flex min-w-0 items-center gap-2.5 overflow-hidden ${
+        workspaceBarOutside ? "pt-1.5 pr-[15px] pl-[15px]" : "px-3 pt-2.5"
+      }`}
+    >
+      {!remote && !hideProjectPicker ? (
+        <CwdPicker
+          cwd={cwd}
+          recents={recents}
+          projectLogoPath={projectLogoPath}
+          enabled={enabled}
+          onCwdChange={onCwdChange}
+          onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
+          onClose={() => ref.current?.focus()}
+        />
+      ) : null}
+      {hideBranchPicker ? null : draftWorkspace &&
+        onWorkspaceModeChange &&
+        onWorktreeBaseChange ? (
+        <>
+          <WorkspacePicker
+            cwd={executionCwd}
+            mode={workspaceMode ?? "current"}
+            base={resolvedWorktreeBase}
+            enabled={enabled && !busy}
+            onModeChange={onWorkspaceModeChange}
+            onBaseChange={onWorktreeBaseChange}
+            onSelectWorktree={onWorktreeChange}
+            onOpenSettings={onManageWorktrees}
+            onClose={() => ref.current?.focus()}
+          />
+          {(workspaceMode ?? "current") === "current" ? (
+            <BranchPicker
+              cwd={executionCwd}
+              branch={branch}
+              enabled={enabled && !busy}
+              onChange={onBranchChange}
+              onClose={() => ref.current?.focus()}
+            />
+          ) : null}
+        </>
+      ) : worktreeRemoved && onWorktreeChange ? (
+        <WorktreePicker
+          cwd={cwd}
+          executionCwd={executionCwd}
+          enabled={enabled && !busy}
+          onSelect={onWorktreeChange}
+          worktreeRemoved={worktreeRemoved}
+          onBranchChange={onBranchChange}
+          onManage={onManageWorktrees}
+          onClose={() => ref.current?.focus()}
+        />
+      ) : (
+        <>
+          {onWorktreeChange ? (
+            <WorkspaceIdentity
+              worktree={pathKey(cwd) !== pathKey(executionCwd)}
+            />
+          ) : null}
+          <BranchPicker
+            cwd={executionCwd}
+            branch={branch}
+            enabled={enabled && !busy}
+            onChange={onBranchChange}
+            onClose={() => ref.current?.focus()}
+          />
+        </>
+      )}
+      <div className="ml-auto flex shrink-0 items-center">
+        <ContextMeter
+          usage={context}
+          onCompact={
+            compactSupported && !worktreeRemoved ? onCompactContext : undefined
+          }
+          compactDisabled={busy}
+        />
+      </div>
+    </div>
+  );
   return (
     <div
       data-composer
@@ -1977,6 +1849,16 @@ export function Composer({
           onResume={onUsageLimitResume}
           onResumeAtReset={onUsageLimitResumeAtReset}
           onDismiss={onUsageLimitDismiss}
+          modelPicker={
+            onUsageLimitAccountChange ? (
+              <UsageLimitAccountPicker
+                harness={harness}
+                accountId={providerAccountId}
+                onSelect={onUsageLimitAccountChange}
+                variant="composer"
+              />
+            ) : undefined
+          }
         />
       ) : null}
       <MessageQueue
@@ -2153,7 +2035,7 @@ export function Composer({
           ref={boxRef}
           data-composer-box
           data-composer-editing={resendEdited ? "" : undefined}
-          className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
+          className={`relative z-10 border ${
             resendEdited
               ? "edit-last-turn-composer rounded-lg"
               : "rounded-lg border-content/10 has-focus:border-content/20"
@@ -2166,88 +2048,11 @@ export function Composer({
           }`}
         >
           {fileDrag ? (
-            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
+            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-[inherit] bg-accent/8 text-[12px] text-content/70">
               Drop files to attach
             </div>
           ) : null}
-          {hideTopBar ? null : (
-            <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
-              {!remote && !hideProjectPicker ? (
-                <CwdPicker
-                  cwd={cwd}
-                  recents={recents}
-                  projectLogoPath={projectLogoPath}
-                  enabled={enabled}
-                  onCwdChange={onCwdChange}
-                  onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
-                  onClose={() => ref.current?.focus()}
-                />
-              ) : null}
-              {hideBranchPicker ? null : draftWorkspace &&
-                onWorkspaceModeChange &&
-                onWorktreeBaseChange ? (
-                <>
-                  <WorkspacePicker
-                    cwd={executionCwd}
-                    mode={workspaceMode ?? "current"}
-                    base={resolvedWorktreeBase}
-                    enabled={enabled && !busy}
-                    onModeChange={onWorkspaceModeChange}
-                    onBaseChange={onWorktreeBaseChange}
-                    onSelectWorktree={onWorktreeChange}
-                    onOpenSettings={onManageWorktrees}
-                    onClose={() => ref.current?.focus()}
-                  />
-                  {(workspaceMode ?? "current") === "current" ? (
-                    <BranchPicker
-                      cwd={executionCwd}
-                      branch={branch}
-                      enabled={enabled && !busy}
-                      onChange={onBranchChange}
-                      onClose={() => ref.current?.focus()}
-                    />
-                  ) : null}
-                </>
-              ) : worktreeRemoved && onWorktreeChange ? (
-                <WorktreePicker
-                  cwd={cwd}
-                  executionCwd={executionCwd}
-                  enabled={enabled && !busy}
-                  onSelect={onWorktreeChange}
-                  worktreeRemoved={worktreeRemoved}
-                  onBranchChange={onBranchChange}
-                  onManage={onManageWorktrees}
-                  onClose={() => ref.current?.focus()}
-                />
-              ) : (
-                <>
-                  {onWorktreeChange ? (
-                    <WorkspaceIdentity
-                      worktree={pathKey(cwd) !== pathKey(executionCwd)}
-                    />
-                  ) : null}
-                  <BranchPicker
-                    cwd={executionCwd}
-                    branch={branch}
-                    enabled={enabled && !busy}
-                    onChange={onBranchChange}
-                    onClose={() => ref.current?.focus()}
-                  />
-                </>
-              )}
-              <div className="ml-auto flex shrink-0 items-center">
-                <ContextMeter
-                  usage={context}
-                  onCompact={
-                    compactSupported && !worktreeRemoved
-                      ? onCompactContext
-                      : undefined
-                  }
-                  compactDisabled={busy}
-                />
-              </div>
-            </div>
-          )}
+          {workspaceBarOutside ? null : workspaceBar}
 
           {attachments.length > 0 ? (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
@@ -2288,7 +2093,7 @@ export function Composer({
               aria-hidden
               style={{ textIndent: modeIndent }}
               className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
-                shell ? "py-4" : "py-3"
+                fieldPadding
               }`}
             >
               <ComposerHighlight
@@ -2303,9 +2108,10 @@ export function Composer({
               ref={ref}
               data-composer-empty={navigationEmpty ? "true" : undefined}
               style={{ textIndent: modeIndent }}
-              rows={1}
-              spellCheck={false}
-              defaultValue={initialDraft}
+              rows={workspaceBarOutside ? 2 : 1}
+              spellCheck={autocorrect}
+              autoCorrect={autocorrect ? "on" : "off"}
+              defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
                   ? "Select a branch or worktree to continue…"
@@ -2323,7 +2129,7 @@ export function Composer({
               aria-label={inputAriaLabel}
               disabled={disabled}
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
-                shell ? "py-4" : "py-3"
+                fieldPadding
               }`}
               onFocus={onFocus}
               onKeyDown={onKeyDown}
@@ -2359,7 +2165,11 @@ export function Composer({
             />
           </div>
 
-          <div className="flex items-center gap-1 px-2 pb-2">
+          <div
+            className={`flex items-center gap-1 px-2 ${
+              workspaceBarOutside ? "pb-2.5" : "pb-2"
+            }`}
+          >
             <div
               ref={plusRef}
               className={compact ? "hidden" : "relative shrink-0"}
@@ -2649,6 +2459,7 @@ export function Composer({
             </div>
           </div>
         </div>
+        {workspaceBarOutside ? workspaceBar : null}
         {runnerLive && runnerEnabled && !remote ? (
           <ComposerRunner
             boxRef={boxRef}
@@ -2836,12 +2647,5 @@ export function ComposerAction({
     >
       <ArrowUp className="size-3.5" strokeWidth={2.25} />
     </button>
-  );
-}
-
-function hasFiles(data: DataTransfer | null): data is DataTransfer {
-  if (!data) return false;
-  return [...data.types].some(
-    (type) => type === "Files" || type === "application/x-moz-file",
   );
 }

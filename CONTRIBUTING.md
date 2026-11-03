@@ -4,29 +4,26 @@ MonoCode is early and I’m the only maintainer, so small and focused lands much
 
 Please don’t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
 
+## PR policy during the GPUI preview
+
+The Rust + GPUI preview is developed on `main` alongside the production React/Tauri app. Development is focused on the native preview while the production app remains supported.
+
+- Bug fixes, security fixes, documentation improvements, and changes useful to both apps are still welcome on `main`.
+- Larger Tauri-specific features and refactors are temporarily deferred during the migration.
+- Target GPUI contributions at `main`. See [the native guide](docs/native/README.md) for setup and checks.
+
+Before starting a larger change, open an issue so we can agree on the scope and target branch and avoid duplicated work. Existing PRs will be reviewed individually.
+
 ## Get it running
 
-You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in:
+You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in. See [provider setup](docs/providers.md) for installation and login instructions.
 
-- [Claude Code](https://claude.com/product/claude-code) - `claude auth login`
-- [Codex](https://developers.openai.com/codex/cli) - `codex login`
-- [Cursor CLI](https://cursor.com/cli) - `agent login`
-- [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
-- [OpenCode](https://opencode.ai) - `opencode auth login`
-- [Antigravity](https://antigravity.google/docs/cli-install) (macOS/Linux) - `curl -fsSL https://antigravity.google/cli/install.sh | bash`, then run `agy` once to sign in
-- [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
-- [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
-- [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) - macOS/Linux: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; Windows PowerShell: `iex (irm https://hermes-agent.nousresearch.com/install.ps1)`; then run `hermes model`
-
-macOS, Linux, and Windows are supported targets. On Debian/Ubuntu, `npm run setup:linux:deb` installs the native Tauri build dependencies.
+macOS, Linux, and Windows are supported targets. See [building from source](docs/building.md) for platform prerequisites and packaging commands.
 
 ```bash
 npm install
 npm run tauri dev
 ```
-
-One provider is enough. MonoCode probes for each CLI at startup and disables the ones it can’t find, with a hint about how to install them, so a missing Codex doesn’t stop you from working on anything else.
 
 ## Where things live
 
@@ -39,6 +36,16 @@ One provider is enough. MonoCode probes for each CLI at startup and disables the
 
 `src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into MonoCode’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
 
+## Experimental GPUI work
+
+The production React/Tauri app continues to use the commands above. GPUI work
+lives in `crates/monocode-core` and `crates/monocode-gpui`, with an independent
+Cargo workspace and lockfile. Use `npm run native:dev` to develop,
+`npm run native:build` to package an optimized build, and
+`npm run native:check` for its checks. Keep production UI behavior, dependencies,
+CI and release/update distribution intact while the native port is tested.
+See the [native guide](docs/native/README.md) and [architecture](docs/native/migration.md).
+
 ## Before you push
 
 ```bash
@@ -47,9 +54,18 @@ npm run check
 
 That runs what CI runs: vitest, `tsc --noEmit`, `cargo fmt`, `cargo clippy`, and `cargo test`. If it’s green locally it should be green on GitHub. `npm run check:web` and `npm run check:rust` run the two halves separately when you only touched one side.
 
+For transcript layout and scrolling changes, also run the real-browser tests:
+
+```bash
+npx playwright install chromium webkit
+npm run test:browser
+```
+
+These render the actual transcript and stylesheet in Chromium and WebKit, checking scroll geometry that the DOM-mocked unit tests cannot exercise. They start an isolated Vite server on port 1435 and need no provider or Tauri app.
+
 ## New providers
 
-I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Antigravity, Pi, omp, fx, and Hermes Agent are still the best kind of contribution.
+I’m pausing new harnesses until the current ones share the same patterns - session lifecycle, catalog probes, usage, approvals, and how slash commands and skills are wired. A PR that adds another provider will be closed for now, even if the work is good. Fixes, tests, and protocol bugs on Claude, Codex, Cursor, Grok, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Devin are still the best kind of contribution.
 
 When the pause lifts, this section goes away.
 

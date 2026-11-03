@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import {
   getExternalPaneDrop,
   setExternalTitleTabDrop,
@@ -10,6 +11,9 @@ import {
 import { TitleBar, type Tab } from "./TitleBar";
 
 vi.mock("./WindowControls", () => ({ WindowControls: () => null }));
+vi.mock("../../platform/tauri/useTrafficLightsVisible", () => ({
+  useTrafficLightsVisible: () => true,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -79,7 +83,6 @@ describe("title tab pane drops", () => {
           onGoBack,
           onGoForward,
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect: vi.fn(),
           onClose: vi.fn(),
           onCloseMany: vi.fn(),
@@ -116,7 +119,6 @@ describe("title tab pane drops", () => {
           activeId: "first",
           cwd: "/project",
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect,
           onClose: vi.fn(),
           onCloseMany: vi.fn(),
@@ -173,7 +175,6 @@ describe("title tab pane drops", () => {
           activeId: "first",
           cwd: "/project",
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect: vi.fn(),
           onClose: vi.fn(),
           onCloseMany: vi.fn(),
@@ -205,7 +206,6 @@ describe("title tab pane drops", () => {
           activeId: "first",
           cwd: "/project",
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect: vi.fn(),
           onClose: vi.fn(),
           onCloseMany: vi.fn(),

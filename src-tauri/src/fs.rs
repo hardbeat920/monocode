@@ -16,6 +16,7 @@ use crate::dirs_home;
 pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_DOCUMENT_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_DATA_BYTES: u64 = MAX_GENERATED_IMAGE_BYTES * 4 / 3 + 4;
 const GENERATED_IMAGE_DIR: &str = "generated-images";
@@ -636,7 +637,7 @@ pub struct ProjectFile {
 /// index-backed); otherwise a bounded walk that never descends into vendor dirs.
 #[tauri::command]
 pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_project_files_sync(&cwd))
+    crate::background_work::read(move || list_project_files_sync(&cwd))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -839,7 +840,7 @@ pub struct GitDiffStats {
 /// plus untracked (gitignore-aware) files counted as additions.
 #[tauri::command]
 pub async fn git_diff_stats(cwd: String) -> Result<GitDiffStats, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_stats_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_stats_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -876,7 +877,7 @@ pub struct GitDiffIndex {
 /// Changed files in the opened folder, with per-file line counts and status.
 #[tauri::command]
 pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_index_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_index_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -884,7 +885,7 @@ pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
 /// Changed files and counts without branch/upstream synchronization metadata.
 #[tauri::command]
 pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_files_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_files_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -909,11 +910,9 @@ pub async fn git_file_diff(
     relative: String,
     staged: bool,
 ) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_file_diff_for(&expand_home(&cwd), &relative, staged)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::background_work::read(move || git_file_diff_for(&expand_home(&cwd), &relative, staged))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 const GIT_HISTORY_DEFAULT: u32 = 200;
@@ -950,7 +949,7 @@ pub struct GitHistory {
 /// branch. Newest first, with parent SHAs for the graph.
 #[tauri::command]
 pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, String> {
-    tauri::async_runtime::spawn_blocking(move || git_history_for(&expand_home(&cwd), limit))
+    crate::background_work::read(move || git_history_for(&expand_home(&cwd), limit))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -958,7 +957,7 @@ pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, 
 /// Files changed in one commit (first parent / root).
 #[tauri::command]
 pub async fn git_commit_files(cwd: String, sha: String) -> Result<Vec<GitChangedFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_files_for(&expand_home(&cwd), &sha))
+    crate::background_work::read(move || git_commit_files_for(&expand_home(&cwd), &sha))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -970,7 +969,7 @@ pub async fn git_commit_file_diff(
     sha: String,
     relative: String,
 ) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::background_work::read(move || {
         git_commit_file_diff_for(&expand_home(&cwd), &sha, &relative)
     })
     .await
@@ -1055,20 +1054,56 @@ pub struct GitStagedContext {
     pub patch: String,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileLocation {
+    pub root: String,
+    pub relative: String,
+}
+
+/// Locate each file's own checkout, including files whose parents were deleted.
+#[tauri::command]
+pub async fn git_locate_files(paths: Vec<String>) -> Result<Vec<Option<GitFileLocation>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| git_locate_file(&expand_home(path)))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Staged diff (or unstaged vs HEAD if nothing is staged) for commit text generation.
 #[tauri::command]
-pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String> {
-    tauri::async_runtime::spawn_blocking(move || git_staged_context_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn git_staged_context(
+    cwd: String,
+    paths: Option<Vec<String>>,
+) -> Result<GitStagedContext, String> {
+    tauri::async_runtime::spawn_blocking(move || match paths {
+        Some(paths) => git_selected_context_for(&expand_home(&cwd), &paths),
+        None => git_staged_context_for(&expand_home(&cwd)),
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+pub async fn git_commit(
+    cwd: String,
+    message: String,
+    amend: bool,
+    paths: Option<Vec<String>>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = expand_home(&cwd);
-        if amend {
+        if let Some(paths) = paths {
+            if amend {
+                return Err("Selected-file commits cannot amend HEAD".into());
+            }
+            git_commit_selected_for(&root, &message, &paths)
+        } else if amend {
             git_commit_amend_for(&root, &message)
         } else {
             git_commit_for(&root, &message)
@@ -1750,16 +1785,35 @@ fn git_diff_stats_for(root: &Path) -> GitDiffStats {
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     if let Some(text) = git_run(
         root,
-        &["diff", "--no-ext-diff", "--numstat", "HEAD", "--", "."],
+        &[
+            "diff",
+            "-z",
+            "--no-ext-diff",
+            "--numstat",
+            "HEAD",
+            "--",
+            ".",
+        ],
     ) {
         add_numstat_map(&text, &mut files);
     } else {
-        if let Some(text) = git_run(root, &["diff", "--no-ext-diff", "--numstat", "--", "."]) {
+        if let Some(text) = git_run(
+            root,
+            &["diff", "-z", "--no-ext-diff", "--numstat", "--", "."],
+        ) {
             add_numstat_map(&text, &mut files);
         }
         if let Some(text) = git_run(
             root,
-            &["diff", "--no-ext-diff", "--cached", "--numstat", "--", "."],
+            &[
+                "diff",
+                "-z",
+                "--no-ext-diff",
+                "--cached",
+                "--numstat",
+                "--",
+                ".",
+            ],
         ) {
             add_numstat_map(&text, &mut files);
         }
@@ -1804,6 +1858,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--no-ext-diff",
             "--numstat",
@@ -1817,6 +1872,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--name-status",
@@ -1833,6 +1889,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--numstat",
@@ -1846,6 +1903,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--cached",
@@ -1860,6 +1918,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--name-status",
@@ -1874,6 +1933,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--cached",
@@ -1938,12 +1998,29 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
 }
 
 fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
-    for line in text.lines() {
-        let mut parts = line.splitn(3, '\t');
+    // `git diff -z --numstat` ends each record with NUL. A rename is
+    // `add <TAB> del <TAB> <NUL> old <NUL> new <NUL>`; every other record is
+    // `add <TAB> del <TAB> path <NUL>`. The path itself may contain spaces,
+    // quotes, tabs, or non-ASCII bytes, which a newline listing would C-quote.
+    let mut fields = text.split('\0');
+    while let Some(record) = fields.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(3, '\t');
         let Some(add) = parts.next() else { continue };
         let Some(del) = parts.next() else { continue };
         let Some(path) = parts.next() else { continue };
-        let relative = normalize_diff_path(path);
+        let path = if path.is_empty() {
+            let _previous = fields.next();
+            match fields.next() {
+                Some(destination) if !destination.is_empty() => destination,
+                _ => continue,
+            }
+        } else {
+            path
+        };
+        let relative = literal_diff_path(path);
         if relative.is_empty() {
             continue;
         }
@@ -1956,9 +2033,14 @@ fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
 }
 
 fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
-    for line in text.lines() {
-        let Some((code, rest)) = line.split_once('\t') else {
+    // `--no-renames -z` is `status <NUL> path <NUL>`, repeated.
+    let mut fields = text.split('\0');
+    while let Some(code) = fields.next() {
+        if code.is_empty() {
             continue;
+        }
+        let Some(path) = fields.next() else {
+            break;
         };
         let status = match code.as_bytes().first() {
             Some(b'A') => "added",
@@ -1966,10 +2048,19 @@ fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
             Some(b'M' | b'T') => "modified",
             _ => continue,
         };
-        let relative = normalize_diff_path(rest);
+        let relative = literal_diff_path(path);
         if !relative.is_empty() {
             statuses.insert(relative, status);
         }
+    }
+}
+
+fn literal_diff_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        String::new()
+    } else {
+        path_to_js(Path::new(path))
     }
 }
 
@@ -2038,6 +2129,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--cached",
             "--name-only",
@@ -2046,8 +2138,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             ".",
         ],
     ) {
-        for line in names.lines() {
-            let relative = normalize_diff_path(line);
+        for line in names.split('\0') {
+            let relative = literal_diff_path(line);
             if !relative.is_empty() {
                 files.entry(relative).or_default().staged = true;
             }
@@ -2057,6 +2149,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--name-only",
             "--no-renames",
@@ -2064,8 +2157,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             ".",
         ],
     ) {
-        for line in names.lines() {
-            let relative = normalize_diff_path(line);
+        for line in names.split('\0') {
+            let relative = literal_diff_path(line);
             if !relative.is_empty() {
                 files.entry(relative).or_default().unstaged = true;
             }
@@ -2323,6 +2416,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         root,
         &[
             "diff-tree",
+            "-z",
             "--no-commit-id",
             "-r",
             "--root",
@@ -2337,6 +2431,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         root,
         &[
             "diff-tree",
+            "-z",
             "--no-commit-id",
             "-r",
             "--root",
@@ -2423,7 +2518,7 @@ fn git_commit_file_diff_for(root: &Path, sha: &str, relative: &str) -> Result<Gi
 
 fn git_stage_file_for(root: &Path, relative: &str) -> Result<(), String> {
     let relative = resolve_repo_path(root, relative)?;
-    git_checked(root, &["add", "--", &relative])
+    git_checked(root, &["--literal-pathspecs", "add", "--", &relative])
 }
 
 fn git_stage_contents_for(root: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
@@ -2498,7 +2593,16 @@ fn git_hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<Strin
 
 fn git_unstage_file_for(root: &Path, relative: &str) -> Result<(), String> {
     let relative = resolve_repo_path(root, relative)?;
-    git_checked(root, &["restore", "--staged", "--", &relative])
+    git_checked(
+        root,
+        &[
+            "--literal-pathspecs",
+            "restore",
+            "--staged",
+            "--",
+            &relative,
+        ],
+    )
 }
 
 fn git_discard_file_for(root: &Path, relative: &str) -> Result<(), String> {
@@ -2556,6 +2660,192 @@ fn git_staged_context_for(root: &Path) -> Result<GitStagedContext, String> {
         branch: git_branch(root),
         summary,
         patch,
+    })
+}
+
+fn git_locate_file(path: &Path) -> Result<Option<GitFileLocation>, String> {
+    if !path.is_absolute() || path.as_os_str().to_string_lossy().contains('\0') {
+        return Err("Invalid file path".into());
+    }
+    let mut parent = path.parent().ok_or("Invalid file path")?;
+    while !parent.is_dir() {
+        parent = parent.parent().ok_or("File has no existing parent")?;
+    }
+    // Canonicalize parents rather than the file: deleted files still have a
+    // location, and a tracked symlink belongs to the checkout holding the link.
+    let directory = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
+    let actual = directory.join(path.strip_prefix(parent).map_err(|e| e.to_string())?);
+    let output = git_cmd()
+        .args(["-C"])
+        .arg(&directory)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return if error.contains("not a git repository") {
+            Ok(None)
+        } else {
+            Err(error.trim().into())
+        };
+    }
+    let top = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    let top = Path::new(top.trim_end_matches(['\r', '\n']));
+    let repo = std::fs::canonicalize(top).map_err(|e| e.to_string())?;
+    let relative = actual.strip_prefix(&repo).map_err(|e| e.to_string())?;
+    Ok(Some(GitFileLocation {
+        // Git supplies a usable Windows path without canonicalize's verbatim prefix.
+        root: path_to_js(top),
+        relative: path_to_js(relative),
+    }))
+}
+
+/// A selection names literal files in exactly one checkout, never a directory
+/// or a pathspec that can widen the commit to other files or repositories.
+fn git_selected_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("Select at least one file".into());
+    }
+    let canonical_root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let mut selected = Vec::new();
+    for path in paths {
+        let relative = path_to_js(Path::new(path));
+        if relative.contains('\0')
+            || Path::new(&relative).is_absolute()
+            || Path::new(&relative)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            || relative.split('/').any(|part| {
+                part.is_empty() || matches!(part, "." | "..") || part.eq_ignore_ascii_case(".git")
+            })
+        {
+            return Err("Invalid selected file path".into());
+        }
+        let target = canonical_root.join(&relative);
+        let exists = match std::fs::symlink_metadata(&target) {
+            Ok(entry) if entry.is_dir() => {
+                return Err("Select files rather than directories".into())
+            }
+            Ok(_) => true,
+            Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Err(error) => return Err(error.to_string()),
+        };
+        let location = git_locate_file(&canonical_root.join(&relative))?
+            .ok_or("Selected file is outside Git")?;
+        if std::fs::canonicalize(&location.root).map_err(|e| e.to_string())? != canonical_root {
+            return Err("Selected files must belong to this repository".into());
+        }
+        let tracked = git_output(
+            root,
+            &["--literal-pathspecs", "ls-files", "-z", "--", &relative],
+        )
+        .ok_or("Could not validate selected files")?;
+        if tracked
+            .split(|byte| *byte == 0)
+            .any(|entry| !entry.is_empty() && entry != relative.as_bytes())
+        {
+            return Err("Select files rather than directories".into());
+        }
+        let head_type = git_stdout(root, &["cat-file", "-t", &format!("HEAD:{relative}")]);
+        if head_type.as_deref() == Some("tree") {
+            return Err("Select files rather than directories".into());
+        }
+        if !exists && tracked.is_empty() && head_type.as_deref() != Some("blob") {
+            return Err("Selected file does not exist in this repository".into());
+        }
+        if !selected.contains(&relative) {
+            selected.push(relative);
+        }
+    }
+    Ok(selected)
+}
+
+fn git_commit_selected_for(root: &Path, message: &str, paths: &[String]) -> Result<(), String> {
+    if message.trim().is_empty() {
+        return Err("Commit message cannot be empty".into());
+    }
+    let paths = git_selected_paths(root, paths)?;
+    let existing: Vec<&str> = paths
+        .iter()
+        .filter(|path| std::fs::symlink_metadata(root.join(path)).is_ok())
+        .map(String::as_str)
+        .collect();
+    let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+    add.extend(existing);
+    if add.len() > 4 {
+        git_checked(root, &add)?;
+    }
+    // --only takes the chosen working-tree files and preserves every other
+    // staged entry. Add existing files to make new files eligible for --only;
+    // already-staged deletions no longer match `git add` but do match `commit`.
+    let mut args = vec![
+        "--literal-pathspecs",
+        "commit",
+        "--only",
+        "--cleanup=strip",
+        "-m",
+        message.trim(),
+        "--",
+    ];
+    args.extend(paths.iter().map(String::as_str));
+    git_checked(root, &args).map_err(with_signing_hint)
+}
+
+struct GitSelectionIndex(PathBuf);
+
+impl Drop for GitSelectionIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn git_selected_context_for(root: &Path, paths: &[String]) -> Result<GitStagedContext, String> {
+    let paths = git_selected_paths(root, paths)?;
+    let index_dir = std::env::temp_dir().join(format!("monocode-git-selection-{}", Uuid::new_v4()));
+    let directory = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let directory = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut directory = directory;
+        directory.mode(0o700);
+        directory
+    };
+    directory.create(&index_dir).map_err(|e| e.to_string())?;
+    let index = GitSelectionIndex(index_dir);
+    let run = |args: &[&str]| -> Result<String, String> {
+        let output = git_cmd()
+            .arg("--literal-pathspecs")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_INDEX_FILE", index.0.join("index"))
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("PATH", crate::harness::gui_search_path())
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        }
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    };
+    if git_stdout(root, &["rev-parse", "--verify", "HEAD"]).is_some() {
+        run(&["read-tree", "HEAD"])?;
+    } else {
+        run(&["read-tree", "--empty"])?;
+    }
+    let mut add = vec!["add", "-A", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    run(&add)?;
+    Ok(GitStagedContext {
+        branch: git_branch(root),
+        summary: run(&["diff", "--cached", "--stat", "--no-renames"])?,
+        patch: run(&[
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        ])?,
     })
 }
 
@@ -4093,7 +4383,119 @@ fn gh_checked(root: &Path, args: &[&str]) -> Result<String, String> {
     gh_run(root, args, false)
 }
 
+struct GitHubRateLimitBackoff {
+    until: SystemTime,
+    error: String,
+}
+
+// Shared by all webviews, including background Inbox and PR checks requests.
+static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
+
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+    gh_with_backoff(
+        &GITHUB_RATE_LIMIT_BACKOFF,
+        args,
+        allow_empty,
+        |args, allow_empty| gh_run_raw(root, args, allow_empty),
+    )
+}
+
+fn github_rate_limit_error(
+    backoff: &mut Option<GitHubRateLimitBackoff>,
+    now: SystemTime,
+) -> Option<String> {
+    if let Some(active) = backoff.as_ref().filter(|active| now < active.until) {
+        return Some(active.error.clone());
+    }
+    *backoff = None;
+    None
+}
+
+fn gh_with_backoff(
+    backoff: &Mutex<Option<GitHubRateLimitBackoff>>,
+    args: &[&str],
+    allow_empty: bool,
+    mut run: impl FnMut(&[&str], bool) -> Result<String, String>,
+) -> Result<String, String> {
+    if let Ok(mut slot) = backoff.lock() {
+        if let Some(error) = github_rate_limit_error(&mut slot, SystemTime::now()) {
+            return Err(error);
+        }
+    }
+    let result = run(args, allow_empty);
+    let Err(error) = &result else {
+        return result;
+    };
+    let message = error.to_lowercase();
+    let primary = message.contains("api rate limit") && message.contains("exceeded");
+    let secondary = message.contains("secondary rate limit") || message.contains("abuse detection");
+    if !primary && !secondary {
+        return result;
+    }
+    // Stop other requests immediately and resolve the reset once. If GitHub
+    // cannot return it, retry after a minute rather than hammering the API.
+    if let Ok(mut slot) = backoff.lock() {
+        if github_rate_limit_error(&mut slot, SystemTime::now()).is_some() {
+            return result;
+        }
+        *slot = Some(GitHubRateLimitBackoff {
+            until: SystemTime::now() + Duration::from_secs(60),
+            error: error.clone(),
+        });
+    } else {
+        return result;
+    }
+    if primary && message.contains("graphql") {
+        // The REST /rate_limit endpoint can disagree with the live GraphQL
+        // quota. Query the same resource that reported the exhausted budget.
+        let reset = run(
+            &[
+                "api",
+                "graphql",
+                "-f",
+                "query=query { rateLimit { remaining resetAt } }",
+            ],
+            false,
+        )
+        .and_then(|json| parse_github_rate_limit_backoff(&json));
+        if let Ok(until) = reset {
+            if let Ok(mut slot) = backoff.lock() {
+                *slot = until
+                    .filter(|until| *until > SystemTime::now())
+                    .map(|until| GitHubRateLimitBackoff {
+                        until,
+                        error: error.clone(),
+                    });
+            }
+        }
+    }
+    result
+}
+
+fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, String> {
+    let response: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let rate = &response["data"]["rateLimit"];
+    let remaining = rate["remaining"]
+        .as_u64()
+        .ok_or("GitHub did not return its remaining quota")?;
+    if remaining > 0 {
+        return Ok(None);
+    }
+    let reset = rate["resetAt"]
+        .as_str()
+        .ok_or("GitHub did not return its rate-limit reset")?;
+    let reset = time::OffsetDateTime::parse(reset, &time::format_description::well_known::Rfc3339)
+        .map_err(|error| error.to_string())?
+        .unix_timestamp();
+    let seconds = u64::try_from(reset).map_err(|error| error.to_string())?;
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds.saturating_add(1)))
+        .map(Some)
+        .ok_or_else(|| "Invalid GitHub rate-limit reset".into())
+}
+
+fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
@@ -4151,19 +4553,25 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
     Ok(relative)
 }
 
+/// Any git can start a filter: in an LFS repo `status`, `diff`, `add`, and
+/// checkouts all run `git-lfs`, which a Finder launch's bare PATH lacks. The
+/// cached search path finds it without waiting on the login shell.
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
+    crate::background_work::configure_child(&mut cmd);
     crate::hide_window_console(&mut cmd);
+    cmd.env("PATH", crate::harness::cached_gui_search_path());
     cmd
 }
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
     let mut cmd = git_cmd();
+    let args = args.strip_prefix(&["--literal-pathspecs"]).unwrap_or(args);
     if matches!(
         args.first().copied(),
         Some("commit" | "push" | "pull" | "fetch" | "clone")
     ) {
-        // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
+        // Signers, hooks, and credential helpers may only be on the login-shell PATH.
         cmd.env("PATH", gui_path());
     }
     cmd
@@ -5236,6 +5644,36 @@ fn read_file_base64_sync(path: &str) -> Result<String, String> {
     ))
 }
 
+/// Video containers the chat can stream; mirrors `VIDEO_MIME_TYPES` in the UI.
+const STREAMABLE_VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "m4v", "mov", "webm", "ogv", "avi", "mkv", "mpg", "mpeg", "3gp", "3g2",
+];
+
+/// Let the asset protocol serve one local video, so a chat can stream it with
+/// range requests instead of reading the whole file into memory. Only that
+/// file, and only a video container, joins the scope. Returns the canonical
+/// path the caller should load.
+#[tauri::command]
+pub fn allow_video_stream(app: AppHandle, path: String) -> Result<String, String> {
+    let path = expand_home(&path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let video = is_streamable_video(&path);
+    if !video || !path.is_file() {
+        return Err("Not a video file".into());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn is_streamable_video(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| STREAMABLE_VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 /// Read a file as raw bytes for the image viewer.
 ///
 /// Returns an `ipc::Response`, which reaches the webview as an ArrayBuffer, so
@@ -5262,6 +5700,66 @@ fn read_binary_file_sync(path: &str) -> Result<Vec<u8>, String> {
         ));
     }
     std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Read an image that a Markdown document in a project shows.
+///
+/// The document is untrusted, so `path` must be relative to `root` and the
+/// file must resolve inside it with symlinks followed: a README cannot pull in
+/// a file from elsewhere on disk. The caller sniffs the bytes, as for
+/// `read_binary_file`.
+#[tauri::command]
+pub async fn read_project_image(
+    root: String,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        read_project_image_sync(Path::new(&root), Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn read_project_image_sync(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
+    use std::path::Component;
+    if !path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        return Err("Image path must stay inside the project".into());
+    }
+    let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let joined = root.join(path);
+    let file = std::fs::canonicalize(&joined).map_err(|e| format!("{}: {e}", joined.display()))?;
+    if !file.starts_with(&root) {
+        return Err("Image is outside the project".into());
+    }
+    let handle = std::fs::File::open(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let meta = handle
+        .metadata()
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    if !meta.is_file() {
+        return Err("Not a file".into());
+    }
+    let too_large = || {
+        format!(
+            "Image is too large to show (maximum {} MB).",
+            MAX_DOCUMENT_IMAGE_BYTES / 1024 / 1024
+        )
+    };
+    if meta.len() > MAX_DOCUMENT_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    handle
+        .take(MAX_DOCUMENT_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    if bytes.len() as u64 > MAX_DOCUMENT_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// Persist a pasted blob so non-image attachments have a real path.
@@ -5455,6 +5953,43 @@ fn read_text_file_sync(path: &str) -> Result<String, String> {
         return Err("Binary files cannot be edited.".into());
     }
     String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8.".into())
+}
+
+/// A path a paired phone named under a project's working copy, refused when it
+/// resolves outside it, through `..` or a symlink alike.
+fn inside_root(root: &str, relative: &str) -> Result<PathBuf, String> {
+    let root = expand_home(root)
+        .canonicalize()
+        .map_err(|_| "Project folder is unavailable".to_string())?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "No such file or folder".to_string())?;
+    if !path.starts_with(&root) {
+        return Err("That is outside the project".into());
+    }
+    Ok(path)
+}
+
+/// A folder in a project's working copy, for the phone's file browser. Hides
+/// the repository's own `.git`.
+#[tauri::command(async)]
+pub fn mobile_list_dir(root: String, relative: String) -> Result<Vec<DirEntry>, String> {
+    let dir = inside_root(&root, &relative)?;
+    Ok(list_dir_sync(&dir)?
+        .into_iter()
+        .filter(|entry| entry.name != ".git")
+        .collect())
+}
+
+/// A text file in a project's working copy, for the phone's file browser.
+#[tauri::command]
+pub async fn mobile_read_text_file(root: String, relative: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_text_file_sync(&path_to_js(&inside_root(&root, &relative)?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Atomically replace a text file from a temporary file in the same directory.
@@ -5745,8 +6280,16 @@ pub async fn move_path(from: String, dest_parent: String) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), String> {
-    let path = expand_home(&path);
+pub async fn reveal_path(path: String) -> Result<(), String> {
+    // On Linux `xdg-open` can stay alive until the file manager window closes;
+    // waiting on it from the main thread hangs the UI.
+    tauri::async_runtime::spawn_blocking(move || reveal_path_sync(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn reveal_path_sync(path: &str) -> Result<(), String> {
+    let path = expand_home(path);
     if !path.exists() {
         return Err(format!("{}: No such file or directory", path.display()));
     }
@@ -5765,10 +6308,14 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // explorer.exe returns 1 even when it opened the folder.
         let path_str = path.to_string_lossy().replace('/', "\\");
+        // `.arg` would wrap the whole `/select,...` switch in quotes when the
+        // path has spaces; explorer ignores a quoted switch and opens its
+        // default folder instead. Only the path itself may be quoted.
         Command::new("explorer")
-            .arg(format!("/select,{path_str}"))
+            .raw_arg(format!("/select,\"{path_str}\""))
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -5809,10 +6356,127 @@ pub async fn open_path_with_default_app(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_video_containers_can_join_the_stream_scope() {
+        use std::path::Path;
+        assert!(is_streamable_video(Path::new("/clips/demo.MP4")));
+        assert!(is_streamable_video(Path::new("/clips/demo.webm")));
+        for path in [
+            "/home/me/.ssh/id_rsa",
+            "/notes/a.md",
+            "/shot.png",
+            "/mp4",
+            "/a.mp4.txt",
+        ] {
+            assert!(!is_streamable_video(Path::new(path)), "{path}");
+        }
+    }
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn github_rate_limit_blocks_other_commands_until_reset() {
+        let backoff = Mutex::new(None);
+        let error = "GraphQL: API rate limit already exceeded for user ID 1.";
+        let mut calls = 0;
+        let result = gh_with_backoff(&backoff, &["pr", "list"], false, |args, _| {
+            calls += 1;
+            if args[0] == "api" {
+                Ok(
+                    r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2099-01-01T00:00:00Z"}}}"#
+                        .into(),
+                )
+            } else {
+                Err(error.into())
+            }
+        });
+        assert_eq!(result.unwrap_err(), error);
+        assert_eq!(calls, 2);
+        assert_eq!(
+            gh_with_backoff(&backoff, &["issue", "view", "42"], false, |_, _| {
+                panic!("No command may reach GitHub before the reset")
+            })
+            .unwrap_err(),
+            error
+        );
+        backoff.lock().unwrap().as_mut().unwrap().until =
+            SystemTime::now() - Duration::from_secs(1);
+        assert_eq!(
+            gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| Ok("fresh".into())).unwrap(),
+            "fresh"
+        );
+        assert!(backoff.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn github_rate_limit_probe_failure_still_pauses_requests() {
+        let backoff = Mutex::new(None);
+        let mut calls = 0;
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            calls += 1;
+            if calls == 1 {
+                Err("GraphQL: API rate limit already exceeded".into())
+            } else {
+                Err("offline".into())
+            }
+        })
+        .is_err());
+        assert_eq!(calls, 2);
+        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
+            panic!("A failed reset lookup must not cause a request storm")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn github_secondary_rate_limit_pauses_without_a_quota_probe() {
+        let backoff = Mutex::new(None);
+        let mut calls = 0;
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            calls += 1;
+            Err("You have exceeded a secondary rate limit".into())
+        })
+        .is_err());
+        assert_eq!(calls, 1);
+        assert!(backoff.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn github_network_errors_do_not_pause_other_commands() {
+        let backoff = Mutex::new(None);
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            Err("error connecting to api.github.com".into())
+        })
+        .is_err());
+        assert!(backoff.lock().unwrap().is_none());
+        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
+            Ok("fresh".into())
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn github_rate_limit_reset_parser_requires_valid_quota_data() {
+        let reset = parse_github_rate_limit_backoff(
+            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2026-10-06T13:48:40Z"}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(reset, UNIX_EPOCH + Duration::from_secs(1791294521));
+        assert!(
+            parse_github_rate_limit_backoff(r#"{"data":{"rateLimit":{"remaining":10}}}"#)
+                .unwrap()
+                .is_none()
+        );
+        assert!(parse_github_rate_limit_backoff(r#"{"errors":[{"message":"offline"}]}"#).is_err());
+        assert!(parse_github_rate_limit_backoff(
+            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"invalid"}}}"#
+        )
+        .is_err());
+    }
 
     #[test]
     fn claude_shell_commands_match_only_requested_bash_tool_ids() {
@@ -6108,6 +6772,53 @@ mod tests {
     }
 
     #[test]
+    fn project_images_read_only_inside_the_project() {
+        let dir = tmp("project-image");
+        let root = dir.0.join("repo");
+        std::fs::create_dir_all(root.join(".github/readme")).unwrap();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        std::fs::write(root.join(".github/readme/hero.png"), png).unwrap();
+        std::fs::write(dir.0.join("secret.png"), b"secret").unwrap();
+
+        let read = |path: &str| read_project_image_sync(&root, Path::new(path));
+        assert_eq!(read(".github/readme/hero.png").unwrap(), png);
+        assert_eq!(read("./.github/readme/hero.png").unwrap(), png);
+        assert!(read("../secret.png").is_err());
+        assert!(read(".github/../../secret.png").is_err());
+        assert!(read(&dir.0.join("secret.png").to_string_lossy()).is_err());
+        assert!(read(".github").is_err());
+        assert!(read("").is_err());
+        assert!(read("missing.png").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_images_refuse_symlinks_out_of_the_project() {
+        let dir = tmp("project-image-link");
+        let root = dir.0.join("repo");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(dir.0.join("secret.png"), b"secret").unwrap();
+        std::fs::write(root.join("docs/inside.png"), b"inside").unwrap();
+        std::os::unix::fs::symlink(dir.0.join("secret.png"), root.join("leak.png")).unwrap();
+        std::os::unix::fs::symlink(&dir.0, root.join("outside")).unwrap();
+        std::os::unix::fs::symlink(root.join("docs/inside.png"), root.join("alias.png")).unwrap();
+
+        let read = |path: &str| read_project_image_sync(&root, Path::new(path));
+        assert!(read("leak.png").is_err());
+        assert!(read("outside/secret.png").is_err());
+        assert_eq!(read("alias.png").unwrap(), b"inside");
+    }
+
+    #[test]
+    fn project_images_refuse_oversized_files() {
+        let dir = tmp("project-image-size");
+        let file = std::fs::File::create(dir.0.join("huge.png")).unwrap();
+        file.set_len(MAX_DOCUMENT_IMAGE_BYTES + 1).unwrap();
+        let error = read_project_image_sync(&dir.0, Path::new("huge.png")).unwrap_err();
+        assert!(error.contains("too large"), "{error}");
+    }
+
+    #[test]
     fn inspect_paths_reports_files_and_directories() {
         let dir = tmp("inspect-paths");
         let file = dir.0.join("notes.md");
@@ -6342,6 +7053,25 @@ mod tests {
         ignored_names(&list_dir_sync(dir).unwrap())
             .iter()
             .any(|n| n == name)
+    }
+
+    #[test]
+    fn inside_root_refuses_paths_that_leave_the_project() {
+        let dir = tmp("mobile-inside-root");
+        let project = dir.0.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.0.join("secret"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.0.join("secret"), project.join("link")).unwrap();
+        let root = project.to_string_lossy();
+
+        assert!(inside_root(&root, "src/main.rs").is_ok());
+        assert!(inside_root(&root, "").is_ok());
+        assert!(inside_root(&root, "../secret").is_err());
+        assert!(inside_root(&root, &dir.0.join("secret").to_string_lossy()).is_err());
+        #[cfg(unix)]
+        assert!(inside_root(&root, "link").is_err());
     }
 
     #[test]
@@ -6598,6 +7328,225 @@ mod tests {
     }
 
     #[test]
+    fn selected_commit_preserves_other_staged_files() {
+        let repo = tmp("selected-commit");
+        assert!(init_git_commit(
+            &repo.0,
+            &[("chosen.txt", "old\n"), ("other.txt", "old\n")]
+        ));
+        std::fs::write(repo.0.join("other.txt"), "unrelated staged\n").unwrap();
+        assert!(git(&repo.0, &["add", "other.txt"]));
+        std::fs::write(repo.0.join("chosen.txt"), "partial staging\n").unwrap();
+        assert!(git(&repo.0, &["add", "chosen.txt"]));
+        std::fs::write(repo.0.join("chosen.txt"), "chosen working tree\n").unwrap();
+
+        git_commit_selected_for(&repo.0, "Selected only", &["chosen.txt".into()]).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:chosen.txt"]).as_deref(),
+            Some("chosen working tree")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("old")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["show", ":other.txt"]).as_deref(),
+            Some("unrelated staged")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["diff", "--cached", "--name-only"]).as_deref(),
+            Some("other.txt")
+        );
+        // The existing whole-index workflow remains available to other panels.
+        git_commit_for(&repo.0, "Remaining staged work").unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("unrelated staged")
+        );
+    }
+
+    #[test]
+    fn selected_context_keeps_index_and_excluded_content_private() {
+        let repo = tmp("selected-context");
+        assert!(init_git_commit(
+            &repo.0,
+            &[
+                ("chosen.txt", "old\n"),
+                ("secret.txt", "old\n"),
+                ("deleted.txt", "gone\n")
+            ]
+        ));
+        std::fs::write(repo.0.join("secret.txt"), "EXCLUDED_SECRET\n").unwrap();
+        std::fs::write(repo.0.join("chosen.txt"), "partial staging\n").unwrap();
+        assert!(git(&repo.0, &["add", "."]));
+        std::fs::write(repo.0.join("chosen.txt"), "selected work\n").unwrap();
+        std::fs::write(repo.0.join("new.txt"), "selected new\n").unwrap();
+        std::fs::remove_file(repo.0.join("deleted.txt")).unwrap();
+        assert!(git(&repo.0, &["add", "deleted.txt"]));
+        let index = std::fs::read(repo.0.join(".git/index")).unwrap();
+        let head = git_stdout(&repo.0, &["rev-parse", "HEAD"]);
+        let paths = vec!["chosen.txt".into(), "new.txt".into(), "deleted.txt".into()];
+
+        let context = git_selected_context_for(&repo.0, &paths).unwrap();
+        assert!(context.patch.contains("+selected work"));
+        assert!(context.patch.contains("+selected new"));
+        assert!(context.patch.contains("-gone"));
+        assert!(!context.patch.contains("EXCLUDED_SECRET"));
+        assert!(!context.summary.contains("secret.txt"));
+        assert_eq!(std::fs::read(repo.0.join(".git/index")).unwrap(), index);
+        assert_eq!(git_stdout(&repo.0, &["rev-parse", "HEAD"]), head);
+
+        git_commit_selected_for(&repo.0, "Add and delete selected files", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:new.txt"]).as_deref(),
+            Some("selected new")
+        );
+        assert!(git_stdout(&repo.0, &["show", "HEAD:deleted.txt"]).is_none());
+        assert_eq!(
+            git_stdout(&repo.0, &["show", ":secret.txt"]).as_deref(),
+            Some("EXCLUDED_SECRET")
+        );
+    }
+
+    #[test]
+    fn selected_files_work_without_a_head() {
+        let repo = tmp("selected-unborn");
+        assert!(init_git(&repo.0, "main", None));
+        std::fs::write(repo.0.join("chosen.txt"), "chosen\n").unwrap();
+        std::fs::write(repo.0.join("other.txt"), "other\n").unwrap();
+        assert!(git(&repo.0, &["add", "other.txt"]));
+        let paths = vec!["chosen.txt".into()];
+        assert!(git_selected_context_for(&repo.0, &paths)
+            .unwrap()
+            .patch
+            .contains("+chosen"));
+        git_commit_selected_for(&repo.0, "First selected commit", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["ls-tree", "--name-only", "HEAD"]).as_deref(),
+            Some("chosen.txt")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["diff", "--cached", "--name-only"]).as_deref(),
+            Some("other.txt")
+        );
+    }
+
+    #[test]
+    fn selected_paths_reject_directories_and_other_repositories_before_staging() {
+        let repo = tmp("selected-invalid");
+        assert!(init_git_commit(&repo.0, &[("chosen.txt", "old\n")]));
+        let nested = repo.0.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert!(init_git_commit(&nested, &[("file.txt", "nested\n")]));
+        std::fs::create_dir(repo.0.join("missing-folder")).unwrap();
+        std::fs::write(repo.0.join("missing-folder/child.txt"), "child\n").unwrap();
+        assert!(git(&repo.0, &["add", "missing-folder/child.txt"]));
+        std::fs::remove_dir_all(repo.0.join("missing-folder")).unwrap();
+        std::fs::write(repo.0.join("chosen.txt"), "unstaged\n").unwrap();
+        let index = std::fs::read(repo.0.join(".git/index")).unwrap();
+        for invalid in [
+            "",
+            "../escape",
+            ".git/config",
+            "./chosen.txt",
+            "nested/file.txt",
+            "missing-folder",
+            "absent.txt",
+        ] {
+            let paths = vec!["chosen.txt".into(), invalid.into()];
+            assert!(
+                git_commit_selected_for(&repo.0, "Invalid", &paths).is_err(),
+                "{invalid}"
+            );
+            assert!(
+                git_selected_context_for(&repo.0, &paths).is_err(),
+                "{invalid}"
+            );
+            assert_eq!(std::fs::read(repo.0.join(".git/index")).unwrap(), index);
+        }
+        assert!(git_commit_selected_for(&repo.0, "Empty", &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_filenames_are_literal() {
+        let repo = tmp("selected-literal");
+        assert!(init_git_commit(&repo.0, &[("other.txt", "old\n")]));
+        std::fs::write(repo.0.join("other.txt"), "excluded\n").unwrap();
+        let paths: Vec<String> = [
+            "*",
+            ":(glob)*",
+            "-flag",
+            "line\nbreak",
+            "back\\slash",
+            "hello é.txt",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for path in &paths {
+            std::fs::write(repo.0.join(path), "literal file\n").unwrap();
+        }
+        git_commit_selected_for(&repo.0, "Literal filenames", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("old")
+        );
+        for path in paths {
+            assert_eq!(
+                git_stdout(&repo.0, &["show", &format!("HEAD:{path}")]).as_deref(),
+                Some("literal file")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_symlinks_do_not_read_or_commit_outside_files() {
+        use std::os::unix::fs::symlink;
+        let repo = tmp("selected-symlinks");
+        let outside = tmp("selected-outside");
+        assert!(init_git_commit(&repo.0, &[("chosen.txt", "old\n")]));
+        std::fs::write(outside.0.join("secret.txt"), "OUTSIDE_SECRET\n").unwrap();
+        symlink(outside.0.join("secret.txt"), repo.0.join("file-link")).unwrap();
+        symlink(&outside.0, repo.0.join("dir-link")).unwrap();
+        let context = git_selected_context_for(&repo.0, &["file-link".into()]).unwrap();
+        assert!(!context.patch.contains("OUTSIDE_SECRET"));
+        assert!(context.patch.contains("new file mode 120000"));
+        assert!(git_selected_context_for(&repo.0, &["dir-link/secret.txt".into()]).is_err());
+        assert!(
+            git_commit_selected_for(&repo.0, "Escape", &["dir-link/secret.txt".into()]).is_err()
+        );
+    }
+
+    #[test]
+    fn locate_files_distinguishes_repos_worktrees_and_deleted_parents() {
+        let home = tmp("locate-files");
+        let a = home.0.join("a");
+        let b = home.0.join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        assert!(init_git_commit(&a, &[("file.txt", "a\n")]));
+        assert!(init_git_commit(&b, &[("file.txt", "b\n")]));
+        let tree = home.0.join("worktree");
+        assert!(git(
+            &a,
+            &["worktree", "add", "-b", "other", tree.to_str().unwrap()]
+        ));
+        for (root, relative) in [
+            (&a, "deleted/folder/file.txt"),
+            (&b, "file.txt"),
+            (&tree, "file.txt"),
+        ] {
+            let canonical = std::fs::canonicalize(root).unwrap();
+            let location = git_locate_file(&root.join(relative)).unwrap().unwrap();
+            assert_eq!(std::fs::canonicalize(&location.root).unwrap(), canonical);
+            assert_eq!(location.relative, relative);
+        }
+        assert_eq!(git_locate_file(&home.0.join("outside.txt")).unwrap(), None);
+    }
+
+    #[test]
     fn git_diff_stats_are_zero_outside_a_repo() {
         let dir = tmp("git-diff-none");
         std::fs::write(dir.0.join("notes.txt"), "hello\n").unwrap();
@@ -6675,6 +7624,41 @@ mod tests {
         assert_eq!(untracked.status, "untracked");
         assert_eq!(untracked.additions, 2);
         assert_eq!(untracked.deletions, 0);
+    }
+
+    #[test]
+    fn git_diff_index_keeps_literal_non_ascii_paths() {
+        let dir = tmp("git-diff-quoted-path");
+        if !init_git_commit(&dir.0, &[("한글.md", "before\n"), ("my file.txt", "one\n")]) {
+            return;
+        }
+        // Default quoting would otherwise hand the Changes view a C-escaped name.
+        assert!(git(&dir.0, &["config", "core.quotePath", "true"]));
+        std::fs::write(dir.0.join("한글.md"), "before\nafter\n").unwrap();
+        std::fs::write(dir.0.join("my file.txt"), "one\ntwo\n").unwrap();
+
+        let index = git_diff_index_for(&dir.0);
+        let hangul = index
+            .files
+            .iter()
+            .find(|file| file.relative == "한글.md")
+            .unwrap();
+        assert_eq!(hangul.status, "modified");
+        assert_eq!(hangul.additions, 1);
+        assert!(hangul.unstaged);
+        assert!(!hangul.relative.contains('\\'));
+
+        let spaced = index
+            .files
+            .iter()
+            .find(|file| file.relative == "my file.txt")
+            .unwrap();
+        assert_eq!(spaced.status, "modified");
+        assert_eq!(spaced.additions, 1);
+
+        let diff = git_file_diff_for(&dir.0, "한글.md", false).unwrap();
+        assert_eq!(diff.relative, "한글.md");
+        assert!(diff.current.contains("after"));
     }
 
     #[test]
@@ -7032,6 +8016,124 @@ mod tests {
             .unwrap();
         assert!(!unstaged.staged);
         assert!(unstaged.unstaged);
+    }
+
+    #[test]
+    fn git_stage_and_unstage_directory() {
+        let dir = tmp("git-stage-directory");
+        std::fs::create_dir_all(dir.0.join("src/nested")).unwrap();
+        std::fs::create_dir_all(dir.0.join("src-other")).unwrap();
+        if !init_git_commit(
+            &dir.0,
+            &[
+                ("src/app.ts", "before\n"),
+                ("src/nested/deleted.ts", "delete me\n"),
+                ("src-other/app.ts", "before\n"),
+                ("ready.txt", "before\n"),
+                (".gitignore", "src/ignored.txt\n"),
+            ],
+        ) {
+            return;
+        }
+        std::fs::write(dir.0.join("src/app.ts"), "after\n").unwrap();
+        std::fs::remove_dir_all(dir.0.join("src/nested")).unwrap();
+        std::fs::create_dir_all(dir.0.join("src/added")).unwrap();
+        std::fs::write(dir.0.join("src/added/new.ts"), "new\n").unwrap();
+        std::fs::write(dir.0.join("src/ignored.txt"), "ignored\n").unwrap();
+        std::fs::write(dir.0.join("src-other/app.ts"), "outside\n").unwrap();
+        std::fs::write(dir.0.join("ready.txt"), "ready\n").unwrap();
+        git_stage_file_for(&dir.0, "ready.txt").unwrap();
+
+        git_stage_file_for(&dir.0, "src").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 5);
+        for file in &index.files {
+            let in_folder = file.relative.starts_with("src/");
+            assert_eq!(file.staged, in_folder || file.relative == "ready.txt");
+            assert_eq!(file.unstaged, file.relative == "src-other/app.ts");
+        }
+
+        git_unstage_file_for(&dir.0, "src").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 5);
+        for file in &index.files {
+            assert_eq!(file.staged, file.relative == "ready.txt");
+            assert_eq!(file.unstaged, file.relative != "ready.txt");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("src/app.ts")).unwrap(),
+            "after\n"
+        );
+        assert!(!dir.0.join("src/nested").exists());
+    }
+
+    #[test]
+    fn git_stage_and_unstage_deleted_directory() {
+        let dir = tmp("git-stage-deleted-directory");
+        std::fs::create_dir_all(dir.0.join("deleted/nested")).unwrap();
+        if !init_git_commit(&dir.0, &[("deleted/nested/file.ts", "before\n")]) {
+            return;
+        }
+        std::fs::remove_dir_all(dir.0.join("deleted")).unwrap();
+        git_stage_file_for(&dir.0, "deleted").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 1);
+        assert!(index.files[0].staged);
+        assert!(!index.files[0].unstaged);
+
+        git_unstage_file_for(&dir.0, "deleted").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 1);
+        assert!(!index.files[0].staged);
+        assert!(index.files[0].unstaged);
+        assert!(!dir.0.join("deleted").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_stage_and_unstage_literal_directory_names() {
+        for folder in ["*", "folder?", "[ab]", ":(glob)*"] {
+            let dir = tmp("git-stage-literal-directory");
+            for directory in [folder, "a", "folderx"] {
+                std::fs::create_dir(dir.0.join(directory)).unwrap();
+            }
+            let inside = format!("{folder}/inside.txt");
+            let tracked = [
+                inside.as_str(),
+                "a/other.txt",
+                "folderx/other.txt",
+                "ready.txt",
+            ];
+            let initial: Vec<_> = tracked.iter().map(|path| (*path, "before\n")).collect();
+            if !init_git_commit(&dir.0, &initial) {
+                return;
+            }
+            for path in tracked {
+                std::fs::write(dir.0.join(path), "after\n").unwrap();
+            }
+            std::fs::write(dir.0.join("private.txt"), "unrelated untracked data\n").unwrap();
+            let staged_paths = || {
+                git_run(&dir.0, &["diff", "--cached", "--name-only", "-z"])
+                    .unwrap()
+                    .split('\0')
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            };
+
+            git_stage_file_for(&dir.0, "ready.txt").unwrap();
+            git_stage_file_for(&dir.0, folder).unwrap();
+            let mut expected = vec![inside.clone(), "ready.txt".to_string()];
+            expected.sort();
+            assert_eq!(staged_paths(), expected, "stage folder {folder}");
+
+            git_unstage_file_for(&dir.0, folder).unwrap();
+            assert_eq!(staged_paths(), vec!["ready.txt"], "unstage folder {folder}");
+            assert_eq!(
+                std::fs::read_to_string(dir.0.join(&inside)).unwrap(),
+                "after\n"
+            );
+        }
     }
 
     #[test]
@@ -8341,22 +9443,35 @@ mod tests {
         assert!(!head.is_empty());
     }
 
-    #[test]
-    fn read_only_git_cmd_uses_inherited_path() {
-        assert!(!git_cmd()
+    fn git_cmd_path(cmd: &Command) -> Vec<PathBuf> {
+        let path = cmd
             .get_envs()
-            .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .expect("git should get an explicit PATH");
+        std::env::split_paths(path).collect()
+    }
+
+    /// git-lfs and other filters live in Homebrew dirs a Finder launch lacks.
+    #[test]
+    fn read_only_git_cmd_path_adds_fixed_dirs_to_inherited_path() {
+        let path = git_cmd_path(&git_cmd());
+        assert!(path.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(path.contains(&PathBuf::from("/usr/local/bin")));
+        if let Some(inherited) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&inherited) {
+                assert!(path.contains(&dir), "missing inherited {dir:?}");
+            }
+        }
     }
 
     #[test]
-    fn read_only_git_never_resolves_login_shell_path() {
-        for action in ["status", "diff", "rev-parse", "ls-files", "cat-file"] {
+    fn local_git_never_resolves_login_shell_path() {
+        for action in ["status", "diff", "add", "restore", "cat-file"] {
             let cmd = git_cmd_for_args_with_path(&[action], || {
-                panic!("read-only git must not resolve the login-shell PATH")
+                panic!("local git must not resolve the login-shell PATH")
             });
-            assert!(!cmd
-                .get_envs()
-                .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+            assert!(git_cmd_path(&cmd).contains(&PathBuf::from("/opt/homebrew/bin")));
         }
     }
 

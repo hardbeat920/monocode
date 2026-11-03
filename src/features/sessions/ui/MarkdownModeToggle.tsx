@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export type MarkdownViewMode = "preview" | "source";
 
@@ -6,14 +6,19 @@ const remembered = new Map<string, MarkdownViewMode>();
 
 export function useMarkdownMode(
   key: string,
+  fallback: MarkdownViewMode = "preview",
 ): [MarkdownViewMode, (mode: MarkdownViewMode) => void] {
   const [mode, setMode] = useState<MarkdownViewMode>(
-    () => remembered.get(key) ?? "preview",
+    () => remembered.get(key) ?? fallback,
   );
+  // A changed fallback applies to the next key, not the item already shown.
+  const shownKey = useRef(key);
 
   useEffect(() => {
-    setMode(remembered.get(key) ?? "preview");
-  }, [key]);
+    if (shownKey.current === key) return;
+    shownKey.current = key;
+    setMode(remembered.get(key) ?? fallback);
+  }, [key, fallback]);
 
   return [
     mode,

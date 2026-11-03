@@ -3,7 +3,10 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { inboxItemKey, type InboxItem } from "../../inbox/model/githubTasks";
-import { isInboxEntryUnseen, markInboxItemSeen } from "../../inbox/model/inboxSeen";
+import {
+  isInboxEntryUnseen,
+  markInboxItemSeen,
+} from "../../inbox/model/inboxSeen";
 import {
   loadNotificationPreferences,
   updateNotificationPreferences,
@@ -13,7 +16,10 @@ import {
   rememberNotificationProjects,
 } from "../model/notificationProjects";
 import { ProjectNotificationSettings } from "../ui/ProjectNotificationSettings";
-import { useInboxActivity, type InboxActivity } from "../../inbox/hooks/useInboxUnseen";
+import {
+  useInboxActivity,
+  type InboxActivity,
+} from "../../inbox/hooks/useInboxUnseen";
 
 // Only provider I/O and the audio device are replaced. Notification policy,
 // polling, persisted preferences, unread tracking, and Settings are real.
@@ -57,7 +63,7 @@ async function pollUpdated(...indices: number[]) {
   items = items.map((item, index) =>
     indices.includes(index) ? { ...item, updatedAt } : item,
   );
-  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  await act(async () => vi.advanceTimersByTimeAsync(2 * 60_000));
 }
 function projectRow(name: string) {
   return container
@@ -171,7 +177,7 @@ it("honors category choices before and after a project mute while another projec
 
 it("restores a timed mute from storage on remount and expires without replaying missed sounds", async () => {
   await mount();
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 5 * 60_000;
   act(() => updateNotificationPreferences([oneId], { mutedUntil: deadline }));
   await pollUpdated(0);
   expect(activity.unseen).toBe(false);

@@ -7,6 +7,7 @@ import {
   prettyCwd,
   projectName,
   rebasePath,
+  resolveDocumentImage,
   setHomeDir,
   slash,
   resolveWorkspaceFileReference,
@@ -244,5 +245,96 @@ describe("path relations", () => {
     expect(displayPath("c:/USERS/me/App/src/a.ts", "C:/Users/ME/app")).toBe(
       "src/a.ts",
     );
+  });
+});
+
+describe("document images", () => {
+  it.each([
+    [".github/readme/hero.png", "/repo/README.md", "/repo/.github/readme/hero.png"],
+    ["./shot.PNG", "/repo/README.md", "/repo/shot.PNG"],
+    ["../assets/a.png", "/repo/docs/guide.md", "/repo/assets/a.png"],
+    ["/img/a.png", "/repo/docs/guide.md", "/repo/img/a.png"],
+    ["a.png?raw=true#top", "/repo/docs/guide.md", "/repo/docs/a.png"],
+    ["My%20Shot%231.jpg", "/repo/README.md", "/repo/My Shot#1.jpg"],
+    ["logo.svg", "/repo/README.md", "/repo/logo.svg"],
+    ["docs/../x.webp", "/repo/README.md", "/repo/x.webp"],
+  ])("resolves %s from %s inside the project", (src, document, path) => {
+    expect(resolveDocumentImage(src, document, "/repo")).toEqual({
+      path,
+      relative: path.slice("/repo/".length),
+    });
+  });
+
+  it.each([
+    "../outside.png",
+    "../../etc/x.png",
+    "/../outside.png",
+    "a%2F..%2F..%2Fb.png",
+    "%2e%2e/outside.png",
+    "https://img.shields.io/badge.svg",
+    "http://example.com/a.png",
+    "HTTPS://example.com/a.png",
+    "data:image/png;base64,AAAA",
+    "file:///etc/x.png",
+    "javascript:alert(1)//.png",
+    "//host/x.png",
+    "~/x.png",
+    "%7E/x.png",
+    "C:/repo/x.png",
+    "..\\outside.png",
+    "a%5C..%5C..%5Cb.png",
+    "a%00.png",
+    "%E0%A4%A.png",
+    "notes.md",
+    "image.png.html",
+    "folder",
+    "",
+    "   ",
+  ])("refuses %j", (src) => {
+    expect(resolveDocumentImage(src, "/repo/README.md", "/repo")).toBeUndefined();
+  });
+
+  it("refuses every image without a usable project root", () => {
+    expect(resolveDocumentImage("a.png", "/repo/README.md", "")).toBeUndefined();
+    expect(resolveDocumentImage("a.png", "/Users/me/README.md", "~")).toBeUndefined();
+    expect(resolveDocumentImage("a.png", "", "/repo")).toBeUndefined();
+  });
+
+  it("refuses images beside a document outside the project", () => {
+    expect(
+      resolveDocumentImage("a.png", "/elsewhere/README.md", "/repo"),
+    ).toBeUndefined();
+    expect(
+      resolveDocumentImage("a.png", "/repo-other/README.md", "/repo"),
+    ).toBeUndefined();
+  });
+
+  it("resolves Windows projects without case or separator differences", () => {
+    expect(
+      resolveDocumentImage("../img/a.png", "C:\\Repo\\docs\\guide.md", "c:/repo"),
+    ).toEqual({ path: "C:/Repo/img/a.png", relative: "img/a.png" });
+    expect(
+      resolveDocumentImage("/a.png", "C:\\Repo\\README.md", "C:\\Repo\\"),
+    ).toEqual({ path: "C:/Repo/a.png", relative: "a.png" });
+    expect(
+      resolveDocumentImage("../../a.png", "C:/Repo/docs/guide.md", "C:/Repo"),
+    ).toBeUndefined();
+  });
+
+  it("resolves projects on a connected machine", () => {
+    expect(
+      resolveDocumentImage(
+        "../shot.png",
+        "remote://box/home/me/repo/docs/guide.md",
+        "remote://box/home/me/repo",
+      ),
+    ).toEqual({ path: "remote://box/home/me/repo/shot.png", relative: "shot.png" });
+    expect(
+      resolveDocumentImage(
+        "../../shot.png",
+        "remote://box/home/me/repo/docs/guide.md",
+        "remote://box/home/me/repo",
+      ),
+    ).toBeUndefined();
   });
 });

@@ -18,6 +18,7 @@ static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
 /// paths that bring workspace windows back.
 pub const QUICK_COMPOSER_LABEL: &str = "quick-composer";
 pub const QUICK_COMPOSER_GIT_LABEL: &str = "quick-composer-git";
+pub const MONO_CHAT_PREFIX: &str = "mono-chat-";
 static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
 
 const QUIT_POLL: &str = "quit_poll";
@@ -76,7 +77,7 @@ fn configure_session_window(config: &mut tauri::utils::config::WindowConfig, rev
     config.focus = reveal;
 }
 
-pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindow, String> {
+pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<Window, String> {
     let mut config = app
         .config()
         .app
@@ -121,7 +122,7 @@ pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindo
     if reveal {
         let _ = window.set_focus();
     }
-    Ok(window)
+    Ok(window.as_ref().window().clone())
 }
 
 /// The page colour to fill the window with when glass is off. Not a constant:
@@ -143,33 +144,39 @@ impl Rgb {
 
 /// Desktop blur goes on after the first UI paint and only in dark mode.
 #[tauri::command]
-pub fn set_window_glass_enabled(window: Window, enabled: bool, background: Rgb) {
-    // Window handles remain valid with multiple webviews; preserve the old
-    // WebviewWindow behavior of updating the app document's background too.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Some(view) = window.get_webview(window.label()) {
-        #[cfg(target_os = "macos")]
-        if enabled {
-            let _ = view.set_background_color(Some(Color(0, 0, 0, 3)));
-        }
-        #[cfg(target_os = "windows")]
-        let _ = view.set_background_color(Some(if enabled {
-            Color(0, 0, 0, 0)
-        } else {
-            Color(247, 247, 247, 255)
-        }));
-    }
+pub fn set_window_glass_enabled(
+    window: Window,
+    enabled: bool,
+    background: Rgb,
+    opacity: Option<f64>,
+) -> bool {
     #[cfg(target_os = "macos")]
     {
         if enabled {
-            let _ = window.set_background_color(Some(Color(0, 0, 0, 3)));
-            crate::macos::enable_glass(&window);
+            // The floating panel's native layer owns its rounded fill. A
+            // nonzero under-page background would add a square surface below it.
+            let alpha = if window.label().starts_with(MONO_CHAT_PREFIX) {
+                0
+            } else {
+                3
+            };
+            if let Some(view) = window.get_webview(window.label()) {
+                let _ = view.set_background_color(Some(Color(0, 0, 0, alpha)));
+            }
+            return crate::macos::enable_glass(&window, background, opacity);
         } else {
             crate::macos::disable_glass(&window, background.r, background.g, background.b);
         }
     }
     #[cfg(target_os = "windows")]
     {
+        if let Some(view) = window.get_webview(window.label()) {
+            let _ = view.set_background_color(Some(if enabled {
+                Color(0, 0, 0, 0)
+            } else {
+                background.fill()
+            }));
+        }
         if enabled {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Acrylic).build());
@@ -192,6 +199,11 @@ pub fn set_window_glass_enabled(window: Window, enabled: bool, background: Rgb) 
     {
         let _ = (window, enabled, background);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = opacity;
+    // Only macOS paints the shared glass tint natively. Other platforms and
+    // callers without an opacity keep their existing CSS backgrounds.
+    false
 }
 
 /// Close with a running chat hides the webview so the harness child keeps going.
@@ -208,13 +220,16 @@ pub fn destroy_window(window: Window) -> Result<(), String> {
 }
 
 pub fn is_workspace_window(label: &str) -> bool {
-    label != QUICK_COMPOSER_LABEL && label != QUICK_COMPOSER_GIT_LABEL
+    label != QUICK_COMPOSER_LABEL
+        && label != QUICK_COMPOSER_GIT_LABEL
+        && label != "mono-chat"
+        && !label.starts_with(MONO_CHAT_PREFIX)
 }
 
 /// Every workspace window, sorted by label.
-pub fn workspace_windows(app: &AppHandle) -> Vec<WebviewWindow> {
-    let mut windows: Vec<WebviewWindow> = app
-        .webview_windows()
+pub fn workspace_windows(app: &AppHandle) -> Vec<Window> {
+    let mut windows: Vec<Window> = app
+        .windows()
         .into_values()
         .filter(|window| is_workspace_window(window.label()))
         .collect();
@@ -624,6 +639,16 @@ pub fn confirm_quit(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_mono_windows_are_excluded_from_workspace_lifecycle() {
+        assert!(is_workspace_window("main"));
+        assert!(is_workspace_window("session-123"));
+        assert!(!is_workspace_window("mono-chat-first"));
+        assert!(!is_workspace_window("mono-chat-second"));
+        assert!(!is_workspace_window(QUICK_COMPOSER_LABEL));
+        assert!(!is_workspace_window(QUICK_COMPOSER_GIT_LABEL));
+    }
 
     #[test]
     fn background_session_creation_overrides_main_windows_visible_and_focus_defaults() {

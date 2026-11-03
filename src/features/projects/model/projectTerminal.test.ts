@@ -8,6 +8,7 @@ import {
   createProjectTerminal,
   dockGridStyle,
   findProjectTerminal,
+  focusedDockTerminalId,
   mapProjectTerminal,
   nextDockTerminalTitle,
   patchProjectTerminals,
@@ -78,6 +79,34 @@ describe("closeTerminalInDock", () => {
     const next = closeTerminalInDock(dock, second.id);
     expect(next?.pane.files.map((file) => file.id)).toEqual([first.id]);
     expect(next?.pane.activeFileId).toBe(first.id);
+  });
+});
+
+describe("focusedDockTerminalId", () => {
+  it("targets the active terminal while the open dock has focus", () => {
+    const first = newTerminalFile("/tmp/a", "one");
+    const second = newTerminalFile("/tmp/a", "two");
+    const dock = addTerminalToDock(
+      createProjectTerminal("/tmp/a", first),
+      second,
+    );
+    expect(focusedDockTerminalId(dock, true)).toBe(second.id);
+    expect(
+      focusedDockTerminalId(selectDockTerminal(dock, first.id), true),
+    ).toBe(first.id);
+  });
+
+  it("leaves shortcuts to the workspace when the dock lacks focus", () => {
+    const dock = createProjectTerminal("/tmp/a", newTerminalFile("/tmp/a"));
+    expect(focusedDockTerminalId(dock, false)).toBeNull();
+    expect(focusedDockTerminalId(withDockOpen(dock, false), true)).toBeNull();
+    expect(focusedDockTerminalId(undefined, true)).toBeNull();
+  });
+
+  it("ignores an active id that no longer names a terminal", () => {
+    const dock = createProjectTerminal("/tmp/a", newTerminalFile("/tmp/a"));
+    const stale = { ...dock, pane: { ...dock.pane, activeFileId: "gone" } };
+    expect(focusedDockTerminalId(stale, true)).toBeNull();
   });
 });
 

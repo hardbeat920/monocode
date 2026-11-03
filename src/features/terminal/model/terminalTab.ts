@@ -118,3 +118,26 @@ export function scanOscCwd(
   const rest = tail.length > 256 ? tail.slice(-256) : tail;
   return { cwd, rest };
 }
+
+/**
+ * Working directory for a terminal opened by the general New Terminal
+ * commands.
+ *
+ * A session working in a worktree opens terminals in that worktree, even when
+ * the focused pane is a file or terminal from another checkout. Without a
+ * worktree, the focused pane's directory wins, then the session's, then
+ * `fallback`.
+ */
+export function newTerminalCwd({
+  activeFile,
+  session,
+  fallback,
+}: {
+  activeFile?: Pick<FilePaneTab, "cwd">;
+  session?: { cwd: string; worktreeCwd?: string; worktreeRemoved?: boolean };
+  fallback: string;
+}): string {
+  if (session?.worktreeCwd && !session.worktreeRemoved)
+    return session.worktreeCwd;
+  return activeFile?.cwd ?? session?.cwd ?? fallback;
+}

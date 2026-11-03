@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeLocal }));
 
 import { runRemoteCommand } from "./remoteCommands";
 import { parseRemotePath, remotePath } from "./remoteProjects";
-import { listDir, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
+import { gitCommit, gitLocateFiles, gitStagedContext, listDir, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
 
 beforeEach(() => {
   remoteRequest.mockReset();
@@ -105,6 +105,33 @@ it("adds remote paths to Git index entries", async () => {
     cwd: "remote://env/home/me/repo",
   }) as { files: { path: string }[] };
   expect(index.files[0].path).toBe("remote://env/home/me/repo/src/app.ts");
+});
+
+it("locates remote checkout roots without converting relative filenames", async () => {
+  remoteRequest.mockResolvedValueOnce([
+    { root: "/home/me/a", relative: "same.txt" }, null,
+    { root: "/home/me/b", relative: "same.txt" },
+  ]);
+  const paths = ["remote://env/home/me/a/same.txt", "remote://env/home/me/outside.txt", "remote://env/home/me/b/same.txt"];
+  expect(await gitLocateFiles(paths)).toEqual([
+    { root: "remote://env/home/me/a", relative: "same.txt" }, null,
+    { root: "remote://env/home/me/b", relative: "same.txt" },
+  ]);
+  expect(remoteRequest).toHaveBeenCalledWith("machine", "workspace.run", {
+    command: "git_locate_files", args: { paths: paths.map((path) => path.replace("remote://env", "")) },
+  });
+});
+
+it("passes selected files through remote commit and context calls as repo-relative paths", async () => {
+  await gitCommit("remote://env/home/me/a", "Selected", false, ["same.txt", "line\nbreak"]);
+  expect(remoteRequest).toHaveBeenLastCalledWith("machine", "workspace.run", {
+    command: "git_commit", args: { cwd: "/home/me/a", message: "Selected", amend: false, paths: ["same.txt", "line\nbreak"] },
+  });
+  await gitStagedContext("remote://env/home/me/b", ["same.txt"]);
+  expect(remoteRequest).toHaveBeenLastCalledWith("machine", "workspace.run", {
+    command: "git_staged_context", args: { cwd: "/home/me/b", paths: ["same.txt"] },
+  });
+  expect(invokeLocal).not.toHaveBeenCalled();
 });
 
 it("routes project search through the host and maps match paths", async () => {

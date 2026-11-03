@@ -9,7 +9,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { launchAgent, systemdUnit, uninstallService } from "./service";
+import {
+  launchAgent,
+  startDetached,
+  systemdBooted,
+  systemdUnit,
+  uninstallService,
+} from "./service";
 
 it("keeps paths and environment content from injecting service configuration", () => {
   const options = {
@@ -47,6 +53,7 @@ it.skipIf(process.platform === "win32").each(["darwin", "linux"] as const)(
       const notes = await uninstallService({
         platform,
         home,
+        systemd: true,
         run: async (command, args) => {
           calls.push([command, ...args]);
           // A service that is not loaded must not block cleanup.
@@ -70,6 +77,108 @@ it.skipIf(process.platform === "win32").each(["darwin", "linux"] as const)(
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+it("detects whether systemd is the init system", () => {
+  const root = mkdtempSync(join(tmpdir(), "monocode-systemd-test-"));
+  try {
+    expect(systemdBooted(root)).toBe(false);
+    mkdirSync(join(root, "run/systemd/system"), { recursive: true });
+    expect(systemdBooted(root)).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("leaves systemd alone when uninstalling from a Linux host without it", async () => {
+  const calls: string[][] = [];
+  const notes = await uninstallService({
+    platform: "linux",
+    systemd: false,
+    run: async (command, args) => {
+      calls.push([command, ...args]);
+    },
+  });
+  expect(calls).toEqual([]);
+  expect(notes).toEqual([]);
+});
+
+it.runIf(process.platform === "linux")(
+  "starts the host in its own session so it outlives the SSH connection",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-detached-test-"));
+    try {
+      const entry = join(directory, "entry.mjs");
+      const report = join(directory, "report.json");
+      writeFileSync(
+        entry,
+        `import { readFileSync, writeFileSync } from "node:fs";
+const session = readFileSync("/proc/self/stat", "utf8").split(") ")[1].split(" ")[3];
+writeFileSync(${JSON.stringify(report)}, JSON.stringify({
+  args: process.argv.slice(2), pid: process.pid, session: Number(session), path: process.env.PATH,
+}));
+console.log("started");
+`,
+      );
+      startDetached(
+        { directory, port: 4321, executable: process.execPath, entry },
+        "/test/bin:/usr/bin",
+      );
+      for (let i = 0; i < 100 && !existsSync(report); i++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      const child = JSON.parse(readFileSync(report, "utf8"));
+      expect(child.args).toEqual([
+        "serve",
+        "--data-dir",
+        directory,
+        "--port",
+        "4321",
+      ]);
+      // A session leader: hanging up the SSH session does not reach it.
+      expect(child.session).toBe(child.pid);
+      expect(child.path).toBe("/test/bin:/usr/bin");
+      for (let i = 0; i < 100; i++) {
+        if (
+          readFileSync(join(directory, "host.log"), "utf8").includes("started")
+        )
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(readFileSync(join(directory, "host.log"), "utf8")).toContain(
+        "started",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "records why the host could not be started",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-detached-test-"));
+    try {
+      startDetached(
+        {
+          directory,
+          port: 4321,
+          executable: join(directory, "missing-node"),
+          entry: join(directory, "entry.mjs"),
+        },
+        "/usr/bin",
+      );
+      const log = join(directory, "host.log");
+      for (let i = 0; i < 100; i++) {
+        if (readFileSync(log, "utf8").includes("Failed to start host")) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(readFileSync(log, "utf8")).toMatch(
+        /Failed to start host: .*ENOENT/,
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   },
 );

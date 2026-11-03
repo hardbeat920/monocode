@@ -486,6 +486,33 @@ describe("live catalog overlays", () => {
     expect(encodeModelLaunchId("claude:opus-5-5")).toBe("claude-opus-5-5");
   });
 
+  it("gives a saved version the settings of the alias that launches it", () => {
+    // Claude lists Opus 5.5 only as the `opus` alias. The saved concrete id
+    // must keep its effort and fast options in the picker.
+    const effort = {
+      id: "effort",
+      label: "Reasoning",
+      kind: "select" as const,
+      value: "high",
+      options: [{ value: "high", label: "High" }],
+    };
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus",
+        harness: "claude" as const,
+        name: "Opus 5.5",
+        nativeId: "opus",
+        aliasTarget: "claude-opus-5-5",
+        settings: [effort],
+      },
+    ]);
+
+    const saved = resolveModel("claude", "claude:opus-5-5");
+    expect(saved.id).toBe("claude:opus-5-5");
+    expect(saved.settings).toEqual([effort]);
+    expect(resolveModel("claude", "claude:opus-5").settings).toBeUndefined();
+  });
+
   it("prefers the bundled versioned model over a singleton fuzzy match", () => {
     // Live catalog has only Opus 5, so `opus-5-5` prefix-matches that one
     // row. Returning it would give ModelSettings the wrong AgentModel for a

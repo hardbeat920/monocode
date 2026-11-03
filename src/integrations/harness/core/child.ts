@@ -34,6 +34,53 @@ export function readHarnessTextFile(path: string): Promise<string> {
   });
 }
 
+export function prepareMonoCodexStore(
+  providerAccountId?: string,
+  threadId?: string,
+): Promise<{ home: string; hasThread: boolean }> {
+  return invoke("codex_mono_store_prepare", { providerAccountId, threadId });
+}
+
+export function copyMonoCodexThreads(
+  providerAccountId: string | undefined,
+  threadId: string,
+  paths: string[],
+  sqliteHome?: string,
+): Promise<void> {
+  return invoke("codex_mono_store_copy", {
+    providerAccountId,
+    threadId,
+    paths,
+    sqliteHome,
+  });
+}
+
+/** Copy a native Claude or Codex conversation into another account's home,
+ * so that account resumes the same provider session id. */
+export function transferProviderSession(
+  provider: "claude" | "codex",
+  fromAccountId: string | undefined,
+  toAccountId: string | undefined,
+  providerSessionId: string,
+): Promise<void> {
+  return invoke("provider_session_transfer", {
+    provider,
+    fromAccountId,
+    toAccountId,
+    providerSessionId,
+  });
+}
+
+export function restoreMonoCodexAgentState(
+  providerAccountId: string | undefined,
+  threadId: string,
+): Promise<void> {
+  return invoke("codex_mono_store_restore_agent_state", {
+    providerAccountId,
+    threadId,
+  });
+}
+
 function invoke<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -51,8 +98,12 @@ function listen<T>(
 }
 
 type LinePayload = { sessionId: string; line: string };
+// The desktop batches a frame's stdout lines and SSE events into one event;
+// the remote host still sends them one at a time.
+type LinesPayload = LinePayload | { sessionId: string; lines: string[] };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
-type SsePayload = { sessionId: string; data: string };
+type SsePayload =
+  { sessionId: string; data: string } | { sessionId: string; events: string[] };
 type SseEndPayload = { sessionId: string; error?: string | null };
 
 type LineHandler = (line: string) => void;
@@ -67,6 +118,11 @@ const stderrHandlers = new Map<string, LineHandler>();
 const sseHandlers = new Map<string, SseHandler>();
 const sseEndHandlers = new Map<string, SseEndHandler>();
 const sseBuffer = new Map<string, string[]>();
+// Output is broadcast to every window. Only ids this window spawned or opened
+// may buffer while unwatched; anything else would be held until the bridge
+// is torn down, since nothing here ever watches or unwatches it.
+const ownedChildren = new Set<string>();
+const ownedSse = new Set<string>();
 const livePid = new Map<string, number>();
 const pendingExit = new Map<
   string,
@@ -119,14 +175,18 @@ function ensureBridge() {
   bridgeAttempt = attempt;
   const installation = Promise.all([
     register(
-      listen<LinePayload>("harness-stdout", (event) => {
-        const { sessionId, line } = event.payload;
-        const handler = lineHandlers.get(sessionId);
-        if (handler) {
-          handler(line);
-          return;
+      listen<LinesPayload>("harness-stdout", (event) => {
+        const { payload } = event;
+        const { sessionId } = payload;
+        const lines = "lines" in payload ? payload.lines : [payload.line];
+        for (const line of lines) {
+          // A handler may detach mid-batch; later lines follow the old path.
+          const handler = lineHandlers.get(sessionId);
+          if (handler) handler(line);
+          else if (ownedChildren.has(sessionId)) {
+            pushBounded(lineBuffer, sessionId, line);
+          }
         }
-        pushBounded(lineBuffer, sessionId, line);
       }),
     ),
     register(
@@ -155,13 +215,16 @@ function ensureBridge() {
     ),
     register(
       listen<SsePayload>("harness-sse", (event) => {
-        const { sessionId, data } = event.payload;
-        const handler = sseHandlers.get(sessionId);
-        if (handler) {
-          handler(data);
-          return;
+        const { payload } = event;
+        const { sessionId } = payload;
+        const events = "events" in payload ? payload.events : [payload.data];
+        for (const data of events) {
+          const handler = sseHandlers.get(sessionId);
+          if (handler) handler(data);
+          else if (ownedSse.has(sessionId)) {
+            pushBounded(sseBuffer, sessionId, data);
+          }
         }
-        pushBounded(sseBuffer, sessionId, data);
       }),
     ),
     register(
@@ -194,6 +257,8 @@ function teardownBridge() {
   sseHandlers.clear();
   sseEndHandlers.clear();
   sseBuffer.clear();
+  ownedChildren.clear();
+  ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
   void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
@@ -258,6 +323,7 @@ export function unwatchChild(sessionId: string) {
   lineHandlers.delete(sessionId);
   exitHandlers.delete(sessionId);
   lineBuffer.delete(sessionId);
+  ownedChildren.delete(sessionId);
   stderrHandlers.delete(sessionId);
   pendingExit.delete(sessionId);
 }
@@ -278,6 +344,7 @@ export function unwatchSse(sessionId: string) {
   sseHandlers.delete(sessionId);
   sseEndHandlers.delete(sessionId);
   sseBuffer.delete(sessionId);
+  ownedSse.delete(sessionId);
 }
 
 export async function spawnChild(
@@ -287,9 +354,13 @@ export async function spawnChild(
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
   binaryProvider?: ConfigurableBinaryProvider,
+  codexStore?: "mono",
+  /** `devin acp` only: start with an approval rule for every edit. */
+  devinAskEdits?: boolean,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
+  ownedChildren.add(sessionId);
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
@@ -301,6 +372,8 @@ export async function spawnChild(
     account,
     binaryProvider,
     binaryPath,
+    ...(codexStore ? { codexStore } : {}),
+    ...(devinAskEdits ? { devinAskEdits } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
@@ -331,6 +404,8 @@ export function killAllChildren(): Promise<void> {
   sseHandlers.clear();
   sseEndHandlers.clear();
   sseBuffer.clear();
+  ownedChildren.clear();
+  ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
   return invoke("harness_kill_all");
@@ -363,6 +438,7 @@ async function resolveHarnessBinary(
     fx: "harness_resolve_fx",
     hermes: "harness_resolve_hermes",
     antigravity: "harness_resolve_antigravity",
+    devin: "harness_resolve_devin",
   };
   return invoke(command[provider]);
 }
@@ -421,6 +497,12 @@ export function resolveHermesBinary(
   return resolveHarnessBinary("hermes", binaryPath);
 }
 
+export function resolveDevinBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("devin", binaryPath);
+}
+
 export function resolveAntigravityBinary(
   binaryPath?: string | null,
 ): Promise<{ path: string; args: string[] }> {
@@ -449,6 +531,7 @@ export function openHarnessSse(
   url: string,
   headers?: Record<string, string>,
 ): Promise<void> {
+  ownedSse.add(sessionId);
   return invoke("harness_sse_open", { sessionId, url, headers });
 }
 

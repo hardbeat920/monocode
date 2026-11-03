@@ -2,6 +2,7 @@ import {
   cp,
   lstat,
   mkdir,
+  mkdtemp,
   readFile,
   realpath,
   rename,
@@ -9,7 +10,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
@@ -59,6 +61,7 @@ export const WORKSPACE_COMMANDS = [
   "git_stage_all",
   "git_unstage_all",
   "git_commit",
+  "git_locate_files",
   "git_head_message",
   "git_push",
   "git_pull",
@@ -166,7 +169,9 @@ export class WorkspaceCommands {
       case "git_unstage_all":
         return this.gitAction(input.cwd, "unstageAll");
       case "git_commit":
-        return this.gitCommit(input.cwd, input.message, input.amend);
+        return this.gitCommit(input.cwd, input.message, input.amend, input.paths);
+      case "git_locate_files":
+        return this.gitLocateFiles(input.paths);
       case "git_head_message":
         return this.gitCommand(input.cwd, ["log", "-1", "--format=%B"]);
       case "git_push":
@@ -186,7 +191,7 @@ export class WorkspaceCommands {
       case "git_commit_file_diff":
         return this.gitCommitFileDiff(input.cwd, input.sha, input.relative);
       case "git_staged_context":
-        return this.gitStagedContext(input.cwd);
+        return this.gitStagedContext(input.cwd, input.paths);
       case "git_range_context":
         return this.gitRangeContext(input.cwd);
       case "git_branches":
@@ -479,21 +484,97 @@ export class WorkspaceCommands {
     return hostGitAction(await this.gitRoot(cwd), action, relative, message, contents);
   }
 
-  private async gitCommand(cwd: unknown, args: string[]): Promise<string> {
+  private async gitCommand(cwd: unknown, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
     const root = await this.gitRoot(cwd);
     return (await exec("git", ["-c", "core.pager=cat", ...args], {
       cwd: root,
       timeout: 30_000,
       maxBuffer: 4 * 1024 * 1024,
       encoding: "utf8",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
     })).stdout;
   }
 
-  private async gitCommit(cwd: unknown, message: unknown, amend: unknown) {
+  private async gitCommit(cwd: unknown, message: unknown, amend: unknown, paths: unknown) {
     if (typeof message !== "string" || !message.trim() || message.length > 100_000)
       throw new Error("Enter a commit message");
-    await this.gitCommand(cwd, ["commit", ...(amend === true ? ["--amend"] : []), "-m", message]);
+    if (paths != null) {
+      if (amend === true) throw new Error("Selected-file commits cannot amend HEAD");
+      const root = await this.gitRoot(cwd);
+      const selected = await this.gitSelectedPaths(root, paths);
+      const existing: string[] = [];
+      for (const path of selected) {
+        if (await lstat(join(root, path)).then(() => true, () => false)) existing.push(path);
+      }
+      if (existing.length) await this.gitCommand(root, ["--literal-pathspecs", "add", "-A", "--", ...existing]);
+      await this.gitCommand(root, ["--literal-pathspecs", "commit", "--only", "--cleanup=strip", "-m", message, "--", ...selected]);
+    } else {
+      await this.gitCommand(cwd, ["commit", ...(amend === true ? ["--amend"] : []), "-m", message]);
+    }
+  }
+
+  private async gitLocateFiles(paths: unknown) {
+    if (!Array.isArray(paths)) throw new Error("Invalid file paths");
+    const locations = [];
+    for (const path of paths) locations.push(await this.gitLocateFile(path));
+    return locations;
+  }
+
+  private async gitLocateFile(path: unknown) {
+    if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0"))
+      throw new Error("Invalid file path");
+    // Resolve parents, keeping a symlink itself in the checkout that owns it.
+    const parent = await this.locate(dirname(path));
+    const actual = resolve(parent.root, parent.relative, basename(path));
+    let directory = dirname(actual);
+    while (!(await stat(directory).then((entry) => entry.isDirectory(), () => false))) {
+      const next = dirname(directory);
+      if (next === directory) throw new Error("File has no existing parent");
+      directory = next;
+    }
+    let top: string;
+    try {
+      top = (await exec("git", ["-C", directory, "rev-parse", "--show-toplevel"], {
+        timeout: 30_000, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      })).stdout.replace(/[\r\n]+$/, "");
+    } catch (error) {
+      if (String(error).includes("not a git repository")) return null;
+      throw error;
+    }
+    // Discovery cannot widen the host's registered project boundaries.
+    const root = await this.gitRoot(top);
+    return { root: slashed(root), relative: process.platform === "win32" ? slashed(relative(root, actual)) : relative(root, actual) };
+  }
+
+  private async gitSelectedPaths(root: string, paths: unknown): Promise<string[]> {
+    if (!Array.isArray(paths) || paths.length === 0)
+      throw new Error("Select at least one file");
+    const selected: string[] = [];
+    for (const path of paths) {
+      if (typeof path !== "string" || isAbsolute(path) || path.includes("\0") ||
+          (process.platform === "win32" ? slashed(path) : path).split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git"))
+        throw new Error("Invalid selected file path");
+      const target = workspacePath(root, path);
+      const entry = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (entry?.isDirectory())
+        throw new Error("Select files rather than directories");
+      const location = await this.gitLocateFile(target);
+      if (!location || location.root !== slashed(root))
+        throw new Error("Selected files must belong to this repository");
+      // Even missing folders must not widen a literal selection to their children.
+      const tracked = await this.gitCommand(root, ["--literal-pathspecs", "ls-files", "-z", "--", path]);
+      if (tracked.split("\0").some((entry) => entry && entry !== path))
+        throw new Error("Select files rather than directories");
+      const type = await this.gitCommand(root, ["cat-file", "-t", `HEAD:${path}`]).catch(() => "");
+      if (type.trim() === "tree") throw new Error("Select files rather than directories");
+      if (!entry && !tracked && type.trim() !== "blob")
+        throw new Error("Selected file does not exist in this repository");
+      if (!selected.includes(path)) selected.push(path);
+    }
+    return selected;
   }
 
   private async gitSync(cwd: unknown) {
@@ -635,7 +716,27 @@ export class WorkspaceCommands {
     }
   }
 
-  private async gitStagedContext(cwd: unknown) {
+  private async gitStagedContext(cwd: unknown, paths: unknown) {
+    if (paths != null) {
+      const root = await this.gitRoot(cwd);
+      const selected = await this.gitSelectedPaths(root, paths);
+      const directory = await mkdtemp(join(tmpdir(), "monocode-git-selection-"));
+      const env = { GIT_INDEX_FILE: join(directory, "index") };
+      const run = (args: string[]) => this.gitCommand(root, ["--literal-pathspecs", ...args], env);
+      try {
+        const hasHead = await this.gitCommand(root, ["rev-parse", "--verify", "HEAD"]).then(() => true, () => false);
+        await run(["read-tree", hasHead ? "HEAD" : "--empty"]);
+        await run(["add", "-A", "--", ...selected]);
+        const [index, summary, patch] = await Promise.all([
+          this.gitIndex(root),
+          run(["diff", "--cached", "--stat", "--no-renames"]),
+          run(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames"]),
+        ]);
+        return { branch: index.branch, summary, patch };
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
     const [index, summary, patch] = await Promise.all([
       this.gitIndex(cwd),
       this.gitCommand(cwd, ["diff", "--cached", "--stat"]),

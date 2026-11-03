@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::dirs_home;
 use crate::fs::expand_home;
 
-const MAX_SKILLS: usize = 300;
+const MAX_SKILLS: usize = 5_000;
 const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -157,6 +157,18 @@ pub(crate) fn list_skills_from(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
+        add_root(home.join(".config/devin/skills"), "user", "devin");
+        // Windows keeps Devin's user config under %APPDATA% instead.
+        #[cfg(windows)]
+        add_root(
+            std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData/Roaming"))
+                .join("devin/skills"),
+            "user",
+            "devin",
+        );
+        add_root(project.join(".devin/skills"), "project", "devin");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -384,7 +396,7 @@ fn scan_root(root: &Path, scope: &str, source: &str) -> Vec<DiscoveredSkill> {
         let Ok(bytes) = read_prefix(&skill_md, MAX_FRONTMATTER_BYTES) else {
             continue;
         };
-        let Ok(text) = String::from_utf8(bytes) else {
+        let Some(text) = utf8_prefix(bytes) else {
             continue;
         };
         let fallback = slug_name(folder);
@@ -424,6 +436,22 @@ fn read_prefix(path: &Path, max: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(max.min(4096));
     file.take(max as u64).read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// Decodes the bytes from `read_prefix`, which can stop in the middle of a
+/// multi-byte character. Removes an incomplete character at the end.
+/// Rejects other invalid UTF-8.
+fn utf8_prefix(bytes: Vec<u8>) -> Option<String> {
+    match String::from_utf8(bytes) {
+        Ok(text) => Some(text),
+        Err(err) if err.utf8_error().error_len().is_none() => {
+            let valid = err.utf8_error().valid_up_to();
+            let mut bytes = err.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).ok()
+        }
+        Err(_) => None,
+    }
 }
 
 fn parse_frontmatter(text: &str, fallback: &str) -> (String, String) {
@@ -619,6 +647,38 @@ mod tests {
     }
 
     #[test]
+    fn utf8_prefix_drops_only_a_cut_character() {
+        // 2-byte, 3-byte and 4-byte characters, with each possible cut.
+        for text in ["abж", "ab€", "ab😀"] {
+            let bytes = text.as_bytes();
+            let last = text.chars().last().unwrap().len_utf8();
+            for removed in 1..last {
+                let cut = bytes[..bytes.len() - removed].to_vec();
+                assert_eq!(utf8_prefix(cut).as_deref(), Some("ab"));
+            }
+            assert_eq!(utf8_prefix(bytes.to_vec()).as_deref(), Some(text));
+        }
+        assert_eq!(utf8_prefix(vec![b'a', 0xff, b'b']), None);
+    }
+
+    #[test]
+    fn lists_large_skill_when_prefix_cuts_a_character() {
+        let project = tmp("proj");
+        let home = tmp("home");
+        let mut body = String::from("---\nname: big-cyrillic\ndescription: Big skill\n---\n");
+        // Put the first byte of a 2-byte character at the last byte of the prefix.
+        while body.len() < MAX_FRONTMATTER_BYTES - 1 {
+            body.push('x');
+        }
+        body.push_str(&"ж".repeat(1_000));
+        write_skill(&home.0.join(".agents/skills"), "big-cyrillic", &body);
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let skill = skills.iter().find(|s| s.name == "big-cyrillic").unwrap();
+        assert_eq!(skill.description, "Big skill");
+    }
+
+    #[test]
     fn agents_skills_win_over_provider_dirs() {
         let project = tmp("proj");
         let home = tmp("home");
@@ -656,6 +716,31 @@ mod tests {
         let native = skills.iter().find(|s| s.name == "cursor-only").unwrap();
         assert_eq!(native.source, "cursor");
         assert_eq!(native.scope, "project");
+    }
+
+    #[test]
+    fn lists_large_catalogs_from_every_root() {
+        let project = tmp("proj");
+        let home = tmp("home");
+        for index in 0..1_400 {
+            let name = format!("shared-{index:04}");
+            write_skill(
+                &home.0.join(".agents/skills"),
+                &name,
+                &format!("---\nname: {name}\ndescription: Shared skill {index}\n---\n"),
+            );
+        }
+        write_skill(
+            &home.0.join(".codex/skills"),
+            "codex-only",
+            "---\nname: codex-only\ndescription: Codex native\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        assert_eq!(skills.len(), 1_401);
+        assert!(skills.iter().any(|s| s.name == "shared-1399"));
+        let codex = skills.iter().find(|s| s.name == "codex-only").unwrap();
+        assert_eq!(codex.source, "codex");
     }
 
     #[test]
@@ -751,6 +836,30 @@ mod tests {
         assert_eq!(project_skill.scope, "project");
         let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
         assert_eq!(user_skill.source, "hermes");
+        assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_devin_project_and_user_skills() {
+        let project = tmp("proj-devin");
+        let home = tmp("home-devin");
+        write_skill(
+            &project.0.join(".devin/skills"),
+            "devin-review",
+            "---\nname: devin-review\ndescription: Devin project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".config/devin/skills"),
+            "devin-global",
+            "---\nname: devin-global\ndescription: Devin user skill\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let project_skill = skills.iter().find(|s| s.name == "devin-review").unwrap();
+        assert_eq!(project_skill.source, "devin");
+        assert_eq!(project_skill.scope, "project");
+        let user_skill = skills.iter().find(|s| s.name == "devin-global").unwrap();
+        assert_eq!(user_skill.source, "devin");
         assert_eq!(user_skill.scope, "user");
     }
 

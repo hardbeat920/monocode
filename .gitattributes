@@ -1,2 +1,5 @@
 # Shell scripts are also embedded in the desktop app and sent to Unix hosts.
 *.sh text eol=lf
+
+# Signature verification requires identical package bytes on every platform.
+crates/monocode-core/src/app_update/fixtures/package.txt text eol=lf

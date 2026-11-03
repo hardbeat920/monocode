@@ -388,6 +388,9 @@ function modelFromListRow(raw: unknown): AgentModel | null {
     harness: "claude",
     name,
     nativeId,
+    ...(fromResolved.id && fromResolved.id !== nativeId
+      ? { aliasTarget: fromResolved.id }
+      : {}),
     ...(settings.length > 0 ? { settings } : {}),
   };
 }

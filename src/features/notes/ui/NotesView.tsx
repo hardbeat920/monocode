@@ -1,7 +1,6 @@
 import { LoaderCircle, Plus, Search, File, Trash2, X } from "../../../shared/ui/icons";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -30,6 +29,7 @@ import {
   notePreview,
   noteSourceProject,
   noteTitle,
+  peekNotes,
   upsertNote,
   requestAddNoteToChat,
   type Note,
@@ -43,6 +43,7 @@ import {
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import { inProjectScope } from "../../projects/model/projectScope";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -51,7 +52,8 @@ import {
   resolveTabGroupLogo,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { AgentMarkdown, MarkdownSourceHighlight } from "../../sessions/ui/AgentMarkdown";
+import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { MarkdownSourceEditor } from "../../sessions/ui/MarkdownSourceEditor";
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -84,18 +86,25 @@ function enqueueNoteSave(
 }
 
 type Props = {
+  tabbed?: boolean;
+  active?: boolean;
   besideRail?: boolean;
   compactRail?: boolean;
   cwd?: string;
+  /** Lists only this project's notes, plus project-less ones. */
+  scopeProject?: string;
   recents: RecentProject[];
   onClose: () => void;
   onToggleSidebar?: () => void;
 };
 
 export function NotesView({
+  tabbed = false,
+  active = true,
   besideRail = false,
   compactRail = false,
   cwd,
+  scopeProject,
   recents,
   onClose,
   onToggleSidebar,
@@ -112,11 +121,18 @@ export function NotesView({
       rememberedWidth = width;
     },
   });
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
+  const [loading, setLoading] = useState(() => peekNotes() === null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(rememberedNoteId);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    const cached = peekNotes();
+    return (
+      cached?.find((note) => note.id === rememberedNoteId)?.id ??
+      cached?.[0]?.id ??
+      rememberedNoteId
+    );
+  });
   const [creating, setCreating] = useState(false);
   const logos = useTabGroupLogos();
   const [groupMascots] = useState(loadTabGroupMascots);
@@ -153,6 +169,7 @@ export function NotesView({
   }, [selectedId]);
 
   useEffect(() => {
+    if (!active) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -161,12 +178,20 @@ export function NotesView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [active]);
+
+  const scoped = useMemo(
+    () =>
+      scopeProject
+        ? notes.filter((note) => inProjectScope(note.sourceCwd, scopeProject))
+        : notes,
+    [notes, scopeProject],
+  );
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return notes;
-    return notes.filter((note) => {
+    if (!needle) return scoped;
+    return scoped.filter((note) => {
       const project = noteSourceProject(note.sourceCwd)?.toLowerCase() ?? "";
       return (
         note.title.toLowerCase().includes(needle) ||
@@ -176,19 +201,22 @@ export function NotesView({
         project.includes(needle)
       );
     });
-  }, [notes, query]);
+  }, [scoped, query]);
 
+  // A note from another project stays remembered, but a scoped list opens on
+  // its own first note instead.
   const selected =
     visible.find((note) => note.id === selectedId) ??
-    notes.find((note) => note.id === selectedId) ??
-    null;
+    scoped.find((note) => note.id === selectedId) ??
+    (scopeProject ? (visible[0] ?? null) : null);
 
   const onCreate = async () => {
     if (creating) return;
     setCreating(true);
     try {
+      // A blank title marks the note's generated slug as pending.
       const note = await createNote({
-        title: "Untitled",
+        title: "",
         body: "",
         ...(cwd && looksLikeProject(cwd) ? { sourceCwd: cwd } : {}),
       });
@@ -321,24 +349,27 @@ export function NotesView({
       data-app-notes
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
-      <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
-        data-tauri-drag-region="deep"
-      >
-        {IS_MAC && compactRail ? <div className="w-4 shrink-0" /> : null}
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
-        {besideRail ? null : (
-          <OverlayNav onBack={onClose} onToggleSidebar={onToggleSidebar} />
-        )}
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
-          <File
-            className="size-3.5 shrink-0 text-content/45"
-            strokeWidth={1.75}
-          />
-          <span className="min-w-0 truncate text-content">Notes</span>
+      {!tabbed ? (
+        <div
+          data-app-view-header
+          className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
+          data-tauri-drag-region="deep"
+        >
+          {IS_MAC && compactRail ? <div className="w-4 shrink-0" /> : null}
+          {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+          {besideRail ? null : (
+            <OverlayNav onBack={onClose} onToggleSidebar={onToggleSidebar} />
+          )}
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
+            <File
+              className="size-3.5 shrink-0 text-content/45"
+              strokeWidth={1.75}
+            />
+            <span className="min-w-0 truncate text-content">Notes</span>
+          </div>
+          {IS_MAC ? null : <WindowControls />}
         </div>
-        {IS_MAC ? null : <WindowControls />}
-      </div>
+      ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         {list}
         <NoteDetail
@@ -571,10 +602,14 @@ function NoteEditor({
   const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const titleFieldRef = useRef<HTMLInputElement>(null);
   const sourceFieldRef = useRef<HTMLTextAreaElement>(null);
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  // Title the user finished typing (blur/close). Any later title edit drops
+  // it; a save clears it only if the same request is still current.
+  const finalizeRef = useRef<{ title: string } | null>(null);
   const onSavedRef = useRef(onSaved);
   bodyRef.current = body;
   noteRef.current = note;
@@ -599,15 +634,25 @@ function NoteEditor({
     const current = latest ?? noteRef.current;
     const changes = editsRef.current;
     const nextBody = changes.body ?? current.body;
+    const titleFocused = document.activeElement === titleFieldRef.current;
     const nextTitle =
-      (changes.title ?? current.title).trim() || noteTitle(nextBody);
+      (changes.title ?? current.title).trim() ||
+      (titleFocused ? current.title : noteTitle(nextBody));
     const nextTags = changes.tags ?? current.tags;
     const nextProject = projectChangeRef.current;
     const acceptSaved = (saved: Note) => {
       noteRef.current = saved;
       // A completed save only clears the edits included in that request.
       const remaining = { ...editsRef.current };
-      if (remaining.title === changes.title) delete remaining.title;
+      // Keep the focused draft, including blanks and spaces, until blur.
+      // Leave the draft for a queued blur or unmount save to commit as well.
+      if (
+        remaining.title === changes.title &&
+        !titleFocused &&
+        document.activeElement !== titleFieldRef.current
+      ) {
+        delete remaining.title;
+      }
       if (remaining.body === changes.body) delete remaining.body;
       if (remaining.tags === changes.tags) delete remaining.tags;
       editsRef.current = remaining;
@@ -619,7 +664,11 @@ function NoteEditor({
       }
       setSaveError(null);
     };
+    // Bound to the finished title so a newer partial edit never finalizes.
+    const finalizeRequest = finalizeRef.current;
+    const finalizeSlug = finalizeRequest?.title === nextTitle;
     if (
+      !finalizeSlug &&
       nextTitle === current.title &&
       nextBody === current.body &&
       sameTags(nextTags, current.tags) &&
@@ -634,8 +683,12 @@ function NoteEditor({
         title: nextTitle,
         body: nextBody,
         tags: nextTags,
+        ...(finalizeSlug ? { finalizeSlug } : {}),
         ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
+      if (finalizeSlug && finalizeRef.current === finalizeRequest) {
+        finalizeRef.current = null;
+      }
       acceptSaved(saved);
       onSavedRef.current(saved);
       return saved;
@@ -765,6 +818,14 @@ function NoteEditor({
 
   useEffect(() => {
     return () => {
+      // Only notes whose slug is still pending need a finalizing save.
+      if (noteRef.current.slugPending) {
+        finalizeRef.current = {
+          title:
+            (editsRef.current.title ?? noteRef.current.title).trim() ||
+            noteTitle(bodyRef.current),
+        };
+      }
       void saveNow();
     };
   }, [saveNow]);
@@ -812,14 +873,19 @@ function NoteEditor({
             />
           </div>
           <input
+            ref={titleFieldRef}
             value={title}
             onChange={(event) => {
+              finalizeRef.current = null;
               editNote({ title: event.target.value });
               scheduleSave();
             }}
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
               if (next !== title) editNote({ title: next });
+              if (noteRef.current.slugPending) {
+                finalizeRef.current = { title: next };
+              }
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
@@ -933,7 +999,7 @@ function NoteEditor({
             </div>
           ) : null}
           {mode === "source" ? (
-            <NoteSource
+            <MarkdownSourceEditor
               textareaRef={sourceFieldRef}
               autoFocus={blank}
               value={body}
@@ -943,66 +1009,12 @@ function NoteEditor({
               }}
             />
           ) : body.trim() ? (
-            <AgentMarkdown text={body} cwd={sourceCwd} />
+            <AgentMarkdown text={body} cwd={sourceCwd} hardBreaks />
           ) : (
             <p className="text-[13px] text-content/45">No description</p>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function NoteSource({
-  value,
-  onChange,
-  textareaRef,
-  autoFocus = false,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  textareaRef: { current: HTMLTextAreaElement | null };
-  autoFocus?: boolean;
-}) {
-  const lines = value.split("\n");
-  const gutterWidth = `calc(${Math.max(String(lines.length).length, 2)}ch + 0.75rem)`;
-  const textOffset = `calc(${gutterWidth} + 0.75rem)`;
-
-  return (
-    <div className="relative min-h-[448px]">
-      <div
-        aria-hidden
-        className="pointer-events-none grid font-mono text-[13px] leading-5 text-content/85"
-        style={{
-          gridTemplateColumns: `${gutterWidth} minmax(0, 1fr)`,
-        }}
-      >
-        {lines.map((line, index) => (
-          <Fragment key={index}>
-            <div className="select-none pr-2 text-right tabular-nums whitespace-nowrap text-content/40">
-              {index + 1}
-            </div>
-            <div className="min-h-5 min-w-0 pl-3 whitespace-pre-wrap wrap-break-word">
-              {line ? <MarkdownSourceHighlight text={line} /> : "\u00a0"}
-            </div>
-          </Fragment>
-        ))}
-      </div>
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 w-px bg-content/10"
-        style={{ left: gutterWidth }}
-      />
-      <textarea
-        ref={textareaRef}
-        value={value}
-        autoFocus={autoFocus}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        placeholder="Write markdown…"
-        className="markdown-source-field absolute inset-0 h-full w-full resize-none overflow-hidden border-0 bg-transparent py-0 pr-0 font-mono text-[13px] leading-5 whitespace-pre-wrap wrap-break-word outline-none"
-        style={{ paddingLeft: textOffset }}
-      />
     </div>
   );
 }

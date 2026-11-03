@@ -23,22 +23,32 @@ function ringClass(ratio: number): string {
  *
  * Renders nothing until the harness reports both halves — Cursor's ACP stream
  * carries no usage at all, and a ring guessing at a number is worse than no
- * ring.
+ * ring. A conversation with nothing in it yet is the exception: its context
+ * is known to be empty, so `empty` shows a bare ring.
  */
 export function ContextMeter({
   usage,
   onCompact,
   compactDisabled = false,
+  empty = false,
 }: {
   usage?: ContextUsage;
   onCompact?: () => void;
   compactDisabled?: boolean;
+  /** The conversation has no messages yet. */
+  empty?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const ratio = contextRatio(usage);
-  if (!usage || ratio === null) return null;
+  if (!usage || ratio === null) {
+    return empty ? (
+      <span title="No context used yet" className="grid shrink-0">
+        <MeterRing ratio={0} label="No context used yet" />
+      </span>
+    ) : null;
+  }
 
   const { headline, detail } = contextTooltip(usage);
   const actionsOpen = open && onCompact != null;
@@ -118,18 +128,21 @@ function MeterRing({ ratio, label }: { ratio: number; label?: string }) {
         strokeWidth={STROKE}
         className="opacity-25"
       />
-      <circle
-        cx={SIZE / 2}
-        cy={SIZE / 2}
-        r={RADIUS}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={STROKE}
-        strokeLinecap="round"
-        strokeDasharray={CIRCUMFERENCE}
-        strokeDashoffset={CIRCUMFERENCE * (1 - ratio)}
-        transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
-      />
+      {/* A round cap would leave a dot on an empty ring. */}
+      {ratio > 0 ? (
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={STROKE}
+          strokeLinecap="round"
+          strokeDasharray={CIRCUMFERENCE}
+          strokeDashoffset={CIRCUMFERENCE * (1 - ratio)}
+          transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+        />
+      ) : null}
     </svg>
   );
 }

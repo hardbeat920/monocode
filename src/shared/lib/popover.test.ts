@@ -68,7 +68,7 @@ describe("placePopover", () => {
     ).toBe(200);
   });
 
-  it("keeps the minimum height when neither side has room", () => {
+  it("keeps the minimum height on screen when neither side has room", () => {
     expect(
       placePopover(
         anchor(100, 100, 80, 20),
@@ -79,10 +79,21 @@ describe("placePopover", () => {
     ).toEqual({
       side: "top",
       left: 100,
-      bottom: 106,
+      bottom: 12,
       width: 200,
       maxHeight: 180,
     });
+  });
+
+  it("never lets a minimum height push a popover off-screen", () => {
+    const placed = placePopover(
+      anchor(100, 300, 80, 20),
+      menu,
+      { width: 800, height: 400 },
+      { side: "top", minHeight: 442, maxHeight: 442 },
+    );
+    expect(placed.maxHeight).toBe(384);
+    expect(400 - placed.bottom! - placed.maxHeight).toBeGreaterThanOrEqual(8);
   });
 
   it("narrows a popover wider than the viewport", () => {

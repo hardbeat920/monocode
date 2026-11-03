@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
+  DAILY_WINDOW_MINUTES,
+  formatExtraUsageBalance,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -52,10 +54,34 @@ import {
   type ProviderAccountIdentity,
 } from "../../features/providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../features/providers/ui/ProviderAccountSubtitle";
+import { useShowRemainingUsage } from "../../features/settings/model/displayPrefs";
 
 type UsageWindowEntry = {
   key: "session" | "weekly" | "monthly";
   window: RateLimitWindow;
+};
+
+/** `inset` is the footer on the inset layout's outer glass: pill-shaped chips. */
+export type UsageChipVariant = "footer" | "inset" | "composer";
+
+export const USAGE_CHIP_CLASSES: Record<UsageChipVariant, string> = {
+  footer:
+    "-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]",
+  inset:
+    "inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]",
+  composer:
+    "inline-flex h-6.5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-content/55 transition-colors hover:bg-content/8 hover:text-content focus-visible:outline-2 focus-visible:outline-accent",
+};
+
+/** The refresh button beside the usage chips, per variant. */
+
+export const USAGE_REFRESH_CLASSES: Record<UsageChipVariant, string> = {
+  footer:
+    "grid size-4.5 shrink-0 place-items-center rounded-md text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50",
+  inset:
+    "-ml-1 grid size-5 shrink-0 place-items-center rounded-full text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50",
+  composer:
+    "grid size-6.5 shrink-0 place-items-center rounded-md text-content/40 transition-colors hover:bg-content/8 hover:text-content disabled:opacity-50",
 };
 
 type ResetActionState =
@@ -73,6 +99,7 @@ export function UsageProviderChip({
   onConsumeReset,
   onReconnect,
   presentation,
+  variant = "footer",
 }: {
   limits: ProviderRateLimits;
   now: number;
@@ -85,7 +112,10 @@ export function UsageProviderChip({
   onManageAccounts?: () => void;
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
   onReconnect?: () => Promise<void>;
+  /** `composer` matches the quiet tool buttons under a Mono's composer. */
+  variant?: UsageChipVariant;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [accountView, setAccountView] = useState<"usage" | "accounts" | "add">(
@@ -117,7 +147,7 @@ export function UsageProviderChip({
     return best;
   }, null);
   const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now))
+    .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
     .join(" · ");
   const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
   const iconHarness = presentation?.harness ?? limits.provider;
@@ -220,7 +250,7 @@ export function UsageProviderChip({
       <button
         ref={trigger}
         type="button"
-        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
+        className={USAGE_CHIP_CLASSES[variant]}
         aria-label={`${providerLabel} usage details`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -260,7 +290,11 @@ export function UsageProviderChip({
                     <span className="text-content/25">·</span>
                   ) : null}
                   <span>
-                    {formatUsagePercent(entry.window.usedPercent)}{" "}
+                    {formatUsagePercent(
+                      showRemaining
+                        ? 100 - clampUsedPercent(entry.window.usedPercent)
+                        : entry.window.usedPercent,
+                    )}{" "}
                     {formatRateLimitWindowChipLabel(entry.window, now)}
                   </span>
                 </span>
@@ -406,6 +440,17 @@ export function UsageProviderChip({
               ) : (
                 <EmptyUsageState limits={limits} loading={loading} />
               )}
+
+              {limits.extraUsageBalance != null ? (
+                <section className="mt-1.5 flex items-baseline justify-between gap-3 rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
+                  <h3 className="text-[11px] font-medium text-content/65">
+                    Extra usage balance
+                  </h3>
+                  <span className="shrink-0 text-[11px] font-medium tabular-nums">
+                    {formatExtraUsageBalance(limits.extraUsageBalance)}
+                  </span>
+                </section>
+              ) : null}
 
               {suggestion && onSelectAccount ? (
                 <SwitchSuggestion
@@ -759,10 +804,14 @@ function UsageWindowCard({
   window: RateLimitWindow;
   now: number;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
+  const shown = showRemaining ? remaining : pct;
   const title =
-    kind === "session"
+    kind === "session" && window.windowMinutes === DAILY_WINDOW_MINUTES
+      ? "Daily limit"
+      : kind === "session"
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"
@@ -774,24 +823,27 @@ function UsageWindowCard({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-[11px] font-medium text-content/65">{title}</h3>
         <span className="shrink-0 text-[11px] font-medium tabular-nums">
-          {formatUsagePercent(pct)} used
+          {formatUsagePercent(shown)} {showRemaining ? "remaining" : "used"}
         </span>
       </div>
       <div
         className="mt-2 h-1.5 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} remaining`}
+        aria-label={`${title} ${showRemaining ? "remaining" : "used"}`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(remaining)}
+        aria-valuenow={Math.round(shown)}
       >
         <span
           className={`block h-full rounded-full ${barClass(pct)}`}
-          style={{ width: `${remaining}%` }}
+          style={{ width: `${shown}%` }}
         />
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] leading-4 text-content/40">
-        <span className="tabular-nums">{Math.round(remaining)}% remaining</span>
+        <span className="tabular-nums">
+          {formatUsagePercent(showRemaining ? pct : remaining)}{" "}
+          {showRemaining ? "used" : "remaining"}
+        </span>
         <span
           className="truncate text-right tabular-nums"
           title={
@@ -1146,6 +1198,7 @@ function emptyUsageLabel(limits: ProviderRateLimits): string {
 }
 
 function MiniBar({ usedPct }: { usedPct: number }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(usedPct);
   return (
     <span
@@ -1154,7 +1207,7 @@ function MiniBar({ usedPct }: { usedPct: number }) {
     >
       <span
         className={`block h-full rounded-full ${barClass(pct)}`}
-        style={{ width: `${100 - pct}%` }}
+        style={{ width: `${showRemaining ? 100 - pct : pct}%` }}
       />
     </span>
   );

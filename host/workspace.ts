@@ -785,8 +785,8 @@ export async function hostGitAction(
       await git(
         root,
         action === "stage"
-          ? ["add", "--", path]
-          : ["restore", "--staged", "--", path],
+          ? ["--literal-pathspecs", "add", "--", path]
+          : ["--literal-pathspecs", "restore", "--staged", "--", path],
       );
       return;
     }

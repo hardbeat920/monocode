@@ -67,14 +67,20 @@ let activity: InboxActivity;
 const recents = [];
 const sessions = [session];
 
-function Harness() {
-  activity = useInboxActivity(recents, "/tmp/app", sessions);
+function Harness({
+  rows = sessions,
+  scopeProject,
+}: {
+  rows?: SessionSummary[];
+  scopeProject?: string;
+}) {
+  activity = useInboxActivity(recents, "/tmp/app", rows, { scopeProject });
   return null;
 }
 
-async function mount() {
+async function mount(rows = sessions, scopeProject?: string) {
   await act(async () => {
-    root.render(createElement(Harness));
+    root.render(createElement(Harness, { rows, scopeProject }));
   });
 }
 
@@ -91,6 +97,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete (document as { hidden?: boolean }).hidden;
   act(() => root.unmount());
   container.remove();
   localStorage.clear();
@@ -198,6 +205,37 @@ describe("Inbox activity polling", () => {
     expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
   });
 
+  it("badges only the scoped project's items and ones tied to no project", async () => {
+    const team: InboxItem = {
+      ...remote,
+      provider: "linear",
+      kind: "linear",
+      repo: "",
+      number: 7,
+      url: "https://linear.app/acme/issue/APP-7",
+      projectPath: "",
+    };
+    const appEntry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    const teamEntry = { key: inboxItemKey(team), updatedAt: team.updatedAt };
+    seedInboxSeenIfNeeded([
+      { ...appEntry, updatedAt: "2026-09-12T12:00:00Z" },
+      { ...teamEntry, updatedAt: "2026-09-12T12:00:00Z" },
+    ]);
+    listInboxItems.mockResolvedValue({ items: [remote, team], errors: {} });
+    await mount(sessions, "/tmp/other");
+    // The team-level issue belongs to every project.
+    expect(activity.unseen).toBe(true);
+    act(() => markInboxItemSeen(teamEntry));
+    // The app's item doesn't light another project's dot...
+    expect(activity.unseen).toBe(false);
+    expect(isInboxEntryUnseen(appEntry)).toBe(true);
+    // ...but does its own, and the unscoped (classic) one.
+    await mount(sessions, "/tmp/app");
+    expect(activity.unseen).toBe(true);
+    await mount(sessions, undefined);
+    expect(activity.unseen).toBe(true);
+  });
+
   it("reuses the Inbox list for linked-session updates", async () => {
     listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
     await mount();
@@ -207,20 +245,68 @@ describe("Inbox activity polling", () => {
     expect(githubWorkItem).not.toHaveBeenCalled();
   });
 
-  it("falls back to an exact lookup only when the Inbox omits the item", async () => {
+  it("does not individually poll linked items omitted by the Inbox", async () => {
     listInboxItems.mockResolvedValue({ items: [], errors: {} });
     githubWorkItem.mockResolvedValue(remote);
     await mount();
 
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(listInboxItems).toHaveBeenCalledTimes(1);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("bounds an hour of background traffic regardless of linked-session history", async () => {
+    vi.useFakeTimers();
+    listInboxItems.mockResolvedValue({ items: [], errors: {} });
+    const history = Array.from({ length: 200 }, (_, index) => ({
+      ...session,
+      id: `old-${index}`,
+      linkedWorkItem: { ...session.linkedWorkItem!, number: index + 1000 },
+    }));
+    await mount(history);
+    await act(async () => vi.advanceTimersByTimeAsync(60 * 60_000));
+
+    expect(listInboxItems).toHaveBeenCalledTimes(31);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("slows tray polling and coalesces repeated visibility changes", async () => {
+    vi.useFakeTimers();
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    await act(async () => vi.advanceTimersByTimeAsync(119_999));
+    expect(listInboxItems).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(listInboxItems).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(299_999));
+    expect(listInboxItems).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(listInboxItems).toHaveBeenCalledTimes(3);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+    });
+    expect(listInboxItems).toHaveBeenCalledTimes(3);
+  });
+
+  it("links a newly loaded session using the existing snapshot without refetching", async () => {
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount([]);
+    await mount([session]);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
     expect(listInboxItems).toHaveBeenCalledTimes(1);
-    expect(githubWorkItem).toHaveBeenCalledExactlyOnceWith(
-      "/tmp/app",
-      "acme/app",
-      "pr",
-      42,
-      { force: true },
-    );
+    expect(githubWorkItem).not.toHaveBeenCalled();
   });
 
   it("clears a linked-session update as soon as its remote snapshot is read", async () => {

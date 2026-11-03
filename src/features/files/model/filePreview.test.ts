@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatFileSize, isImagePath, sniffImageMime } from "./filePreview";
+import {
+  formatFileSize,
+  isImagePath,
+  isVideoPath,
+  sniffDocumentImageMime,
+  sniffImageMime,
+  videoMimeForPath,
+} from "./filePreview";
 
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values);
@@ -21,11 +28,43 @@ describe("isImagePath", () => {
   });
 });
 
+describe("video paths", () => {
+  it.each([
+    ["/w/clip.mp4", "video/mp4"],
+    ["C:\\work\\clip.M4V", "video/mp4"],
+    ["/w/screen recording.MOV", "video/quicktime"],
+    ["remote://env/repo/clip.webm", "video/webm"],
+    ["/w/clip.ogv", "video/ogg"],
+    ["/w/clip.avi", "video/x-msvideo"],
+    ["/w/clip.mkv", "video/x-matroska"],
+    ["/w/clip.mpg", "video/mpeg"],
+    ["/w/clip.mpeg", "video/mpeg"],
+    ["/w/clip.3gp", "video/3gpp"],
+    ["/w/clip.3g2", "video/3gpp2"],
+  ])("routes %s to the player with %s", (path, mime) => {
+    expect(isVideoPath(path)).toBe(true);
+    expect(videoMimeForPath(path)).toBe(mime);
+    expect(isImagePath(path)).toBe(false);
+  });
+
+  it.each([
+    "/w/main.ts",
+    "/w/logo.svg",
+    "/w/photo.png",
+    "/w/LICENSE",
+    "/w/.mp4/notes.txt",
+    "/w/clip.mp4.html",
+  ])("does not route %s to the player", (path) => {
+    expect(isVideoPath(path)).toBe(false);
+    expect(videoMimeForPath(path)).toBeNull();
+  });
+});
+
 describe("sniffImageMime", () => {
   it("identifies each supported format by magic number", () => {
-    expect(sniffImageMime(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe(
-      "image/png",
-    );
+    expect(
+      sniffImageMime(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)),
+    ).toBe("image/png");
     expect(sniffImageMime(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe("image/jpeg");
     expect(sniffImageMime(bytes(0x47, 0x49, 0x46, 0x38, 0x39, 0x61))).toBe(
       "image/gif",
@@ -54,6 +93,34 @@ describe("sniffImageMime", () => {
         bytes(0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d),
       ),
     ).toBeNull();
+  });
+});
+
+describe("sniffDocumentImageMime", () => {
+  const text = (value: string) => new TextEncoder().encode(value);
+
+  it("sniffs raster images whatever their name", () => {
+    const png = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+    expect(sniffDocumentImageMime("hero.png", png)).toBe("image/png");
+    expect(sniffDocumentImageMime("hero.svg", png)).toBe("image/png");
+  });
+
+  it("accepts SVG text only under an .svg name", () => {
+    const svg = text('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"/>');
+    expect(sniffDocumentImageMime("logo.svg", svg)).toBe("image/svg+xml");
+    expect(sniffDocumentImageMime("logo.SVG", text("<svg>"))).toBe("image/svg+xml");
+    expect(sniffDocumentImageMime("logo.png", svg)).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", text("<html><body/>"))).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", text("<svgfoo>"))).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", bytes(0x3c, 0x73, 0x76, 0x67, 0x3e, 0))).toBeNull();
+  });
+
+  it("refuses a Git LFS pointer left in place of the image", () => {
+    const pointer = text(
+      "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1234\n",
+    );
+    expect(sniffDocumentImageMime("hero.png", pointer)).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", pointer)).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-//! macOS chrome: traffic lights and WindowServer background blur.
+//! macOS chrome: traffic lights and native window background blur.
 //!
 //! The overlay titlebar is ~28pt. Our HTML tab bar is 40px (`h-10`), so the
 //! native `NSTitlebarContainerView` has to be stretched to match or the
@@ -10,17 +10,18 @@
 //! pinned once. The container is `setFrame`'d to 40px on install,
 //! resize, and focus — not from `drawRect`.
 //!
-//! Sidebar glass uses a transparent NSWindow plus
-//! `CGSSetWindowBackgroundBlurRadius` (private WindowServer API). That
-//! blurs the desktop behind the window; CSS only tints the sidebar on top.
-//! A nearly transparent AppKit visual-effect view behind the WKWebView keeps
-//! CSS backdrop filters stable during hover repaints and window capture.
+//! Window glass uses an AppKit visual-effect backdrop below WKWebView. Its
+//! Gaussian blur samples the desktop; a separate native view supplies the
+//! shared tint, including newly exposed resize edges before WebKit paints.
+//! The legacy WindowServer blur is only a fallback without a native backing.
 //!
-//! Fully clear `NSColor.clearColor` (alpha 0) plus a native shadow makes
-//! macOS draw a chamfered gap at the corners. Tiny alpha (0.01) keeps the
-//! shadow without that outline.
+//! Decorated workspace windows keep tiny alpha (0.01) to avoid a chamfered
+//! shadow gap. Borderless chats use a masked NSVisualEffectView below Wry's
+//! unchanged content host, with a rounded tint view above the material.
+//! Rounded layers clip WebKit and paint the tint during live resize. They
+//! must not use the rectangular WindowServer background-blur surface.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_void, OsStr};
 use std::path::{Component, Path};
@@ -28,17 +29,20 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use objc2::rc::Retained;
-use objc2::runtime::NSObject;
+use objc2::runtime::{Bool, NSObject};
 use objc2::{
     define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSColor, NSMenu, NSMenuItem,
-    NSRequestUserAttentionType, NSTitlebarSeparatorStyle, NSUserInterfaceItemIdentification,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowOrderingMode,
+    NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSImage, NSImageResizingMode,
+    NSMenu, NSMenuItem, NSRequestUserAttentionType, NSTitlebarSeparatorStyle,
+    NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{
+    NSArray, NSDictionary, NSEdgeInsets, NSNumber, NSRect, NSSize, NSString, NSUserDefaults,
+};
+use objc2_quartz_core::CALayer;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tauri::{AppHandle, Manager, Window, WindowEvent};
 
@@ -55,6 +59,11 @@ pub const BLUR_MAX: u8 = 64;
 pub const BLUR_DEFAULT: u8 = 24;
 
 const GLASS_BACKING_ID: &str = "monocode.webview-glass-backing";
+const GLASS_TINT_ID: &str = "monocode.webview-glass-tint";
+const FLOATING_GLASS_ID: &str = "monocode.floating-glass";
+const FLOATING_CONTENT_ID: &str = "monocode.floating-content";
+/// Matches the floating chat's `rounded-2xl` CSS outline.
+const FLOATING_CORNER_RADIUS: f64 = 16.0;
 
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
@@ -69,6 +78,18 @@ type ConnectionFn = unsafe extern "C" fn() -> CgsConnection;
 
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+/// WebKit reads this preference once, when its first webview starts. Register
+/// a fallback so spelling underlines are enabled without replacing a saved
+/// user preference. HTML spellcheck still controls which fields are checked.
+pub fn register_spellcheck_default() {
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    let enabled = NSNumber::numberWithBool(true);
+    let defaults: Retained<NSDictionary<NSString>> =
+        NSDictionary::from_slices(&[&*key], &[enabled.as_ref()]);
+    // SAFETY: The dictionary contains a string key and a property-list boolean.
+    unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&defaults) };
 }
 
 pub fn install(window: &Window) {
@@ -202,20 +223,141 @@ fn set_launch_background(window: &Window, r: u8, g: u8, b: u8) {
         return;
     };
     set_glass_backing(&ns_window, false);
-    ns_window.setOpaque(true);
-    ns_window.setBackgroundColor(Some(&NSColor::colorWithRed_green_blue_alpha(
-        r as f64 / 255.0,
-        g as f64 / 255.0,
-        b as f64 / 255.0,
-        1.0,
-    )));
+    ns_window.setOpaque(!window.label().starts_with(crate::window::MONO_CHAT_PREFIX));
+    set_native_background(
+        window,
+        &ns_window,
+        &NSColor::colorWithRed_green_blue_alpha(
+            r as f64 / 255.0,
+            g as f64 / 255.0,
+            b as f64 / 255.0,
+            1.0,
+        ),
+    );
 }
 
-/// Turn on desktop blur after the first UI paint.
-pub fn enable_glass(window: &Window) {
+/// Borderless chats need their rounded shape and fill in AppKit, so newly
+/// exposed resize edges never wait for a WebKit frame or CSS backdrop filter.
+pub fn prepare_floating_window(window: &Window) {
+    let Some(native) = ns_window(window) else {
+        return;
+    };
+    let Some(content) = native.contentView() else {
+        return;
+    };
+    let glass = NSVisualEffectView::initWithFrame(
+        NSVisualEffectView::alloc(native.mtm()),
+        content.bounds(),
+    );
+    glass.setIdentifier(Some(&NSString::from_str(FLOATING_GLASS_ID)));
+    glass.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+    glass.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    glass.setState(NSVisualEffectState::Active);
+    glass.setMaskImage(Some(&floating_corner_mask()));
+    glass.setWantsLayer(true);
+    if let Some(layer) = glass.layer() {
+        layer.setCornerRadius(FLOATING_CORNER_RADIUS);
+        layer.setMasksToBounds(true);
+    }
+
+    glass.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    // Wry owns this host and its responder hierarchy. Insert the material
+    // below WebKit instead of replacing or reparenting the content view.
+    content.setWantsLayer(true);
+    if let Some(layer) = content.layer() {
+        layer.setCornerRadius(FLOATING_CORNER_RADIUS);
+        layer.setMasksToBounds(true);
+    }
+    content.addSubview_positioned_relativeTo(&glass, NSWindowOrderingMode::Below, None);
+
+    // Tint must sit above the material but below WebKit. Painting the host's
+    // background would put the tint behind the material instead.
+    let tint = NSView::initWithFrame(NSView::alloc(native.mtm()), content.bounds());
+    tint.setIdentifier(Some(&NSString::from_str(FLOATING_CONTENT_ID)));
+    tint.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    tint.setWantsLayer(true);
+    if let Some(layer) = tint.layer() {
+        layer.setCornerRadius(FLOATING_CORNER_RADIUS);
+        layer.setMasksToBounds(true);
+    }
+    content.addSubview_positioned_relativeTo(&tint, NSWindowOrderingMode::Above, Some(&glass));
+    native.setHasShadow(true);
+    set_launch_background(window, 23, 23, 23);
+}
+
+fn floating_corner_mask() -> Retained<NSImage> {
+    // A one-point stretchable center preserves the 16pt corners at every
+    // window size and screen scale, without regenerating a mask on resize.
+    let size = FLOATING_CORNER_RADIUS * 2.0 + 1.0;
+    let draw = block2::RcBlock::new(|rect| {
+        NSColor::blackColor().setFill();
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+            rect,
+            FLOATING_CORNER_RADIUS,
+            FLOATING_CORNER_RADIUS,
+        )
+        .fill();
+        Bool::YES
+    });
+    let mask = NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(size, size), false, &draw);
+    mask.setCapInsets(NSEdgeInsets {
+        top: FLOATING_CORNER_RADIUS,
+        left: FLOATING_CORNER_RADIUS,
+        bottom: FLOATING_CORNER_RADIUS,
+        right: FLOATING_CORNER_RADIUS,
+    });
+    mask.setResizingMode(NSImageResizingMode::Stretch);
+    mask
+}
+
+fn set_native_background(window: &Window, native: &NSWindow, color: &NSColor) {
+    if window.label().starts_with(crate::window::MONO_CHAT_PREFIX) {
+        if let Some(layer) = native.contentView().and_then(|view| {
+            view.subviews()
+                .iter()
+                .find(|view| {
+                    view.identifier().as_deref() == Some(&NSString::from_str(FLOATING_CONTENT_ID))
+                })
+                .and_then(|view| view.layer())
+        }) {
+            layer.setBackgroundColor(Some(&color.CGColor()));
+            // Even 1% alpha across NSWindow's full rectangle makes its shadow
+            // square. All of this panel's tint belongs to the clipped layer.
+            native.setBackgroundColor(Some(&NSColor::clearColor()));
+            native.invalidateShadow();
+            return;
+        }
+    }
+    if let Some(tint) = native.contentView().and_then(|content| {
+        content.subviews().iter().find(|view| {
+            view.identifier().as_deref() == Some(&NSString::from_str(GLASS_TINT_ID))
+                && !view.isHidden()
+        })
+    }) {
+        if let Some(layer) = tint.layer() {
+            layer.setBackgroundColor(Some(&color.CGColor()));
+            // The tint belongs above the live backdrop, which covers the
+            // NSWindow background. Keep tiny alpha for the native shadow.
+            native.setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
+            return;
+        }
+    }
+    native.setBackgroundColor(Some(color));
+}
+
+/// Turn on desktop blur after the first UI paint. Report whether AppKit paints
+/// the tint so the page can stop painting the same translucent colour twice.
+pub fn enable_glass(window: &Window, background: crate::window::Rgb, opacity: Option<f64>) -> bool {
+    let tinted = prepare_glass(window, background, opacity);
+    if !glass_enabled(window) {
+        apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
+    }
     set_glass_enabled(window, true);
-    prepare_glass(window);
-    apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
+    tinted
 }
 
 /// Turn off the blur and fall back to an opaque window in the caller's colour.
@@ -225,29 +367,160 @@ pub fn disable_glass(window: &Window, r: u8, g: u8, b: u8) {
     set_launch_background(window, r, g, b);
 }
 
-fn prepare_glass(window: &Window) {
+fn prepare_glass(window: &Window, background: crate::window::Rgb, opacity: Option<f64>) -> bool {
     let Some(ns_window) = ns_window(window) else {
-        return;
+        return false;
     };
-    set_glass_backing(&ns_window, true);
-    ns_window.setOpaque(false);
-    // Fully clear + shadow leaves a jagged gap at the corners.
-    ns_window.setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
-    ns_window.setHasShadow(true);
-    ns_window.invalidateShadow();
-    ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    if !glass_enabled(window) {
+        set_glass_backing(&ns_window, true);
+        ns_window.setOpaque(false);
+        ns_window.setHasShadow(true);
+        ns_window.invalidateShadow();
+        ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    }
+    let opacity = opacity.filter(|value| value.is_finite());
+    let color = if let Some(opacity) = opacity {
+        NSColor::colorWithSRGBRed_green_blue_alpha(
+            background.r as f64 / 255.0,
+            background.g as f64 / 255.0,
+            background.b as f64 / 255.0,
+            opacity.clamp(0.15, 1.0),
+        )
+    } else {
+        // Older pages still paint their own tint. Fully clear + shadow leaves
+        // a jagged gap at the corners, so keep the original tiny alpha.
+        NSColor::clearColor().colorWithAlphaComponent(0.01)
+    };
+    set_native_background(window, &ns_window, &color);
+    opacity.is_some()
 }
 
-/// Keep an AppKit backdrop surface below the transparent WKWebView. With only
-/// WindowServer blur, native hover/capture tests expose unfiltered web content
-/// for individual frames. A visual-effect backing prevents that without
-/// removing CSS blur or making the page opaque; an ordinary layer-backed
-/// NSView did not. Keep a nonzero alpha so AppKit retains the effect, but only
-/// tint at 1% so the existing glass appearance and blur-radius control remain.
+struct WindowBackdropIvars {
+    radius: Cell<u8>,
+}
+
+define_class!(
+    #[unsafe(super(NSVisualEffectView))]
+    #[name = "MonoCodeWindowBackdrop"]
+    #[ivars = WindowBackdropIvars]
+    struct WindowBackdrop;
+
+    impl WindowBackdrop {
+        #[unsafe(method(updateLayer))]
+        fn update_layer(&self) {
+            // AppKit rebuilds its private material layers when appearance
+            // changes. Always let it finish before adjusting the backdrop.
+            unsafe { let _: () = msg_send![super(self), updateLayer]; }
+            self.configure_layers();
+        }
+    }
+);
+
+impl WindowBackdrop {
+    fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
+        let allocated = Self::alloc(mtm).set_ivars(WindowBackdropIvars {
+            radius: Cell::new(BLUR_RADIUS.load(Ordering::Relaxed)),
+        });
+        let view: Retained<Self> = unsafe { msg_send![super(allocated), initWithFrame: frame] };
+        view.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        view.setState(NSVisualEffectState::Active);
+        view.setWantsLayer(true);
+        view
+    }
+
+    fn set_radius(&self, radius: u8) {
+        self.ivars().radius.set(radius);
+        self.configure_layers();
+        self.setNeedsDisplay(true);
+    }
+
+    fn configure_layers(&self) {
+        let Some(layer) = self.layer() else {
+            return;
+        };
+        // These are AppKit-owned private filters. An OS change must not let
+        // an Objective-C exception escape through the updateLayer callback.
+        let configured = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            configure_backdrop_layer(&layer, self.ivars().radius.get());
+        }));
+        if configured.is_ok() {
+            // Window snapshots omit live backdrops. An opaque base behind
+            // that layer keeps Mission Control previews from showing raw
+            // desktop through a window whose blur was omitted.
+            layer.setBackgroundColor(Some(&NSColor::blackColor().CGColor()));
+        }
+    }
+}
+
+/// Preserve AppKit's downsampled Gaussian backdrop while replacing material
+/// coloration with our theme's own tint. This leaves in-app CSS blur alone.
+fn configure_backdrop_layer(layer: &CALayer, radius: u8) {
+    layer.setBackgroundColor(None);
+    if layer.class().name().to_bytes() == b"CAChameleonLayer" {
+        layer.setHidden(true);
+        return;
+    }
+    if let Some(filters) = layer.filters() {
+        let mut retained = Vec::with_capacity(filters.len());
+        let mut changed = false;
+        for filter in filters.iter() {
+            let description: Retained<NSString> = unsafe { msg_send![&*filter, description] };
+            let description = description.to_string();
+            if description.contains("Saturat") {
+                changed = true;
+                continue;
+            }
+            if description.contains("Blur") {
+                let key = NSString::from_str("inputRadius");
+                let current: Option<Retained<NSNumber>> =
+                    unsafe { msg_send![&*filter, valueForKey: &*key] };
+                if current.as_ref().map(|value| value.doubleValue()) != Some(f64::from(radius)) {
+                    // AppKit's filters are shared with Core Animation's
+                    // committed render tree. Mutating the installed filter
+                    // and reassigning an equal array does not invalidate it.
+                    // Install a changed copy so the displayed blur updates.
+                    let replacement: Retained<objc2::runtime::AnyObject> =
+                        unsafe { msg_send![&*filter, copy] };
+                    let value = NSNumber::numberWithDouble(f64::from(radius));
+                    unsafe {
+                        let _: () = msg_send![&*replacement, setValue: &*value, forKey: &*key];
+                    }
+                    retained.push(replacement);
+                    changed = true;
+                    continue;
+                }
+            }
+            retained.push(filter);
+        }
+        if changed {
+            unsafe {
+                layer.setFilters(Some(&NSArray::from_retained_slice(&retained)));
+            }
+        }
+    }
+    if let Some(children) = unsafe { layer.sublayers() } {
+        for child in children.iter() {
+            configure_backdrop_layer(&child, radius);
+        }
+    }
+}
+
+/// Native desktop blur and its tint sit below the unchanged Wry webview.
 fn set_glass_backing(window: &NSWindow, enabled: bool) {
     let Some(content) = window.contentView() else {
         return;
     };
+    // Reuse the floating chat's masked material, including when glass is
+    // disabled. A second, unmasked effect would restore square corners.
+    if let Some(backing) = content
+        .subviews()
+        .iter()
+        .find(|view| view.identifier().as_deref() == Some(&NSString::from_str(FLOATING_GLASS_ID)))
+    {
+        backing.setHidden(!enabled);
+        return;
+    }
     let identifier = NSString::from_str(GLASS_BACKING_ID);
     if let Some(backing) = content
         .subviews()
@@ -255,32 +528,62 @@ fn set_glass_backing(window: &NSWindow, enabled: bool) {
         .find(|view| view.identifier().as_deref() == Some(&identifier))
     {
         backing.setHidden(!enabled);
+        if let Some(tint) = content
+            .subviews()
+            .iter()
+            .find(|view| view.identifier().as_deref() == Some(&NSString::from_str(GLASS_TINT_ID)))
+        {
+            tint.setHidden(!enabled);
+        }
         return;
     }
     if !enabled {
         return;
     }
 
-    let backing = NSVisualEffectView::initWithFrame(
-        NSVisualEffectView::alloc(window.mtm()),
-        content.bounds(),
-    );
+    let backing = WindowBackdrop::new(content.bounds(), window.mtm());
     backing.setIdentifier(Some(&identifier));
-    backing.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
-    backing.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    backing.setState(NSVisualEffectState::Active);
-    backing.setAlphaValue(0.01);
     backing.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     // Wry owns the parent and WKWebView. Insert a sibling below the webview;
     // do not replace its parent, first responder, or event-handling view.
     content.addSubview_positioned_relativeTo(&backing, NSWindowOrderingMode::Below, None);
+
+    let tint = NSView::initWithFrame(NSView::alloc(window.mtm()), content.bounds());
+    tint.setIdentifier(Some(&NSString::from_str(GLASS_TINT_ID)));
+    tint.setWantsLayer(true);
+    tint.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    content.addSubview_positioned_relativeTo(&tint, NSWindowOrderingMode::Above, Some(&backing));
 }
 
 fn apply_blur(window: &Window, radius: u8) {
+    // This API blurs the window rectangle independently of CALayer clipping.
+    // The floating panel's masked AppKit material owns its backdrop instead.
+    let radius = if window.label().starts_with(crate::window::MONO_CHAT_PREFIX) {
+        0
+    } else {
+        radius
+    };
     let Some(ns_window) = ns_window(window) else {
         return;
+    };
+    let native_backing = ns_window.contentView().and_then(|content| {
+        content.subviews().iter().find(|view| {
+            view.identifier().as_deref() == Some(&NSString::from_str(GLASS_BACKING_ID))
+        })
+    });
+    let legacy_radius = if let Some(backing) = native_backing {
+        if let Some(backdrop) = backing.downcast_ref::<WindowBackdrop>() {
+            backdrop.set_radius(radius);
+        }
+        // Avoid applying two desktop blurs. Floating windows also keep
+        // their existing masked native material rather than this backdrop.
+        0
+    } else {
+        radius
     };
     let Some(set_blur) = set_blur_fn() else {
         return;
@@ -293,7 +596,7 @@ fn apply_blur(window: &Window, radius: u8) {
         return;
     }
     unsafe {
-        set_blur(connection, window_number as c_int, radius as c_int);
+        set_blur(connection, window_number as c_int, legacy_radius as c_int);
     }
 }
 
@@ -529,8 +832,8 @@ pub(crate) fn install_dock_menu(app: &AppHandle) {
 /// paints Tauri's embedded icns edge-to-edge. Wrap that binary in a real
 /// `.app` so macOS applies the plate, mask, and padding.
 #[cfg(debug_assertions)]
-pub(crate) fn ensure_dev_bundle() {
-    if let Err(err) = relaunch_from_dev_bundle() {
+pub(crate) fn ensure_dev_bundle(version: &str, bundle_version: &str) {
+    if let Err(err) = relaunch_from_dev_bundle(version, bundle_version) {
         eprintln!("monocode: macos dev bundle: {err}");
     }
 }
@@ -578,14 +881,14 @@ fn existing_bundle_root_from_exe(exe: &Path) -> Option<(std::path::PathBuf, Stri
 }
 
 #[cfg(debug_assertions)]
-fn relaunch_from_dev_bundle() -> Result<(), String> {
+fn relaunch_from_dev_bundle(version: &str, bundle_version: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     if let Some((app, app_name)) = existing_bundle_root_from_exe(&exe) {
-        write_dev_bundle_icons(&app, &app_name)?;
+        write_dev_bundle_icons(&app, &app_name, version, bundle_version)?;
         return Ok(());
     }
     let app_name = dev_bundle_name_from_env(DEV_BUNDLE_DEFAULT_NAME);
@@ -596,7 +899,7 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
         .join(dev_bundle_dir_name(&app_name));
     let macos_dir = app.join("Contents/MacOS");
     std::fs::create_dir_all(&macos_dir).map_err(|e| e.to_string())?;
-    write_dev_bundle_icons(&app, &app_name)?;
+    write_dev_bundle_icons(&app, &app_name, version, bundle_version)?;
 
     let bundled = macos_dir.join("monocode");
     let _ = std::fs::remove_file(&bundled);
@@ -629,11 +932,19 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
 }
 
 #[cfg(debug_assertions)]
-fn write_dev_bundle_icons(app: &Path, app_name: &str) -> Result<(), String> {
+fn write_dev_bundle_icons(
+    app: &Path,
+    app_name: &str,
+    version: &str,
+    bundle_version: &str,
+) -> Result<(), String> {
     let resources = app.join("Contents/Resources");
     std::fs::create_dir_all(&resources).map_err(|e| e.to_string())?;
-    std::fs::write(app.join("Contents/Info.plist"), dev_bundle_plist(app_name))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        app.join("Contents/Info.plist"),
+        dev_bundle_plist(app_name, version, bundle_version),
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(resources.join("AppIcon.icns"), DEV_ICNS).map_err(|e| e.to_string())?;
     std::fs::write(resources.join("Assets.car"), DEV_ASSETS_CAR).map_err(|e| e.to_string())?;
     let _ = std::process::Command::new("/usr/bin/touch")
@@ -697,8 +1008,10 @@ fn escape_plist_text(value: &str) -> String {
 }
 
 #[cfg(debug_assertions)]
-fn dev_bundle_plist(app_name: &str) -> Vec<u8> {
+fn dev_bundle_plist(app_name: &str, version: &str, bundle_version: &str) -> Vec<u8> {
     let app_name = escape_plist_text(app_name);
+    let version = escape_plist_text(version);
+    let bundle_version = escape_plist_text(bundle_version);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -723,9 +1036,9 @@ fn dev_bundle_plist(app_name: &str) -> Vec<u8> {
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.75</string>
+	<string>{version}</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.75.5</string>
+	<string>{bundle_version}</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -742,6 +1055,71 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn native_backdrop_accepts_radius_updates_without_material_saturation() {
+        let result = objc2::exception::catch(|| {
+            let layer = CALayer::new();
+            let filter_class = objc2::runtime::AnyClass::get(c"CAFilter")
+                .expect("Core Animation provides backdrop filters");
+            let blur: Retained<objc2::runtime::AnyObject> = unsafe {
+                msg_send![filter_class, filterWithType: &*NSString::from_str("gaussianBlur")]
+            };
+            let saturation: Retained<objc2::runtime::AnyObject> = unsafe {
+                msg_send![filter_class, filterWithType: &*NSString::from_str("colorSaturate")]
+            };
+            unsafe {
+                layer.setFilters(Some(&NSArray::from_retained_slice(&[blur, saturation])));
+            }
+            let filter_radius = |filter: &objc2::runtime::AnyObject| {
+                let value: Option<Retained<NSNumber>> =
+                    unsafe { msg_send![filter, valueForKey: &*NSString::from_str("inputRadius")] };
+                value.as_ref().map(|value| value.doubleValue())
+            };
+            for radius in [60, 1, 64, 24] {
+                let previous = layer.filters().unwrap().objectAtIndex(0);
+                let previous_radius = filter_radius(&previous);
+                configure_backdrop_layer(&layer, radius);
+                let filters = layer.filters().expect("Gaussian blur remains installed");
+                assert_eq!(filters.len(), 1);
+                let updated = filters.objectAtIndex(0);
+                assert_eq!(filter_radius(&updated), Some(f64::from(radius)));
+                assert!(
+                    !std::ptr::eq(&*previous, &*updated),
+                    "A radius change must replace the filter in the render tree"
+                );
+                assert_eq!(filter_radius(&previous), previous_radius);
+
+                configure_backdrop_layer(&layer, radius);
+                assert!(
+                    std::ptr::eq(&*updated, &*layer.filters().unwrap().objectAtIndex(0)),
+                    "Unchanged radii must reuse the installed filter"
+                );
+            }
+        });
+        result.unwrap_or_else(|exception| {
+            panic!("Core Animation rejected the native backdrop configuration: {exception:?}")
+        });
+    }
+
+    #[test]
+    fn floating_mask_supports_appkit_stretching_without_an_exception() {
+        let result = objc2::exception::catch(|| {
+            let mask = floating_corner_mask();
+            // AppKit draws the retained block later, when it needs the mask.
+            // Exercise that callback as well as the image constructor.
+            let image = unsafe {
+                mask.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None)
+            };
+            assert!(image.is_some(), "AppKit must be able to rasterize the mask");
+            mask
+        });
+        let mask = result.unwrap_or_else(|exception| {
+            panic!("AppKit rejected the floating window mask: {exception:?}")
+        });
+        assert_eq!(mask.size(), NSSize::new(33.0, 33.0));
+        assert_eq!(mask.capInsets().top, FLOATING_CORNER_RADIUS);
+    }
 
     fn test_bundle_exe_path(app_name: &str) -> (PathBuf, PathBuf) {
         let nonce = SystemTime::now()
@@ -791,7 +1169,7 @@ mod tests {
 
     #[test]
     fn dev_bundle_plist_uses_the_provided_app_name() {
-        let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev")).unwrap();
+        let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev", "1.2.3", "1.2.3")).unwrap();
         assert!(plist.contains("<string>MonoCode Dev</string>"));
         assert!(!plist.contains("<string>MonoCode</string>"));
     }

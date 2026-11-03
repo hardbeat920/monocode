@@ -136,6 +136,82 @@ it.each(["worker", "main"])(
   },
 );
 
+it("offers selection actions for a whole last paragraph above the turn actions", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const save = vi.fn();
+  vi.spyOn(Range.prototype, "getClientRects").mockReturnValue({
+    length: 0,
+  } as DOMRectList);
+  vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(10, 20, 120, 20),
+  );
+  const select = async (end: Node, offset: number) => {
+    const paragraphs = container.querySelectorAll(
+      '[data-chat-message="answer"] p',
+    );
+    const range = document.createRange();
+    range.setStart(paragraphs[paragraphs.length - 1].firstChild!, 0);
+    range.setEnd(end, offset);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    await act(async () => {
+      document.dispatchEvent(new Event("selectionchange"));
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    });
+    return document.querySelector('[aria-label="Selected text actions"]');
+  };
+  try {
+    act(() =>
+      root.render(
+        createElement(AgentTranscript, {
+          blocks: [
+            {
+              id: "prompt",
+              role: "user",
+              text: "Check it",
+              startedAt: 1000,
+              durationMs: 2000,
+            },
+            {
+              id: "answer",
+              role: "assistant",
+              text: "First paragraph.\n\nLast paragraph.",
+            },
+          ],
+          onSaveSelectionNote: save,
+        }),
+      ),
+    );
+    // A paragraph selection ends at the start of what follows; after the
+    // last paragraph that is the turn's action row, outside the response.
+    const actions = container.querySelector("[data-turn-actions]")!;
+    const walker = document.createTreeWalker(actions, NodeFilter.SHOW_TEXT);
+    const actionText = walker.nextNode()!;
+    expect(actionText.textContent!.length).toBeGreaterThan(1);
+
+    const toolbar = await select(actionText, 0);
+    expect(toolbar).not.toBeNull();
+    const notes = [...toolbar!.querySelectorAll("button")].find(
+      (button) => button.textContent === "Add to notes",
+    )!;
+    await act(async () => notes.click());
+    expect(save).toHaveBeenCalledWith("Last paragraph.");
+
+    // Reaching into the action row's own text still leaves the response.
+    expect(await select(actionText, 1)).toBeNull();
+  } finally {
+    act(() => root.unmount());
+    window.getSelection()?.removeAllRanges();
+    container.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("saves worker prompts and responses with their source session and project", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();

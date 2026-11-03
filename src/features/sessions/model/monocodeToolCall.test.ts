@@ -39,6 +39,15 @@ describe("MonoCode CLI tool calls", () => {
     expect(
       monoCodeToolCall(shell("monocode app sessions.draft --json '{}'"))?.label,
     ).toBe("Save a draft");
+    for (const [action, label] of [
+      ["sessions.stop", "Stop a session"],
+      ["sessions.archive", "Archive a session"],
+      ["sessions.delete", "Delete a session"],
+    ]) {
+      expect(
+        monoCodeToolCall(shell(`monocode app ${action} --json '{}'`))?.label,
+      ).toBe(label);
+    }
     expect(
       monoCodeToolCall(shell("monocode app notes.write --input -"))?.label,
     ).toBe("Write a note");

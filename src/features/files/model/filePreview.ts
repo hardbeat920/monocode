@@ -11,6 +11,25 @@ const IMAGE_EXTENSIONS = new Set([
   ".ico",
 ]);
 
+const VIDEO_MIME_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
+  ".avi": "video/x-msvideo",
+  ".mkv": "video/x-matroska",
+  ".mpg": "video/mpeg",
+  ".mpeg": "video/mpeg",
+  ".3gp": "video/3gpp",
+  ".3g2": "video/3gpp2",
+};
+
+function extensionOf(path: string): string {
+  const name = basename(path).toLowerCase();
+  return name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+}
+
 /**
  * Whether a path belongs to the image viewer, decided before anything is read.
  *
@@ -18,9 +37,20 @@ const IMAGE_EXTENSIONS = new Set([
  * which offers its own rendered preview alongside the source.
  */
 export function isImagePath(path: string): boolean {
-  const name = basename(path).toLowerCase();
-  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
-  return IMAGE_EXTENSIONS.has(extension);
+  return IMAGE_EXTENSIONS.has(extensionOf(path));
+}
+
+/** Route video containers to the player, which checks codec support on load. */
+export function isVideoPath(path: string): boolean {
+  return videoMimeForPath(path) !== null;
+}
+
+/**
+ * Only return explicit video MIME types, so even mislabeled markup cannot
+ * become a document through its blob URL. The media decoder validates bytes.
+ */
+export function videoMimeForPath(path: string): string | null {
+  return VIDEO_MIME_TYPES[extensionOf(path)] ?? null;
 }
 
 /**
@@ -51,6 +81,24 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
     if (brand === "avif" || brand === "avis") return "image/avif";
   }
   return null;
+}
+
+/**
+ * MIME type for an image a Markdown document shows, or null when the bytes
+ * are not one. Raster images are sniffed as in the viewer. SVG has no magic
+ * number, so a `.svg` file must be text that contains an `<svg` element; it is
+ * then shown through an `<img>`, where its scripts and external references
+ * never run. A Git LFS pointer in place of the image matches neither.
+ */
+export function sniffDocumentImageMime(
+  path: string,
+  bytes: Uint8Array,
+): string | null {
+  const raster = sniffImageMime(bytes);
+  if (raster) return raster;
+  if (extensionOf(path) !== ".svg" || bytes.includes(0)) return null;
+  const text = new TextDecoder().decode(bytes.subarray(0, 64 * 1024));
+  return /<svg[\s>]/i.test(text) ? "image/svg+xml" : null;
 }
 
 /** Byte count for the viewer footer, in the units a file manager would show. */

@@ -43,6 +43,20 @@ describe("workingTreeDiffEntries", () => {
     ]);
   });
 
+  it("keeps only the scoped side", () => {
+    const files = [
+      file("a.ts", true, true),
+      file("b.ts", true, false),
+      file("c.ts", false, true),
+    ];
+    expect(
+      workingTreeDiffEntries(files, "unstaged").map((entry) => entry.id),
+    ).toEqual(["unstaged:a.ts", "unstaged:c.ts"]);
+    expect(
+      workingTreeDiffEntries(files, "staged").map((entry) => entry.id),
+    ).toEqual(["staged:a.ts", "staged:b.ts"]);
+  });
+
   it("focuses and prioritizes the selected comparison", () => {
     const entries = workingTreeDiffEntries([
       file("a.ts", true, true),

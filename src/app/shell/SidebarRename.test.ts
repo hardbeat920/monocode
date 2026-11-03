@@ -1,13 +1,21 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps } from "react";
+import { act, createElement, StrictMode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
-import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
+import { saveProjectRailOrder } from "../../features/projects/model/recents";
+import {
+  loadSessionFolders,
+  saveSessionFolders,
+} from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
+import {
+  createMono,
+  saveMonoSessionId,
+} from "../../features/monos/model/mono";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -17,7 +25,10 @@ vi.mock("../../features/source-control/hooks/useGitFileStatuses", () => ({
   useGitFileStatuses: () => ({ files: new Map(), dirs: new Map() }),
 }));
 vi.mock("./SidebarUpdate", () => ({ SidebarUpdateFooter: () => null }));
-vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
+vi.mock("../../features/files/ui/FileTree", () => ({
+  FileTree: ({ cwd, rootLabel }: { cwd: string; rootLabel?: string }) =>
+    createElement("div", { "data-explorer-cwd": cwd }, rootLabel),
+}));
 vi.mock("../../platform/tauri/clipboard", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
@@ -141,6 +152,264 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("project swipe navigation", () => {
+  it("starts a short swipe transition immediately while the destination is loading", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(
+        () =>
+          ({
+            cancel: vi.fn(),
+            finished: new Promise(() => {}),
+          }) as unknown as Animation,
+      );
+    const paths = ["/workspace/project", "/workspace/other"];
+    saveProjectRailOrder(paths);
+    props = {
+      ...props,
+      inset: true,
+      recents: paths.map((path) => ({ path, openedAt: 1 })),
+      onSelectProject: vi.fn((cwd: string) => {
+        props = { ...props, cwd, pending: true, sessions: [] };
+        render();
+      }),
+    };
+    act(render);
+    animate.mockClear();
+    act(() => {
+      container.querySelector("aside")!.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 30,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(props.onSelectProject).toHaveBeenCalledExactlyOnceWith(paths[1]);
+    expect(animate).toHaveBeenCalled();
+    expect(
+      animate.mock.calls.some(
+        ([, options]) =>
+          typeof options === "object" && options?.duration === 180,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([true, false])(
+    "enables swiping only in the inset sidebar (inset=%s)",
+    (inset) => {
+      const paths = ["/workspace/project", "/workspace/other", "/workspace/last"];
+      saveProjectRailOrder(paths);
+      props = {
+        ...props,
+        inset,
+        recents: paths.map((path) => ({ path, openedAt: 1 })),
+        onSelectProject: vi.fn((cwd: string) => {
+          props = { ...props, cwd };
+          render();
+        }),
+      };
+      act(render);
+      const swipe = () => act(() => {
+        container.querySelector("aside")!.dispatchEvent(new WheelEvent("wheel", {
+          deltaX: 80,
+          bubbles: true,
+          cancelable: true,
+        }));
+      });
+      swipe();
+      swipe();
+      if (inset) {
+        expect(props.onSelectProject).toHaveBeenCalledExactlyOnceWith(paths[1]);
+      } else {
+        expect(props.onSelectProject).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
+describe("inset session previews", () => {
+  function hover(target = card()) {
+    act(() =>
+      target.dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          pointerType: "mouse",
+        }),
+      ),
+    );
+  }
+
+  function preview() {
+    return document.querySelector<HTMLElement>("[data-session-preview]");
+  }
+
+  beforeEach(() => {
+    props.inset = true;
+  });
+
+  it("shows the full session details immediately without a native title tooltip", () => {
+    props.sessions[0] = {
+      ...props.sessions[0],
+      title: "Review hover previews",
+      harness: "claude",
+      model: "claude:sonnet-4.6",
+      repo: "monocode",
+      branch: "feature/session-preview",
+      worktreeCwd: "/workspace/worktrees/session-preview",
+      additions: 42,
+      deletions: 7,
+    };
+    act(() => render());
+    expect(preview()).toBeNull();
+    hover();
+
+    expect(card().hasAttribute("title")).toBe(false);
+    expect(preview()?.dataset.popoverSide).toBe("right");
+    expect(preview()?.textContent).toContain("Review hover previews");
+    expect(preview()?.textContent).toContain("Sonnet 4.6");
+    expect(preview()?.textContent).toContain("Working...");
+    expect(preview()?.textContent).toContain(
+      "/workspace/worktrees/session-preview",
+    );
+    expect(preview()?.textContent).toContain("feature/session-preview");
+    expect(preview()?.querySelector("dl")?.textContent).not.toMatch(
+      /Model|Mode|Repository|Updated/,
+    );
+    expect(preview()?.textContent).toContain("+42");
+    expect(preview()?.textContent).toContain("−7");
+    expect(
+      card()
+        .querySelector("[data-session-select]")
+        ?.getAttribute("aria-describedby"),
+    ).toBe(preview()?.id);
+  });
+
+  it("stays open while the pointer crosses into the preview", () => {
+    vi.useFakeTimers();
+    act(() => render());
+    hover();
+    const surface = preview()!;
+    act(() =>
+      card().dispatchEvent(
+        new PointerEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      ),
+    );
+    hover(surface);
+    act(() => vi.advanceTimersByTime(200));
+    expect(preview()).toBe(surface);
+
+    act(() =>
+      surface.dispatchEvent(
+        new PointerEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      ),
+    );
+    act(() => vi.advanceTimersByTime(200));
+    expect(preview()).toBeNull();
+  });
+
+  it("replaces the preview when another session is hovered", () => {
+    props.sessions.push({
+      ...props.sessions[0],
+      id: "session-2",
+      title: "Second conversation",
+    });
+    act(() => render());
+    hover();
+    hover(
+      container.querySelector<HTMLElement>('[data-session-card="session-2"]')!,
+    );
+    expect(document.querySelectorAll("[data-session-preview]")).toHaveLength(1);
+    expect(preview()?.dataset.sessionPreview).toBe("session-2");
+  });
+
+  it.each(["escape", "scroll", "contextmenu"])("dismisses on %s", (action) => {
+    act(() => render());
+    hover();
+    expect(preview()).not.toBeNull();
+    act(() => {
+      if (action === "escape") {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      } else if (action === "scroll") {
+        card().parentElement!.dispatchEvent(new Event("scroll"));
+      } else {
+        card().dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+      }
+    });
+    expect(preview()).toBeNull();
+  });
+
+  it("does not open for touch pointers", () => {
+    act(() => render());
+    act(() =>
+      card().dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          pointerType: "touch",
+        }),
+      ),
+    );
+    expect(preview()).toBeNull();
+  });
+
+  it("stays open when transcript prefetching scrolls another pane", () => {
+    act(() => render());
+    hover();
+    const transcript = document.createElement("div");
+    container.append(transcript);
+    act(() => transcript.dispatchEvent(new Event("scroll")));
+    expect(preview()).not.toBeNull();
+  });
+});
+
+it("leaves the resident agent and its description out of the session list", () => {
+  saveMonoSessionId(createMono(["/workspace/project"]).id, "resident");
+  props.sessions = [
+    ...props.sessions,
+    {
+      ...props.sessions[0],
+      id: "resident",
+      title: "Resident agent description",
+    },
+  ];
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
+  expect(container.querySelector("[data-mono]")).toBeNull();
+  expect(container.textContent).not.toContain("Resident agent description");
+});
+
+it("omits hidden Mono launches from history, open sessions and folders", () => {
+  const hidden = {
+    ...props.sessions[0],
+    id: "hidden-launch",
+    title: "Mono background work",
+    sidebarHidden: true,
+  };
+  props.sessions = [...props.sessions, hidden];
+  props.openSessions = [hidden];
+  saveSessionFolders("/workspace/project", [
+    { id: "folder", name: "Work", sessionIds: [hidden.id], collapsed: false },
+  ]);
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+  expect(container.textContent).not.toContain(hidden.title);
+  props.sessions = props.sessions.filter((session) => session.id !== hidden.id);
+  act(() => render());
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+});
+
 describe("project rail visibility", () => {
   it("keeps the mounted rail and its scroll state when collapsed", async () => {
     props = {
@@ -165,6 +434,131 @@ describe("project rail visibility", () => {
     expect(container.querySelector('nav[aria-label="Projects"]')).toBe(rail);
     expect(rail?.scrollTop).toBe(37);
   });
+});
+
+describe("worktree explorer visibility", () => {
+  it("does not mount the file tree while browsing chat tabs", () => {
+    props = { ...props, gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBeNull();
+  });
+
+  it("retains the hidden tree and catches up when Files opens", () => {
+    props = {
+      ...props,
+      tab: "files",
+      gitCwd: "/worktrees/first",
+      explorerRootLabel: "first-branch",
+    };
+    act(() => render());
+    const first = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    first.scrollTop = 73;
+    props = {
+      ...props,
+      tab: "sessions",
+      gitCwd: "/worktrees/second",
+      explorerRootLabel: "second-branch",
+    };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBe(first);
+    expect(first.scrollTop).toBe(73);
+    expect(first.dataset.explorerCwd).toBe("/worktrees/first");
+
+    props = { ...props, tab: "files" };
+    act(() => render());
+    const second = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    expect(second.dataset.explorerCwd).toBe("/worktrees/second");
+    expect(second.textContent).toBe("second-branch");
+    expect(second).not.toBe(first);
+  });
+
+  it("updates the visible explorer on a worktree switch", () => {
+    props = { ...props, tab: "files", gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(
+      container.querySelector<HTMLElement>("[data-explorer-cwd]")!.dataset
+        .explorerCwd,
+    ).toBe("/worktrees/second");
+  });
+});
+
+describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
+  it.each([
+    ["Inbox", "inboxActive", "onOpenInbox"],
+    ["Notes", "notesActive", "onOpenNotes"],
+    ["Automations", "automationsActive", "onOpenAutomations"],
+    ["Search", "searchActive", "onSearch"],
+  ] as const)("selects only %s while it covers a Mono", async (label, active, open) => {
+    const mono = createMono();
+    props = {
+      ...props,
+      projectRailOpen: !compact,
+      compactProjectRail: compact,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+      monoViewActive: true,
+      monos: {
+        activeId: mono.id,
+        states: new Map(),
+        onOpen: vi.fn(),
+        onCreate: vi.fn(),
+        onDelete: vi.fn(),
+      },
+      [open]: () => {
+        props = { ...props, [active]: true };
+        render();
+      },
+    };
+    await act(async () => render());
+    const monoSelected = () => compact
+      ? container.querySelector('[aria-label^="Switch project"]')!
+          .getAttribute("aria-label")!.includes("current mono")
+      : !!container.querySelector('[data-mono-rail] [aria-current="true"]');
+    expect(monoSelected()).toBe(true);
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!.click(),
+    );
+    expect(container.querySelector(`button[aria-label^="${label}"]`)!.classList)
+      .toContain("bg-selection");
+    expect(monoSelected()).toBe(false);
+    expect(container.querySelector('[data-mono-rail] [data-selected="true"]')).toBeNull();
+    expect(props.monos?.activeId).toBe(mono.id);
+
+    // Back reveals the same conversation and restores its rail selection.
+    props = { ...props, [active]: false };
+    await act(async () => render());
+    expect(monoSelected()).toBe(true);
+  });
+});
+
+it.each([
+  "inboxActive",
+  "notesActive",
+  "automationsActive",
+  "searchActive",
+] as const)("does not show the covered inset session selected while %s", async (active) => {
+  const selected = () =>
+    container
+      .querySelector('[data-session-select="session-1"]')
+      ?.getAttribute("aria-current");
+  // The inset sidebar keeps the session list beside these views.
+  props = { ...props, inset: true };
+  await act(async () => render());
+  expect(selected()).toBe("true");
+
+  props = { ...props, [active]: true };
+  await act(async () => render());
+  expect(selected() ?? undefined).toBeUndefined();
+  expect(container.querySelector('[data-session-select="session-1"]')).not.toBeNull();
+
+  props = { ...props, [active]: false };
+  await act(async () => render());
+  expect(selected()).toBe("true");
 });
 
 describe("sidebar session multiselection", () => {
@@ -719,6 +1113,66 @@ describe("sidebar reorder affordances", () => {
           .className,
       ).not.toContain("cursor-grab");
     }
+  });
+});
+
+describe("sidebar new session rows", () => {
+  it("grows in only for a session that arrives after the list has rendered", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(() => ({ cancel: vi.fn() }) as unknown as Animation);
+    const animated = (property: string) =>
+      animate.mock.calls.flatMap(([keyframes], index) =>
+        property in (keyframes as Keyframe[])[0]
+          ? [animate.mock.contexts[index] as HTMLElement]
+          : [],
+      );
+    // Dev builds replay mount effects; the row must still animate, once.
+    const render = () =>
+      root.render(createElement(StrictMode, null, createElement(Sidebar, props)));
+    act(() => render());
+    expect(animate).not.toHaveBeenCalled();
+
+    props = {
+      ...props,
+      sessions: [
+        {
+          ...props.sessions[0],
+          id: "session-2",
+          createdAt: Date.now(),
+          updatedAt: props.sessions[0].updatedAt + 1,
+        },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    // The new card fades in where it lands; the row below slides down.
+    expect(animated("opacity")).toHaveLength(1);
+    expect(
+      animated("opacity")[0].closest("li")?.querySelector(
+        '[data-session-card="session-2"]',
+      ),
+    ).not.toBeNull();
+    expect(animated("transform")).toHaveLength(1);
+    expect(
+      animated("transform")[0].querySelector('[data-session-card="session-1"]'),
+    ).not.toBeNull();
+    const calls = animate.mock.calls.length;
+
+    props = {
+      ...props,
+      sessions: [
+        { ...props.sessions[0], id: "session-old", createdAt: 1 },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
+
+    // Reordering existing rows must not replay their entrance.
+    props = { ...props, sessions: [...props.sessions].reverse() };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
   });
 });
 

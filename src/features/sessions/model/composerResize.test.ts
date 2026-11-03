@@ -24,9 +24,43 @@ describe("resizeComposer", () => {
     expect(el.style.height).toBe("400px");
   });
 
+  it.each([
+    [88, 140],
+    [140, 88],
+    [160, 400],
+  ])(
+    "keeps the composer space while measuring from %i to %i",
+    (height, nextHeight) => {
+      const wrapper = { style: { minHeight: "20px" }, offsetHeight: height };
+      const style = { height: `${height}px` };
+      let measured = false;
+      const el = {
+        style,
+        parentElement: wrapper,
+        get scrollHeight() {
+          if (style.height === "auto") {
+            // Reading layout here must not briefly expand the transcript's
+            // viewport and clamp its scroll position before the final resize.
+            expect(wrapper.style.minHeight).toBe(`${height}px`);
+            measured = true;
+          }
+          return nextHeight;
+        },
+      };
+      resizeComposer(el);
+      expect(measured).toBe(true);
+      expect(style.height).toBe(
+        `${Math.min(nextHeight, COMPOSER_MAX_HEIGHT)}px`,
+      );
+      expect(wrapper.style.minHeight).toBe("20px");
+    },
+  );
+
   it("leaves the height alone when the field has no layout box", () => {
-    const el = field(0, "88px");
+    const wrapper = { style: { minHeight: "20px" }, offsetHeight: 0 };
+    const el = { ...field(0, "88px"), parentElement: wrapper };
     resizeComposer(el);
     expect(el.style.height).toBe("88px");
+    expect(wrapper.style.minHeight).toBe("20px");
   });
 });

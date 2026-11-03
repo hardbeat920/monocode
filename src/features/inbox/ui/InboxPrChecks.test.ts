@@ -683,6 +683,10 @@ describe("Checks tab user behavior", () => {
 
   it("loads checks on open in the inbox even while Summary is active", async () => {
     mockBackend();
+    const checksCalls = () =>
+      invoke.mock.calls.filter(
+        ([command]) => command === "git_github_pr_checks",
+      );
     render(
       createElement(InboxDetail, {
         item: { ...prItem, projectPath: "/tmp/web", provider: "github" },
@@ -704,6 +708,7 @@ describe("Checks tab user behavior", () => {
       'button[role="tab"][aria-selected="true"]',
     );
     expect(summaryTab?.textContent).toContain("Summary");
+    expect(checksCalls()).toHaveLength(1);
 
     const checksTab = container.querySelector<HTMLButtonElement>(
       'button[role="tab"][aria-label="Checks: 1 passed"]',
@@ -712,6 +717,8 @@ describe("Checks tab user behavior", () => {
     await act(async () => {
       checksTab?.click();
     });
+    // Opening Checks resumes polling and immediately revalidates the PR.
+    expect(checksCalls()).toHaveLength(2);
     expect(container.textContent).toContain("build");
     expect(container.textContent).toContain("CI · Passed · 1m 00s");
     const row = buttonByLabel("build · Passed, took 1m 00s, CI");
@@ -723,11 +730,6 @@ describe("Checks tab user behavior", () => {
     );
 
     // An inbox revision change revalidates the same PR.
-    const checksCalls = () =>
-      invoke.mock.calls.filter(
-        ([command]) => command === "git_github_pr_checks",
-      );
-    expect(checksCalls()).toHaveLength(1);
     render(
       createElement(InboxDetail, {
         item: { ...prItem, projectPath: "/tmp/web", provider: "github" },
@@ -740,7 +742,7 @@ describe("Checks tab user behavior", () => {
       }),
     );
     await flush();
-    expect(checksCalls()).toHaveLength(2);
+    expect(checksCalls()).toHaveLength(3);
   });
 
   it("loads checks in the linked side panel where revision stays 0", async () => {

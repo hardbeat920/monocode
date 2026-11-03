@@ -1,3 +1,4 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import { normalizeProjectPath } from "../../../../features/projects/model/recents";
@@ -20,6 +21,7 @@ import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
 import { piSubagentEvents } from "./piSubagents";
 import {
+  addPiTurnUsage,
   agentEndWillRetry,
   asRecord,
   assistantDeltaFromEvent,
@@ -28,7 +30,6 @@ import {
   buildPiSteer,
   contextFromSessionStats,
   contextFromUsage,
-  turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
   forkMessagesFromRpcData,
@@ -56,6 +57,7 @@ import {
   tryParseJsonRecord,
   turnErrorFromEvent,
   type PiExtensionUiRequest,
+  type PiTurnUsage,
 } from "./piProtocol";
 import type {
   ApprovalDecision,
@@ -118,6 +120,7 @@ type Live = {
   emittedReasoning: string;
   /** Reason the turn failed, held until we know it is not being retried. */
   turnError: string | null;
+  turnUsage: PiTurnUsage;
 };
 
 type Resume = {
@@ -323,7 +326,7 @@ export async function steerTurn(
   input: SteerTurnInput,
 ): Promise<void> {
   const live = stateFor(flavor).liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new Error("No active turn to steer");
+  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
   const message = input.text.trim();
   const buildCommand =
     flavor.id === "omp" && message.startsWith("/")
@@ -525,6 +528,7 @@ async function startLive(
     emittedAssistant: "",
     emittedReasoning: "",
     turnError: null,
+    turnUsage: { done: {}, open: {} },
   };
   liveRef.current = live;
 
@@ -600,6 +604,7 @@ async function runTurn(
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.turnError = null;
+  live.turnUsage = { done: {}, open: {} };
   live.toolsByIndex.clear();
   live.toolsById.clear();
   live.compacting = false;
@@ -864,7 +869,7 @@ function handleFrame(
 
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
-  const metrics = turnMetricsFromUsage(rec);
+  const metrics = addPiTurnUsage(live.turnUsage, rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 
   const delta = assistantDeltaFromEvent(rec);
@@ -934,7 +939,13 @@ function handleFrame(
         preview: previewFromTool(tool.name, tool.input, execUpdate.detail),
       });
       if (toolKindFromName(tool.name) === "agent") {
-        for (const event of piSubagentEvents(tool.id, tool.input, rec.partialResult, false)) live.onEvent(event);
+        for (const event of piSubagentEvents(
+          tool.id,
+          tool.input,
+          rec.partialResult,
+          false,
+        ))
+          live.onEvent(event);
       }
     }
   }
@@ -954,7 +965,14 @@ function handleFrame(
         preview: previewFromTool(tool.name, tool.input, execEnd.detail),
       });
       if (toolKindFromName(tool.name) === "agent") {
-        for (const event of piSubagentEvents(tool.id, tool.input, rec.result, true, execEnd.isError)) live.onEvent(event);
+        for (const event of piSubagentEvents(
+          tool.id,
+          tool.input,
+          rec.result,
+          true,
+          execEnd.isError,
+        ))
+          live.onEvent(event);
       }
     }
   }
@@ -1017,7 +1035,9 @@ async function handleExtensionUi(
 ): Promise<void> {
   if (!needsExtensionUiReply(request)) {
     const text = request.title ? extensionUiTitle(request) : "";
-    if (text.trim()) live.onEvent({ type: "status", text });
+    if (request.method === "setStatus" && request.statusKey)
+      live.onEvent({ type: "status", key: request.statusKey, text });
+    else if (text.trim()) live.onEvent({ type: "status", text });
     return;
   }
 
@@ -1182,7 +1202,10 @@ async function applyModel(
     stateFor(flavor).liveByThread.get(input.sessionId) === live &&
     !live.muteUpdates
   ) {
-    live.onEvent({ type: "session.configChanged", model: `pi:${live.nativeModel}` });
+    live.onEvent({
+      type: "session.configChanged",
+      model: `pi:${live.nativeModel}`,
+    });
   }
 }
 

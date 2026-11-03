@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SurfaceTabs } from "./SurfaceTabs";
 import { TitleBar, type Tab } from "../../../app/shell/TitleBar";
 
-vi.mock("../../../app/shell/WindowControls", () => ({ WindowControls: () => null }));
+vi.mock("../../../app/shell/WindowControls", () => ({
+  WindowControls: () => null,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -46,6 +48,24 @@ function flushPaint() {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private callback: (entries: ResizeObserverEntry[]) => void) {}
+      observe(target: Element) {
+        const rect = target.getBoundingClientRect();
+        this.callback([
+          {
+            target,
+            borderBoxSize: [{ inlineSize: rect.width, blockSize: rect.height }],
+            contentRect: rect,
+          } as ResizeObserverEntry,
+        ]);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   mockLocalStorage();
   localStorage.setItem("monocode.tabAnimationsEnabled", "1");
   vi.useFakeTimers();
@@ -90,7 +110,6 @@ function closeTab(
           activeId: current.includes("first") ? "first" : current[0],
           cwd: "/project",
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect: vi.fn(),
           onClose: close,
           onCloseMany: vi.fn(),
@@ -241,7 +260,6 @@ function addThird(kind: "workspace" | "file") {
           activeId: ids[ids.length - 1],
           cwd: "/project",
           onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
           onSelect: vi.fn(),
           onClose: vi.fn(),
           onCloseMany: vi.fn(),

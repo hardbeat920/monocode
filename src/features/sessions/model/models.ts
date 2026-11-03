@@ -25,6 +25,8 @@ export type AgentModel = {
   harness: HarnessId;
   name: string;
   nativeId?: string;
+  /** Concrete native id a moving alias (`opus`) currently launches. */
+  aliasTarget?: string;
   /** Upstream provider inside a multi-provider harness such as OpenCode. */
   provider?: {
     id: string;
@@ -198,6 +200,12 @@ export const MODELS: AgentModel[] = [
     name: "Gemini 3.8 Flash (High)",
     nativeId: "gemini-3.8-flash-high",
   },
+  {
+    id: "devin:adaptive",
+    harness: "devin",
+    name: "Adaptive",
+    nativeId: "adaptive",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -211,6 +219,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   fx: "fx:zai/glm-5.2-fast",
   hermes: "hermes:default",
   antigravity: "antigravity:gemini-3.8-flash-high",
+  devin: "devin:adaptive",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -240,6 +249,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "fx",
   "hermes",
   "antigravity",
+  "devin",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];
@@ -404,14 +414,19 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       return hits[0];
     }
     const bundled = bundledById.get(id);
-    if (bundled && bundled.harness === harness) return bundled;
+    if (bundled && bundled.harness === harness) {
+      return withAliasSettings(bundled, available);
+    }
 
     // A saved concrete Claude version may be absent from both catalogs.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
     if (harness === "claude" && /^claude:[a-z][a-z0-9-]*-\d/.test(requested)) {
       const nativeId = nativeIdForUnknownKey(requested);
-      return { id: requested, harness, name: nativeId, nativeId };
+      return withAliasSettings(
+        { id: requested, harness, name: nativeId, nativeId },
+        available,
+      );
     }
   }
   // Codex has no built-in catalog. During startup, retain the saved model
@@ -440,6 +455,29 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
   }
   const fallbackId = defaultModelId(harness);
   return (fallbackId ? findModel(fallbackId) : undefined) ?? available[0];
+}
+
+/**
+ * A concrete version missing from the live catalog borrows the settings of the
+ * alias that launches it. Claude lists Opus 5.5 only as `opus`, so a saved
+ * `claude:opus-5-5` would otherwise lose its effort and fast options.
+ */
+function withAliasSettings(
+  model: AgentModel,
+  available: AgentModel[],
+): AgentModel {
+  if (model.settings) return model;
+  const native = comparableNativeId(
+    model.harness,
+    model.nativeId ?? nativeIdFrom(model.id),
+  );
+  const alias = available.find(
+    (item) =>
+      item.settings &&
+      item.aliasTarget != null &&
+      comparableNativeId(item.harness, item.aliasTarget) === native,
+  );
+  return alias ? { ...model, settings: alias.settings } : model;
 }
 
 /** Catalog-reported context window for a model id, when known. */

@@ -77,9 +77,22 @@ describe("Hermes ACP protocol", () => {
       models: {
         currentModelId: "nous:hermes-4",
         availableModels: [
-          { modelId: "openrouter:gpt-5", name: "OpenRouter · GPT-5" },
-          { modelId: "nous:hermes-4", name: "Nous · Hermes 4" },
+          {
+            modelId: "openrouter:gpt-5",
+            name: "OpenRouter · gpt-5",
+            description: "Provider: OpenRouter",
+          },
+          {
+            modelId: "nous:hermes-4",
+            name: "Nous Portal · hermes-4",
+            description: "Provider: Nous Portal • current",
+          },
           { modelId: "nous:hermes-4", name: "duplicate" },
+          {
+            modelId: "custom:ollama:llama3:8b",
+            name: "llama3:8b",
+            description: "Provider: Ollama • Local • current",
+          },
         ],
       },
     };
@@ -90,14 +103,23 @@ describe("Hermes ACP protocol", () => {
       {
         id: "hermes:nous:hermes-4",
         harness: "hermes",
-        name: "Nous · Hermes 4",
+        name: "hermes-4",
         nativeId: "nous:hermes-4",
+        provider: { id: "nous", name: "Nous Portal" },
       },
       {
         id: "hermes:openrouter:gpt-5",
         harness: "hermes",
-        name: "OpenRouter · GPT-5",
+        name: "gpt-5",
         nativeId: "openrouter:gpt-5",
+        provider: { id: "openrouter", name: "OpenRouter" },
+      },
+      {
+        id: "hermes:custom:ollama:llama3:8b",
+        harness: "hermes",
+        name: "llama3:8b",
+        nativeId: "custom:ollama:llama3:8b",
+        provider: { id: "custom:ollama", name: "Ollama" },
       },
     ]);
   });

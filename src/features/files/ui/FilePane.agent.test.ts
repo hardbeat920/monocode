@@ -90,7 +90,7 @@ describe("file pane agent tabs", () => {
         }),
       ),
     );
-    expect(container.textContent).toContain("Done");
+    await vi.waitFor(() => expect(container.textContent).toContain("Done"));
   });
 
   it("omits redundant tabs when the title bar already represents the file", async () => {

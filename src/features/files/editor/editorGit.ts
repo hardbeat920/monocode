@@ -1,7 +1,8 @@
-import { Chunk } from "@codemirror/merge";
+import { Chunk, type DiffConfig } from "@codemirror/merge";
 import {
   EditorState,
   Facet,
+  Prec,
   RangeSet,
   RangeSetBuilder,
   StateEffect,
@@ -11,16 +12,21 @@ import {
   type Transaction,
 } from "@codemirror/state";
 import {
+  BlockType,
   Decoration,
   EditorView,
   GutterMarker,
   ViewPlugin,
   WidgetType,
   gutter,
+  gutterLineClass,
+  gutterWidgetClass,
+  lineNumberWidgetMarker,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
 import type { UnifiedLine } from "../../source-control/model/unifiedDiff";
+import { EDITOR_LINE_HEIGHT_PX } from "./editorMetrics";
 
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
 
@@ -51,18 +57,59 @@ const gitCommentFacet = Facet.define<
 });
 
 const insertedLine = Decoration.line({ class: "cm-gitInsertedLine" });
-const LINE_HEIGHT = Math.round(13 * 1.6);
 
-const addMarker = new (class extends GutterMarker {
-  eq() {
-    return true;
+class GitMarker extends GutterMarker {
+  constructor(
+    readonly kind: string,
+    readonly glyph: string,
+  ) {
+    super();
   }
+
+  eq(other: GitMarker) {
+    return this.kind === other.kind && this.glyph === other.glyph;
+  }
+
   toDOM() {
     const el = document.createElement("div");
-    el.className = "cm-gitMarker cm-gitAdd";
+    el.className = `cm-gitMarker ${this.kind}`;
+    el.textContent = this.glyph;
     return el;
   }
-})();
+}
+
+const addMarker = new GitMarker("cm-gitAdd", "+");
+// U+2212 minus, matching the removed-line mark in the other diff views.
+const delMarker = new GitMarker("cm-gitDel", "−");
+
+// Tints every gutter cell of a changed row, like the line-number lane in the
+// unified diff view.
+class GitRowClass extends GutterMarker {
+  constructor(readonly elementClass: string) {
+    super();
+  }
+
+  eq(other: GitRowClass) {
+    return this.elementClass === other.elementClass;
+  }
+}
+
+const addRow = new GitRowClass("cm-gitAddRow");
+const delRow = new GitRowClass("cm-gitDelRow");
+
+class OldLineNumber extends GutterMarker {
+  constructor(readonly number: number) {
+    super();
+  }
+
+  eq(other: OldLineNumber) {
+    return this.number === other.number;
+  }
+
+  toDOM() {
+    return document.createTextNode(String(this.number));
+  }
+}
 
 const originalField = StateField.define<Text | null>({
   create() {
@@ -109,6 +156,7 @@ const chunksField = StateField.define<readonly Chunk[]>({
 type GitDecorations = {
   lines: DecorationSet;
   gutter: RangeSet<GutterMarker>;
+  rows: RangeSet<GutterMarker>;
 };
 
 const gitDecorations = StateField.define<GitDecorations>({
@@ -128,39 +176,36 @@ const gitDecorations = StateField.define<GitDecorations>({
     EditorView.decorations.from(field, (value) => value.lines),
 });
 
-class DeletedLinesWidget extends WidgetType {
+// One widget per removed line so each gets its own gutter glyph, aligned
+// even when the line wraps.
+class DeletedLineWidget extends WidgetType {
   constructor(
-    readonly lines: readonly string[],
+    readonly text: string,
     readonly pos: number,
-    readonly firstLine: number,
+    readonly oldLine: number,
   ) {
     super();
   }
 
-  eq(other: DeletedLinesWidget) {
+  eq(other: DeletedLineWidget) {
     return (
       this.pos === other.pos &&
-      this.firstLine === other.firstLine &&
-      this.lines.length === other.lines.length &&
-      this.lines.every((line, i) => line === other.lines[i])
+      this.oldLine === other.oldLine &&
+      this.text === other.text
     );
   }
 
   toDOM() {
-    const wrap = document.createElement("div");
-    wrap.className = "cm-gitDeletedChunk";
-    wrap.setAttribute("aria-hidden", "true");
-    for (const [index, text] of this.lines.entries()) {
-      const line = wrap.appendChild(document.createElement("div"));
-      line.className = "cm-gitDeletedLine";
-      line.dataset.oldLine = String(this.firstLine + index);
-      line.textContent = text || "\u00a0";
-    }
-    return wrap;
+    const line = document.createElement("div");
+    line.className = "cm-gitDeletedLine";
+    line.setAttribute("aria-hidden", "true");
+    line.dataset.oldLine = String(this.oldLine);
+    line.textContent = this.text || "\u00a0";
+    return line;
   }
 
   get estimatedHeight() {
-    return this.lines.length * LINE_HEIGHT;
+    return EDITOR_LINE_HEIGHT_PX;
   }
 
   ignoreEvent() {
@@ -178,7 +223,10 @@ export function editorGit(options?: {
     originalField,
     chunksField,
     gitDecorations,
-    gitGutter,
+    gitRows,
+    // Lowest precedence puts the glyph lane after the line numbers and fold
+    // gutter, right next to the code it marks.
+    Prec.low(gitGutter),
     gitHunkActions,
     gitOverview,
     gitTheme,
@@ -329,10 +377,19 @@ export function stageChunkText(
   current: string,
   pos: number,
   selection?: GitTextRange | null,
+  /** Must match the config that produced `pos`, so the same hunk is found. */
+  diffConfig: DiffConfig = DIFF_CONFIG,
 ): string | null {
   const orig = textFromString(original);
   const doc = textFromString(current);
-  const changes = stageChunkChanges(orig, doc, pos, selection, "\n");
+  const changes = stageChunkChanges(
+    orig,
+    doc,
+    pos,
+    selection,
+    "\n",
+    diffConfig,
+  );
   if (!changes) return null;
   return orig.replace(changes.from, changes.to, changes.insert).toString();
 }
@@ -376,9 +433,13 @@ export function findChunk(
   });
 }
 
-function chunksFor(original: Text | null, current: Text): readonly Chunk[] {
+function chunksFor(
+  original: Text | null,
+  current: Text,
+  diffConfig: DiffConfig = DIFF_CONFIG,
+): readonly Chunk[] {
   if (!original) return [];
-  return Chunk.build(original, current, DIFF_CONFIG);
+  return Chunk.build(original, current, diffConfig);
 }
 
 function replacesEntireDoc(tr: Transaction): boolean {
@@ -419,8 +480,9 @@ function stageChunkChanges(
   pos: number,
   selection: GitTextRange | null | undefined,
   lineBreak: string,
+  diffConfig?: DiffConfig,
 ): { from: number; to: number; insert: Text } | null {
-  const range = actionChunkRange(original, doc, pos, selection);
+  const range = actionChunkRange(original, doc, pos, selection, diffConfig);
   if (!range) return null;
   return applySide(
     doc,
@@ -464,8 +526,9 @@ function actionChunkRange(
   doc: Text,
   pos: number,
   selection: GitTextRange | null | undefined,
+  diffConfig?: DiffConfig,
 ): ChunkRange | null {
-  const chunk = findChunk(doc, chunksFor(original, doc), pos);
+  const chunk = findChunk(doc, chunksFor(original, doc, diffConfig), pos);
   if (!chunk) return null;
   return narrowChunk(original, doc, chunk, selection);
 }
@@ -581,6 +644,33 @@ export type OverviewTick = {
   pos: number;
 };
 
+/**
+ * Rendered extents of the document, so overview ticks land where wrapped
+ * lines and removed-line widgets actually draw instead of at their line
+ * number's share of the file.
+ */
+export type OverviewLayout = {
+  /** Height the rail stands for: the editor's whole scroll range. */
+  height: number;
+  /**
+   * The line block around `pos`, measured from the top of the scroll
+   * content. `textTop` is where its own text starts, below any removed-line
+   * widgets drawn above it.
+   */
+  lineBlockAt(pos: number): { top: number; bottom: number; textTop: number };
+};
+
+/** One unit per line, for callers without a rendered view. */
+function lineCountLayout(doc: Text): OverviewLayout {
+  return {
+    height: Math.max(1, doc.lines),
+    lineBlockAt(pos) {
+      const top = doc.lineAt(pos).number - 1;
+      return { top, bottom: top + 1, textTop: top };
+    },
+  };
+}
+
 export function navigableChunkPositions(
   doc: Text,
   chunks: readonly Chunk[],
@@ -593,37 +683,79 @@ export function overviewTicks(
   doc: Text,
   chunks: readonly Chunk[],
   original: Text | null,
+  layout: OverviewLayout = lineCountLayout(doc),
 ): OverviewTick[] {
-  const total = Math.max(1, doc.lines);
+  const total = Math.max(1, layout.height);
   const ticks: OverviewTick[] = [];
   for (const chunk of chunks) {
     const insertion = chunk.fromB !== chunk.toB;
     const deletion = chunk.fromA !== chunk.toA;
     if (!insertion && !deletion) continue;
     const pos = Math.min(Math.max(0, chunk.fromB), doc.length);
-    const startLine = doc.lineAt(pos).number;
-    let lineCount = 1;
+    // The block's top includes the removed-line widgets drawn above it.
+    const block = layout.lineBlockAt(pos);
+    let bottom = block.bottom;
     if (insertion) {
       const endPos = Math.max(pos, Math.min(chunk.endB, doc.length) - 1);
-      lineCount = Math.max(1, doc.lineAt(endPos).number - startLine + 1);
+      bottom = layout.lineBlockAt(doc.lineAt(endPos).from).bottom;
+    } else if (block.textTop > block.top) {
+      bottom = block.textTop;
     } else if (original) {
-      lineCount = Math.max(1, deletedLineTexts(original, chunk).length);
+      // No widget extent to measure: count each removed line as one row.
+      const lines = Math.max(1, deletedLineTexts(original, chunk).length);
+      bottom = block.top + lines * (block.bottom - block.top);
     }
     ticks.push({
       kind: insertion && deletion ? "mod" : deletion ? "del" : "add",
-      top: (startLine - 1) / total,
-      size: lineCount / total,
+      top: block.top / total,
+      size: Math.max(0, bottom - block.top) / total,
       pos,
     });
   }
   return ticks;
 }
 
+/** The view's measured line blocks, in the scroller's content coordinates. */
+function viewOverviewLayout(view: EditorView): OverviewLayout {
+  const offset = documentOffset(view);
+  const scroller = view.scrollDOM;
+  return {
+    // The scroll height, so ticks share the scrollbar thumb's scale.
+    height: Math.max(
+      scroller.scrollHeight,
+      offset + view.contentHeight - view.documentPadding.top,
+    ),
+    lineBlockAt(pos) {
+      const block = view.lineBlockAt(pos);
+      const text = Array.isArray(block.type)
+        ? block.type.find((part) => part.type === BlockType.Text)
+        : undefined;
+      return {
+        top: offset + block.top,
+        bottom: offset + block.bottom,
+        textTop: offset + (text?.top ?? block.top),
+      };
+    },
+  };
+}
+
+/** Where the document starts inside the scroll content, past its padding. */
+function documentOffset(view: EditorView): number {
+  const scroller = view.scrollDOM;
+  return (
+    view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop
+  );
+}
+
 function buildDecorations(state: EditorState): GitDecorations {
   const original = state.field(originalField);
   const chunks = state.field(chunksField);
   if (!original || chunks.length === 0) {
-    return { lines: Decoration.none, gutter: RangeSet.empty };
+    return {
+      lines: Decoration.none,
+      gutter: RangeSet.empty,
+      rows: RangeSet.empty,
+    };
   }
 
   const lineItems: { from: number; deco: Decoration }[] = [];
@@ -638,14 +770,16 @@ function buildDecorations(state: EditorState): GitDecorations {
       const firstLine = original.lineAt(
         Math.min(chunk.fromA, original.length),
       ).number;
-      lineItems.push({
-        from: widgetAt,
-        deco: Decoration.widget({
-          widget: new DeletedLinesWidget(deleted, widgetAt, firstLine),
-          block: true,
-          side: -1,
-        }),
-      });
+      for (const [index, text] of deleted.entries()) {
+        lineItems.push({
+          from: widgetAt,
+          deco: Decoration.widget({
+            widget: new DeletedLineWidget(text, widgetAt, firstLine + index),
+            block: true,
+            side: -1,
+          }),
+        });
+      }
     }
 
     if (!insertion) continue;
@@ -668,10 +802,14 @@ function buildDecorations(state: EditorState): GitDecorations {
 
   const lines = new RangeSetBuilder<Decoration>();
   const marks = new RangeSetBuilder<GutterMarker>();
+  const rows = new RangeSetBuilder<GutterMarker>();
   for (const item of lineItems) lines.add(item.from, item.from, item.deco);
-  for (const item of markItems) marks.add(item.from, item.from, addMarker);
+  for (const item of markItems) {
+    marks.add(item.from, item.from, addMarker);
+    rows.add(item.from, item.from, addRow);
+  }
 
-  return { lines: lines.finish(), gutter: marks.finish() };
+  return { lines: lines.finish(), gutter: marks.finish(), rows: rows.finish() };
 }
 
 function widgetPos(doc: Text, chunk: Chunk): number {
@@ -692,9 +830,38 @@ function sameText(a: Text | null, b: Text | null): boolean {
 const gitGutter = gutter({
   class: "cm-gitGutter",
   markers: (view) => view.state.field(gitDecorations).gutter,
+  widgetMarker: (_view, widget) =>
+    widget instanceof DeletedLineWidget ? delMarker : null,
   lineMarkerChange: (update) =>
     update.startState.field(chunksField) !== update.state.field(chunksField),
 });
+
+const gitRows: Extension = [
+  gutterLineClass.compute(
+    [gitDecorations],
+    (state) => state.field(gitDecorations).rows,
+  ),
+  gutterWidgetClass.of((_view, widget) =>
+    widget instanceof DeletedLineWidget ? delRow : null,
+  ),
+  // Removed lines show their old number, as in the unified diff view.
+  lineNumberWidgetMarker.of((_view, widget) =>
+    widget instanceof DeletedLineWidget
+      ? new OldLineNumber(widget.oldLine)
+      : null,
+  ),
+  // The number gutter only sizes for the current document; reserve room for
+  // old numbers too so it doesn't clip them or shift while scrolling.
+  EditorView.editorAttributes.compute(
+    [originalField],
+    (state): Record<string, string> => {
+      const original = state.field(originalField);
+      return original
+        ? { style: `--cm-git-old-digits: ${String(original.lines).length}` }
+        : {};
+    },
+  ),
+];
 
 function activeChunkIndex(view: EditorView, positions: number[]): number {
   if (positions.length === 0) return -1;
@@ -710,6 +877,8 @@ function activeChunkIndex(view: EditorView, positions: number[]): number {
   return index;
 }
 
+type OverviewMeasure = { ticks: OverviewTick[]; height: number };
+
 const gitOverview = ViewPlugin.fromClass(
   class {
     readonly dom: HTMLDivElement;
@@ -722,8 +891,16 @@ const gitOverview = ViewPlugin.fromClass(
         this.onMouseDown(event);
       });
       view.dom.appendChild(this.dom);
-      this.draw();
+      view.requestMeasure(this.measure);
     }
+
+    // Line heights are read in CodeMirror's measure phase, once wrapped
+    // lines have been measured, and redrawn whenever they change.
+    readonly measure = {
+      key: this,
+      read: (view: EditorView) => this.read(view),
+      write: (measured: OverviewMeasure | null) => this.draw(measured),
+    };
 
     update(update: ViewUpdate) {
       if (
@@ -731,7 +908,7 @@ const gitOverview = ViewPlugin.fromClass(
         update.geometryChanged ||
         update.state.field(chunksField) !== update.startState.field(chunksField)
       ) {
-        this.draw();
+        this.view.requestMeasure(this.measure);
       }
     }
 
@@ -742,7 +919,15 @@ const gitOverview = ViewPlugin.fromClass(
     onMouseDown(event: MouseEvent) {
       if (event.button !== 0) return;
       event.preventDefault();
-      this.jump(event);
+      // Ticks are drawn at least 3px tall, taller than a small change spans
+      // on the rail, so a click on one goes to its change rather than to the
+      // line under the pointer. Dragging on from there follows the pointer.
+      const tick =
+        event.target instanceof HTMLElement
+          ? event.target.closest<HTMLElement>(".cm-gitOverviewTick")
+          : null;
+      if (tick?.dataset.pos != null) this.scrollTo(Number(tick.dataset.pos));
+      else this.jump(event);
       const move = (next: MouseEvent) => this.jump(next);
       const stop = () => {
         window.removeEventListener("mousemove", move);
@@ -759,36 +944,49 @@ const gitOverview = ViewPlugin.fromClass(
         1,
         Math.max(0, (event.clientY - rect.top) / rect.height),
       );
-      const doc = this.view.state.doc;
-      const lineNumber = Math.min(
-        doc.lines,
-        Math.max(1, Math.floor(ratio * doc.lines) + 1),
+      // Same scale as the ticks, so clicking one lands on its change.
+      const { height } = viewOverviewLayout(this.view);
+      const block = this.view.lineBlockAtHeight(
+        ratio * height - documentOffset(this.view),
       );
-      const pos = doc.line(lineNumber).from;
+      this.scrollTo(block.from);
+    }
+
+    scrollTo(pos: number) {
       this.view.dispatch({
         effects: EditorView.scrollIntoView(pos, { y: "center" }),
       });
     }
 
-    draw() {
-      const { state } = this.view;
+    read(view: EditorView): OverviewMeasure | null {
+      const { state } = view;
       const chunks = state.field(chunksField);
-      const original = state.field(originalField);
+      if (chunks.length === 0) return null;
+      return {
+        ticks: overviewTicks(
+          state.doc,
+          chunks,
+          state.field(originalField),
+          viewOverviewLayout(view),
+        ),
+        height: Math.max(1, this.dom.clientHeight || view.dom.clientHeight),
+      };
+    }
+
+    draw(measured: OverviewMeasure | null) {
       this.dom.replaceChildren();
-      if (chunks.length === 0) {
+      if (!measured) {
         this.dom.hidden = true;
         return;
       }
       this.dom.hidden = false;
-      const height = Math.max(
-        1,
-        this.dom.clientHeight || this.view.dom.clientHeight,
-      );
-      for (const tick of overviewTicks(state.doc, chunks, original)) {
+      const { ticks, height } = measured;
+      for (const tick of ticks) {
         const el = document.createElement("div");
         el.className = `cm-gitOverviewTick cm-gitOverview-${tick.kind}`;
         el.style.top = `${tick.top * 100}%`;
         el.style.height = `${Math.max(3, tick.size * height)}px`;
+        el.dataset.pos = String(tick.pos);
         this.dom.appendChild(el);
       }
     }
@@ -1049,9 +1247,9 @@ const gitTheme = EditorView.theme({
     position: "relative",
   },
   ".cm-gitGutter": {
-    width: "22px",
+    width: "16px",
     padding: "0",
-    minWidth: "22px",
+    minWidth: "16px",
     overflow: "visible",
   },
   ".cm-gitGutter .cm-gutterElement": {
@@ -1059,25 +1257,55 @@ const gitTheme = EditorView.theme({
     justifyContent: "flex-end",
     padding: "0",
   },
+  // The +/- glyph keeps added and removed lines distinguishable without
+  // relying on color; the row tints carry the color.
   ".cm-gitMarker": {
-    width: "3px",
+    width: "100%",
     height: "100%",
+    boxSizing: "border-box",
+    fontFamily: "var(--font-mono)",
+    fontSize: "11px",
+    fontWeight: "600",
+    lineHeight: `${EDITOR_LINE_HEIGHT_PX}px`,
+    textAlign: "center",
   },
   ".cm-gitAdd": {
-    backgroundColor: "#34d399",
+    color: "var(--color-diff-add-fg)",
+  },
+  ".cm-gitDel": {
+    color: "var(--color-diff-del-fg)",
+  },
+  // Line-number and fold cells take the stronger gutter tint; the glyph lane
+  // matches the row so the marker reads as part of the line.
+  ".cm-gutterElement.cm-gitAddRow": {
+    backgroundColor: "var(--color-diff-add-gutter)",
+    color: "var(--color-diff-add-fg)",
+  },
+  ".cm-gutterElement.cm-gitDelRow": {
+    backgroundColor: "var(--color-diff-del-gutter)",
+    color: "var(--color-diff-del-fg)",
+  },
+  // Diff tabs size the number column to its digits so the number sits close
+  // to its +/- glyph. 5px is the horizontal padding below.
+  ".cm-gutters .cm-lineNumbers .cm-gutterElement": {
+    minWidth: "0",
+    padding: "0 3px 0 2px",
+  },
+  ".cm-lineNumbers": {
+    minWidth: "calc(var(--cm-git-old-digits, 0) * 1ch + 5px)",
+  },
+  ".cm-gitGutter .cm-gutterElement.cm-gitAddRow": {
+    backgroundColor: "var(--color-diff-add-bg)",
+  },
+  ".cm-gitGutter .cm-gutterElement.cm-gitDelRow": {
+    backgroundColor: "var(--color-diff-del-bg)",
   },
   ".cm-gitInsertedLine": {
-    backgroundColor: "color-mix(in srgb, #34d399 18%, transparent)",
-    boxShadow: "inset 3px 0 0 #34d399",
-  },
-  ".cm-gitDeletedChunk": {
-    position: "relative",
-    width: "100%",
+    backgroundColor: "var(--color-diff-add-bg)",
   },
   ".cm-gitDeletedLine": {
     padding: "0 12px 0 6px",
-    backgroundColor: "color-mix(in srgb, #f87171 16%, transparent)",
-    boxShadow: "inset 3px 0 0 #f87171",
+    backgroundColor: "var(--color-diff-del-bg)",
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
   },
@@ -1099,15 +1327,16 @@ const gitTheme = EditorView.theme({
     pointerEvents: "auto",
   },
   ".cm-gitOverview-add": {
-    backgroundColor: "#34d399",
+    backgroundColor: "var(--color-diff-add)",
   },
   ".cm-gitOverview-del": {
-    backgroundColor: "#f87171",
+    backgroundColor: "var(--color-diff-del)",
   },
   ".cm-gitOverview-mod": {
     display: "flex",
     flexDirection: "row",
-    background: "linear-gradient(to right, #f87171 0 50%, #34d399 50% 100%)",
+    background:
+      "linear-gradient(to right, var(--color-diff-del) 0 50%, var(--color-diff-add) 50% 100%)",
   },
   ".cm-gitHunkBar": {
     position: "absolute",

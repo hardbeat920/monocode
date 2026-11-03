@@ -457,8 +457,10 @@ export function ConnectionsSettings() {
               loginctl enable-linger
             </code>
             ), so the host and your other user services keep running after you
-            log out. The host keeps running until you stop it on that machine;
-            removing it here only disconnects this desktop.
+            log out. Without systemd, as in many containers and microVMs, the
+            host runs as a background process instead and is started again when
+            you reconnect. The host keeps running until you stop it on that
+            machine; removing it here only disconnects this desktop.
           </p>
           <div className="flex justify-end gap-2">
             <button

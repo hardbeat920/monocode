@@ -274,4 +274,5 @@ it("does not spellcheck or autocorrect the machine name", async () => {
   expect(name.getAttribute("autocorrect")).toBe("off");
   expect(name.getAttribute("autocapitalize")).toBe("off");
   expect(container.textContent).toContain("loginctl enable-linger");
+  expect(container.textContent).toContain("Without systemd");
 });

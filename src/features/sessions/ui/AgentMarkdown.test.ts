@@ -68,25 +68,25 @@ describe("AgentMarkdown inline code", () => {
 });
 
 describe("AgentMarkdown code fence highlighting", () => {
-  it("falls back to JS highlighting for a fence tagged text", () => {
+  it("uses plaintext highlighting for a fence tagged text", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentMarkdown, {
         text: "```text\nconst x = 1;\n```",
       }),
     );
 
-    expect(markup).toContain('data-language="js"');
-    expect(markup).not.toContain('data-language="text"');
+    expect(markup).toContain('data-language="text"');
+    expect(markup).not.toContain('data-language="js"');
   });
 
-  it("falls back to JS highlighting for an untagged fence", () => {
+  it("uses plaintext highlighting for an untagged fence", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentMarkdown, {
         text: "```\nconst x = 1;\n```",
       }),
     );
 
-    expect(markup).toContain('data-language="js"');
+    expect(markup).toContain('data-language="text"');
   });
 
   it("leaves an explicit real language alone", () => {
@@ -99,14 +99,14 @@ describe("AgentMarkdown code fence highlighting", () => {
     expect(markup).toContain('data-language="python"');
   });
 
-  it("keeps a text fence labeled text despite the JS highlighting fallback", () => {
+  it("keeps a text fence labeled and highlighted as text", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentMarkdown, {
         text: "```text\nconst x = 1;\n```",
       }),
     );
 
-    expect(markup).toContain('data-language="js"');
+    expect(markup).toContain('data-language="text"');
     expect(markup).toMatch(
       /class="markdown-code-fallback-label"[^>]*>text<\/span>/,
     );
@@ -119,6 +119,7 @@ describe("AgentMarkdown code fence highlighting", () => {
       }),
     );
 
+    expect(markup).toContain('data-language="text"');
     expect(markup).toMatch(
       /class="markdown-code-fallback-label"[^>]*><\/span>/,
     );
@@ -130,7 +131,7 @@ describe("AgentMarkdown code fence highlighting", () => {
         text: "```plaintext\nconst x = 1;\n```",
       }),
     );
-    expect(plaintextMarkup).toContain('data-language="js"');
+    expect(plaintextMarkup).toContain('data-language="text"');
     expect(plaintextMarkup).toMatch(
       /class="markdown-code-fallback-label"[^>]*>plaintext<\/span>/,
     );
@@ -140,7 +141,7 @@ describe("AgentMarkdown code fence highlighting", () => {
         text: "```txt\nconst x = 1;\n```",
       }),
     );
-    expect(txtMarkup).toContain('data-language="js"');
+    expect(txtMarkup).toContain('data-language="text"');
     expect(txtMarkup).toMatch(
       /class="markdown-code-fallback-label"[^>]*>txt<\/span>/,
     );
@@ -169,5 +170,46 @@ describe("AgentMarkdown note images", () => {
       'data-note-image="/note-assets/note-1/123-diagram.png"',
     );
     expect(markup).toContain('alt="Diagram"');
+  });
+});
+
+describe("AgentMarkdown local media", () => {
+  const text = [
+    "![Demo](</Users/me/My Clips/demo.mp4>)",
+    "",
+    "[Open the screenshot](/Users/me/shot.png) and [the notes](/Users/me/notes.md)",
+  ].join("\n");
+
+  it("shows local images and videos in place of their links when enabled", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, { text, localMedia: true }),
+    );
+
+    expect(markup).toContain('data-local-media="/Users/me/My Clips/demo.mp4"');
+    expect(markup).toContain('data-local-media="/Users/me/shot.png"');
+    expect(markup).not.toContain('data-local-media="/Users/me/notes.md"');
+    expect(markup).toContain(">the notes</a>");
+  });
+
+  it("keeps links and drops local images elsewhere", () => {
+    const markup = renderToStaticMarkup(createElement(AgentMarkdown, { text }));
+
+    expect(markup).not.toContain("data-local-media");
+    expect(markup).toContain(">Open the screenshot</a>");
+  });
+});
+
+describe("AgentMarkdown document images", () => {
+  it("drops relative images in chat, Markdown or HTML", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: '![Shot](shot.png)\n\n<p align="center"><img src=".github/readme/hero.png" alt="Hero"></p>',
+        cwd: "/repo",
+      }),
+    );
+
+    expect(markup).not.toContain("data-document-image");
+    expect(markup).not.toContain("<img");
+    expect(markup).not.toContain("data-image-alt");
   });
 });

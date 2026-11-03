@@ -11,16 +11,28 @@ import {
   OrchestrationActions,
   OrchestrationWorkers,
 } from "./OrchestrationActions";
-import { Check, ChevronDown, ChevronRight, CircleAlert } from "../../../shared/ui/icons";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+} from "../../../shared/ui/icons";
 import { TerminalSpinner } from "../../sessions/ui/TerminalSpinner";
 
 export function OrchestrationSidebarAgents({
   leadId,
   summary,
+  variant = "card",
 }: {
   leadId: string;
   summary: OrchestrationSummary;
+  /**
+   * `tree` hangs the agents off a rail under the lead's row, on the curve the
+   * transcript's tool steps use, instead of listing them inside its card.
+   */
+  variant?: "card" | "tree";
 }) {
+  const tree = variant === "tree";
   const actions = useContext(OrchestrationActions);
   const workers = useContext(OrchestrationWorkers);
   const runs = useSyncExternalStore(
@@ -81,16 +93,20 @@ export function OrchestrationSidebarAgents({
   const solidAction =
     "rounded bg-content/15 px-1.5 py-0.5 text-[11px] text-content/75 hover:bg-content/25 hover:text-content disabled:opacity-35";
   return (
-    <div className="relative mt-1.5">
-      <div className="mb-0.5 px-0.5 flex items-center justify-between text-[11px] text-content/45">
-        <span>
-          {summary.tasks.length}{" "}
-          {summary.tasks.length === 1 ? "agent" : "agents"}
-        </span>
-        <span className="tabular-nums">
-          {done}/{summary.tasks.length} done
-        </span>
-      </div>
+    // The rail drops from under the lead's mark: the row's 8px inset plus
+    // half its 16px icon, less the step's own 6px rail offset.
+    <div className={tree ? "relative ml-2.5 pb-1 pt-1" : "relative mt-1.5"}>
+      {tree ? null : (
+        <div className="mb-0.5 px-0.5 flex items-center justify-between text-[11px] text-content/45">
+          <span>
+            {summary.tasks.length}{" "}
+            {summary.tasks.length === 1 ? "agent" : "agents"}
+          </span>
+          <span className="tabular-nums">
+            {done}/{summary.tasks.length} done
+          </span>
+        </div>
+      )}
       {/*
         Offset by the rows' own padding so a chevron lands on the card's
         content edge, under the harness icon of the header above.
@@ -101,7 +117,7 @@ export function OrchestrationSidebarAgents({
       */}
       <div
         aria-label="Orchestrated agents"
-        className="-mx-2 flex touch-pan-y flex-col gap-px"
+        className={`flex touch-pan-y flex-col${tree ? "" : " -mx-2 gap-px"}`}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
@@ -122,7 +138,12 @@ export function OrchestrationSidebarAgents({
               key={task.sessionId}
               data-orchestration-agent={task.sessionId}
               // Expanding lights the whole row, header and detail together.
-              className={`rounded-md ${open ? "bg-selection" : ""}`}
+              // On the rail, each agent is a step branching off it.
+              className={
+                tree
+                  ? "zen-phase-step orchestration-tree-step"
+                  : `rounded-md ${open ? "bg-selection" : ""}`
+              }
             >
               <button
                 type="button"
@@ -131,14 +152,26 @@ export function OrchestrationSidebarAgents({
                 aria-expanded={open}
                 onClick={() => toggle(task.sessionId, open)}
                 // Named, because the whole session card is already a `group`.
-                className={`group/agent flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left ${
-                  open ? "" : "hover:bg-content/10"
-                }`}
+                className={
+                  tree
+                    ? `group/agent flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left ${
+                        open ? "bg-selection" : "hover:bg-content/10"
+                      }`
+                    : `group/agent flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left ${
+                        open ? "" : "hover:bg-content/10"
+                      }`
+                }
               >
                 {/* One slot: the chevron stands in for the harness mark
-                    whenever this row is open or under the pointer. */}
+                    whenever this row is open or under the pointer. On the
+                    rail the mark stays: the curve already shows the nesting. */}
                 <span className="grid size-3.5 shrink-0 place-items-center text-content/45">
-                  {open ? (
+                  {tree ? (
+                    <HarnessIcon
+                      harness={task.harness}
+                      className="size-3.5 opacity-75"
+                    />
+                  ) : open ? (
                     <ChevronDown className="size-3" strokeWidth={1.75} />
                   ) : (
                     <>
@@ -153,7 +186,13 @@ export function OrchestrationSidebarAgents({
                     </>
                   )}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[12px] leading-snug text-content/80">
+                <span
+                  className={`min-w-0 flex-1 truncate leading-snug ${
+                    tree
+                      ? `text-[13px] ${open ? "text-content" : "text-content/55 group-hover/agent:text-content/80"}`
+                      : "text-[12px] text-content/80"
+                  }`}
+                >
                   {task.title}
                 </span>
                 <span
@@ -180,12 +219,15 @@ export function OrchestrationSidebarAgents({
                   ) : task.status === "completed" ? (
                     <Check className="size-3" strokeWidth={2.25} />
                   ) : null}
-                  <span>{label}</span>
+                  {/* On the rail the spinner says it on its own. */}
+                  {tree && working ? null : <span>{label}</span>}
                 </span>
               </button>
               {/* Indented to the title's column: the icon slot and its gap. */}
               {open && (
-                <div className="space-y-2 pb-3 pl-6.5 pr-2">
+                <div
+                  className={`space-y-2 pb-3 pr-2 ${tree ? "pl-1.5 pt-1.5" : "pl-6.5"}`}
+                >
                   <p
                     className="flex min-w-0 items-center gap-1.5 text-[11px] text-content/45"
                     title={`${model} · ${HARNESS_TITLE[task.harness]}`}

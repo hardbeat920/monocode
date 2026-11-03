@@ -89,6 +89,54 @@ export function joinPath(parent: string, relative: string): string {
   return out;
 }
 
+const DOCUMENT_IMAGE_EXTENSION = /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+
+/** True for references that never name a file in the project. */
+function isForeignImageReference(value: string): boolean {
+  return (
+    /^[a-z][a-z0-9+.-]*:/i.test(value) ||
+    value.startsWith("//") ||
+    value.startsWith("~") ||
+    value.includes("\\") ||
+    value.includes("\0")
+  );
+}
+
+/**
+ * The project file an image in a Markdown document refers to, as GitHub reads
+ * it: relative to the document's folder, or to the project root when it starts
+ * with `/`. The document is untrusted, so anything that is not a plain image
+ * path inside `root` is refused: URLs of any scheme, `//host` and `~` paths,
+ * backslashes, and `..` that climbs out of the project. `relative` is the
+ * same file relative to `root`.
+ */
+export function resolveDocumentImage(
+  src: string,
+  documentPath: string,
+  root: string,
+): { path: string; relative: string } | undefined {
+  let value = src.trim();
+  if (!value || !documentPath || !root || root.trim() === "~") return undefined;
+  if (isForeignImageReference(value)) return undefined;
+  value = value.replace(/[?#][\s\S]*$/, "");
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+  if (!value || isForeignImageReference(value)) return undefined;
+
+  const base = trimSlash(root);
+  const path = value.startsWith("/")
+    ? joinPath(base, value)
+    : joinPath(parentPath(documentPath), value);
+  if (!isEqualOrInside(path, base) || pathKey(path) === pathKey(base))
+    return undefined;
+  if (!DOCUMENT_IMAGE_EXTENSION.test(path)) return undefined;
+  const relative = path.slice(base.length).replace(/^\/+/, "");
+  return relative ? { path, relative } : undefined;
+}
+
 /**
  * The real OS home directory, primed once at startup from `fs.homeDir()`
  * (see `setHomeDir`). This module has no direct OS access of its own, so

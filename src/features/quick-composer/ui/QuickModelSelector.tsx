@@ -1,5 +1,4 @@
 import "./QuickModelSelector.css";
-import { QuickPermissions } from "./QuickPermissions";
 import {
   useEffect,
   useId,
@@ -29,7 +28,6 @@ import {
   HARNESSES,
   HARNESS_TITLE,
   type HarnessId,
-  type RuntimeMode,
 } from "../../sessions/model/session";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
@@ -44,8 +42,6 @@ type Props = {
   onChange: (model: AgentModel) => void;
   onSettingsChange: (values: Record<string, string>) => void;
   onClose: () => void;
-  runtimeMode: RuntimeMode;
-  onRuntimeModeChange: (mode: RuntimeMode) => void;
 };
 
 /** Inline model browser: providers share the full width above search/results. */
@@ -56,8 +52,6 @@ export function QuickModelSelector({
   onChange,
   onSettingsChange,
   onClose,
-  runtimeMode,
-  onRuntimeModeChange,
 }: Props) {
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
@@ -226,217 +220,200 @@ export function QuickModelSelector({
           );
         })}
       </nav>
-      <div className="flex min-h-0">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <label className="flex h-10 shrink-0 items-center gap-2 border-b border-stroke px-4 text-content/40">
-            <Search className="size-3.5 shrink-0" />
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActive(0);
-              }}
-              role="combobox"
-              aria-label="Search models"
-              aria-controls={listId}
-              aria-expanded="true"
-              aria-autocomplete="list"
-              aria-activedescendant={
-                models[active] ? `${listId}-${active}` : undefined
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <label className="flex h-10 shrink-0 items-center gap-2 border-b border-stroke px-4 text-content/40">
+          <Search className="size-3.5 shrink-0" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActive(0);
+            }}
+            role="combobox"
+            aria-label="Search models"
+            aria-controls={listId}
+            aria-expanded="true"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              models[active] ? `${listId}-${active}` : undefined
+            }
+            placeholder="Search models…"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                if (models.length)
+                  setActive(
+                    (index) =>
+                      (index +
+                        (event.key === "ArrowDown" ? 1 : -1) +
+                        models.length) %
+                      models.length,
+                  );
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                const selected = models[active];
+                if (selected) pick(selected);
               }
-              placeholder="Search models…"
-              autoComplete="off"
-              spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return;
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  if (models.length)
-                    setActive(
-                      (index) =>
-                        (index +
-                          (event.key === "ArrowDown" ? 1 : -1) +
-                          models.length) %
-                        models.length,
-                    );
-                } else if (event.key === "Enter") {
-                  event.preventDefault();
-                  const selected = models[active];
-                  if (selected) pick(selected);
-                }
-              }}
-            />
-          </label>
-          <div
-            ref={listRef}
-            id={listId}
-            role="listbox"
-            aria-label="Models"
-            className="h-60 min-h-0 overflow-y-auto overscroll-none p-2"
-          >
-            {models.length ? (
-              models.map((item, index) => (
-                <div
-                  key={`${item.harness}:${item.id}`}
-                  data-index={index}
-                  className={`flex h-8 items-center rounded-lg ${index === active ? "bg-selection-emphasis" : "hover:bg-selection-hover"}`}
-                  onMouseEnter={() => setActive(index)}
+            }}
+          />
+        </label>
+        <div
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          aria-label="Models"
+          className="h-60 min-h-0 overflow-y-auto overscroll-none p-2"
+        >
+          {models.length ? (
+            models.map((item, index) => (
+              <div
+                key={`${item.harness}:${item.id}`}
+                data-index={index}
+                className={`flex h-8 items-center rounded-lg ${index === active ? "bg-selection-emphasis" : "hover:bg-selection-hover"}`}
+                onMouseEnter={() => setActive(index)}
+              >
+                <button
+                  id={`${listId}-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={item.id === model.id}
+                  disabled={!enabled(item)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => pick(item)}
+                  className="flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] text-content disabled:opacity-35"
                 >
-                  <button
-                    id={`${listId}-${index}`}
-                    type="button"
-                    role="option"
-                    aria-selected={item.id === model.id}
-                    disabled={!enabled(item)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => pick(item)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] text-content disabled:opacity-35"
-                  >
-                    {visibleTab === "favorites" ? (
-                      <HarnessIcon
-                        harness={item.harness}
-                        className="size-3.5 shrink-0"
-                      />
-                    ) : null}
-                    <span className="truncate">{item.name}</span>
-                    {item.provider ? (
-                      <span className="ml-auto truncate text-[11px] text-content/40">
-                        {item.provider.name}
-                      </span>
-                    ) : null}
-                    {item.id === model.id ? (
-                      <Check className="ml-auto size-3.5 shrink-0 text-accent" />
-                    ) : null}
-                  </button>
-                  <button
-                    type="button"
-                    title={
-                      favorites.includes(item.id)
-                        ? "Remove from favorites"
-                        : "Add to favorites"
-                    }
-                    aria-label={`${favorites.includes(item.id) ? "Remove" : "Add"} ${item.name} ${favorites.includes(item.id) ? "from" : "to"} favorites`}
-                    onClick={() => {
-                      const next = favorites.includes(item.id)
-                        ? favorites.filter((id) => id !== item.id)
-                        : [...favorites, item.id];
-                      setFavorites(next);
-                      saveFavoriteModels(next);
-                    }}
-                    className="grid size-8 shrink-0 place-items-center text-content/35 hover:text-content"
-                  >
-                    <Star
-                      className="size-3.5"
-                      fill={
-                        favorites.includes(item.id) ? "currentColor" : "none"
-                      }
+                  {visibleTab === "favorites" ? (
+                    <HarnessIcon
+                      harness={item.harness}
+                      className="size-3.5 shrink-0"
                     />
-                  </button>
-                </div>
-              ))
-            ) : (
-              <p className="px-2 py-6 text-center text-[12px] text-content/45">
-                {query
-                  ? "No matching models"
-                  : visibleTab === "favorites"
-                    ? "No favorite models"
-                    : "Loading models…"}
-              </p>
-            )}
-          </div>
-          {effort && effort.options.length > 0 ? (
-            <div className="shrink-0 border-t border-stroke px-4 pb-3 pt-2">
-              <div className="mb-1 grid grid-cols-[28px_1fr_28px] items-center">
-                {canToggleFast ? (
-                  <button
-                    type="button"
-                    aria-label="Fast mode"
-                    aria-pressed={fastEnabled}
-                    title={
-                      fastEnabled ? "Turn off fast mode" : "Turn on fast mode"
-                    }
-                    onClick={() =>
-                      changeSetting(fast.id, fastEnabled ? fastOff : fastOn)
-                    }
-                    className={`grid size-7 place-items-center rounded-md transition-colors ${fastEnabled ? "bg-amber-400/20 text-amber-400 hover:bg-amber-400/30" : "text-content/40 hover:bg-selection-hover hover:text-content"}`}
-                  >
-                    <Zap
-                      className="size-4"
-                      fill={fastEnabled ? "currentColor" : "none"}
-                    />
-                  </button>
-                ) : (
-                  <span />
-                )}
-                <span className="text-center text-[13px] font-medium text-accent">
-                  {effort.options[effortIndex]?.label}
-                </span>
+                  ) : null}
+                  <span className="truncate">{item.name}</span>
+                  {item.provider ? (
+                    <span className="ml-auto truncate text-[11px] text-content/40">
+                      {item.provider.name}
+                    </span>
+                  ) : null}
+                  {item.id === model.id ? (
+                    <Check className="ml-auto size-3.5 shrink-0 text-accent" />
+                  ) : null}
+                </button>
                 <button
                   type="button"
-                  aria-label="Reset to saved defaults"
-                  title="Reset to saved defaults"
-                  onClick={resetSettings}
-                  className="grid size-7 place-items-center rounded-md text-content/40 hover:bg-selection-hover hover:text-content"
+                  title={
+                    favorites.includes(item.id)
+                      ? "Remove from favorites"
+                      : "Add to favorites"
+                  }
+                  aria-label={`${favorites.includes(item.id) ? "Remove" : "Add"} ${item.name} ${favorites.includes(item.id) ? "from" : "to"} favorites`}
+                  onClick={() => {
+                    const next = favorites.includes(item.id)
+                      ? favorites.filter((id) => id !== item.id)
+                      : [...favorites, item.id];
+                    setFavorites(next);
+                    saveFavoriteModels(next);
+                  }}
+                  className="grid size-8 shrink-0 place-items-center text-content/35 hover:text-content"
                 >
-                  <RotateCcw className="size-4" />
+                  <Star
+                    className="size-3.5"
+                    fill={favorites.includes(item.id) ? "currentColor" : "none"}
+                  />
                 </button>
               </div>
-              <div className="relative h-6">
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full"
-                  style={{
-                    background: `linear-gradient(to right, var(--color-accent) ${(effortIndex / Math.max(1, effort.options.length - 1)) * 100}%, color-mix(in srgb, var(--color-content) 15%, transparent) 0%)`,
-                  }}
-                />
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-2.5 top-1/2"
-                >
-                  {effort.options.map((option, index) => (
-                    <span
-                      key={option.value}
-                      className={`absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full ${index <= effortIndex ? "bg-white/45" : "bg-content/25"}`}
-                      style={{
-                        left: `${(index / Math.max(1, effort.options.length - 1)) * 100}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <input
-                  type="range"
-                  aria-label={effort.label}
-                  min={0}
-                  max={effort.options.length - 1}
-                  step={1}
-                  value={effortIndex}
-                  aria-valuetext={effort.options[effortIndex]?.label}
-                  onChange={(event) =>
-                    changeSetting(
-                      effort.id,
-                      effort.options[Number(event.target.value)].value,
-                    )
-                  }
-                  className="quick-reasoning-slider relative z-10 block h-6 w-full"
-                />
-              </div>
-            </div>
-          ) : null}
+            ))
+          ) : (
+            <p className="px-2 py-6 text-center text-[12px] text-content/45">
+              {query
+                ? "No matching models"
+                : visibleTab === "favorites"
+                  ? "No favorite models"
+                  : "Loading models…"}
+            </p>
+          )}
         </div>
-        {model.harness !== "fx" ? (
-          <aside className="flex min-h-0 w-1/2 shrink-0 flex-col border-l border-stroke">
-            <h3 className="flex h-10 shrink-0 items-center border-b border-stroke px-4 text-[12px] font-medium text-content/55">
-              Permissions
-            </h3>
-            <QuickPermissions
-              embedded
-              value={runtimeMode}
-              onChange={onRuntimeModeChange}
-              onClose={onClose}
-            />
-          </aside>
+        {effort && effort.options.length > 0 ? (
+          <div className="shrink-0 border-t border-stroke px-4 pb-3 pt-2">
+            <div className="mb-1 grid grid-cols-[28px_1fr_28px] items-center">
+              {canToggleFast ? (
+                <button
+                  type="button"
+                  aria-label="Fast mode"
+                  aria-pressed={fastEnabled}
+                  title={
+                    fastEnabled ? "Turn off fast mode" : "Turn on fast mode"
+                  }
+                  onClick={() =>
+                    changeSetting(fast.id, fastEnabled ? fastOff : fastOn)
+                  }
+                  className={`grid size-7 place-items-center rounded-md transition-colors ${fastEnabled ? "bg-amber-400/20 text-amber-400 hover:bg-amber-400/30" : "text-content/40 hover:bg-selection-hover hover:text-content"}`}
+                >
+                  <Zap
+                    className="size-4"
+                    fill={fastEnabled ? "currentColor" : "none"}
+                  />
+                </button>
+              ) : (
+                <span />
+              )}
+              <span className="text-center text-[13px] font-medium text-accent">
+                {effort.options[effortIndex]?.label}
+              </span>
+              <button
+                type="button"
+                aria-label="Reset to saved defaults"
+                title="Reset to saved defaults"
+                onClick={resetSettings}
+                className="grid size-7 place-items-center rounded-md text-content/40 hover:bg-selection-hover hover:text-content"
+              >
+                <RotateCcw className="size-4" />
+              </button>
+            </div>
+            <div className="relative h-6">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full"
+                style={{
+                  background: `linear-gradient(to right, var(--color-accent) ${(effortIndex / Math.max(1, effort.options.length - 1)) * 100}%, color-mix(in srgb, var(--color-content) 15%, transparent) 0%)`,
+                }}
+              />
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-2.5 top-1/2"
+              >
+                {effort.options.map((option, index) => (
+                  <span
+                    key={option.value}
+                    className={`absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full ${index <= effortIndex ? "bg-white/45" : "bg-content/25"}`}
+                    style={{
+                      left: `${(index / Math.max(1, effort.options.length - 1)) * 100}%`,
+                    }}
+                  />
+                ))}
+              </div>
+              <input
+                type="range"
+                aria-label={effort.label}
+                min={0}
+                max={effort.options.length - 1}
+                step={1}
+                value={effortIndex}
+                aria-valuetext={effort.options[effortIndex]?.label}
+                onChange={(event) =>
+                  changeSetting(
+                    effort.id,
+                    effort.options[Number(event.target.value)].value,
+                  )
+                }
+                className="quick-reasoning-slider relative z-10 block h-6 w-full"
+              />
+            </div>
+          </div>
         ) : null}
       </div>
     </section>

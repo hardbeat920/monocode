@@ -10,6 +10,25 @@ export default defineConfig(async ({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
+    worker: { format: "es" },
+    resolve: {
+      alias: [
+        ...(mode.startsWith("benchmark")
+          ? [
+              {
+                find: /^@tauri-apps\/api\/core$/,
+                replacement: new URL(
+                  "./tests/browser/tauriFixture.ts",
+                  import.meta.url,
+                ).pathname,
+              },
+            ]
+          : []),
+        ...(mode === "benchmark-profile"
+          ? [{ find: "react-dom/client", replacement: "react-dom/profiling" }]
+          : []),
+      ],
+    },
     clearScreen: false,
     build: {
       rollupOptions: {
@@ -18,6 +37,10 @@ export default defineConfig(async ({ mode }) => {
         input: {
           main: "index.html",
           quickComposer: "quick-composer.html",
+          monoChat: "mono-chat.html",
+          ...(mode.startsWith("benchmark")
+            ? { workspaceBenchmark: "tests/browser/workspace-performance.html" }
+            : {}),
         },
       },
     },

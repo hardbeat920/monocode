@@ -1,0 +1,231 @@
+.diff-review-scroll {
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+.diff-review-content {
+  position: relative;
+  font-size: var(--code-font-size);
+  tab-size: 4;
+}
+.diff-review-file-slot {
+  position: sticky;
+  left: 0;
+  width: 100%;
+}
+.diff-review-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-stroke);
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.diff-review-file-header:hover {
+  background: var(--color-selection-subtle);
+}
+.diff-review-file-slot.is-sticky {
+  z-index: 20;
+  top: 0;
+  background: color-mix(in srgb, var(--color-content) 2%, transparent);
+}
+.diff-review-file-slot.is-sticky.is-expanded {
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+.diff-review-file-body {
+  display: flex;
+  min-width: 0;
+}
+.diff-review-gutter-lane {
+  flex-shrink: 0;
+  width: var(--diff-gutter-width);
+}
+.diff-review-code-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: none;
+}
+.diff-review-code-scroll::-webkit-scrollbar {
+  display: none;
+}
+.diff-review-code-lane {
+  min-width: max(100%, var(--diff-code-min-width));
+}
+.diff-review-horizontal-scroll {
+  position: sticky;
+  bottom: 0;
+  flex-shrink: 0;
+  height: 14px;
+  /* Same font as the code lanes, so `--diff-code-min-width`'s ch matches. */
+  font-size: var(--code-font-size);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: none;
+}
+.diff-review-gutter-lane .diff-review-fixed-row {
+  width: var(--diff-gutter-width);
+}
+.diff-review-gutter-lane .diff-review-card-row {
+  border-right: 0;
+}
+.diff-review-code-lane .diff-review-card-row {
+  border-left: 0;
+}
+.diff-review-fixed-row {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  width: 100%;
+}
+.diff-review-code-lane .diff-review-fixed-row {
+  overflow: visible;
+}
+.diff-review-code-lane .diff-review-fixed-row > span {
+  /* Pin the label within the wide canvas. Ordinary percentage widths avoid
+     a second container-query style pass on every pane-width change. */
+  position: sticky;
+  left: 0;
+  flex-shrink: 0;
+  width: max-content;
+  max-width: 100%;
+}
+.diff-review-hunk {
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  border-block: 1px solid
+    color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.diff-review-hunk-columns {
+  display: flex;
+  flex-shrink: 0;
+  width: var(--diff-gutter-width);
+  padding-left: 3px;
+  font-family: var(--font-sans);
+  font-size: 9px;
+  color: color-mix(in srgb, var(--color-content) 35%, transparent);
+}
+.diff-review-hunk-columns > span {
+  width: var(--diff-number-width);
+  padding-right: 8px;
+  text-align: right;
+}
+.diff-review-line {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.diff-review-line.is-add {
+  --diff-ink: var(--color-diff-add-fg);
+  background: color-mix(in srgb, var(--color-diff-add-fg) 6%, transparent);
+}
+.diff-review-line.is-del {
+  --diff-ink: var(--color-diff-del-fg);
+  background: color-mix(in srgb, var(--color-diff-del-fg) 6%, transparent);
+}
+.diff-review-gutter {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  width: var(--diff-gutter-width);
+  color: var(
+    --diff-ink,
+    color-mix(in srgb, var(--color-content) 40%, transparent)
+  );
+}
+.diff-review-accent {
+  flex-shrink: 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--diff-ink, transparent) 55%, transparent);
+}
+.diff-review-number {
+  display: block;
+  flex-shrink: 0;
+  width: var(--diff-number-width);
+  padding-right: 8px;
+  text-align: right;
+  font-size: 11px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.diff-review-marker {
+  display: block;
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 20px;
+}
+.diff-review-code {
+  display: block;
+  padding: 0 24px 0 12px;
+  white-space: pre;
+  font-size: var(--code-font-size);
+  line-height: 20px;
+  color: color-mix(in srgb, var(--color-content) 92%, transparent);
+}
+.diff-review-line-actions {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.diff-review-line-action {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: var(--diff-number-width);
+  border-radius: 3px;
+  color: var(--color-content);
+  pointer-events: none;
+}
+.diff-review-line-action:first-child {
+  left: 3px;
+}
+.diff-review-line-action + .diff-review-line-action {
+  right: 0;
+  width: 24px;
+}
+.diff-review-line:hover .diff-review-line-actions,
+.diff-review-line.is-hovered .diff-review-line-actions,
+.diff-review-line:focus-within .diff-review-line-actions {
+  opacity: 1;
+}
+.diff-review-line:hover .diff-review-line-action,
+.diff-review-line.is-hovered .diff-review-line-action,
+.diff-review-line:focus-within .diff-review-line-action {
+  pointer-events: auto;
+}
+.diff-review-line:hover .diff-review-number-old,
+.diff-review-line.is-hovered .diff-review-number-old,
+.diff-review-line:focus-within .diff-review-number-old,
+.diff-review-line.is-stageable:hover .diff-review-marker,
+.diff-review-line.is-stageable.is-hovered .diff-review-marker,
+.diff-review-line.is-stageable:focus-within .diff-review-marker {
+  visibility: hidden;
+}
+.diff-review-line-action:hover,
+.diff-review-line-action:focus-visible {
+  background: color-mix(in srgb, var(--color-content) 12%, transparent);
+}
+.diff-review-line-action:disabled {
+  opacity: 0.35;
+}
+.diff-review-card-header {
+  border: 1px solid var(--color-stroke);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  overflow: hidden;
+}
+.diff-review-card-row {
+  border-inline: 1px solid var(--color-stroke);
+}
+.diff-review-card-gap {
+  border-top: 1px solid var(--color-stroke);
+}

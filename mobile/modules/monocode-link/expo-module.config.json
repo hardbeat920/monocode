@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["MonocodeLinkModule"] },
+  "android": { "modules": ["expo.modules.monocodelink.MonocodeLinkModule"] }
+}

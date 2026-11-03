@@ -331,6 +331,23 @@ describe("openChangesTab", () => {
     expect(files.find(isChangesTab)?.changeKind).toBe("unstaged");
   });
 
+  it("switches the reused Changes tab to the section it was opened from", () => {
+    const cwd = "/repo";
+    const staged = openChangesTab(
+      newTab("session-a"),
+      cwd,
+      undefined,
+      "staged",
+    );
+    const unstaged = openChangesTab(staged, cwd, undefined, "unstaged");
+    const all = openChangesTab(unstaged, cwd);
+    const kindOf = (tab: typeof staged) =>
+      tab.editorPanes[0]?.files.find(isChangesTab)?.changeKind;
+    expect(kindOf(staged)).toBe("staged");
+    expect(kindOf(unstaged)).toBe("unstaged");
+    expect(kindOf(all)).toBeUndefined();
+  });
+
   it("opens a Changes tab without a focused file", () => {
     const cwd = "/repo";
     const next = openChangesTab(newTab("session-a"), cwd);

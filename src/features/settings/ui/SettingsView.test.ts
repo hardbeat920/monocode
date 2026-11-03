@@ -8,9 +8,12 @@ import { SettingsView } from "./SettingsView";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import {
   SETTINGS_INDEX,
+  CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+  INSET_LAYOUT_HIDDEN_SETTINGS,
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "../model/settings";
+import { loadInsetLayout } from "../model/appearance";
 import {
   providerAccounts,
   saveProviderAccount,
@@ -23,6 +26,13 @@ import {
   HARNESSES,
   HARNESS_TITLE,
 } from "../../sessions/model/session";
+import { saveMaskEmails, saveShowRemainingUsage } from "../model/displayPrefs";
+import {
+  createMono,
+  findMono,
+  monoLook,
+  updateMono,
+} from "../../monos/model/mono";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -99,7 +109,10 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
-  vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  vi.mocked(invoke).mockReset().mockImplementation(async command => command === "mobile_status" ? {
+    enabled: false, listening: false, name: "Desktop", fingerprint: null,
+    openRouter: true, remoteAddress: "", routerStatus: "Off", addresses: [], devices: [],
+  } : undefined);
 });
 
 afterEach(async () => {
@@ -113,7 +126,32 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
-  it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
+  it("saves each Mono's session visibility and restores it when settings reopen", async () => {
+    const mono = createMono();
+    const other = createMono();
+    const toggle = (id: string) =>
+      container.querySelector<HTMLButtonElement>(
+        `[role="switch"][aria-label="Show sessions started by ${monoLook(findMono(id)!).name} in sidebar"]`,
+      )!;
+    await render("monos");
+    // Off until turned on: a Mono's sessions stay in its overview.
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle(mono.id).click());
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(true);
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
+    await render("general");
+    await render("monos");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    await act(async () => updateMono(mono.id, (entry) => ({
+      ...entry,
+      showStartedSessionsInSidebar: false,
+    })));
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("blurs account emails by default and hides them when settings reopen", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "provider_account_identity") {
         const { provider } = args as { provider: string };
@@ -149,7 +187,62 @@ describe("settings pages", () => {
     ).toHaveLength(2);
   });
 
+  it("shows used usage and plain emails until the options are turned on", async () => {
+    saveMaskEmails(false);
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "provider_account_identity"
+        ? { email: "user@example.com", plan: "Pro" }
+        : undefined,
+    );
+    setCachedRateLimits("claude", "default", {
+      provider: "claude",
+      session: {
+        usedPercent: 23,
+        windowMinutes: 300,
+        resetsAt: Date.now() + 3_600_000,
+      },
+      weekly: null,
+      monthly: null,
+      resetCredits: null,
+      updatedAt: Date.now(),
+      error: null,
+      status: "ok",
+    });
+
+    await render("providers");
+
+    const used = container.querySelector('[aria-label="5h limit used"]');
+    expect(used?.getAttribute("aria-valuenow")).toBe("23");
+    expect(used?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 23%;",
+    );
+    expect(container.textContent).toContain("user@example.com");
+    expect(container.querySelector('[aria-label="Reveal email"]')).toBeNull();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Show remaining usage"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Mask account emails"]')!
+        .click(),
+    );
+
+    const remaining = container.querySelector(
+      '[aria-label="5h limit remaining"]',
+    );
+    expect(remaining?.getAttribute("aria-valuenow")).toBe("77");
+    expect(
+      container.querySelectorAll('[aria-label="Reveal email"]').length,
+    ).toBeGreaterThan(0);
+  });
+
   it("shows account usage bars as remaining capacity", async () => {
+    saveShowRemainingUsage(true);
     setCachedRateLimits("claude", "default", {
       provider: "claude",
       session: {
@@ -676,8 +769,11 @@ describe("settings pages", () => {
     "renders every indexed setting on the $section page",
     async ({ section }) => {
       await render(section);
+      const hidden = loadInsetLayout()
+        ? INSET_LAYOUT_HIDDEN_SETTINGS
+        : CLASSIC_LAYOUT_HIDDEN_SETTINGS;
       const expected = SETTINGS_INDEX.filter(
-        (entry) => entry.section === section,
+        (entry) => entry.section === section && !hidden.has(entry.id),
       ).map((entry) => entry.id);
       expect(renderedSettingIds().sort()).toEqual(expected.sort());
     },
@@ -839,6 +935,17 @@ describe("settings search", () => {
     expect(options()).toHaveLength(0);
     expect(input.value).toBe("");
     expect(onSelectSection).not.toHaveBeenCalled();
+  });
+
+  it("lists Escape stopping a session without a recorder", async () => {
+    await render("keybindings");
+    const row = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "Session: Stop",
+    )?.parentElement;
+    expect(row?.textContent).toContain("Esc");
+    expect(
+      container.querySelector('[aria-label="Change Session: Stop shortcut"]'),
+    ).toBeNull();
   });
 
   it("records a custom keybinding from the key cell", async () => {

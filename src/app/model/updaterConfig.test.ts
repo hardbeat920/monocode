@@ -1,22 +1,31 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getVersion, check, message, ask, relaunch } = vi.hoisted(() => ({
+const { getVersion, getBundleType, check, message, ask, relaunch } = vi.hoisted(() => ({
   getVersion: vi.fn(),
+  getBundleType: vi.fn(),
   check: vi.fn(),
   message: vi.fn(),
   ask: vi.fn(),
   relaunch: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/app", () => ({ getVersion }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion,
+  getBundleType,
+  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+}));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask, message }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch }));
 vi.mock("../../features/settings/model/sounds", () => ({ announceUpdateAvailable: vi.fn() }));
 
-import { runUpdateFlow } from "./updater";
+import { packageManagerHint, probeForUpdate, runUpdateFlow } from "./updater";
 
 describe("updater", () => {
+  beforeEach(() => {
+    getBundleType.mockResolvedValue("appimage");
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
   });
@@ -55,5 +64,67 @@ describe("updater", () => {
       error: "network failed",
     });
     expect(message).toHaveBeenCalledOnce();
+  });
+
+  it.each(["deb", "rpm"] as const)("names one %s installer and the releases URL", (kind) => {
+    const hint = packageManagerHint(kind);
+    expect(hint).toContain("https://github.com/hardbeat920/monocode/releases/latest");
+    expect(hint).not.toMatch(/[*<>]/);
+    expect(hint).toContain("Replace the file name");
+    expect(hint).toContain(kind === "deb" ? "sudo apt install ./MonoCode_X.Y.Z_amd64.deb" : "sudo dnf install ./MonoCode-X.Y.Z-1.x86_64.rpm");
+  });
+
+  it.each([
+    ["deb", "sudo apt install"],
+    ["rpm", "sudo dnf install"],
+  ])("sends %s installs to their package manager without checking the feed", async (kind, hint) => {
+    getVersion.mockResolvedValue("0.9.0");
+    getBundleType.mockResolvedValue(kind);
+
+    await expect(runUpdateFlow(true)).resolves.toEqual({
+      phase: "idle",
+      currentVersion: "0.9.0",
+      packageManaged: kind,
+    });
+    expect(check).not.toHaveBeenCalled();
+    expect(message).toHaveBeenCalledWith(expect.stringContaining(hint), {
+      title: "MonoCode",
+    });
+  });
+
+  it("keeps the automatic probe silent on package-managed installs", async () => {
+    getBundleType.mockResolvedValue("deb");
+
+    await expect(probeForUpdate()).resolves.toBeNull();
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("still checks the feed for AppImage installs", async () => {
+    getVersion.mockResolvedValue("0.9.0");
+    check.mockResolvedValue(null);
+
+    await expect(runUpdateFlow(false)).resolves.toEqual({
+      phase: "current",
+      currentVersion: "0.9.0",
+    });
+    expect(check).toHaveBeenCalledOnce();
+  });
+
+  it("treats a feed without this platform as unavailable, not as a failure", async () => {
+    getVersion.mockResolvedValue("0.9.0");
+    check.mockRejectedValue(
+      new Error(
+        'None of the fallback platforms `["linux-x86_64-deb", "linux-x86_64"]` were found in the response `platforms` object',
+      ),
+    );
+
+    await expect(runUpdateFlow(true)).resolves.toEqual({
+      phase: "idle",
+      currentVersion: "0.9.0",
+    });
+    expect(message).toHaveBeenCalledWith(
+      expect.stringContaining("aren't available for this install yet"),
+      { title: "MonoCode" },
+    );
   });
 });
