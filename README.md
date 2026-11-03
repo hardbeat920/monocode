@@ -1,7 +1,3 @@
-<p align="center">
-  <img width="1680" height="1050" alt="Screenshot 2026-11-03 at 21 16 27" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
-</p>
-
 <h1 align="center">MonoCode</h1>
 
 <p align="center">
@@ -9,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
+  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
 </p>
 
 > [!NOTE]
