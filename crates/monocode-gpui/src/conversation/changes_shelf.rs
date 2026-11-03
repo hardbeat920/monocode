@@ -222,8 +222,10 @@ mod tests {
 
     #[test]
     fn a_slide_keeps_running_from_its_resting_end_until_done() {
-        let mut shelf = ChangesShelf::default();
-        shelf.open = true;
+        let mut shelf = ChangesShelf {
+            open: true,
+            ..Default::default()
+        };
         shelf.slide_to(true, true);
         // Opened and settled: rests without a slide.
         shelf
