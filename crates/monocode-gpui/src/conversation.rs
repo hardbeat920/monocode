@@ -3752,6 +3752,8 @@ mod composer_motion_tests {
             window
                 .update(visual, |c, window, cx| {
                     c.set_scene_visible(visible);
+                    c.transcript
+                        .update(cx, |view, cx| view.visible(visible, cx));
                     c.sync_component_visibility(window, cx);
                     cx.notify();
                 })

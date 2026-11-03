@@ -1,5 +1,5 @@
-//! Mechanical translation of snakeArcade.ts. Ordering (including stale pellet
-//! occupancy and tail entry while growing) intentionally matches the reference.
+//! Native Snake engine. Movement order, including tail entry while growing,
+//! follows snakeArcade.ts; replacement food excludes the current body.
 use crate::{
     random::Random,
     types::{Bubble, Cell, Mode, Pickup},
@@ -134,6 +134,17 @@ impl Snake {
             self.pellet = cell;
             return;
         }
+        // An unlucky run of samples must not leave the eaten pellet under the
+        // head. Fall back to a free cell without drawing more randomness.
+        for y in 0..self.play_rows {
+            for x in 0..self.cols {
+                let cell = Cell::new(x, y);
+                if !self.occupied.contains(&cell) && !self.on_logo(cell) {
+                    self.pellet = cell;
+                    return;
+                }
+            }
+        }
     }
     fn spawn_snake(&mut self, random: &mut dyn Random) {
         let y = (self.play_rows / 2).max(1);
@@ -267,6 +278,8 @@ impl Snake {
             if self.player {
                 self.score += 1;
             }
+            // The new head is part of the growing body before food is placed.
+            self.occupied.insert(next);
             self.place_pellet(random);
         }
         if self.grow > 0 {
@@ -492,5 +505,55 @@ fn wrap(value: i32, max: i32) -> i32 {
         0
     } else {
         value.rem_euclid(max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacement_food_excludes_the_new_head_even_after_random_retries_run_out() {
+        struct Candidates {
+            head: Cell,
+            misses: usize,
+            draws: usize,
+        }
+        impl Random for Candidates {
+            fn next_f64(&mut self) -> f64 {
+                let attempt = self.draws / 2;
+                let x_axis = self.draws.is_multiple_of(2);
+                self.draws += 1;
+                if x_axis {
+                    (if attempt < self.misses {
+                        f64::from(self.head.x)
+                    } else {
+                        0.
+                    } + 0.5)
+                        / 40.
+                } else {
+                    (f64::from(self.head.y) + 0.5) / 20.
+                }
+            }
+        }
+        for misses in [1, 60] {
+            let mut game = Snake::new(vec![]);
+            let mut startup = crate::random::Mulberry32::new(7);
+            game.resize(40, 20, &mut startup);
+            game.take_control(&mut startup);
+            let head = Cell::new(game.body[0].x + 1, game.body[0].y);
+            game.pellet = head;
+            let mut random = Candidates {
+                head,
+                misses,
+                draws: 0,
+            };
+            game.advance(&mut random);
+            assert_eq!(game.score(), 1);
+            assert_eq!(game.body.len(), 4);
+            assert!(!game.body.contains(&game.pellet), "misses={misses}");
+            assert!(!game.on_logo(game.pellet));
+            assert_eq!(random.draws, if misses == 1 { 4 } else { 120 });
+        }
     }
 }

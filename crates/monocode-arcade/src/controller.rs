@@ -198,8 +198,11 @@ impl Controller {
     }
     /// Finish the selected board's boot fade without advancing simulation.
     pub fn reveal(&mut self) -> Frame<'_> {
-        self.boards[self.configuration.game.index()].reveal();
-        self.refresh();
+        let board = &mut self.boards[self.configuration.game.index()];
+        if board.fade() < 1. {
+            board.reveal();
+            self.refresh();
+        }
         self.frame()
     }
     pub fn step(&mut self, dt: f64) -> Frame<'_> {
@@ -288,7 +291,8 @@ mod tests {
             assert_eq!(frame.stamp.len(), input.cols * input.rows);
             assert_eq!(frame.fade, 0.);
             if game == GameId::Pacman {
-                assert_eq!(frame.sprites[0].dx, 1); // JS fallback for zero dx.
+                // A stationary Pac-Man defaults to facing right.
+                assert_eq!((frame.sprites[0].dx, frame.sprites[0].dy), (1, 0));
             }
             same_frame(controller.frame(), reference.configure(input));
 
@@ -300,6 +304,8 @@ mod tests {
             // Only one board was revealed: matching after the natural fade
             // proves reveal did not move gameplay, advance timers or draw RNG.
             same_frame(controller.step(420.), reference.step(420.));
+            same_frame(controller.reveal(), reference.frame());
+            same_frame(controller.reveal(), reference.frame());
 
             input.playing = true;
             for board in [&mut controller, &mut reference] {
@@ -311,6 +317,7 @@ mod tests {
             same_frame(controller.step(dt), reference.step(dt));
             assert!(controller.frame().stamp.iter().any(|&value| value > 0.));
             same_frame(controller.configure(input), reference.frame());
+            same_frame(controller.reveal(), reference.frame());
 
             input.cols = 72;
             input.rows = 36;
@@ -320,10 +327,29 @@ mod tests {
                 (72, 36, 72 * 36)
             );
             same_frame(controller.frame(), reference.configure(input));
+            same_frame(controller.reveal(), reference.frame());
             assert_eq!(controller.release_control().dim, game.descriptor().idle_dim);
             assert!(!controller.boards[game.index()].controlled());
             assert!(!controller.configuration.playing);
             same_frame(controller.frame(), reference.release_control());
+            assert_eq!(controller.frame().fade, 0.);
+            same_frame(controller.reveal(), reference.reveal());
+            same_frame(controller.reveal(), reference.frame());
+
+            // Returning to a revealed board still replaces the shared buffers.
+            input.playing = false;
+            let other = if game == GameId::Pacman {
+                GameId::Snake
+            } else {
+                GameId::Pacman
+            };
+            for selected in [other, game] {
+                input.game = selected;
+                controller.configure(input);
+                reference.configure(input);
+                reference.reveal();
+                same_frame(controller.reveal(), reference.frame());
+            }
         }
     }
 }

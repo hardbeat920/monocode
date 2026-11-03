@@ -28,13 +28,14 @@ pub(crate) fn style(color: u32) -> Style {
 }
 
 pub(crate) fn new(transcript: Entity<TranscriptView>, cx: &mut Context<Runner>) -> Runner {
-    let weak_transcript = transcript.downgrade();
+    let geometry = transcript.update(cx, |view, cx| view.jump_geometry(cx));
+    let weak_geometry = geometry.downgrade();
     let services = Services {
         clock: Rc::new(crate::pulse::ComponentClock),
         obstacle: Rc::new(move |bounds, rim, cx| {
-            let jump = weak_transcript
+            let jump = weak_geometry
                 .upgrade()
-                .and_then(|view| view.read(cx).jump_bounds());
+                .and_then(|geometry| geometry.read(cx).bounds());
             obstacle(bounds, rim, jump)
         }),
     };
@@ -42,7 +43,7 @@ pub(crate) fn new(transcript: Entity<TranscriptView>, cx: &mut Context<Runner>) 
         .build_hasher()
         .finish() as u32;
     let mut view = ComposerView::new(seed, props(false, "invader"), style(0x459cf7), services);
-    view.watch_geometry(&transcript, cx);
+    view.watch_geometry(&geometry, cx);
     view
 }
 

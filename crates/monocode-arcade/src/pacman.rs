@@ -1,5 +1,5 @@
-//! Mechanical translation of pacmanArcade.ts. Variable-dt, tie/draw order,
-//! transition overshoot and the existing singleton-speech defect are kept.
+//! Native Pac-Man engine. Variable-dt, tie/draw order and transition overshoot
+//! follow pacmanArcade.ts; sprite headings and fixed status messages are corrected.
 use crate::{
     random::Random,
     types::{Bubble, Cell, Mode, Pickup, Sprite, SpriteKind},
@@ -375,9 +375,11 @@ impl Pacman {
         4200. + random.next_f64() * (10500. - 4200.)
     }
     fn say(&mut self, lines: &[&'static str], from: Speaker, random: &mut dyn Random) {
-        // Keep the reference singleton bug: it repeats last_line instead of
-        // selecting LEVEL CLEAR/GAME OVER. Correct only in a separate change.
-        let mut text = self.last_line;
+        // A fixed status message needs neither randomness nor repeat avoidance.
+        let mut text = match lines {
+            [line] => *line,
+            _ => self.last_line,
+        };
         while text == self.last_line && lines.len() > 1 {
             text = lines[(random.next_f64() * lines.len() as f64).floor() as usize];
         }
@@ -1151,7 +1153,12 @@ impl Pacman {
             cx: self.cell_x(self.pac.at_x()) + f64::from(self.tile - 1) / 2.,
             cy: self.cell_y(self.pac.at_y()) + f64::from(self.tile - 1) / 2.,
             size: f64::from(self.tile),
-            dx: if self.pac.dx == 0 { 1 } else { self.pac.dx },
+            // Only a stationary Pac-Man defaults right; vertical motion has dx=0.
+            dx: if self.pac.dx == 0 && self.pac.dy == 0 {
+                1
+            } else {
+                self.pac.dx
+            },
             dy: self.pac.dy,
             alpha,
             mouth,
@@ -1247,6 +1254,54 @@ impl Pacman {
             for value in out {
                 *value = (f64::from(*value) * alpha) as f32;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprites_keep_cardinal_headings_and_only_default_when_stationary() {
+        let mut game = Pacman::new(vec![]);
+        let mut random = crate::random::Mulberry32::new(7);
+        game.resize(80, 40, &mut random);
+        let mut sprites = Vec::new();
+        for controlled in [false, true] {
+            if controlled {
+                game.take_control(&mut random);
+            }
+            for heading in DIRS.into_iter().chain([Cell::default()]) {
+                game.pac.dx = heading.x;
+                game.pac.dy = heading.y;
+                game.pac.progress = 0.5;
+                game.write_sprites(&mut sprites);
+                let expected = if heading == Cell::default() {
+                    Cell::new(1, 0)
+                } else {
+                    heading
+                };
+                assert_eq!(
+                    (sprites[0].dx, sprites[0].dy),
+                    (expected.x, expected.y),
+                    "heading {heading:?}, controlled={controlled}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn end_game_speech_uses_the_only_line_without_drawing_randomness() {
+        let mut game = Pacman::new(vec![]);
+        let mut random = crate::random::Mulberry32::new(7);
+        game.resize(80, 40, &mut random);
+        game.last_line = "GOT ONE";
+        for line in ["LEVEL CLEAR", "GAME OVER", "GAME OVER"] {
+            let next_random = random.clone().next_f64();
+            game.say(&[line], Speaker::Pac, &mut random);
+            assert_eq!(game.speech_bubble().unwrap().text, line);
+            assert_eq!(random.next_f64(), next_random);
         }
     }
 }

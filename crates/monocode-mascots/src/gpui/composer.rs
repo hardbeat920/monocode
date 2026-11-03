@@ -16,7 +16,9 @@ use gpui::{
 };
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-const TICK_MS: f64 = 1000. / 30.;
+// Match the native host/arcade cadence without changing their shared scheduler.
+const TICK: Duration = Duration::from_millis(33);
+const TICK_MS: f64 = TICK.as_millis() as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
@@ -132,7 +134,7 @@ impl ComposerView {
         }
     }
     fn tick(&self) -> u64 {
-        self.base_tick + (self.elapsed.as_secs_f64() * 1000. / TICK_MS) as u64
+        self.base_tick + (self.elapsed.as_nanos() / TICK.as_nanos()) as u64
     }
     fn prepare_frame(&mut self, reduced: bool, advance: bool) {
         // Preserve busy edges even when a short turn ends before first layout.
@@ -271,5 +273,64 @@ impl Render for ComposerView {
                 .size_full(),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Clock;
+    impl AnimationClock for Clock {
+        fn elapsed(&self, _: &mut App) -> Duration {
+            Duration::ZERO
+        }
+        fn request(&self, _: bool, _: &mut Window, _: &mut App) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn clock_slots_do_not_repeat_or_step_twice() {
+        let mut view = ComposerView::new(
+            7,
+            Props {
+                busy: true,
+                mascot: Some(MascotId::Invader),
+                rim_y: 64.,
+            },
+            Style {
+                color: gpui::rgb(0x459cf7).into(),
+            },
+            Services {
+                clock: Rc::new(Clock),
+                obstacle: Rc::new(|_, _, _| None),
+            },
+        );
+        for (elapsed, slot) in [
+            (Duration::ZERO, 0),
+            (TICK - Duration::from_nanos(1), 0),
+            (TICK, 1),
+            (TICK + Duration::from_nanos(1), 1),
+            (TICK * 5, 5),
+            (TICK * 1000, 1000),
+        ] {
+            view.elapsed = elapsed;
+            assert_eq!(view.tick(), slot);
+        }
+        view.elapsed = Duration::ZERO;
+        view.bounds = Some(Bounds::new(
+            gpui::point(gpui::px(0.), gpui::px(0.)),
+            gpui::size(gpui::px(600.), gpui::px(80.)),
+        ));
+        view.width = Some(600.);
+        view.update_frame(false);
+        let start = view.simulation.borrow().frame().pose.unwrap();
+        view.elapsed = TICK;
+        view.update_frame(false);
+        let moved = view.simulation.borrow().frame().pose.unwrap();
+        assert!((moved.x - start.x - 5.28).abs() < 1e-9);
+        view.update_frame(false);
+        assert_eq!(view.simulation.borrow().frame().pose, Some(moved));
     }
 }

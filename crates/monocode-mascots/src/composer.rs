@@ -380,6 +380,25 @@ mod tests {
             assert_eq!(runner.advance(input).pose.unwrap().x, moving.x);
             input.busy = false;
             assert!(!runner.configure(input).active);
+            input.busy = true;
+            for obstacle in [
+                Some(Obstacle {
+                    left: moving.x - 5.,
+                    right: moving.x + 5.,
+                    height: 28.,
+                }),
+                Some(Obstacle {
+                    left: moving.x + 100.,
+                    right: moving.x + 110.,
+                    height: 28.,
+                }),
+                None,
+            ] {
+                input.obstacle = obstacle;
+                let pose = runner.configure(input).pose.unwrap();
+                assert_eq!(pose.x, moving.x);
+                assert_eq!(pose.y, jump_height(moving.x, obstacle, &[]));
+            }
         }
     }
 }
