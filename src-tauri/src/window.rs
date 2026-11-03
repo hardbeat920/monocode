@@ -384,10 +384,6 @@ fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
     }
 }
 
-fn app_window_labels(app: &AppHandle) -> Vec<String> {
-    app.windows().into_keys().collect()
-}
-
 /// Ask every app window what it has running, then decide once for all of them.
 pub fn request_quit(app: &AppHandle) {
     let labels = workspace_labels(app);

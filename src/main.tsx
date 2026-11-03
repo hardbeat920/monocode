@@ -4,7 +4,6 @@ import ReactDOM from "react-dom/client";
 if (import.meta.env.DEV) void import("./debugMonoScroll");
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import App from "./app/App";
 import { browserRequest } from "./features/sessions/model/embeddedBrowser";
 import {
   activateWindowAppearance,

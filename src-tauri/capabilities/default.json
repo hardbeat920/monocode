@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "webviews": ["main", "window-*"],
+  "webviews": ["main", "window-*", "quick-session-*", "quick-composer", "quick-composer-git", "mono-chat-*"],
   "permissions": [
     "core:default",
     "core:event:default",
