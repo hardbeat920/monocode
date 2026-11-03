@@ -1,4 +1,4 @@
-<h1 align="center">MonoCode</h1>
+<h1 align="center">Monocode</h1>
 
 <p align="center">
   <strong>A GUI for your coding agents.</strong>
