@@ -1,15 +1,11 @@
-<p align="center">
-  <img src="public/monocode.png" alt="MonoCode" width="88" />
-</p>
-
-<h1 align="center">MonoCode</h1>
+<h1 align="center">Monocode</h1>
 
 <p align="center">
   <strong>A GUI for your coding agents.</strong>
 </p>
 
 <p align="center">
-  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
+  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
 </p>
 
 > [!NOTE]
