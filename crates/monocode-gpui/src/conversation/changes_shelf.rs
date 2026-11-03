@@ -33,17 +33,20 @@ impl ChangesShelf {
         });
     }
 
-    /// How far open the card is, or `None` once it has folded away.
-    fn progress(&self) -> Option<f32> {
+    /// How far open the card is while a slide runs (`Some`), or whether it
+    /// rests open (`None` inside) — `None` overall once it has folded away.
+    /// A running slide may sit at exactly 0 or 1 on its first frame, so the
+    /// caller keeps drawing frames until the spring reports done.
+    fn progress(&self) -> Option<Option<f32>> {
         let mut slide = self.slide.borrow_mut();
         let Some((progress, done)) = slide.as_ref().map(|s| s.at(Instant::now())) else {
-            return self.open.then_some(1.);
+            return self.open.then_some(None);
         };
         if done {
             *slide = None;
-            return self.open.then_some(1.);
+            return self.open.then_some(None);
         }
-        Some(progress)
+        Some(Some(progress))
     }
 }
 
@@ -110,9 +113,9 @@ impl Conversation {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(px(6.))
+                                .gap(px(5.))
+                                // The Commit pill's label: 12px, regular weight.
                                 .text_size(px(12.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .font_features(tabular())
                                 .child(
                                     div()
@@ -125,9 +128,9 @@ impl Conversation {
                                         .child(format!("-{}", format_integer(deletions))),
                                 ),
                         )
-                        .child(div().flex().items_center().gap(px(2.)).children(
+                        .child(div().flex().items_center().gap(px(1.5)).children(
                             squares.into_iter().map(|square| {
-                                div().size(px(8.)).rounded(px(2.)).bg(match square {
+                                div().size(px(6.)).rounded(px(1.5)).bg(match square {
                                     Square::Add => rgb(DIFF_ADD).into(),
                                     Square::Del => rgb(DIFF_DEL).into(),
                                     Square::Empty => content(0.12),
@@ -166,10 +169,11 @@ impl Conversation {
         composer_shelf::shelf("changes-shelf")
             .debug_selector(|| "changes-shelf".into())
             .px(inset)
-            .child(if progress >= 1. {
-                card
-            } else {
-                composer_shelf::reveal(card, card_width, progress.max(0.), window)
+            .child(match progress {
+                None => card,
+                Some(progress) => {
+                    composer_shelf::reveal(card, card_width, progress.clamp(0., 1.), window)
+                }
             })
             .into_any_element()
     }
@@ -214,7 +218,33 @@ fn squares(additions: i64, deletions: i64) -> [Square; SQUARES] {
 
 #[cfg(test)]
 mod tests {
-    use super::{Square::*, squares};
+    use super::{ChangesShelf, Square::*, squares};
+
+    #[test]
+    fn a_slide_keeps_running_from_its_resting_end_until_done() {
+        let mut shelf = ChangesShelf::default();
+        shelf.open = true;
+        shelf.slide_to(true, true);
+        // Opened and settled: rests without a slide.
+        shelf
+            .slide
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .elapsed(std::time::Duration::from_secs(5));
+        assert_eq!(shelf.progress(), Some(None));
+        // Closing starts at fully open, yet still counts as running.
+        shelf.open = false;
+        shelf.slide_to(false, true);
+        assert!(matches!(shelf.progress(), Some(Some(p)) if p >= 0.99));
+        shelf
+            .slide
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .elapsed(std::time::Duration::from_secs(5));
+        assert_eq!(shelf.progress(), None, "folded away");
+    }
 
     #[test]
     fn squares_split_by_share_and_keep_a_minority() {

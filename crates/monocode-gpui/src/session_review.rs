@@ -222,7 +222,11 @@ fn card() -> gpui::Div {
 }
 
 impl SessionReview {
-    /// The settled turn's file count and line totals, while there are files.
+    /// The recorded files' absolute paths.
+    pub(crate) fn paths(&self) -> Vec<String> {
+        self.files.iter().map(|file| file.path.clone()).collect()
+    }
+    /// The session's pending file count and line totals, while there are files.
     pub(crate) fn totals(&self) -> Option<(usize, i64, i64)> {
         (!self.busy && !self.files.is_empty()).then(|| {
             (

@@ -547,8 +547,18 @@ impl Conversation {
                 cx.emit(SessionChanged);
             }
         });
-        // The changes pill and its ledge card read the review's files.
-        let review_observation = cx.observe(&review, |_, _, cx| cx.notify());
+        // The changes pill and its ledge card read the review's files. Files
+        // the recorded turns changed, also through shell commands, count as
+        // this session's edits for the commit pill.
+        let review_observation = cx.observe(&review, |this, review, cx| {
+            let paths = review.read(cx).paths();
+            let known = this.session_edits.len();
+            this.remember_session_edits(paths);
+            if this.session_edits.len() != known {
+                this.refresh_git_actions(cx);
+            }
+            cx.notify();
+        });
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.identity(&summary.provider, Kind::from_id(&summary.provider).label());

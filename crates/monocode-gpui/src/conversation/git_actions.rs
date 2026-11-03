@@ -641,6 +641,66 @@ mod tests {
     }
 
     #[gpui::test]
+    fn shell_edits_in_the_recorded_turns_offer_the_pill(cx: &mut TestAppContext) {
+        let repo = Repo::new();
+        std::fs::write(repo.0.join("own.rs"), "written by a shell command\n").unwrap();
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut summary = store.create("codex", &repo.cwd()).unwrap();
+        summary.provider = "fixture".into();
+        summary.has_messages = true;
+        let row = |role: &str, text: &str| Row {
+            role: role.into(),
+            text: text.into(),
+            first: true,
+            sent_at: None,
+        };
+        store
+            .write_rows(
+                summary.id,
+                0,
+                &[row("user", "Append a line"), row("assistant", "Done")],
+            )
+            .unwrap();
+        let window = cx.update(|cx| {
+            input::bind(cx);
+            crate::popover::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                    view.load(cx);
+                    view
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let shown = |visual: &mut gpui::VisualTestContext| {
+            visual.run_until_parked();
+            visual.debug_bounds("git-actions").is_some()
+        };
+        assert!(!shown(visual), "no Edit tool call names the file");
+        let file = monocode_core::checkpoint::CheckpointFile {
+            path: repo.0.join("own.rs").to_string_lossy().into_owned(),
+            relative: "own.rs".into(),
+            status: "modified".into(),
+            additions: 1,
+            deletions: 1,
+            exact: true,
+            undoable: true,
+        };
+        window
+            .update(visual, |view, _, cx| {
+                view.review.update(cx, |r, cx| r.set_files(vec![file], cx));
+            })
+            .unwrap();
+        assert!(shown(visual), "the recorded turn's shell edit counts");
+        assert!(
+            visual.debug_bounds("changes-pill").is_some(),
+            "the changes pill sits beside it"
+        );
+    }
+
+    #[gpui::test]
     fn the_pill_requires_session_changes_and_sends_straight_away(cx: &mut TestAppContext) {
         let store = Store::open(Path::new(":memory:")).unwrap();
         // Fails after saving the turn, without launching a real provider.
