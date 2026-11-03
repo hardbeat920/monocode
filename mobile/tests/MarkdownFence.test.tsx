@@ -86,3 +86,35 @@ it("keeps the action available after a clipboard failure", async () => {
   await copy();
   expect(buttons()[0].getAttribute("aria-label")).toBe("Copied");
 });
+
+it("clears confirmation when the fence body changes", async () => {
+  render("```\nfirst");
+  await copy();
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copied");
+  render("```\nfirst\nsecond");
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copy code");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("ignores a clipboard completion for an earlier fence body", async () => {
+  let complete!: (saved: boolean) => void;
+  clipboard.setStringAsync.mockReturnValueOnce(new Promise<boolean>((resolve) => { complete = resolve; }));
+  render("```\nfirst");
+  await copy();
+  render("```\nfirst\nsecond");
+  await act(async () => { complete(true); });
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copy code");
+  expect(vi.getTimerCount()).toBe(0);
+  await copy();
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copied");
+});
+
+it("does not confirm when the clipboard resolves false", async () => {
+  render("```\ntext\n```");
+  clipboard.setStringAsync.mockResolvedValueOnce(false);
+  await copy();
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copy code");
+  expect(vi.getTimerCount()).toBe(0);
+  await copy();
+  expect(buttons()[0].getAttribute("aria-label")).toBe("Copied");
+});

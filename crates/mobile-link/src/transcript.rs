@@ -225,12 +225,24 @@ fn parse_blocks(id: &str, text: &str, offset: usize) -> Vec<Block> {
                         flush(&mut current, &mut block);
                         if tag == TagEnd::CodeBlock {
                             if let Some(block) = block.as_mut() {
-                                let rows: Vec<_> = block.rows.iter().enumerate().filter(|(_, row)| {
-                                    row.presentation["group"].as_str() == Some(&code_group)
-                                }).collect();
-                                let text = rows.iter().map(|(_, row)| {
-                                    row.runs.iter().map(|run| run.text.as_str()).collect::<String>()
-                                }).collect::<Vec<_>>().join("\n");
+                                let rows: Vec<_> = block
+                                    .rows
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, row)| {
+                                        row.presentation["group"].as_str() == Some(&code_group)
+                                    })
+                                    .collect();
+                                let text = rows
+                                    .iter()
+                                    .map(|(_, row)| {
+                                        row.runs
+                                            .iter()
+                                            .map(|run| run.text.as_str())
+                                            .collect::<String>()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
                                 if let Some((first, _)) = rows.first() {
                                     let first = *first;
                                     Arc::make_mut(&mut block.rows[first]).action =
@@ -1240,7 +1252,10 @@ mod tests {
         let rows: Vec<_> = md.blocks.iter().flat_map(|b| &b.rows).collect();
         let code: Vec<_> = rows.iter().filter(|r| r.kind == "code").collect();
         assert_eq!(code.len(), 2); // No trailing blank line from the fence.
-        assert_eq!(code[0].action, json!({"type":"copy","copyText":"const a = 1;\nconst b = 2;"}));
+        assert_eq!(
+            code[0].action,
+            json!({"type":"copy","copyText":"const a = 1;\nconst b = 2;"})
+        );
         assert_eq!(code[1].action, Value::Null);
         assert_eq!(code[0].presentation["language"], "ts");
         assert!(code[1].presentation.get("language").is_none());
@@ -1298,9 +1313,21 @@ mod tests {
     fn code_copy_actions_keep_fences_separate_and_preserve_literal_contents() {
         let mut md = Markdown::default();
         md.update("m", "Prose\n\n```md\n# Heading\n\n  **literal** 👋\n```\n\n> ~~~sh\n> echo hi\n> ~~~\n\n```\n```");
-        let actions: Vec<_> = md.blocks.iter().flat_map(|b| &b.rows)
-            .filter(|r| r.action["type"] == "copy").map(|r| &r.action["copyText"]).collect();
-        assert_eq!(actions, vec![&json!("# Heading\n\n  **literal** 👋"), &json!("echo hi"), &json!("")]);
+        let actions: Vec<_> = md
+            .blocks
+            .iter()
+            .flat_map(|b| &b.rows)
+            .filter(|r| r.action["type"] == "copy")
+            .map(|r| &r.action["copyText"])
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                &json!("# Heading\n\n  **literal** 👋"),
+                &json!("echo hi"),
+                &json!("")
+            ]
+        );
     }
 
     #[test]
@@ -1312,7 +1339,10 @@ mod tests {
         let changed = delta["rows"].as_array().unwrap();
         assert_eq!(changed.len(), 3);
         let first = changed.iter().find(|r| r["id"] == "t/a:0").unwrap();
-        assert_eq!(first["action"], json!({"type":"copy","copyText":"one\ntwo\nthree\nfour"}));
+        assert_eq!(
+            first["action"],
+            json!({"type":"copy","copyText":"one\ntwo\nthree\nfour"})
+        );
         assert!(changed.iter().all(|r| r["id"] != "t/a:0:code:line1"));
     }
     #[test]

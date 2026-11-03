@@ -171,9 +171,18 @@ function CodeBlock({ text, language }: { text: string; language: string }) {
   const styles = useStyles();
   const colors = useColors();
   const header = codeFenceHeader(language);
-  const [copied, setCopied] = useState(false);
+  const body = useMemo(() => ({ text }), [text]);
+  const [copiedBody, setCopiedBody] = useState<typeof body>();
+  const copied = copiedBody === body;
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const copyAttempt = useRef({ id: 0 });
+  useEffect(() => {
+    const attempt = copyAttempt.current;
+    return () => {
+      attempt.id++;
+      clearTimeout(timer.current);
+    };
+  }, [text]);
   return (
     <View style={styles.codeBlock}>
       <View style={styles.codeHeader}>
@@ -186,11 +195,15 @@ function CodeBlock({ text, language }: { text: string; language: string }) {
           accessibilityLabel={copied ? "Copied" : "Copy code"}
           style={({ pressed }) => [styles.codeCopy, pressed && styles.codeCopyPressed]}
           onPress={async () => {
+            const attempt = ++copyAttempt.current.id;
+            clearTimeout(timer.current);
+            setCopiedBody(undefined);
             try {
-              await Clipboard.setStringAsync(text);
-              setCopied(true);
+              const saved = await Clipboard.setStringAsync(text);
+              if (!saved || attempt !== copyAttempt.current.id) return;
+              setCopiedBody(body);
               clearTimeout(timer.current);
-              timer.current = setTimeout(() => setCopied(false), 2000);
+              timer.current = setTimeout(() => setCopiedBody(undefined), 2000);
             } catch {
               // Keep the copy action available if the clipboard is unavailable.
             }
