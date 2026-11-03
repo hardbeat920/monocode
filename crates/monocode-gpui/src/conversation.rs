@@ -3,6 +3,7 @@ mod approvals;
 mod attachment_drop;
 mod background_tasks;
 mod btw;
+mod changes_shelf;
 mod commands;
 pub(crate) mod composer_features;
 mod composer_shelf;
@@ -151,6 +152,7 @@ pub(crate) struct Conversation {
     folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     background: background_tasks::BackgroundTasks,
+    changes: changes_shelf::ChangesShelf,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
     attachment_photos: std::collections::HashMap<
@@ -545,17 +547,12 @@ impl Conversation {
                 cx.emit(SessionChanged);
             }
         });
-        let review_observation = cx.observe(&review, |this, review, cx| {
-            let shown = review.read(cx).shown();
-            this.transcript
-                .update(cx, |view, cx| view.set_review_shown(shown, cx));
-            cx.notify();
-        });
+        // The changes pill and its ledge card read the review's files.
+        let review_observation = cx.observe(&review, |_, _, cx| cx.notify());
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
             view.file_link_base = Some(summary.cwd.clone());
-            view.set_review(review.clone().into());
             view
         });
         let account = crate::accounts::get(cx)
@@ -605,6 +602,7 @@ impl Conversation {
             folder_selected: false,
             follow_ups: Default::default(),
             background: Default::default(),
+            changes: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
             attachment_photos: Default::default(),
@@ -2818,6 +2816,7 @@ impl Conversation {
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .child(self.changes_shelf(window, cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
@@ -3761,8 +3760,17 @@ impl Render for Conversation {
                 )
             })
             .child({
-                let pill = self.git_action_pill(cx);
-                let beside = pill.is_some();
+                let git = self.git_action_pill(cx);
+                let changes = self.changes_pill(cx);
+                let beside = git.is_some() || changes.is_some();
+                let pill = beside.then(|| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .children(git)
+                        .children(changes)
+                });
                 self.transcript
                     .update(cx, |t, cx| t.set_jump_beside_pill(beside, cx));
                 div()
