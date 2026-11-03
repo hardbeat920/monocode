@@ -177,7 +177,15 @@ fn private_entry(name: &str) -> bool {
         || name == "session_index.jsonl.lock"
 }
 
+// ponytail: one process-wide lock rather than one per home; preparation is a
+// few filesystem calls, so contention is negligible. Add a per-home map if
+// that ever changes. Only serializes this process, not other Codex CLIs.
+static PREPARE_LOCK: Mutex<()> = Mutex::new(());
+
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
+    // link_entry and the lock cleanup below are check-then-act sequences, so
+    // concurrent preparations of the same home would otherwise race.
+    let _serialized = PREPARE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::create_dir_all(source)
         .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
     std::fs::create_dir_all(home)
@@ -204,7 +212,11 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     // takes its place.
     let mono_lock = home.join("session_index.jsonl.lock");
     if std::fs::symlink_metadata(&mono_lock).is_ok_and(|m| m.file_type().is_symlink()) {
-        std::fs::remove_file(&mono_lock).map_err(|e| e.to_string())?;
+        match std::fs::remove_file(&mono_lock) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
     }
     #[cfg(windows)]
     remove_if_same_file(&mono_lock, &source.join("session_index.jsonl.lock"))?;
@@ -940,6 +952,39 @@ mod tests {
             "account",
             "removing the link must not touch its target"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_preparations_all_survive_a_stale_lock_link() {
+        for _ in 0..50 {
+            let fixture = Fixture::new();
+            let source = fixture.source();
+            let home = fixture.home();
+            std::fs::create_dir_all(source.join("sessions")).unwrap();
+            std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+            std::fs::create_dir_all(&home).unwrap();
+            std::os::unix::fs::symlink(
+                source.join("session_index.jsonl.lock"),
+                home.join("session_index.jsonl.lock"),
+            )
+            .unwrap();
+            let start = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            prepare_files(&source, &home)
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    worker.join().unwrap().unwrap();
+                }
+            });
+            assert!(!home.join("session_index.jsonl.lock").exists());
+        }
     }
 
     #[cfg(windows)]
