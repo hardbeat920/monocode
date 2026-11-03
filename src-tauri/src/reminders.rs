@@ -105,13 +105,13 @@ fn set(conn: &mut Connection, ids: &[String], due_at: i64, now: i64) -> Result<(
         let valid: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sessions
-                 WHERE id = ?1 AND has_user_message = 1 AND inbox_ask IS NULL)",
+                 WHERE id = ?1 AND inbox_ask IS NULL)",
                 [id],
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
         if !valid {
-            return Err("This conversation must be saved before adding a reminder.".into());
+            return Err("This conversation is no longer available.".into());
         }
         tx.execute(
             "INSERT INTO session_reminders (session_id, due_at) VALUES (?1, ?2)
@@ -135,6 +135,13 @@ fn clear(
             "DELETE FROM session_reminders WHERE session_id = ?1
              AND (?2 IS NULL OR due_at = ?2)",
             params![id, expected_due_at],
+        )
+        .map_err(|error| error.to_string())?;
+        // A blank conversation was saved only to hold its reminder.
+        tx.execute(
+            "DELETE FROM sessions WHERE id = ?1 AND has_user_message = 0
+             AND NOT EXISTS (SELECT 1 FROM session_reminders WHERE session_id = ?1)",
+            [id],
         )
         .map_err(|error| error.to_string())?;
     }
@@ -518,6 +525,31 @@ mod tests {
             .unwrap();
         assert!(take_due(&mut conn, 300, |_| true).unwrap().is_empty());
         assert!(list(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn blank_conversations_take_reminders_and_are_removed_with_them() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.lock_conn().unwrap();
+        seed(&conn, "blank", "/one");
+        seed(&conn, "saved", "/one");
+        conn.execute(
+            "UPDATE sessions SET has_user_message = 0 WHERE id = 'blank'",
+            [],
+        )
+        .unwrap();
+        let ids = ["blank".into(), "saved".into()];
+        set(&mut conn, &ids, 200, 100).unwrap();
+        assert_eq!(list(&conn).unwrap().len(), 2);
+        clear(&mut conn, &ids, None).unwrap();
+        let remaining: Vec<String> = conn
+            .prepare("SELECT id FROM sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining, ["saved"]);
     }
 
     #[test]

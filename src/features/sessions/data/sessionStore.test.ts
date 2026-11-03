@@ -15,6 +15,7 @@ import {
   backfillClaudeShellCommands,
   backfillCodexShellCommands,
   isPersistableId,
+  isStorableSession,
   persistFingerprint,
   sanitizeSessionForPersist,
   shouldPersistSession,
@@ -62,6 +63,15 @@ it("fingerprints queued message edits, ordering, errors and pause state", () => 
   expect(persistFingerprint({ ...session, queuedMessages: [second] })).not.toBe(
     original,
   );
+});
+
+it("stores a blank conversation only in a local project folder", () => {
+  expect(isStorableSession(newSession("codex", "/work/repo"))).toBe(true);
+  expect(isStorableSession(newSession("codex", "/"))).toBe(false);
+  expect(isStorableSession(newSession("codex", "~"))).toBe(false);
+  expect(
+    isStorableSession(newSession("codex", "remote://env/home/me/repo")),
+  ).toBe(false);
 });
 
 it("keeps host-owned transcripts out of local session storage", () => {
