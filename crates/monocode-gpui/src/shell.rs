@@ -8,6 +8,7 @@ mod classic_sidebar;
 mod classic_surface_tests;
 mod classic_surfaces;
 mod file_panes;
+mod github_star;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
@@ -16,9 +17,13 @@ mod live_agents;
 mod mobile_host;
 mod mono_panes;
 pub(crate) mod monos;
+mod new_chat_choice;
+#[cfg(test)]
+mod new_chat_choice_tests;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
+mod pinned_tabs;
 mod project_rail;
 mod project_removal;
 mod project_settings;
@@ -40,6 +45,8 @@ mod sidebar_list;
 mod sidebar_peek;
 mod space_reorder;
 mod terminal_dock;
+mod terminal_panes;
+use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
@@ -61,6 +68,7 @@ use crate::{
     right_panel::{PanelEvent, RightPanel},
     runtime::{Database, locked},
     session_mark::{SessionMark, State as MarkState},
+    tab_tile::{Face, NARROW_TAB, TAB_TILE, TAB_TILE_GAP, mark_tile},
     terminal::{Terminal, TerminalEvent},
     theme::*,
     usage_footer::UsageFooter,
@@ -461,6 +469,8 @@ enum DragSource {
     Session(i64),
     /// A Mono tab pulled down out of the strip; it has no pane yet.
     MonoTab,
+    /// A dock terminal pulled off the dock's strip; it has no pane yet.
+    DockTerminal(usize),
 }
 impl DragSource {
     fn session(self) -> i64 {
@@ -469,7 +479,7 @@ impl DragSource {
             | DragSource::Review(id)
             | DragSource::Tab(id)
             | DragSource::Session(id) => id,
-            DragSource::MonoTab => i64::MIN,
+            DragSource::MonoTab | DragSource::DockTerminal(_) => i64::MIN,
         }
     }
 }
@@ -540,6 +550,8 @@ enum PaneMark {
     File(Option<String>),
     /// A Mono's mascot and colour.
     Mono(String, u32),
+    /// A terminal pulled out of its dock.
+    Terminal,
 }
 /// A split tab's headline rolling to the newly focused pane: the next pane
 /// rises from below, the previous one drops from above.
@@ -551,6 +563,8 @@ struct PaneTick {
     start: std::time::Instant,
 }
 const PANE_TICK_DURATION: f32 = 0.24;
+/// The tab tiles' deck shuffle on the same focus change.
+const TILE_SHUFFLE_DURATION: f32 = 0.34;
 /// useAnimatedReorder: `--motion-reorder-duration` with `--motion-ease-out`.
 const REORDER_DURATION: f32 = 0.16;
 /// A tab easing from one horizontal offset to another.
@@ -615,6 +629,9 @@ pub(crate) struct Shell {
     sidebar_list: sidebar_list::SidebarList,
     sidebar_slide: Option<PaneSlide>,
     sidebar_fraction: f32,
+    /// Settings' own nav collapse, apart from the project sidebar's saved
+    /// state; every visit to Settings starts with it open.
+    settings_nav_visible: bool,
     /// The collapsed inset sidebar peeking out over the workspace.
     sidebar_peek: Option<sidebar_peek::SidebarPeek>,
     peek_animating: bool,
@@ -654,6 +671,7 @@ pub(crate) struct Shell {
     live_next_change: u64,
     busy_sessions: HashSet<i64>,
     notification_state: notifications::State,
+    github_star: github_star::State,
     quick: crate::quick_composer::Controller,
     unseen_finished: HashSet<i64>,
     archiving: HashSet<i64>,
@@ -701,6 +719,11 @@ pub(crate) struct Shell {
     query: String,
     sidebar_hover: Option<&'static str>,
     tab_hover: Option<i64>,
+    /// The pinned deck at the strip's left edge: how far it has fanned out,
+    /// and the card under the pointer.
+    pin_fan: pinned_tabs::PinFan,
+    pin_deck: pinned_tabs::PinDeck,
+    pin_card_hover: Option<TitleTab>,
     /// Tab animations: opening and closing title tabs, with each tab's last label.
     title_tab_motion: crate::tab_motion::TabMotion<TitleTab, ()>,
     /// Tab animations: the selected tab before the last switch, the one now
@@ -778,6 +801,8 @@ pub(crate) struct Shell {
     skip_session_click: bool,
     /// Live terminals of each project's dock, in the dock's tab order.
     terminals: HashMap<String, Vec<Entity<Terminal>>>,
+    /// Live shells of `workspace.terminal_panes`, spawned when first shown.
+    terminal_pane_views: HashMap<i64, Entity<Terminal>>,
     /// A project's dock sliding open (toward 1) or shut (toward 0).
     dock_slide: Option<(String, PaneSlide)>,
     dock_resize: Option<(f32, f32)>,
@@ -940,6 +965,19 @@ impl Shell {
             }
             cx.notify();
         });
+        // A real change, such as a discard from the Changes panel: chats in
+        // this checkout reread their recorded changes, which drops reverted
+        // files from the changes pill and its card.
+        let git_changes = cx.subscribe(&git, |this, git, _: &crate::git_status::GitChanged, cx| {
+            let cwd = git.read(cx).root.clone();
+            for view in this.sessions.values() {
+                if view.read(cx).review.read(cx).session().1 == cwd {
+                    view.update(cx, |view, cx| {
+                        view.review.update(cx, |review, cx| review.refresh(cx))
+                    });
+                }
+            }
+        });
         let resources = cx.new(ResourceMonitor::new);
         let resource_observation = cx.observe(&resources, |_, _, cx| cx.notify());
         let resource_stops = cx.subscribe(&resources, |this, _, StopSession(id), cx| {
@@ -988,6 +1026,7 @@ impl Shell {
             sidebar_list: sidebar_list::SidebarList::new(cx),
             sidebar_slide: None,
             sidebar_fraction: if workspace.sidebar_visible { 1. } else { 0. },
+            settings_nav_visible: true,
             sidebar_peek: None,
             peek_animating: false,
             peek_close: None,
@@ -1017,6 +1056,7 @@ impl Shell {
             live_next_change: 1000,
             busy_sessions: HashSet::new(),
             notification_state,
+            github_star: Default::default(),
             quick: Default::default(),
             unseen_finished: HashSet::new(),
             archiving: HashSet::new(),
@@ -1062,6 +1102,9 @@ impl Shell {
             query: String::new(),
             sidebar_hover: None,
             tab_hover: None,
+            pin_fan: Default::default(),
+            pin_deck: Default::default(),
+            pin_card_hover: None,
             title_tab_motion: Default::default(),
             title_tab_selection: (None, None, std::time::Instant::now()),
             session_hover: None,
@@ -1124,6 +1167,7 @@ impl Shell {
             sidebar_auto_hidden: false,
             sidebar_fitted_room: None,
             terminals: HashMap::new(),
+            terminal_pane_views: HashMap::new(),
             dock_slide: None,
             dock_resize: None,
             dock_hover: None,
@@ -1141,6 +1185,7 @@ impl Shell {
             viewport_height: 800.,
             observations: vec![
                 git_observation,
+                git_changes,
                 resource_observation,
                 resource_stops,
                 classic_search_subscription,
@@ -1270,7 +1315,7 @@ impl Shell {
         if let Some(inbox) = &self.inbox {
             let active = self.active_app_view == Some(app_views::AppView::Inbox)
                 && self.settings.is_none()
-                && self.app_search.is_none();
+                && !self.search_page();
             inbox.update(cx, |inbox, cx| inbox.set_active(active, cx));
         }
         // Every pane of the active tab is on screen, not just the focused one.
@@ -1278,7 +1323,7 @@ impl Shell {
             Some(tab)
                 if !self.app_view_open()
                     && self.settings.is_none()
-                    && self.app_search.is_none()
+                    && !self.search_page()
                     && !self.mono_active(cx) =>
             {
                 self.workspace.layout(tab).leaf_ids().into_iter().collect()
@@ -1291,7 +1336,7 @@ impl Shell {
             && self.workspace.right_panel_open
             && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
+            && !self.search_page()
         {
             shown.extend(
                 self.monos
@@ -1632,7 +1677,7 @@ impl Shell {
             && (!self.workspace.classic_layout || self.mono_active(cx))
             && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
+            && !self.search_page()
             && (self.mono_active(cx) || self.git.read(cx).available())
     }
     fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
@@ -1642,7 +1687,7 @@ impl Shell {
             && self.workspace.right_panel_open
             && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
+            && !self.search_page()
             && !opening;
         if let Some(panel) = &self.right_panel {
             let sidebar_tab = (self.workspace.classic_layout
@@ -2236,6 +2281,7 @@ impl Shell {
             .get(&id)
             .map(|s| s.read(cx).display_title())
             .or_else(|| self.mono_pane_title(id, cx))
+            .or_else(|| self.terminal_pane_title(id, cx))
             .unwrap_or_default();
         let focused = self.workspace.active == Some(id) && !self.review_focused;
         div()
@@ -2617,6 +2663,9 @@ impl Shell {
     ) -> AnyElement {
         if self.workspace.mono_panes.contains_key(&id) {
             return self.mono_pane_surface(id, split, cx);
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            return self.terminal_pane_surface(id, split, cx);
         }
         let in_split = split.is_some();
         let chat = self.sessions.get(&id).cloned();
@@ -3389,6 +3438,10 @@ impl Shell {
             }
             return;
         }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
+            return;
+        }
         if self.workspace.active == Some(id) {
             return;
         }
@@ -3625,7 +3678,7 @@ impl Shell {
         if !strip.contains(&position) {
             return None;
         }
-        let count = self.visible_tabs(cx).len();
+        let count = self.strip_tabs(cx).len();
         let bounds: Vec<_> = (0..count)
             .filter_map(|ix| self.tab_scroll.bounds_for_item(ix))
             .collect();
@@ -3657,7 +3710,9 @@ impl Shell {
             return;
         }
         let insert = match source {
-            DragSource::Pane(_) | DragSource::Review(_) => self.tab_insert_at(event.position, cx),
+            DragSource::Pane(_) | DragSource::Review(_) | DragSource::DockTerminal(_) => {
+                self.tab_insert_at(event.position, cx)
+            }
             _ => None,
         };
         let over = if insert.is_some() {
@@ -3724,6 +3779,10 @@ impl Shell {
             DragSource::Pane(pane) => self.workspace.mono_panes.get(&pane).cloned(),
             _ => None,
         };
+        if let DragSource::DockTerminal(ix) = drag.source {
+            self.drop_dock_terminal(ix, drag.over, drag.insert, window, cx);
+            return;
+        }
         let mut over = drag
             .over
             .map(|(target, edge)| (self.resolve_mono_target(target, cx), edge));
@@ -3760,7 +3819,7 @@ impl Shell {
                 }
             }
             (DragSource::Pane(_), _, Some(to)) => {
-                let tabs = self.visible_tabs(cx);
+                let tabs = self.strip_tabs(cx);
                 let session_index = tabs
                     .get(to)
                     .and_then(TitleTab::session)
@@ -3929,6 +3988,10 @@ impl Shell {
         }
     }
     fn persist(&mut self, cx: &mut Context<Self>) {
+        // A terminal pane closed with its tab or pane stops its shell.
+        for pane in self.workspace.prune_terminal_panes() {
+            self.terminal_pane_views.remove(&pane);
+        }
         if let Some(id) = self.workspace.active {
             self.refresh_session_mark(id, cx);
         }
@@ -4014,7 +4077,7 @@ impl Shell {
             monos.update(cx, |m, cx| m.focus_active(window, cx));
             return;
         }
-        if self.focus_mono_pane(window, cx) {
+        if self.focus_mono_pane(window, cx) || self.focus_terminal_pane(window, cx) {
             return;
         }
         if let Some(review) = self
@@ -4038,6 +4101,10 @@ impl Shell {
         }
         if self.workspace.mono_panes.contains_key(&id) {
             self.open_mono_pane(id, window, cx);
+            return;
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
             return;
         }
         if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
@@ -4097,6 +4164,10 @@ impl Shell {
         }
         if self.workspace.mono_panes.contains_key(&id) {
             self.open_mono_pane(id, window, cx);
+            return;
+        }
+        if self.workspace.terminal_panes.contains_key(&id) {
+            self.open_terminal_pane(id, window, cx);
             return;
         }
         if let Some(monos) = &self.monos {
@@ -4202,6 +4273,15 @@ impl Shell {
         if self.workspace.sidebar_visible && self.sidebar_focus.contains_focused(window, cx) {
             self.focus_workspace(window, cx);
         }
+        if self.settings.is_some() {
+            let visible = !self.settings_nav_visible;
+            self.slide_sidebar(visible, cx);
+            self.settings_nav_visible = visible;
+            // Search moves between the nav and the title bar.
+            self.invalidate_chrome(cx);
+            cx.notify();
+            return;
+        }
         self.sidebar_auto_hidden = false;
         self.set_sidebar_visible(!self.workspace.sidebar_visible, cx);
         self.persist(cx);
@@ -4211,6 +4291,12 @@ impl Shell {
         if visible == self.workspace.sidebar_visible {
             return;
         }
+        self.slide_sidebar(visible, cx);
+        self.workspace.sidebar_visible = visible;
+        self.sync_right_panel(cx);
+    }
+    /// Starts (or retargets) the sidebar's slide toward `visible`.
+    fn slide_sidebar(&mut self, visible: bool, cx: &mut Context<Self>) {
         let to = if visible { 1. } else { 0. };
         self.sidebar_slide = if cx.reduce_motion() {
             None
@@ -4222,8 +4308,6 @@ impl Shell {
         };
         self.resize = None;
         self.drop_peek();
-        self.workspace.sidebar_visible = visible;
-        self.sync_right_panel(cx);
     }
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_app_search(window, cx);
@@ -4342,7 +4426,7 @@ impl Shell {
         }) {
             self.activate_session(id, window, cx);
         } else {
-            self.create_session(self.default_kind(), true, cx);
+            self.create_session(self.default_choice(), true, cx);
         }
     }
     fn open_project(&mut self, cx: &mut Context<Self>) {
@@ -4372,18 +4456,26 @@ impl Shell {
         })
         .detach();
     }
-    fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
-        self.create_session(kind, false, cx);
+    fn new_chat(&mut self, cx: &mut Context<Self>) {
+        self.create_session(self.default_choice(), false, cx);
     }
-    fn create_session(&mut self, kind: Kind, only_if_empty: bool, cx: &mut Context<Self>) {
-        self.create_session_target(kind, only_if_empty, None, cx);
+    fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        self.create_session(self.explicit_choice(kind), false, cx);
+    }
+    fn create_session(
+        &mut self,
+        choice: new_chat_choice::NewChatChoice,
+        only_if_empty: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_session_target(choice, only_if_empty, None, cx);
     }
     fn create_in_folder(&mut self, folder: String, cx: &mut Context<Self>) {
-        self.create_session_target(self.default_kind(), false, Some(folder), cx);
+        self.create_session_target(self.default_choice(), false, Some(folder), cx);
     }
     fn create_session_target(
         &mut self,
-        kind: Kind,
+        choice: new_chat_choice::NewChatChoice,
         only_if_empty: bool,
         folder: Option<String>,
         cx: &mut Context<Self>,
@@ -4399,14 +4491,7 @@ impl Shell {
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
-        let model = self
-            .workspace
-            .preferences
-            .project_providers
-            .get(&cwd)
-            .and_then(|p| p.models.get(kind.id()))
-            .or(self.workspace.preferences.default_models.get(kind.id()))
-            .cloned();
+        let new_chat_choice::NewChatChoice { kind, model } = choice;
         let navigation_revision = self.navigation_revision;
         let account = crate::accounts::get(cx)
             .map(|center| center.read(cx).selected(kind, &cwd))
@@ -4593,10 +4678,10 @@ impl Shell {
                 .on_click(cx.listener(|this, _, window, cx| this.visit(1, window, cx))),
             )
     }
-    /// Settings fill the sidebar's place, so its toggle steps aside. Its
-    /// slot stays, so nothing beside it moves.
+    /// The classic layout's settings fill the project rail, so its toggle
+    /// steps aside. Its slot stays, so nothing beside it moves.
     fn sidebar_toggle(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        if self.settings.is_some() {
+        if self.settings.is_some() && self.workspace.classic_layout {
             return div()
                 .id("toggle-sidebar")
                 .debug_selector(|| "toggle-sidebar".into())
@@ -4807,7 +4892,8 @@ impl Shell {
             } else {
                 self.navigation_width() + 6.
             };
-            let header = settings.update(cx, |v, cx| v.header(!classic, cx));
+            let search = !self.workspace.classic_layout && !self.settings_nav_visible;
+            let header = settings.update(cx, |v, cx| v.header(!classic, search, cx));
             return div()
                 .h(px(TITLE_BAR_HEIGHT))
                 .flex_shrink_0()
@@ -5278,7 +5364,14 @@ impl Shell {
                 let ix = tabs.iter().position(|entry| *entry == tab).unwrap_or(0);
                 let count = tabs.len();
                 let closable = tab.session().is_none_or(|id| self.tab_can_close(id, cx));
+                let pinned = self.tab_pinned(&tab);
                 let mut items = vec![
+                    MenuAction::new(
+                        if pinned { "unpin" } else { "pin" },
+                        if pinned { "Unpin Tab" } else { "Pin Tab" },
+                    )
+                    .into(),
+                    MenuItem::Separator,
                     MenuAction::new("close", "Close Tab")
                         .shortcut(format!("{MOD}W"))
                         .disabled(!closable)
@@ -6567,12 +6660,14 @@ impl Shell {
         }
     }
     fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(settings) = &self.settings {
+        if let Some(settings) = self.settings.clone() {
             let section = settings.read(cx).section;
+            let search = settings.update(cx, |v, cx| v.search_field(true, cx));
             let select = cx.weak_entity();
             let back = select.clone();
             return crate::settings::nav(
                 section,
+                search,
                 move |section, _, cx| {
                     let _ = select.update(cx, |this, cx| this.select_settings(section, cx));
                 },
@@ -6730,7 +6825,14 @@ impl Shell {
                         )
                         .child(self.virtual_sidebar(cx))
                         .children(live_agents)
-                        .child(self.app_update_footer(cx)),
+                        .child(self.app_update_footer(cx))
+                        // The Focused layout has no project rail footer to hold it.
+                        .when(!self.workspace.classic_layout, |d| {
+                            d.children(
+                                self.github_star_prompt(cx)
+                                    .map(|prompt| div().mx_2().my_2().child(prompt)),
+                            )
+                        }),
                 ),
             )
             .when(!self.workspace.classic_layout, |d| {
@@ -7018,7 +7120,10 @@ impl Shell {
         let file_panes = leaves.iter().filter(|id| review(id).is_some()).count();
         let mono_panes = leaves
             .iter()
-            .filter(|id| self.workspace.mono_panes.contains_key(id))
+            .filter(|id| {
+                self.workspace.mono_panes.contains_key(id)
+                    || self.workspace.terminal_panes.contains_key(id)
+            })
             .count();
         let multi_pane = sessions.len() + file_panes + mono_panes > 1;
         let session_focused = sessions.first() == Some(&focus);
@@ -7035,7 +7140,9 @@ impl Shell {
         let conversation = sessions.first().map(title).unwrap_or_default();
         let file = files.first().cloned().unwrap_or_default();
         let untitled = "New session".to_owned();
-        let mono = self.mono_pane_title(focus, cx);
+        let mono = self
+            .mono_pane_title(focus, cx)
+            .or_else(|| self.terminal_pane_title(focus, cx));
         let headline = if let Some(mono) = mono {
             mono
         } else if multi_pane && file_focused && !file.is_empty() {
@@ -7050,9 +7157,16 @@ impl Shell {
         // right or down rolls the headline up.
         let mut panes = Vec::new();
         for id in self.workspace.layout(tab).leaf_ids() {
-            if let (Some(title), Some(mark)) =
-                (self.mono_pane_title(id, cx), self.mono_pane_mark(id, cx))
-            {
+            if let (Some(title), Some(mark)) = (
+                self.mono_pane_title(id, cx)
+                    .or_else(|| self.terminal_pane_title(id, cx)),
+                self.mono_pane_mark(id, cx).or_else(|| {
+                    self.workspace
+                        .terminal_panes
+                        .contains_key(&id)
+                        .then_some(PaneMark::Terminal)
+                }),
+            ) {
                 panes.push(TabPane {
                     key: (id, false),
                     title,
@@ -7113,6 +7227,7 @@ impl Shell {
                 crate::file_icons::file_type_icon(name, false, false, 14.)
             }
             PaneMark::File(None) => icon("git-compare", 14.).text_color(ink).into_any_element(),
+            PaneMark::Terminal => icon("terminal", 14.).text_color(ink).into_any_element(),
             PaneMark::Mono(mascot, color) => div()
                 .opacity(if active { 1. } else { 0.55 })
                 .child(crate::monos::avatar::avatar(
@@ -7150,7 +7265,6 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(self.pane_mark(&pane.mark, active))
                 .child(
                     div()
                         .flex_1()
@@ -7178,10 +7292,17 @@ impl Shell {
     }
     /// Where tab `tab`'s headline is in its roll to the focused pane: the
     /// pane leaving, its direction, and the eased progress.
-    fn pane_tick(&mut self, tab: i64, copy: &TabCopy, animate: bool) -> (Option<usize>, f32, f32) {
+    /// Also the tiles' shuffle, linear: it runs longer than the title's
+    /// roll so the card being put back can be seen lifting over the stack.
+    fn pane_tick(
+        &mut self,
+        tab: i64,
+        copy: &TabCopy,
+        animate: bool,
+    ) -> ((Option<usize>, f32, f32), f32) {
         let Some(shown) = copy.panes.get(copy.focus).map(|p| p.key) else {
             self.pane_ticks.remove(&tab);
-            return (None, 0., 1.);
+            return ((None, 0., 1.), 1.);
         };
         let now = std::time::Instant::now();
         let position = |key: (i64, bool)| copy.panes.iter().position(|p| p.key == key);
@@ -7205,17 +7326,107 @@ impl Shell {
         if !animate {
             tick.from = None;
         }
-        let t = now.saturating_duration_since(tick.start).as_secs_f32() / PANE_TICK_DURATION;
-        let from = tick.from.and_then(position).filter(|_| t < 1.);
+        let elapsed = now.saturating_duration_since(tick.start).as_secs_f32();
+        let t = (elapsed / PANE_TICK_DURATION).min(1.);
+        let shuffle = elapsed / TILE_SHUFFLE_DURATION;
+        let from = tick.from.and_then(position).filter(|_| shuffle < 1.);
         if from.is_none() {
             tick.from = None;
-            return (None, 0., 1.);
+            return ((None, 0., 1.), 1.);
         }
-        (from, tick.dir, crate::reveal::bezier(t, 0.22, 1., 0.36, 1.))
+        (
+            (from, tick.dir, crate::reveal::bezier(t, 0.22, 1., 0.36, 1.)),
+            shuffle,
+        )
+    }
+    /// The focused pane's mark on a frosted tile, with the tab's other panes
+    /// tucked behind it.
+    /// `leaving` is the pane that had focus while `shuffle` (linear) runs
+    /// the deck shuffle that deals the focused pane's tile to the front.
+    fn pane_tile_stack(&self, copy: &TabCopy, leaving: Option<usize>, shuffle: f32) -> AnyElement {
+        // The focused pane in front, the rest behind in layout order.
+        // A tab with no panes yet (still loading, or closing) has no focus
+        // to put in front, so an index past the end is skipped, never used.
+        let depths = |focus: usize| {
+            let count = copy.panes.len();
+            let mut depth = vec![0; count];
+            for (d, ix) in std::iter::once(focus)
+                .filter(|ix| *ix < count)
+                .chain((0..count).filter(|ix| *ix != focus))
+                .enumerate()
+            {
+                depth[ix] = d;
+            }
+            depth
+        };
+        let to = depths(copy.focus);
+        let from = leaving.map(depths).unwrap_or_else(|| to.clone());
+        let tiles = copy
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(ix, pane)| {
+                // Only the front tile borrows a lit session's live mark: the
+                // view can draw in one place at a time.
+                let (face, mark) = self.pane_tile(&pane.mark, to[ix] == 0);
+                crate::tab_tile::StackTile {
+                    face,
+                    mark,
+                    from: from[ix],
+                    to: to[ix],
+                }
+            })
+            .collect();
+        crate::tab_tile::tile_stack(
+            &TAB_TILE,
+            tiles,
+            if leaving.is_some() { shuffle } else { 1. },
+        )
+        .debug_selector(|| "title-tab-tile-stack".into())
+        .into_any_element()
+    }
+    /// A pane's tile: a session on its provider's colour with a white mark,
+    /// or, while it works or waits to be seen, its live mark on a neutral
+    /// tile; files and Monos neutral.
+    fn pane_tile(&self, mark: &PaneMark, live: bool) -> (Face, AnyElement) {
+        match mark {
+            PaneMark::Session(provider, lit) => {
+                match lit.filter(|_| live).and_then(|id| self.tab_marks.get(&id)) {
+                    Some(view) => (
+                        Face::Neutral,
+                        view.clone()
+                            .cached(StyleRefinement::default().size(px(14.)))
+                            .into_any_element(),
+                    ),
+                    None => (Face::provider(provider), provider_glyph(provider, 14.)),
+                }
+            }
+            PaneMark::File(Some(name)) => (
+                Face::Neutral,
+                crate::file_icons::file_type_glyph(name, 14., crate::tab_tile::tile_ink()),
+            ),
+            PaneMark::File(None) => (
+                Face::Neutral,
+                icon("git-compare", 14.)
+                    .text_color(crate::tab_tile::tile_ink())
+                    .into_any_element(),
+            ),
+            PaneMark::Terminal => (
+                Face::Neutral,
+                icon("terminal", 14.)
+                    .text_color(crate::tab_tile::tile_ink())
+                    .into_any_element(),
+            ),
+            // A Mono keeps its mascot's own colours.
+            mark => (Face::Neutral, self.pane_mark(mark, true)),
+        }
     }
     /// The dragged session's title, following the pointer.
     fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
         let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
+        if let Some(title) = self.dragged_terminal_title(drag.source, cx) {
+            return Some(terminal_drag_ghost(drag.position, title));
+        }
         let id = drag.source.session();
         let review = (matches!(drag.source, DragSource::Review(_))
             || self.workspace.review_owners.contains_key(&id))
@@ -7268,7 +7479,13 @@ impl Shell {
             return false;
         };
         let layout = self.workspace.layout(tab);
-        self.visible_tabs(cx).len() > 1
+        // Beside the pins, the strip's last tab counts as the only one.
+        let tabs = if self.tab_pinned(&TitleTab::Session(tab)) {
+            self.visible_tabs(cx)
+        } else {
+            self.strip_tabs(cx)
+        };
+        tabs.len() > 1
             || layout.is_split()
             || layout.leaf_ids().iter().any(|id| {
                 self.session_summaries.contains_key(id) && {
@@ -7290,7 +7507,7 @@ impl Shell {
     fn start_tab_drag(&mut self, id: TitleTab, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.skip_tab_click = false;
         self.close_menu(cx);
-        let tabs = self.visible_tabs(cx);
+        let tabs = self.strip_tabs(cx);
         let Some(from) = tabs.iter().position(|tab| *tab == id) else {
             return;
         };
@@ -7412,7 +7629,7 @@ impl Shell {
                 self.cancel_pane_drag(cx);
                 // Each tab glides from where it is drawn into its new slot.
                 let now = std::time::Instant::now();
-                let visible = self.visible_tabs(cx);
+                let visible = self.strip_tabs(cx);
                 let drawn: Vec<(TitleTab, f32)> = visible
                     .iter()
                     .enumerate()
@@ -7427,7 +7644,7 @@ impl Shell {
                 self.reorder_title_tab(&drag.id, drag.to, cx);
                 self.tab_shifts.clear();
                 if !cx.reduce_motion() {
-                    for (ix, id) in self.visible_tabs(cx).iter().enumerate() {
+                    for (ix, id) in self.strip_tabs(cx).iter().enumerate() {
                         let (Some((_, left)), Some(slot)) =
                             (drawn.iter().find(|(t, _)| t == id), drag.bounds.get(ix))
                         else {
@@ -7535,19 +7752,31 @@ impl Shell {
             .max(0.)
     }
     fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let viewport = self.tabs_width(window, cx);
-        let tabs = self.visible_tabs(cx);
+        let strip_width = self.tabs_width(window, cx);
+        let tabs = self.strip_tabs(cx);
         let count = tabs.len();
         let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
         let reduced = cx.reduce_motion();
-        let animate = self.workspace.preferences.tab_animations
-            && !reduced
-            && !self.tab_drag.as_ref().is_some_and(|d| d.active);
+        let pane_motion = !reduced && !self.tab_drag.as_ref().is_some_and(|d| d.active);
+        let animate = self.workspace.preferences.tab_animations && pane_motion;
         let (slots, opening) = self.title_tab_motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
             animate,
             std::time::Instant::now(),
         );
+        // Pinned tabs leave the strip for the deck at its left edge; as it
+        // fans out it takes more of the strip and the tabs give way.
+        let closing: HashSet<TitleTab> = slots
+            .iter()
+            .filter_map(|s| match s {
+                crate::tab_motion::Slot::Closing { key, .. } => Some(key.clone()),
+                crate::tab_motion::Slot::Live { .. } => None,
+            })
+            .collect();
+        let (dock, dock_width) = self
+            .pinned_dock(&closing, window, cx)
+            .map_or((None, 0.), |(dock, w)| (Some(dock), w));
+        let viewport = (strip_width - dock_width).max(0.);
         // Every tab fits: they share the strip, however many there are. A tab
         // easing in or out holds its share of a slot, so the others give way
         // to it gradually, as flex-shrink does in TitleBar.tsx.
@@ -7685,12 +7914,15 @@ impl Shell {
                 .contains_key(&self.workspace.session_for_pane(id))
             {
                 let copy = self.tab_copy(id, cx);
+                // Moving focus inside a tab rolls its title and shuffles its
+                // tiles whatever the open/close Tab animations setting says;
+                // only Reduce Motion or a drag holds them still.
                 let tick = self.pane_tick(
                     id,
                     &copy,
-                    animate && !selection_changed && selected == Some(TitleTab::Session(id)),
+                    pane_motion && !selection_changed && selected == Some(TitleTab::Session(id)),
                 );
-                moving |= tick.0.is_some();
+                moving |= tick.0.0.is_some();
                 copies.insert(id, (copy, tick));
             }
         }
@@ -7705,11 +7937,11 @@ impl Shell {
                 })
             })
             .filter_map(|(ix, id)| {
-                let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
+                let (copy, ((leaving, dir, progress), shuffle)) = copies.remove(&id)?;
                 let active = self.workspace.active_tab() == Some(id)
                     && !self.app_view_open()
                     && !self.mono_active(cx)
-                    && self.app_search.is_none();
+                    && !self.search_page();
                 // The press itself redraws the strip to arm tab dragging.
                 // Keep its ink stable until that press is released, even if
                 // hover hitboxes are being replaced during that redraw.
@@ -7753,11 +7985,14 @@ impl Shell {
                                 |d| d.pr_7(),
                             )
                             // Too narrow for the plate's padding: the mark sits centred.
-                            .when(tab_width(&TitleTab::Session(id)) < 30., |d| {
-                                d.px(px(((tab_width(&TitleTab::Session(id)) - 14.) / 2.).max(0.)))
+                            .when(tab_width(&TitleTab::Session(id)) < NARROW_TAB, |d| {
+                                d.px(px(
+                                    ((tab_width(&TitleTab::Session(id)) - TAB_TILE.w) / 2.).max(0.)
+                                ))
                             })
-                            .gap(px(6.))
+                            .gap(px(TAB_TILE_GAP))
                             .group_hover("title-tab", |s| s.bg(title_tab_fill(active, true)))
+                            .child(self.pane_tile_stack(&copy, leaving, shuffle))
                             .child(self.pane_headline(
                                 &copy,
                                 (leaving, dir, progress),
@@ -7980,8 +8215,13 @@ impl Shell {
                         })
                         .map(|id| {
                             let copy = self.tab_copy(id, cx);
-                            self.pane_headline(&copy, (None, 0., 1.), false, false)
-                        });
+                            [
+                                self.pane_tile_stack(&copy, None, 1.),
+                                self.pane_headline(&copy, (None, 0., 1.), false, false),
+                            ]
+                        })
+                        .into_iter()
+                        .flatten();
                     Some(
                         slot(&key, open)
                             .child(
@@ -7994,7 +8234,7 @@ impl Shell {
                                         title_tab_plate(false, false)
                                             .w_full()
                                             .min_w_0()
-                                            .gap(px(6.))
+                                            .gap(px(TAB_TILE_GAP))
                                             .children(headline),
                                     ),
                             )
@@ -8006,13 +8246,14 @@ impl Shell {
         div()
             .id("title-tab-strip")
             .debug_selector(|| "title-tab-strip".into())
-            .w(px(viewport))
+            .w(px(strip_width))
             .min_w_0()
             .h(px(TITLE_BAR_HEIGHT))
             .relative()
             .flex()
             .items_center()
             .overflow_hidden()
+            .children(dock)
             .child(
                 div()
                     .id("session-tabs")
@@ -8049,9 +8290,7 @@ impl Shell {
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),
                             )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                     )
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
@@ -8242,14 +8481,16 @@ impl Render for Shell {
                 fraction
             }
             None => {
-                if self.workspace.sidebar_visible {
-                    1.
+                let visible = if self.settings.is_some() {
+                    self.settings_nav_visible
                 } else {
-                    0.
-                }
+                    self.workspace.sidebar_visible
+                };
+                if visible { 1. } else { 0. }
             }
         };
-        if self.settings.is_some() {
+        // The classic layout's settings nav is the project rail, which stays.
+        if self.settings.is_some() && self.workspace.classic_layout {
             self.sidebar_fraction = 1.;
         }
         let sidebar_width = self.workspace.sidebar_width * self.sidebar_fraction;
@@ -8274,6 +8515,7 @@ impl Render for Shell {
                     cx.notify();
                 }));
             self.start_native_notifications(cx);
+            self.check_github_star(false, cx);
             let shell = cx.entity().downgrade();
             window.on_window_should_close(cx, move |window, cx| {
                 shell
@@ -8306,6 +8548,7 @@ impl Render for Shell {
                         this.close_preview(cx);
                     } else {
                         this.resume_git(cx);
+                        this.check_github_star(true, cx);
                     }
                 }));
             self.observations
@@ -8492,7 +8735,7 @@ impl Render for Shell {
                 if this.dock_focused(window, cx).is_some() {
                     this.new_terminal(window, cx);
                 } else {
-                    this.create(this.default_kind(), cx);
+                    this.new_chat(cx);
                 }
             }))
             .on_action(
@@ -8506,6 +8749,15 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                // A pinned tab stays put: ⌘W only closes what sits inside
+                // it, a dock terminal, a review file or one pane of a split.
+                let pinned = this.active_title_tab(cx).filter(|tab| this.tab_pinned(tab));
+                if pinned
+                    .as_ref()
+                    .is_some_and(|tab| !matches!(tab, TitleTab::Session(_)))
+                {
+                    return;
+                }
                 if let Some(view) = this.active_app_view.filter(|_| this.settings.is_none()) {
                     if this.workspace.classic_layout {
                         this.close_app_view(window, cx);
@@ -8514,8 +8766,12 @@ impl Render for Shell {
                     }
                     return;
                 }
-                if this.app_search.is_some() {
+                if this.search_page() {
                     this.close_search_tab(window, cx);
+                    return;
+                }
+                if this.app_search.is_some() {
+                    this.close_app_search(window, cx);
                     return;
                 }
                 if let Some(TitleTab::Mono { id, .. }) = this.active_title_tab(cx) {
@@ -8535,6 +8791,14 @@ impl Render for Shell {
                     return;
                 }
                 if let Some(id) = this.workspace.active {
+                    if pinned.is_some()
+                        && !this
+                            .workspace
+                            .tab_of(id)
+                            .is_some_and(|tab| this.workspace.layout(tab).is_split())
+                    {
+                        return;
+                    }
                     // Close Pane (⌘W) in a split; the whole tab otherwise.
                     this.close_pane(id, window, cx);
                 }
@@ -8824,6 +9088,7 @@ impl Render for Shell {
             .children(self.action_modal(window, cx))
             .children(self.resource_modal(window, cx))
             .children(self.quick_open_modal(window, cx))
+            .children(self.search_modal(window, cx))
             .children(self.remote_project_modal(window, cx))
             .children(self.notice_modals(window, cx))
             .children(self.folder_picker_popover(window, cx))
@@ -9214,34 +9479,15 @@ mod tests {
             })
             .unwrap();
         cx.refresh().unwrap();
-        cx.update_window(window.into(), |_, w, cx| {
-            let position = gpui::point(px(612.), px(23.));
-            w.simulate_mouse_move(position, cx);
-            w.dispatch_event(
-                gpui::PlatformInput::MouseDown(MouseDownEvent {
-                    position,
-                    button: MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                    first_mouse: false,
-                }),
-                cx,
-            );
-            w.dispatch_event(
-                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                    position,
-                    button: MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                }),
-                cx,
-            );
-        })
-        .unwrap();
-        cx.run_until_parked();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        // The first action overlaps the tab strip. Pin it without selecting it.
+        let pin = visual.debug_bounds("menu-action-pin").unwrap();
+        visual.simulate_click(pin.center(), Default::default());
+        visual.run_until_parked();
         window
-            .update(cx, |shell, _, _| {
-                assert_eq!(shell.workspace.tabs, [a]);
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.tabs, [a, b]);
+                assert_eq!(shell.workspace.pinned_tabs, [TitleTab::Session(b)]);
                 assert_eq!(shell.workspace.active, Some(a));
                 assert!(shell.menu.is_none());
             })
@@ -11840,18 +12086,26 @@ mod tests {
         })
         .unwrap();
         let mut frames = Vec::new();
+        let mut settling_passes = 0;
         for opening in [true, false] {
             window
-                .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
+                .update(cx, |shell, w, cx| {
+                    shell.toggle_right_panel(w, cx);
+                    if let Some(slide) = &shell.right_slide {
+                        slide.freeze_elapsed(Duration::ZERO);
+                    }
+                })
                 .unwrap();
             for frame in 1..=40 {
                 let root = window.root(cx).unwrap();
-                let before = root.read_with(cx, |shell, _| shell.render_passes);
+                let (before, sliding) = root.read_with(cx, |shell, _| {
+                    (shell.render_passes, shell.right_slide.is_some())
+                });
                 let start = Instant::now();
                 window
                     .update(cx, |shell, _, cx| {
                         if let Some(slide) = &shell.right_slide {
-                            slide.elapsed(Duration::from_secs_f32(frame as f32 / 120.));
+                            slide.freeze_elapsed(Duration::from_secs_f32(frame as f32 / 120.));
                         }
                         cx.notify();
                     })
@@ -11863,11 +12117,18 @@ mod tests {
                     })
                     .unwrap();
                 }
-                assert_eq!(
-                    root.read_with(cx, |shell, _| shell.render_passes),
-                    before + 1,
-                    "measure one rendered frame per sample"
+                let (after, settled) = root.read_with(cx, |shell, _| {
+                    (shell.render_passes, shell.right_slide.is_none())
+                });
+                let passes = after - before;
+                // Finishing the slide installs the settled panel layout and
+                // can notify the shell once more. Include that work in this
+                // sample; every other frame must still render exactly once.
+                assert!(
+                    passes == 1 || (passes == 2 && sliding && settled),
+                    "expected one render, or two at settling; got {passes}"
                 );
+                settling_passes += passes - 1;
                 frames.push(start.elapsed().as_secs_f64() * 1000.);
                 let rendered = transcript.read_with(cx, |view, _| view.rendered);
                 assert!(
@@ -11883,7 +12144,7 @@ mod tests {
         }
         frames.sort_by(f64::total_cmp);
         eprintln!(
-            "CoreText, 10,000 messages, {} simulated 120Hz frames: CPU p50={:.2}ms p95={:.2}ms max={:.2}ms (excludes presentation/GPU)",
+            "CoreText, 10,000 messages, {} simulated 120Hz frames: CPU p50={:.2}ms p95={:.2}ms max={:.2}ms ({settling_passes} extra settling passes included; excludes presentation/GPU)",
             frames.len(),
             frames[frames.len() / 2],
             frames[frames.len() * 95 / 100],

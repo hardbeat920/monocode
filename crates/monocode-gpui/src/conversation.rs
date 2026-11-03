@@ -3,6 +3,7 @@ mod approvals;
 mod attachment_drop;
 mod background_tasks;
 mod btw;
+mod changes_shelf;
 mod commands;
 pub(crate) mod composer_features;
 mod composer_shelf;
@@ -41,7 +42,9 @@ use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
     SharedString, StyleRefinement, Subscription, Window, canvas, div, prelude::*, px,
 };
-pub(crate) use mobile::{Waiting as MobileWaiting, mobile_access_modes};
+pub(crate) use mobile::{
+    Waiting as MobileWaiting, mobile_access_modes, usage_state as mobile_usage_state,
+};
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
 use monocode_core::{
@@ -149,6 +152,7 @@ pub(crate) struct Conversation {
     folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     background: background_tasks::BackgroundTasks,
+    changes: changes_shelf::ChangesShelf,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
     attachment_photos: std::collections::HashMap<
@@ -204,6 +208,10 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
+    /// The submit button's morph between square and labelled pill.
+    send_morph: std::cell::RefCell<crate::send_morph::Morph>,
+    /// ⌘ (Ctrl elsewhere) as last seen, which flips Queue and Steer.
+    send_alternate: bool,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -227,6 +235,7 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
+    ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
@@ -538,17 +547,22 @@ impl Conversation {
                 cx.emit(SessionChanged);
             }
         });
+        // The changes pill and its ledge card read the review's files. Files
+        // the recorded turns changed, also through shell commands, count as
+        // this session's edits for the commit pill.
         let review_observation = cx.observe(&review, |this, review, cx| {
-            let shown = review.read(cx).shown();
-            this.transcript
-                .update(cx, |view, cx| view.set_review_shown(shown, cx));
+            let paths = review.read(cx).paths();
+            let known = this.session_edits.len();
+            this.remember_session_edits(paths);
+            if this.session_edits.len() != known {
+                this.refresh_git_actions(cx);
+            }
             cx.notify();
         });
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
             view.file_link_base = Some(summary.cwd.clone());
-            view.set_review(review.clone().into());
             view
         });
         let account = crate::accounts::get(cx)
@@ -598,6 +612,7 @@ impl Conversation {
             folder_selected: false,
             follow_ups: Default::default(),
             background: Default::default(),
+            changes: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
             attachment_photos: Default::default(),
@@ -651,6 +666,8 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
+            send_morph: Default::default(),
+            send_alternate: false,
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -669,6 +686,7 @@ impl Conversation {
             narrow: false,
             beside_pane: false,
             arcade: None,
+            ink: None,
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
@@ -1221,6 +1239,13 @@ impl Conversation {
                             this.save_settings(cx);
                             this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
+                        }
+                        // The host renamed the conversation; it is not sent back.
+                        if let Some(title) = update.title
+                            && this.summary.title != title
+                        {
+                            this.summary.title = title;
+                            cx.emit(SessionChanged);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
@@ -2802,6 +2827,7 @@ impl Conversation {
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .child(self.changes_shelf(window, cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
@@ -3237,54 +3263,91 @@ impl Conversation {
             && (!self.preparing_worktree || self.busy || self.stopping)
             && (busy || (has_value && self.loaded))
             && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none()));
-        send_button(
-            "send-or-stop",
-            if busy {
+        // Something to send grows the button into a pill naming the action;
+        // empty or stopping, it rests as a square.
+        let face = crate::send_morph::Face {
+            label: if busy {
                 "Stop"
             } else if draft {
                 "Save draft"
             } else {
                 follow_up.map_or("Send", |(label, _)| label)
             },
-            busy,
-            follow_up.map_or("send", |(_, glyph)| glyph),
-            enabled,
-        )
-        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-            if !enabled {
-                return;
-            }
-            if busy {
-                this.stop(cx);
-            } else {
-                let modifiers = event.modifiers();
-                let alternate = if cfg!(target_os = "macos") {
-                    modifiers.platform
+            glyph: follow_up.map_or("send", |(_, glyph)| glyph),
+            stop: busy,
+            expanded: !busy && has_value,
+        };
+        let frame = self.send_morph.borrow_mut().frame(
+            face,
+            crate::send_morph::expanded_width(face.label, window),
+            !cx.reduce_motion(),
+        );
+        if frame.moving {
+            window.request_animation_frame();
+        }
+        crate::send_morph::button("send-or-stop", face, &frame, enabled)
+            // Holding ⌘ (Ctrl elsewhere) flips Queue and Steer; redraw so the
+            // label rolls to it while the key is down.
+            // Only ⌘'s own changes matter, and only while it changes the action.
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                    let alternate = if cfg!(target_os = "macos") {
+                        event.modifiers.platform
+                    } else {
+                        event.modifiers.control
+                    };
+                    if std::mem::replace(&mut this.send_alternate, alternate) != alternate
+                        && this.follow_up_action(alternate, cx).is_some()
+                    {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if !enabled {
+                    return;
+                }
+                if busy {
+                    this.stop(cx);
                 } else {
-                    modifiers.control
-                };
-                this.send_follow_up(alternate, cx);
-            }
-        }))
+                    let modifiers = event.modifiers();
+                    let alternate = if cfg!(target_os = "macos") {
+                        modifiers.platform
+                    } else {
+                        modifiers.control
+                    };
+                    this.send_follow_up(alternate, cx);
+                }
+            }))
     }
     // EmptySession.tsx: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let games = cx
+        // A chat background replaces the canvas; the ink only lives in motion.
+        let fill = cx
             .try_global::<crate::settings::Preferences>()
-            .is_none_or(|p| p.empty_session_games)
-            && cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.chat_background.is_none());
-        let arcade = if games {
-            Some(
+            .map_or("ink", |p| {
+                if p.chat_background.is_some() {
+                    "none"
+                } else {
+                    p.empty_session.as_str()
+                }
+            });
+        let canvas_fill: Option<AnyElement> = match fill {
+            "games" => Some(
                 self.arcade
                     .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone(),
-            )
-        } else {
-            None
+                    .clone()
+                    .into_any_element(),
+            ),
+            "ink" if !cx.reduce_motion() => Some(
+                self.ink
+                    .get_or_insert_with(|| cx.new(crate::ink_field::InkField::new))
+                    .clone()
+                    .into_any_element(),
+            ),
+            _ => None,
         };
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
@@ -3294,7 +3357,7 @@ impl Conversation {
             .size_full()
             .flex()
             .justify_center()
-            .children(arcade)
+            .children(canvas_fill)
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -3707,8 +3770,17 @@ impl Render for Conversation {
                 )
             })
             .child({
-                let pill = self.git_action_pill(cx);
-                let beside = pill.is_some();
+                let git = self.git_action_pill(cx);
+                let changes = self.changes_pill(cx);
+                let beside = git.is_some() || changes.is_some();
+                let pill = beside.then(|| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .children(git)
+                        .children(changes)
+                });
                 self.transcript
                     .update(cx, |t, cx| t.set_jump_beside_pill(beside, cx));
                 div()

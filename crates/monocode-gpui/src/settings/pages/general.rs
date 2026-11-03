@@ -121,6 +121,23 @@ impl SettingsView {
             ));
         }
         workspace.push(self.row(
+            Some("search-panel"),
+            false,
+            "Search as command panel",
+            Some(
+                "Open search as a floating panel over your work instead of a page with its own tab."
+                    .into(),
+            ),
+            vec![self.toggle(
+                "search-panel",
+                "Search as command panel",
+                p.search_panel,
+                false,
+                cx,
+                |this, on, cx| this.update(cx, |p| p.search_panel = on),
+            )],
+        ));
+        workspace.push(self.row(
             Some("working-agents"),
             false,
             "Working agents",

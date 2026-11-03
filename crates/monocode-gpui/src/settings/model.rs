@@ -388,6 +388,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "streaming pacing immediate latency performance animation",
     ),
     (
+        "collapse-tool-groups",
+        Section::Chat,
+        "Collapse tool groups",
+        "tool calls commands steps expand closed mobile compact activity",
+    ),
+    (
+        "fold-finished-work",
+        Section::Chat,
+        "Fold finished work",
+        "worked for collapse tool calls reply inline expanded history turns",
+    ),
+    (
         "follow-up",
         Section::Chat,
         "Follow-up behavior",
@@ -424,16 +436,22 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "unified editor review changes working tree",
     ),
     (
-        "empty-session-games",
+        "empty-session",
         Section::Chat,
-        "Empty session games",
-        "pacman snake arcade grid fun",
+        "Empty session",
+        "ink dither trails ripple games pacman snake arcade fun",
     ),
     (
         "agent-clis",
         Section::Providers,
         "Agent CLIs",
         "codex opencode cursor grok pi omp fx hermes antigravity copilot devin binary path",
+    ),
+    (
+        "background-model",
+        Section::Providers,
+        "Background model",
+        "title generation commit message branch worktree name pull request haiku fast small",
     ),
     (
         "provider-accounts",

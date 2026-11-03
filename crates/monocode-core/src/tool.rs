@@ -2,7 +2,9 @@
 use serde::{Deserialize, Serialize};
 mod presentation;
 pub mod tasks;
-pub use presentation::{visual_tool, CommandStep, ToolPresentation, VisualStep};
+pub use presentation::{
+    app_activity, app_cli_action, app_tool, visual_tool, CommandStep, ToolPresentation, VisualStep,
+};
 
 /// The app's own step while a conversation carries over from another model.
 pub const HANDOFF: &str = "providerHandoff";

@@ -31,6 +31,9 @@ impl Shell {
         if self.tab_hover == Some(from) {
             self.tab_hover = Some(to);
         }
+        if self.pin_card_hover.as_ref() == Some(&previous) {
+            self.pin_card_hover = Some(TitleTab::Session(to));
+        }
     }
 
     pub(crate) fn click_mono_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -55,12 +58,31 @@ impl Shell {
         }
     }
 
+    /// Every tab this scope shows, pinned ones first in pin order, then the
+    /// strip's own. Shortcuts and cycling walk this order.
     pub(super) fn visible_tabs(&self, cx: &App) -> Vec<TitleTab> {
+        let mut tabs = self.scoped_tabs(cx);
+        let pinned = &self.workspace.pinned_tabs;
+        // Stable, so the strip keeps its own order behind the pins.
+        tabs.sort_by_key(|tab| pinned.iter().position(|p| p == tab).unwrap_or(usize::MAX));
+        tabs
+    }
+
+    /// The tabs drawn as plates in the strip, right of the pinned deck.
+    /// Drags, drops and strip indices count only these.
+    pub(super) fn strip_tabs(&self, cx: &App) -> Vec<TitleTab> {
+        self.scoped_tabs(cx)
+            .into_iter()
+            .filter(|tab| !self.workspace.pinned_tabs.contains(tab))
+            .collect()
+    }
+
+    fn scoped_tabs(&self, cx: &App) -> Vec<TitleTab> {
         self.workspace
             .title_order
             .iter()
             .filter(|tab| match tab {
-                TitleTab::Search => true,
+                TitleTab::Search => !self.workspace.preferences.search_panel,
                 TitleTab::App(view) => {
                     !self.workspace.classic_layout
                         && (*view != app_views::AppView::Notes || self.workspace.preferences.notes)
@@ -101,7 +123,7 @@ impl Shell {
         if let Some(view) = self.active_app_view {
             return Some(TitleTab::App(view));
         }
-        if self.app_search.is_some() {
+        if self.search_page() {
             return Some(TitleTab::Search);
         }
         self.monos
@@ -231,6 +253,10 @@ impl Shell {
         let Some(index) = tabs.iter().position(|entry| *entry == tab) else {
             return;
         };
+        if matches!(action, "pin" | "unpin") {
+            self.toggle_pin_tab(tab, cx);
+            return;
+        }
         if action == "close" {
             if let Some(id) = tab.session() {
                 self.close(id, window, cx);
@@ -239,9 +265,11 @@ impl Shell {
             }
             return;
         }
+        // Like a browser's pinned tabs, these survive the bulk closes.
         let closing = tabs
             .into_iter()
             .enumerate()
+            .filter(|(_, entry)| !self.workspace.pinned_tabs.contains(entry))
             .filter(|(ix, entry)| match action {
                 "others" => *entry != tab,
                 "right" => *ix > index,
@@ -272,7 +300,17 @@ impl Shell {
         }
         let active = self.active_title_tab(cx);
         let replace = active.as_ref().is_some_and(|tab| closing.contains(tab));
-        let next = if replace {
+        // Pins never close on their own, so the strip keeps one tab beside
+        // them: closing its last falls back to a blank session, not a pin.
+        let strip_left = before
+            .iter()
+            .any(|tab| !closing.contains(tab) && !self.workspace.pinned_tabs.contains(tab));
+        let pins_left = before
+            .iter()
+            .any(|tab| !closing.contains(tab) && self.workspace.pinned_tabs.contains(tab));
+        let next = if replace && pins_left && !strip_left {
+            None
+        } else if replace {
             preferred
                 .filter(|tab| before.contains(tab) && !closing.contains(tab))
                 .or_else(|| {
@@ -315,6 +353,7 @@ impl Shell {
         self.workspace
             .scope_focus
             .retain(|_, tab| !closing.contains(tab));
+        self.workspace.prune_pinned_tabs();
         if replace {
             if let Some(monos) = self.monos.clone() {
                 monos.update(cx, |m, cx| m.close(cx));
@@ -342,8 +381,9 @@ impl Shell {
         cx.notify();
     }
 
+    /// Moves `tab` to strip slot `to`; pinned tabs keep their places.
     pub(super) fn reorder_title_tab(&mut self, tab: &TitleTab, to: usize, cx: &App) {
-        let mut visible = self.visible_tabs(cx);
+        let mut visible = self.strip_tabs(cx);
         let Some(from) = visible.iter().position(|entry| entry == tab) else {
             return;
         };

@@ -38,6 +38,7 @@ enum Lang {
     Yaml,
     Toml,
     Ruby,
+    Zig,
 }
 
 /// The same file → language decisions as `languageForPath` in editorLanguage.ts,
@@ -66,6 +67,7 @@ fn language_for_path(path: &str) -> Option<Lang> {
         ".yaml" | ".yml" => Lang::Yaml,
         ".toml" => Lang::Toml,
         ".rb" | ".rake" => Lang::Ruby,
+        ".zig" => Lang::Zig,
         _ => match name.as_str() {
             ".bashrc" | ".bash_profile" | ".zshrc" | ".zprofile" => Lang::Bash,
             "gemfile" | "rakefile" => Lang::Ruby,
@@ -80,6 +82,7 @@ pub(crate) fn supports(path: &str) -> bool {
 }
 
 /// Same list as LINTABLE_EXTENSIONS in editorLint.ts.
+/// Zig is excluded: its pinned grammar rejects valid modern asm clobbers.
 fn lintable(path: &str) -> bool {
     let name = path
         .rsplit(['/', '\\'])
@@ -127,7 +130,7 @@ fn capture(name: &str, attribute_is_property: bool) -> Capture {
         "tag.error" => "var(--syntax-invalid)",
         "number" | "float" | "constant.numeric" => "var(--syntax-number)",
         "text.title" => "var(--color-markdown-heading)",
-        "string.special.key" => "var(--syntax-property)",
+        "string.special.key" | "variable.member" => "var(--syntax-property)",
         _ => match group(name).as_str() {
             "keyword" => "var(--syntax-keyword)",
             "function" => "var(--syntax-callable)",
@@ -151,6 +154,9 @@ struct Grammar {
     /// Patterns gated on `#is?`/`#is-not?` local-scope predicates. Without a
     /// locals pass they would match everywhere, so they are skipped.
     skipped: Vec<bool>,
+    /// Neovim-style queries let a later pattern override an earlier one on
+    /// the same node (Zig's call pattern follows its field pattern).
+    later_patterns_win: bool,
 }
 
 impl Grammar {
@@ -248,10 +254,18 @@ impl Grammar {
                 vec![tree_sitter_ruby::HIGHLIGHTS_QUERY],
                 false,
             ),
+            Lang::Zig => (
+                tree_sitter_zig::LANGUAGE,
+                vec![tree_sitter_zig::HIGHLIGHTS_QUERY],
+                false,
+            ),
         };
         let language = Language::new(language);
-        let query =
-            Query::new(&language, &sources.join("\n")).map_err(|e| format!("{lang:?}: {e}"))?;
+        // Neovim-style queries (Zig's) use `#lua-match?`, which tree-sitter
+        // does not evaluate; their patterns are plain regexes, so run them as
+        // `#match?` rather than letting them match every node.
+        let source = sources.join("\n").replace("#lua-match?", "#match?");
+        let query = Query::new(&language, &source).map_err(|e| format!("{lang:?}: {e}"))?;
         let captures = query
             .capture_names()
             .iter()
@@ -265,6 +279,7 @@ impl Grammar {
             query,
             captures,
             skipped,
+            later_patterns_win: lang == Lang::Zig,
         })
     }
 }
@@ -286,7 +301,8 @@ fn grammar(lang: Lang) -> Option<&'static Grammar> {
 
 /// Highlights `range` of the tree (clipped to it) as flat, sorted,
 /// non-overlapping tokens. Nested captures win over their ancestors, and of
-/// several patterns on one node the earliest wins, as in tree-sitter-highlight.
+/// several patterns on one node the earliest wins, as in tree-sitter-highlight
+/// (the latest, for Neovim-style queries).
 fn highlight(grammar: &Grammar, tree: &Tree, text: &str, range: Range<usize>) -> Vec<Token> {
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(range.clone());
@@ -311,8 +327,15 @@ fn highlight(grammar: &Grammar, tree: &Tree, text: &str, range: Range<usize>) ->
             ));
         }
     }
-    // Outer nodes first; on identical nodes the earliest pattern first.
-    spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    // Outer nodes first; on identical nodes the winning pattern first.
+    spans.sort_by(|a, b| {
+        let pattern = if grammar.later_patterns_win {
+            b.2.cmp(&a.2)
+        } else {
+            a.2.cmp(&b.2)
+        };
+        a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(pattern)
+    });
     spans.dedup_by(|later, first| later.0 == first.0 && later.1 == first.1);
 
     let mut tokens: Vec<Token> = Vec::new();
@@ -465,6 +488,22 @@ fn folds(tree: &Tree, text: &str) -> Vec<Fold> {
             // `do … end`, `def … end`, `class … end` and friends.
             (Some(_), Some(close)) if !close.is_named() && close.kind() == "end" => {
                 add(start, line_end(node.start_byte()), close.start_byte());
+            }
+            // Keyword-first braces: Zig's `struct {`, `enum {`, `switch (x) {`.
+            (Some(_), Some(close)) if !close.is_named() && close.kind() == "}" => {
+                let mut cursor = node.walk();
+                let open = node
+                    .children(&mut cursor)
+                    .find(|child| !child.is_named() && child.kind() == "{");
+                if let Some(open) = open
+                    && open.end_position().row < close.start_position().row
+                {
+                    add(
+                        open.start_position().row,
+                        open.end_byte(),
+                        close.start_byte(),
+                    );
+                }
             }
             _ => {}
         }
@@ -888,7 +927,7 @@ pub(crate) fn analyze(
 mod tests {
     use super::*;
 
-    const LANGS: [(Lang, &str); 16] = [
+    const LANGS: [(Lang, &str); 17] = [
         (Lang::JavaScript, "a.jsx"),
         (Lang::TypeScript, "a.ts"),
         (Lang::Tsx, "a.tsx"),
@@ -905,6 +944,7 @@ mod tests {
         (Lang::Yaml, "a.yaml"),
         (Lang::Toml, "a.toml"),
         (Lang::Ruby, "a.rb"),
+        (Lang::Zig, "a.zig"),
     ];
 
     const TSX: &str = r#"import { useState } from "react";
@@ -951,6 +991,8 @@ export function Counter({ start }: { start: number }) {
             !supports("a.swift"),
             "other languages keep the QuickJS path"
         );
+        // The Zig grammar rejects ZON roots such as `.{ .x = 1 }`.
+        assert!(!supports("build.zig.zon"));
     }
 
     #[test]
@@ -1059,6 +1101,43 @@ export function Counter({ start }: { start: number }) {
     }
 
     #[test]
+    fn zig_lua_match_patterns_only_colour_what_they_match() {
+        let zig = "const std = @import(\"std\");\nconst Point = struct { x: u32 };\n// Adds one.\npub fn bump(value: u32) u32 {\n    std.debug.print(\"{}\", .{value});\n    return value + 1;\n}\n";
+        let analysis = Session::new("a.zig").unwrap().analyze(zig, None);
+        let tokens = &analysis.tokens;
+        assert_eq!(kind_at(tokens, zig, "pub"), Some("var(--syntax-keyword)"));
+        assert_eq!(kind_at(tokens, zig, "bump"), Some("var(--syntax-callable)"));
+        assert_eq!(kind_at(tokens, zig, "u32)"), Some("var(--syntax-type)"));
+        assert_eq!(kind_at(tokens, zig, "Point"), Some("var(--syntax-type)"));
+        assert_eq!(kind_at(tokens, zig, "x:"), Some("var(--syntax-property)"));
+        // A called member is a call; a member that is only accessed is a field.
+        assert_eq!(
+            kind_at(tokens, zig, "print"),
+            Some("var(--syntax-callable)")
+        );
+        assert_eq!(
+            kind_at(tokens, zig, "debug"),
+            Some("var(--syntax-property)")
+        );
+        assert_eq!(
+            kind_at(tokens, zig, "\"std\""),
+            Some("var(--syntax-string)")
+        );
+        assert_eq!(
+            kind_at(tokens, zig, "// Adds"),
+            Some("var(--syntax-comment)")
+        );
+        assert_eq!(kind_at(tokens, zig, "1;"), Some("var(--syntax-number)"));
+        // Lowercase names fail `^[A-Z_]…`, so they keep the default colour.
+        assert_eq!(kind_at(tokens, zig, "value +"), None);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
     fn folds_start_on_their_opening_line() {
         let js = "function f() {\n  return [\n    1,\n  ];\n}\n";
         let analysis = Session::new("a.js").unwrap().analyze(js, None);
@@ -1072,6 +1151,53 @@ export function Counter({ start }: { start: number }) {
             &py[analysis.folds[0].from..analysis.folds[0].to],
             "\n    a = 1\n    return a"
         );
+
+        let zig = "const S = struct {\n    a: u8,\n};\nconst E = enum {\n    a,\n};\nconst U = union(E) {\n    a: u8,\n};\nfn f(e: E) u8 {\n    return switch (e) {\n        .a => 1,\n    };\n}\n";
+        let analysis = Session::new("a.zig").unwrap().analyze(zig, None);
+        let ranges: Vec<_> = analysis.folds.iter().map(|f| &zig[f.from..f.to]).collect();
+        assert_eq!(
+            ranges,
+            [
+                "\n    a: u8,\n",
+                "\n    a,\n",
+                "\n    a: u8,\n",
+                "\n    return switch (e) {\n        .a => 1,\n    };\n",
+                "\n        .a => 1,\n    ",
+            ]
+        );
+    }
+
+    #[test]
+    fn zig_analysis_keeps_parser_diagnostics_disabled() {
+        let valid = r#"const S = struct {
+    x: u8,
+};
+pub fn fence() void {
+    asm volatile ("" ::: .{ .memory = true });
+}
+"#;
+        let malformed = format!("{valid}const Broken = struct {{\n");
+        let mut session = Session::new("a.zig").unwrap();
+        // Zig 0.15.2 asm clobbers are valid, but the pinned grammar rejects them.
+        // Neither they nor malformed Zig should produce parser diagnostics.
+        for source in [valid, malformed.as_str()] {
+            let analysis = session.analyze(source, None);
+            assert!(
+                analysis.diagnostics.is_empty(),
+                "{:?}",
+                analysis.diagnostics
+            );
+            assert_eq!(
+                kind_at(&analysis.tokens, source, "fence"),
+                Some("var(--syntax-callable)")
+            );
+            assert!(
+                analysis
+                    .folds
+                    .iter()
+                    .any(|fold| &source[fold.from..fold.to] == "\n    x: u8,\n")
+            );
+        }
     }
 
     #[test]

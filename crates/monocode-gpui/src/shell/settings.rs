@@ -257,15 +257,24 @@ impl Shell {
         // Settings entity was notified, without rebuilding the shell for
         // ordinary settings edits.
         let mut overlay_was_open = false;
-        self.settings_overlay_watch = Some(cx.observe(&view, move |_, view, cx| {
+        // The search lives in the cached rail, so redraw it as the query moves.
+        let mut search_was = view.read(cx).search_state();
+        self.settings_overlay_watch = Some(cx.observe(&view, move |this, view, cx| {
             let open = view.read(cx).mobile_overlay_open();
             if open || overlay_was_open {
                 cx.notify();
             }
             overlay_was_open = open;
+            let search = view.read(cx).search_state();
+            if search != search_was {
+                search_was = search;
+                this.invalidate_chrome(cx);
+                cx.notify();
+            }
         }));
         self.settings = Some(view.clone());
         // Settings has its own complete rail, even when the project rail was hidden.
+        self.settings_nav_visible = true;
         self.sidebar_slide = None;
         self.sidebar_fraction = 1.;
         window.focus(&view.focus_handle(cx), cx);
@@ -295,6 +304,7 @@ impl Shell {
         if self.mobile.invite.is_some() {
             self.mobile_cancel_invite(cx);
         }
+        self.sidebar_slide = None;
         self.sidebar_fraction = if self.workspace.sidebar_visible {
             1.
         } else {
@@ -334,18 +344,19 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn default_kind(&self) -> Kind {
-        let p = &self.workspace.preferences;
-        p.project_providers
-            .get(&self.workspace.project)
-            .and_then(|p| p.provider.as_deref())
-            .or(p.default_provider.as_deref())
-            .and_then(Kind::parse)
-            .unwrap_or(Kind::Codex)
-    }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
+        // Switching search styles closes an open search of the other style.
+        if self
+            .app_search
+            .as_ref()
+            .is_some_and(|s| s.panel != self.workspace.preferences.search_panel)
+        {
+            self.leave_app_search(cx);
+            self.update_chat_visibility(cx);
+            self.invalidate_chrome(cx);
+        }
         monocode_core::cli::initialize(&self.workspace.preferences.binary_paths);
         self.keep_visible_idle_agents(cx);
         monocode_core::provider::configure_idle_agents(
@@ -637,6 +648,41 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
+    fn settings_nav_search_steps_through_results_with_arrows(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::super::bind_keys(cx);
+            crate::input::bind(cx);
+            crate::popover::bind(cx);
+        });
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open_settings(Section::General, w, cx)
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let back = visual.debug_bounds("settings-nav-back").unwrap();
+        let search = visual.debug_bounds("settings-search").unwrap();
+        let first = visual.debug_bounds("settings-nav-general").unwrap();
+        assert!(back.bottom() < search.top() && search.bottom() < first.top());
+        visual.simulate_click(search.center(), Default::default());
+        visual.simulate_input("theme");
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("settings-result-1").is_some());
+        visual.simulate_keystrokes("down");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert_eq!(
+                    shell.settings.as_ref().unwrap().read(cx).search_state().1,
+                    1
+                )
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(
         cx: &mut TestAppContext,
     ) {
@@ -705,6 +751,56 @@ mod tests {
             })
             .unwrap();
         assert!(visual.debug_bounds("sidebar-content").is_some());
+    }
+
+    #[gpui::test]
+    fn settings_nav_collapses_and_carries_back_and_search_at_its_top(cx: &mut TestAppContext) {
+        cx.update(super::super::bind_keys);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, w, cx| shell.focus_active(w, cx))
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes("cmd-,");
+        visual.run_until_parked();
+        let back = visual.debug_bounds("settings-nav-back").unwrap();
+        let search = visual.debug_bounds("settings-search").unwrap();
+        let general = visual.debug_bounds("settings-nav-general").unwrap();
+        let header = visual.debug_bounds("settings-header").unwrap();
+        assert!(back.bottom() <= search.top(), "Back heads the nav");
+        assert!(
+            search.bottom() <= general.top(),
+            "search sits above the pages"
+        );
+        assert!(search.right() <= header.left(), "search lives in the nav");
+
+        let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(shell.settings.is_some());
+                assert_eq!(shell.sidebar_fraction, 0.);
+                assert!(
+                    shell.workspace.sidebar_visible,
+                    "the project sidebar is untouched"
+                );
+            })
+            .unwrap();
+        let search = visual.debug_bounds("settings-search").unwrap();
+        let header = visual.debug_bounds("settings-header").unwrap();
+        assert!(
+            search.left() >= header.left() && search.bottom() <= header.bottom(),
+            "collapsed, search moves to the title bar"
+        );
+
+        let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| assert_eq!(shell.sidebar_fraction, 1.))
+            .unwrap();
     }
 
     #[gpui::test]
