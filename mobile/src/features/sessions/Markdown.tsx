@@ -3,13 +3,17 @@ import {
   Fragment,
   memo,
   use,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { Linking, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { FileTypeIcon } from "@/features/files/FileTypeIcon";
+import { Icon } from "@/ui/Icon";
 import { withAlpha, themedStyles, useColors } from "@/ui/theme";
 
 import {
@@ -20,6 +24,7 @@ import {
   type MarkdownBlock,
 } from "./markdownParser";
 import { closeOpenMarkers, useStreamedText, useWordFade, type WordClock } from "./wordReveal";
+import { codeFenceHeader } from "./codeFence";
 
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
@@ -133,18 +138,7 @@ const BlockView = memo(function BlockView({ block, fade }: { block: MarkdownBloc
         </Text>
       );
     case "code":
-      return (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.codeBlock}
-          contentContainerStyle={styles.codeContent}
-        >
-          <Text style={styles.codeText} selectable>
-            {block.text}
-          </Text>
-        </ScrollView>
-      );
+      return <CodeBlock text={block.text} language={block.lang} />;
     case "list":
       return (
         <View style={styles.list}>
@@ -172,6 +166,45 @@ const BlockView = memo(function BlockView({ block, fade }: { block: MarkdownBloc
       return <View style={styles.rule} />;
   }
 }, sameBlock);
+
+function CodeBlock({ text, language }: { text: string; language: string }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const header = codeFenceHeader(language);
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <View style={styles.codeBlock}>
+      <View style={styles.codeHeader}>
+        <View style={styles.codeLanguage}>
+          <FileTypeIcon name={header.fileName} isDir={false} size={16} />
+          <Text style={styles.codeLabel} numberOfLines={1}>{header.label}</Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={copied ? "Copied" : "Copy code"}
+          style={({ pressed }) => [styles.codeCopy, pressed && styles.codeCopyPressed]}
+          onPress={async () => {
+            try {
+              await Clipboard.setStringAsync(text);
+              setCopied(true);
+              clearTimeout(timer.current);
+              timer.current = setTimeout(() => setCopied(false), 2000);
+            } catch {
+              // Keep the copy action available if the clipboard is unavailable.
+            }
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={16} color={colors.muted} />
+        </Pressable>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.codeContent}>
+        <Text style={styles.codeText} selectable>{text}</Text>
+      </ScrollView>
+    </View>
+  );
+}
 
 /** Columns share the screen's width, down to a floor; past it, the table scrolls. */
 const MIN_COLUMN_WIDTH = 140;
@@ -391,6 +424,35 @@ const useStyles = themedStyles((colors) => ({
   },
   codeContent: {
     padding: 12,
+    paddingTop: 0,
+  },
+  codeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  codeLanguage: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingLeft: 12,
+  },
+  codeLabel: {
+    flexShrink: 1,
+    color: colors.muted,
+    fontSize: 12,
+  },
+  codeCopy: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+  },
+  codeCopyPressed: {
+    backgroundColor: withAlpha(colors.content, 0.08),
   },
   codeText: {
     color: withAlpha(colors.content, 0.85),
