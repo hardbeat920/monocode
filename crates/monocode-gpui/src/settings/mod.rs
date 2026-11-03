@@ -979,6 +979,7 @@ pub(crate) fn nav(
                     div()
                         .id("settings-nav-back")
                         .debug_selector(|| "settings-nav-back".into())
+                        .group("settings-nav-back")
                         .role(Role::Button)
                         .aria_label("Back to app")
                         .flex()
@@ -989,7 +990,7 @@ pub(crate) fn nav(
                         .h(px(30.))
                         .px_2()
                         .rounded_full()
-                        .text_color(content(0.7))
+                        .text_color(content(0.35))
                         .cursor_pointer()
                         .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                         .child(
@@ -999,7 +1000,13 @@ pub(crate) fn nav(
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(icon("chevron-left", 14.).text_color(content(0.7))),
+                                .child(
+                                    icon("chevron-left", 14.)
+                                        .text_color(content(0.35))
+                                        .group_hover("settings-nav-back", |s| {
+                                            s.text_color(content(1.))
+                                        }),
+                                ),
                         )
                         .child(
                             div()
