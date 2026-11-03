@@ -27,6 +27,7 @@ import {
   formatWorkingDuration,
   hasTurnMetrics,
 } from "./transcriptFormat";
+import { useHandoff } from "./HandoffSheet";
 import { TurnMetricsSheet } from "./TurnMetricsSheet";
 
 /** Who a Mono's turns are by, in place of the model and provider mark. */
@@ -148,10 +149,10 @@ function ErrorNotice({ item, onPress }: { item: SessionErrorNotice; onPress: () 
 
 /**
  * What a finished turn leaves under the answer, as on desktop: copy the reply,
- * its token metrics, and when it landed. Handoff and second opinion stay on
- * the desktop.
+ * its token metrics, handoff, and when it landed.
  */
 function TurnFooter({ turn }: { turn: Turn }) {
+  const handoff = useHandoff();
   const colors = useColors();
   const styles = useStyles();
   const [showMetrics, setShowMetrics] = useState(false);
@@ -171,6 +172,12 @@ function TurnFooter({ turn }: { turn: Turn }) {
       ) : null}
       <View style={styles.footerActions}>
         {turn.copyText ? <CopyButton text={turn.copyText} /> : null}
+        {handoff && turn.handoffFrom ? (
+          <Pressable onPress={() => handoff(turn.id, turn.handoffFrom!)} accessibilityRole="button" accessibilityLabel="Handoff" hitSlop={6}
+            style={({ pressed }) => [styles.footerButton, pressed && styles.footerButtonActive]}>
+            <Icon name="handoff" size={16} color={withAlpha(colors.content, 0.4)} />
+          </Pressable>
+        ) : null}
         {metrics ? (
           <Pressable
             onPress={() => {

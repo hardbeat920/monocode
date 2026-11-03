@@ -39,6 +39,7 @@ import {
   useSessionErrorNotice,
 } from "@/features/sessions/sessionError";
 import { LiveSessions } from "@/features/sessions/LiveSessions";
+import { HandoffProvider } from "@/features/sessions/HandoffSheet";
 import { NativeTranscript } from "@/features/sessions/NativeTranscript";
 import { FileOpener } from "@/features/sessions/Markdown";
 import {
@@ -577,19 +578,21 @@ function SessionTranscript({
   // Mounted with the screen, ahead of the spinner over it, so its scroll
   // view is the one iOS finds to blur under the native header.
   return (
-    <FileOpener value={openFile}>
-      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
-        key={sessionId}
-        pushed
-        busy={busy}
-        turns={turns}
-        hasOlder={hasOlder}
-        loadOlder={loadOlder}
-      />}
-      {!hasNativeTranscript && turns.length === 0 && !failed ? (
-        <TranscriptLoading key={`loading:${sessionId}`} />
-      ) : null}
-    </FileOpener>
+    <HandoffProvider key={sessionId} conversationId={sessionId} projectId={projectId}>
+      <FileOpener value={openFile}>
+        {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
+          key={sessionId}
+          pushed
+          busy={busy}
+          turns={turns}
+          hasOlder={hasOlder}
+          loadOlder={loadOlder}
+        />}
+        {!hasNativeTranscript && turns.length === 0 && !failed ? (
+          <TranscriptLoading key={`loading:${sessionId}`} />
+        ) : null}
+      </FileOpener>
+    </HandoffProvider>
   );
 }
 

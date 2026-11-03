@@ -30,7 +30,7 @@ import {
   useNativeTranscript,
   type NativeTranscriptStatus,
 } from "@/features/workspace/WorkspaceProvider";
-import type { TurnMetrics } from "@/features/workspace/types";
+import type { Harness, TurnMetrics } from "@/features/workspace/types";
 import { pixelLayers } from "@/features/mascots/pixelMascots";
 import { AccentOverride, mix, useAccent, useColors, useScheme, useTheme } from "@/ui/theme";
 import { usePushStarted } from "@/ui/usePushedIn";
@@ -43,12 +43,13 @@ import { SessionErrorSheet } from "./SessionErrorSheet";
 import { useJumpToEnd, useSessionLayout } from "./SessionScreen";
 import type { TranscriptAgent } from "./TranscriptTurn";
 import { MessageActionsSheet, type HeldMessage } from "./MessageActionsSheet";
+import { useHandoff } from "./HandoffSheet";
 import { TurnMetricsSheet } from "./TurnMetricsSheet";
 import { useReportSessionError, type SessionErrorNotice } from "./sessionError";
 
 type Handle = { scrollToEnd: () => Promise<void>; selectText: (text: string) => Promise<void> };
 type Action = {
-  type: "copy" | "metrics" | "error" | "link" | "session" | "choice" | "document" | "message";
+  type: "handoff" | "copy" | "metrics" | "error" | "link" | "session" | "choice" | "document" | "message";
   /** A long-pressed message in a Mono's chat: whose it is. */
   role?: "user" | "agent";
   /** The long-pressed message's first row. */
@@ -61,6 +62,8 @@ type Action = {
   /** A suggested reply picked from a Mono's choices. */
   text?: string;
   documentId?: string;
+  turnId?: string;
+  handoffFrom?: Harness;
   copyText?: string;
   metrics?: TurnMetrics;
   durationMs?: number;
@@ -96,6 +99,7 @@ export function NativeTranscript({
   pushed?: boolean;
 }) {
   const { pairing } = useConnection();
+  const handoff = useHandoff();
   const { pending, onStatus } = useNativeTranscript(conversationId);
   const layout = useSessionLayout();
   const colors = useColors();
@@ -208,6 +212,7 @@ export function NativeTranscript({
   const handleAction = useCallback(
     ({ nativeEvent: action }: NativeSyntheticEvent<Action>) => {
       if (action.type === "error" && action.notice) showError(action.notice);
+      else if (action.type === "handoff" && action.turnId && action.handoffFrom) handoff?.(action.turnId, action.handoffFrom);
       else if (action.type === "metrics" && action.metrics) setMetrics(action);
       else if (action.type === "copy" && action.copyText) {
         void Clipboard.setStringAsync(action.copyText)
@@ -228,7 +233,7 @@ export function NativeTranscript({
           void Linking.openURL(action.url).catch(() => {});
       }
     },
-    [choose, openFile, openSession, showError],
+    [choose, handoff, openFile, openSession, showError],
   );
   useEffect(() => {
     if (!jump || !focused) return;

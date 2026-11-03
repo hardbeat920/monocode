@@ -37,7 +37,7 @@ for (const icon of fileIcons.icons) {
 }
 const items = Object.entries(providers.PROVIDER_SVGS).map(([name, svg]) => ["provider:" + name, svg]);
 const iconNames = {
-  copy: "Copy01Icon", metrics: "ChartBreakoutSquareIcon", check: "Tick02Icon",
+  handoff: "ReplaceIcon", copy: "Copy01Icon", metrics: "ChartBreakoutSquareIcon", check: "Tick02Icon",
   chevronDown: "ArrowDown01Icon", chevronRight: "ArrowRight01Icon", chat: "BubbleChatIcon",
   lock: "LockIcon", edit: "PencilEdit01Icon", search: "Search01Icon",
   terminal: "ComputerTerminal01Icon", robot: "Robot01Icon", wrench: "Wrench01Icon", minus: "MinusSignIcon",

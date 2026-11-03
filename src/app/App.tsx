@@ -1,3 +1,4 @@
+import { mobileHandoff } from "../features/mobile/model/mobileHandoff";
 import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { useMobileWorkspace } from "../features/mobile/hooks/useMobileWorkspace";
@@ -9138,6 +9139,13 @@ function Workspace({
       if (method === "session.cancel") {
         await onStop(session.id);
         return { sessionId: session.id };
+      }
+      if (method === "session.handoff") {
+        if (mono) throw new Error("A Mono's conversation can't be handed off");
+        const created = mobileHandoff(session, params);
+        await upsertSession(created);
+        updateSessionState(sessionsRef, setSessions, (current) => [...current, created]);
+        return { sessionId: created.id };
       }
       if (method === "session.configure") {
         // The phone's model sheet, through the same paths as the composer's

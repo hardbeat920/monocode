@@ -1308,6 +1308,7 @@ impl Shell {
         };
         match request.method.as_str() {
             "session.start" => self.mobile_start(request, finish, cx),
+            "session.handoff" => self.mobile_handoff(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
             _ => {
                 let result =
@@ -1501,6 +1502,117 @@ impl Shell {
                 });
                 let result = result.map(|()| json!({"sessionId": conversation}));
                 this.schedule_mobile_push(cx);
+                finish(this, request, result);
+            });
+        })
+        .detach();
+    }
+
+    /// A reply handoff creates a draft, as the desktop response menu does.
+    fn mobile_handoff(
+        &mut self,
+        request: Request,
+        finish: impl FnOnce(&mut Shell, Request, Result<Value, String>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let params = request.params.clone();
+        let prepared = (|| {
+            let target =
+                self.mobile_target(&string(&params, "conversationId").unwrap_or_default(), cx)?;
+            if !matches!(target, Target::Session(_)) {
+                return Err("A Mono's conversation can't be handed off".to_owned());
+            }
+            let kind = string(&params, "harness")
+                .as_deref()
+                .and_then(Kind::parse)
+                .ok_or("Choose another provider")?;
+            let model = string(&params, "model")
+                .filter(|m| !m.is_empty() && m.len() <= 256)
+                .ok_or("Choose a model")?;
+            let live = self.with_live_snapshot(&target, cx, |snapshot| {
+                let source = snapshot.source();
+                (snapshot.rows.to_vec(), handoff_turn(&source, &params))
+            });
+            let Target::Session(id) = target else {
+                unreachable!()
+            };
+            let summary = self
+                .session_summaries
+                .get(&id)
+                .ok_or("Session is no longer available")?;
+            let title = summary.title.clone();
+            let account = self.mobile_account(kind, &summary.cwd, &params, cx)?;
+            Ok::<_, String>((Target::Session(id), kind, model, live, title, account))
+        })();
+        let (target, kind, model, live, title, account) = match prepared {
+            Ok(value) => value,
+            Err(error) => return finish(self, request, Err(error)),
+        };
+        let saved = self.load_saved(&target, cx);
+        let store = self.store.clone();
+        let work = cx.background_executor().spawn(async move {
+            let saved = saved.await?;
+            if saved.settings.worktree_removed {
+                return Err("This working copy was removed".into());
+            }
+            let snapshot = saved_snapshot(&saved);
+            let source = snapshot.source();
+            let (rows, built) =
+                live.unwrap_or_else(|| (saved.rows.clone(), handoff_turn(&source, &params)));
+            let selected = built
+                .iter()
+                .find(|turn| turn["id"] == params["turnId"])
+                .filter(|turn| turn["footer"] == true)
+                .ok_or("This reply is no longer available for handoff")?;
+            let from = selected["handoffFrom"]
+                .as_str()
+                .ok_or("This reply can't be handed off")?;
+            if kind.id() == from {
+                return Err("Choose another provider".into());
+            }
+            let start = selected["id"]
+                .as_str()
+                .and_then(|id| id.strip_prefix('t'))
+                .and_then(|at| at.parse::<usize>().ok())
+                .ok_or("Invalid reply")?;
+            let mut settings = Settings {
+                account,
+                model: monocode_core::store::native_model(&model, kind.id()),
+                access: saved.settings.access,
+                worktree_cwd: saved.settings.worktree_cwd.clone(),
+                handoff: Some(monocode_core::agent::Handoff {
+                    from: from.into(),
+                    brief: monocode_core::response::handoff(handoff_rows_through(&rows, start)),
+                }),
+                ..Settings::default()
+            };
+            let mut chosen = model_settings(&params);
+            settings.effort = chosen.remove("effort");
+            settings.fast = chosen.remove("fast").as_deref() == Some("true");
+            settings.thinking = chosen.remove("thinking").map(|v| v == "true");
+            settings.model_settings = chosen;
+            let store = locked(&store)?;
+            let mut summary = store.create(kind.id(), &saved.cwd)?;
+            summary.title = title;
+            store.title(summary.id, &summary.title)?;
+            store.configure_agent(summary.id, kind.id(), &settings)?;
+            Ok::<_, String>((summary, settings))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                let result = result.map(|(summary, settings)| {
+                    let id = summary.id;
+                    this.add(summary, cx);
+                    this.sessions[&id]
+                        .update(cx, |view, cx| view.install_transfer(settings, None, cx));
+                    this.order.retain(|s| *s != id);
+                    this.order.insert(0, id);
+                    this.invalidate_chrome(cx);
+                    this.persist(cx);
+                    json!({"sessionId": this.mobile_session_id(id)})
+                });
+                this.publish_mobile_catalog(cx);
                 finish(this, request, result);
             });
         })
@@ -2380,6 +2492,26 @@ fn model_settings(params: &Value) -> HashMap<String, String> {
         .collect()
 }
 
+/// A prompt can span several rows; the next turn starts after its response.
+fn handoff_rows_through(rows: &[Row], start: usize) -> &[Row] {
+    let response = (start..rows.len())
+        .find(|&at| !rows[at].is_prompt())
+        .unwrap_or(rows.len());
+    let end = (response..rows.len())
+        .find(|&at| rows[at].is_prompt())
+        .unwrap_or(rows.len());
+    &rows[..end]
+}
+
+/// Build only the selected turn, including its settled/provider metadata.
+fn handoff_turn(source: &turns::Source<'_>, params: &Value) -> Vec<Value> {
+    turns::turn_ids(source)
+        .iter()
+        .position(|id| params["turnId"].as_str() == Some(id.as_str()))
+        .map(|at| turns::build(source, at..at + 1))
+        .unwrap_or_default()
+}
+
 fn mobile_settings_of(settings: &Settings) -> HashMap<String, String> {
     let mut values = settings.model_settings.clone();
     if let Some(effort) = &settings.effort {
@@ -2483,6 +2615,27 @@ fn hidden_providers(prefs: &crate::settings::Preferences, cwd: &str) -> Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reply_handoff_keeps_split_prompts_and_excludes_later_turns() {
+        let rows = [
+            ("user", "First part", true),
+            ("user", "Second part", false),
+            ("assistant", "First reply", true),
+            ("user", "Later request", true),
+            ("assistant", "Later reply", true),
+        ]
+        .into_iter()
+        .map(|(role, text, first)| Row {
+            role: role.into(),
+            text: text.into(),
+            first,
+            sent_at: None,
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(handoff_rows_through(&rows, 0), &rows[..3]);
+        assert_eq!(handoff_rows_through(&rows, 3), rows.as_slice());
+    }
 
     #[gpui::test]
     fn mobile_catalog_matches_sidebar_visibility_for_saved_and_open_sessions(
