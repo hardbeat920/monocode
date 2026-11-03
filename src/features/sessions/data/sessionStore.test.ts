@@ -662,6 +662,26 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("keeps a `!` command with its output", () => {
+    const session = newSession("claude", "/tmp/project");
+    const shell: Block = {
+      id: "c1",
+      role: "shell",
+      text: "git status",
+      startedAt: 1,
+      durationMs: 20,
+      shell: {
+        cwd: "/tmp/project/wt",
+        status: "done",
+        stdout: "clean\n",
+        stderr: "",
+        exitCode: 0,
+      },
+    };
+    session.blocks = [shell, { ...shell, id: "c2", shell: undefined }];
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([shell]);
+  });
+
   it("keeps valid interjection chrome only on system blocks", () => {
     const session = newSession("pi", "/tmp/project");
     session.blocks = [

@@ -1117,6 +1117,57 @@ describe("Composer question focus", () => {
     expect(parentDraft).toBe("Blocked while orchestration is paused");
   });
 
+  it("runs a `!` command instead of sending it, and keeps it when refused", async () => {
+    let mounts = 0;
+    const render = async (
+      onRunShellCommand: ((command: string) => boolean) | undefined,
+      onSubmit: () => boolean,
+    ) => {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            key: (mounts += 1),
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            initialDraft: "!git status",
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit,
+            onRunShellCommand,
+          }),
+        ),
+      );
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+          .click(),
+      );
+      return container.querySelector("textarea")!.value;
+    };
+
+    const run = vi.fn(() => true);
+    const submit = vi.fn(() => true);
+    expect(await render(run, submit)).toBe("");
+    expect(run).toHaveBeenCalledWith("git status");
+    expect(submit).not.toHaveBeenCalled();
+
+    expect(await render(() => false, submit)).toBe("!git status");
+    expect(submit).not.toHaveBeenCalled();
+
+    // Where commands can't run (a remote session), it is just a message.
+    await render(undefined, submit);
+    expect(submit).toHaveBeenCalledWith("!git status", [], {
+      intent: "default",
+    });
+  });
+
   it("does not restore a failed resend over newer composer text", async () => {
     let recallLastTurn: (() => void) | undefined;
     let rejectResend: ComposerTurnOptions["onResendRejected"];

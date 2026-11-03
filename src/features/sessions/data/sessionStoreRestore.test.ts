@@ -147,3 +147,36 @@ describe("progressive session restoration", () => {
       expect(applySessionRepair(current, source, repaired)).toBe(current);
   });
 });
+
+describe("restoring a `!` command", () => {
+  beforeEach(() => invoke.mockReset());
+
+  it("reads one a quit cut short as stopped, keeping its output", async () => {
+    const record = {
+      id: "s2",
+      harness: "claude",
+      model: "sonnet",
+      cwd: "/repo",
+      blocks: [
+        {
+          id: "c1",
+          role: "shell",
+          text: "npm test",
+          startedAt: 1,
+          shell: { cwd: "/repo/wt", status: "running", stdout: "RUN" },
+        },
+      ],
+    } as unknown as SessionRecord;
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "session_get" ? record : null),
+    );
+    const session = await getSession(record.id);
+    expect(session?.blocks[0]).toEqual({
+      id: "c1",
+      role: "shell",
+      text: "npm test",
+      startedAt: 1,
+      shell: { cwd: "/repo/wt", status: "stopped", stdout: "RUN" },
+    });
+  });
+});

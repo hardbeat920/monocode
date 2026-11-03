@@ -64,6 +64,7 @@ import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
 import { artifactCards } from "../../artifacts/artifacts";
 
 import { TerminalSpinner } from "./TerminalSpinner";
+import { ShellCommandRow } from "./ShellCommandRow";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
@@ -798,9 +799,14 @@ function AgentTranscriptComponent({
   );
   const turns = turnCache.group(blocks, managed, inlineWork);
   // A scheduled update can land while the chat's own turn is still running.
+  // A `!` command runs between turns: while it does, no turn is live.
   const activeTurnIndex = turns.reduce(
     (latest, turn, index) =>
-      turn[0].monoHabit || turn[0].role === "handoff" ? latest : index,
+      turn[0].monoHabit || turn[0].role === "handoff"
+        ? latest
+        : turn[0].role === "shell"
+          ? -1
+          : index,
     -1,
   );
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
@@ -2476,6 +2482,10 @@ const TranscriptBlock = memo(function TranscriptBlock({
 
   if (block.role === "handoff") {
     return <HandoffDivider block={block} />;
+  }
+
+  if (block.role === "shell") {
+    return <ShellCommandRow block={block} embedded={embedded} />;
   }
 
   if (block.role === "system") {
