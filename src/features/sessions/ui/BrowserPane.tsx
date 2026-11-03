@@ -283,8 +283,11 @@ function BrowserPanel({ visible: paneVisible }: { visible: boolean }) {
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          onFocus={() => {
+onFocus={() => {
             editing.current = true;
+          }}
+          onBlur={() => {
+            editing.current = false;
           }}
           onChange={(event) => setAddress(event.target.value)}
           onKeyDown={(event) => {
