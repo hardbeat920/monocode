@@ -1199,7 +1199,9 @@ function Workspace({
   const soulRequest = useRef(0);
   const soulExitCount = useRef(0);
   const [soulFrozen, setSoulFrozen] = useState(false);
-  const beginSoulExit = useCallback(async (): Promise<(() => void) | null> => {
+  const beginSoulExit = useCallback(async (
+    onAcquire?: (release: () => void) => void,
+  ): Promise<(() => void) | null> => {
     soulExitCount.current++;
     soulRequest.current++;
     settingsRequest.current++;
@@ -1211,6 +1213,7 @@ function Workspace({
       soulExitCount.current--;
       if (!soulExitCount.current) setSoulFrozen(false);
     };
+    onAcquire?.(release);
     try {
       const results = await Promise.all([
         saveSoul.current?.() ?? Promise.resolve(true),
@@ -1228,28 +1231,43 @@ function Workspace({
     }
   }, []);
   const quitSoulRelease = useRef<(() => void) | null>(null);
+  const cancelSoulQuit = useRef<(() => void) | null>(null);
   const quitSoulRequest = useRef(0);
   const quitSoulId = useRef<number | null>(null);
   const beforeSoulQuit = useCallback(async (id: number) => {
     const request = ++quitSoulRequest.current;
     quitSoulId.current = id;
-    const pending = beginSoulExit();
-    quitSoulRelease.current?.();
-    quitSoulRelease.current = null;
-    const release = await pending;
-    if (!release) return false;
-    if (request !== quitSoulRequest.current) {
-      release();
+    const previousRelease = quitSoulRelease.current;
+    const previousCancel = cancelSoulQuit.current;
+    let cancel!: () => void;
+    const cancelled = new Promise<null>((resolve) => {
+      cancel = () => resolve(null);
+    });
+    const pending = beginSoulExit((release) => {
+      quitSoulRelease.current = release;
+    });
+    cancelSoulQuit.current = cancel;
+    previousRelease?.();
+    previousCancel?.();
+    const release = await Promise.race([pending, cancelled]);
+    if (!release || request !== quitSoulRequest.current) {
+      release?.();
+      if (request === quitSoulRequest.current) {
+        quitSoulRelease.current = null;
+        cancelSoulQuit.current = null;
+      }
       return false;
     }
-    quitSoulRelease.current = release;
+    cancelSoulQuit.current = null;
     return true;
   }, [beginSoulExit]);
   const abortSoulQuit = useCallback((id: number) => {
     if (quitSoulId.current !== null && quitSoulId.current !== id) return;
     quitSoulRequest.current++;
     quitSoulRelease.current?.();
+    cancelSoulQuit.current?.();
     quitSoulRelease.current = null;
+    cancelSoulQuit.current = null;
     quitSoulId.current = null;
   }, []);
   const closeSoul = useCallback(() => {

@@ -551,11 +551,14 @@ it("does not allow a timed-out quit to discard a pending Soul save", async () =>
     topics: [],
   });
   let finishSave!: (hash: string) => void;
-  state.save.mockReset().mockReturnValueOnce(
-    new Promise((resolve) => {
-      finishSave = resolve;
-    }),
-  );
+  state.save
+    .mockReset()
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishSave = resolve;
+      }),
+    )
+    .mockResolvedValueOnce("newer");
   const node = document.createElement("div");
   document.body.append(node);
   const root = createRoot(node);
@@ -577,17 +580,30 @@ it("does not allow a timed-out quit to discard a pending Soul save", async () =>
   });
   expect(editor.closest("[inert]")).not.toBeNull();
   await act(async () => abortQuit(101));
-  expect(editor.value).toBe("# Pending");
+  expect(editor.closest("[inert]")).toBeNull();
   await act(async () => {
-    finishSave("new");
     await quit;
     expect(invoke).toHaveBeenCalledWith("quit_ready", {
       id: 101,
       persisted: false,
     });
   });
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# After abort");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => finishSave("new"));
+  expect(state.save).toHaveBeenLastCalledWith(
+    mono.id,
+    "soul",
+    "# After abort",
+    "new",
+  );
   expect(editor.closest("[inert]")).toBeNull();
-  expect(editor.value).toBe("# Pending");
+  expect(editor.value).toBe("# After abort");
   await act(async () => root.unmount());
 });
 
@@ -927,4 +943,325 @@ it("still closes regular settings after reopening the same Mono settings", async
   );
   expect(document.querySelector("[data-mono-settings]")).toBeNull();
   await act(async () => root.unmount());
+});
+
+it("immediately unfreezes both editors when an aborted quit has a never-settling save", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  const second = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: first.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  state.save
+    .mockReset()
+    .mockImplementation((id: string) =>
+      id === first.id ? new Promise(() => {}) : Promise.resolve("direct-saved"),
+    );
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  const soul = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-mono-settings] nav button",
+    ),
+  ].find((button) => button.textContent === "Soul")!;
+  await act(async () => soul.click());
+  const regular = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-settings] [data-mono-soul] textarea",
+  )!;
+  await act(async () => state.sidebar.monos.onEditSoul(second.id));
+  const direct = [
+    ...document.querySelectorAll<HTMLTextAreaElement>(
+      "[data-mono-soul] textarea",
+    ),
+  ].find((editor) => editor !== regular)!;
+  const edit = (editor: HTMLTextAreaElement, text: string) => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, text);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => {
+    edit(regular, "# Regular");
+    edit(direct, "# Direct");
+  });
+  let quit!: Promise<void>;
+  await act(async () => {
+    quit = commitQuit(201);
+  });
+  expect(regular.closest("[inert]")).not.toBeNull();
+  expect(direct.closest("[inert]")).not.toBeNull();
+  await act(async () => {
+    abortQuit(201);
+    await quit;
+  });
+  expect(invoke).toHaveBeenCalledWith("quit_ready", {
+    id: 201,
+    persisted: false,
+  });
+  expect(regular.closest("[inert]")).toBeNull();
+  expect(direct.closest("[inert]")).toBeNull();
+  await act(async () => {
+    edit(regular, "# Still editable");
+    edit(direct, "# Also editable");
+  });
+  expect(regular.value).toBe("# Still editable");
+  expect(direct.value).toBe("# Also editable");
+  await act(async () => root.unmount());
+});
+
+it("keeps a newer quit frozen when an older aborted save completes late", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: mono.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  let finishSave!: (hash: string) => void;
+  state.save
+    .mockReset()
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishSave = resolve;
+      }),
+    )
+    .mockResolvedValueOnce("newer");
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onEditSoul(mono.id));
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-soul] textarea",
+  )!;
+  const edit = (text: string) => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, text);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => edit("# First draft"));
+  let firstQuit!: Promise<void>;
+  await act(async () => {
+    firstQuit = commitQuit(301);
+  });
+  await act(async () => {
+    abortQuit(301);
+    await firstQuit;
+  });
+  await act(async () => edit("# Newer draft"));
+  state.holdWrites = true;
+  let secondQuit!: Promise<void>;
+  await act(async () => {
+    secondQuit = commitQuit(302);
+  });
+  await act(async () => abortQuit(301));
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => finishSave("first-saved"));
+  expect(state.save).toHaveBeenLastCalledWith(
+    mono.id,
+    "soul",
+    "# Newer draft",
+    "first-saved",
+  );
+  expect(state.writes).toHaveLength(1);
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => abortQuit(302));
+  expect(editor.closest("[inert]")).toBeNull();
+  await act(async () => {
+    state.writes.shift()!();
+    await secondQuit;
+  });
+  expect(editor.value).toBe("# Newer draft");
+  await act(async () => root.unmount());
+});
+
+it("keeps the window-close lock when an overlapping quit is aborted", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles
+    .mockReset()
+    .mockResolvedValue({
+      id: mono.id,
+      dir: "/mono",
+      soul: "# Original",
+      soulHash: "old",
+      memory: "",
+      memoryHash: "m",
+      memoryPath: "/mono/MEMORY.md",
+      topics: [],
+    });
+  let finish!: (hash: string) => void;
+  state.save.mockReset().mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onEditSoul(mono.id));
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Pending");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  state.holdWrites = true;
+  let close!: Promise<void>;
+  await act(async () => {
+    close = state.onClose!({ preventDefault() {} });
+  });
+  let quit!: Promise<void>;
+  await act(async () => {
+    quit = commitQuit(401);
+  });
+  await act(async () => {
+    abortQuit(401);
+    await quit;
+  });
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => finish("saved"));
+  expect(state.writes).toHaveLength(1);
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => {
+    state.writes.shift()!();
+    await close;
+  });
+  expect(editor.closest("[inert]")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+it("keeps edits and permits retry after the aborted quit's write fails late", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles
+    .mockReset()
+    .mockResolvedValue({
+      id: mono.id,
+      dir: "/mono",
+      soul: "# Original",
+      soulHash: "old",
+      memory: "",
+      memoryHash: "m",
+      memoryPath: "/mono/MEMORY.md",
+      topics: [],
+    });
+  let fail!: (error: Error) => void;
+  state.save
+    .mockReset()
+    .mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+    )
+    .mockResolvedValueOnce("saved");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onEditSoul(mono.id));
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-soul] textarea",
+  )!;
+  const edit = (text: string) => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, text);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => edit("# First"));
+  let quit!: Promise<void>;
+  await act(async () => {
+    quit = commitQuit(501);
+  });
+  await act(async () => {
+    abortQuit(501);
+    await quit;
+  });
+  await act(async () => edit("# Newer"));
+  await act(async () => fail(new Error("disk failed")));
+  expect(editor.value).toBe("# Newer");
+  const retry = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Retry")!;
+  await act(async () => retry.click());
+  expect(state.save).toHaveBeenLastCalledWith(
+    mono.id,
+    "soul",
+    "# Newer",
+    "old",
+  );
+  expect(editor.value).toBe("# Newer");
+  await act(async () => root.unmount());
+  warn.mockRestore();
 });
