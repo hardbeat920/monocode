@@ -6,10 +6,12 @@
 //! without inferring which process owns individual lines. Synchronous: callers
 //! run these on a background executor.
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fs::TryLockError;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -89,11 +91,10 @@ impl Store {
 
     /// One index per worktree, kept so its stat cache survives between turns.
     /// Linked worktrees have distinct roots and must not share the cache.
-    fn index_path(&self, repo: &Path) -> Result<PathBuf, String> {
+    fn index_dir(&self) -> Result<PathBuf, String> {
         let dir = self.root.join("indexes");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let digest = format!("{:x}", Sha256::digest(path_to_js(repo).as_bytes()));
-        Ok(dir.join(format!("{digest}.index")))
+        Ok(dir)
     }
 
     /// Successful structured edits by this session's running turn.
@@ -274,8 +275,8 @@ impl Store {
                 Ok(before.clone())
             } else {
                 let repo = std::fs::canonicalize(&review.repo).map_err(|e| e.to_string())?;
-                let index = self.index_path(&repo)?;
-                let fresh = capture_workspace(&root, &repo, &reference, &index)?;
+                let indexes = self.index_dir()?;
+                let fresh = capture_workspace(&root, &repo, &reference, &indexes)?;
                 if carried.files.is_empty() {
                     Ok(fresh)
                 } else {
@@ -310,8 +311,8 @@ impl Store {
             let captured = std::fs::canonicalize(&review.repo)
                 .map_err(|e| e.to_string())
                 .and_then(|repo| {
-                    let index = self.index_path(&repo)?;
-                    capture_workspace(root, &repo, &turn_ref(session_id, id, "after"), &index)
+                    let indexes = self.index_dir()?;
+                    capture_workspace(root, &repo, &turn_ref(session_id, id, "after"), &indexes)
                 });
             match captured {
                 Ok(oid) => turn.after = Some(oid),
@@ -1009,46 +1010,131 @@ fn capture_workspace(
     root: &Path,
     repo: &Path,
     reference: &str,
-    index: &Path,
+    indexes: &Path,
 ) -> Result<String, String> {
-    match capture_workspace_once(root, repo, reference, index) {
-        // A lock left by an interrupted capture blocks every later one. A
-        // fresh lock can belong to another app process sharing this
-        // directory, so it is reported instead of removed.
-        Err(error) if error.contains("index.lock") => {
-            let lock = index_lock(index);
-            if !stale_lock(&lock) {
-                return Err(error);
-            }
-            let _ = std::fs::remove_file(&lock);
-            let _ = std::fs::remove_file(index);
-            capture_workspace_once(root, repo, reference, index)
-        }
-        // An index left by an interrupted capture can also be truncated.
-        // Rebuilding it restores the stat cache.
-        Err(error) if corrupt_index(&error) => {
-            let _ = std::fs::remove_file(index);
-            capture_workspace_once(root, repo, reference, index)
+    let key = index_key(repo);
+    // One guard per worktree, never per generation: it has to be the same file
+    // whichever generation is current, or two captures stop excluding each
+    // other exactly when they both retry.
+    let _guard = CaptureGuard::acquire(&indexes.join(format!("{key}.capture")))?;
+    // Read the generation only after the guard: another process may have
+    // published a newer one while this capture waited.
+    let generation = index_generation(indexes, &key)?;
+    let index = index_file(indexes, &key, generation);
+    match capture_workspace_once(root, repo, reference, &index) {
+        Err(error) if lost_index_lock(&error) || corrupt_index(&error) => {
+            // Abandoning the path is the only safe recovery. A `git` child of
+            // a killed app renames `<index>.lock` by path, so reusing the name
+            // would let it replace whatever this capture had just written.
+            let next = bump_generation(indexes, &key, generation)?;
+            capture_workspace_once(root, repo, reference, &index_file(indexes, &key, next))
         }
         result => result,
     }
 }
 
-/// Git writes an index through a sibling lock file: `x.index.lock`.
-fn index_lock(index: &Path) -> PathBuf {
-    let mut lock = index.as_os_str().to_owned();
-    lock.push(".lock");
-    PathBuf::from(lock)
+fn index_key(repo: &Path) -> String {
+    format!("{:x}", Sha256::digest(path_to_js(repo).as_bytes()))
 }
 
-/// Long enough for any capture this app runs, short enough that a crash costs
-/// one turn.
-fn stale_lock(lock: &Path) -> bool {
-    std::fs::metadata(lock)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age > std::time::Duration::from_secs(10 * 60))
+fn index_file(indexes: &Path, key: &str, generation: u64) -> PathBuf {
+    indexes.join(format!("{key}.{generation}.index"))
+}
+
+/// Missing means the first capture for this worktree. Anything else is an
+/// error: guessing a generation would write to a path another capture owns.
+fn index_generation(indexes: &Path, key: &str) -> Result<u64, String> {
+    let path = indexes.join(format!("{key}.gen"));
+    match std::fs::read_to_string(&path) {
+        Ok(text) => text.trim().parse().map_err(|e| {
+            format!(
+                "Invalid checkpoint index generation {}: {e}",
+                path.display()
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(format!("Could not read {}: {error}", path.display())),
+    }
+}
+
+fn bump_generation(indexes: &Path, key: &str, generation: u64) -> Result<u64, String> {
+    let next = generation
+        .checked_add(1)
+        .ok_or("Checkpoint index generation overflow")?;
+    let path = indexes.join(format!("{key}.gen"));
+    // Published atomically, so a reader never sees half a number.
+    let staged = indexes.join(format!("{key}.gen.tmp"));
+    std::fs::write(&staged, next.to_string()).map_err(|e| e.to_string())?;
+    std::fs::rename(&staged, &path).map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
+/// Longest a capture waits for another process's capture of the same
+/// workspace. The slowest cold capture here takes about 90s, so this never
+/// cuts a real capture short; past it the other owner is wedged.
+const CAPTURE_GUARD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CAPTURE_GUARD_POLL: Duration = Duration::from_millis(50);
+
+/// Held for a whole capture, so cooperating captures of one workspace run one
+/// at a time across app processes. Closing the file releases it, and the
+/// kernel does so when this process exits or dies, so a crash costs one failed
+/// capture rather than blocking the worktree until a lock file ages out.
+///
+/// It does not cover a `git` child that outlives a killed app: that child can
+/// still hold, and later rename, `Git`'s own lock. See `lost_index_lock`.
+struct CaptureGuard {
+    _file: std::fs::File,
+}
+
+impl CaptureGuard {
+    fn acquire(guard: &Path) -> Result<Self, String> {
+        Self::acquire_within(guard, CAPTURE_GUARD_TIMEOUT)
+    }
+
+    fn acquire_within(path: &Path, timeout: Duration) -> Result<Self, String> {
+        // The sidecar outlives each capture on purpose: removing it while an
+        // owner holds the old inode would let the next capture lock a new
+        // one.
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| format!("Could not open the capture guard {}: {e}", path.display()))?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(CAPTURE_GUARD_POLL)
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err(format!(
+                        "Another MonoCode instance is capturing this workspace: {}",
+                        path.display()
+                    ))
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(format!(
+                        "Could not lock the capture guard {}: {error}",
+                        path.display()
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Git could not take, or lost, the lock it writes the index through.
+fn lost_index_lock(error: &str) -> bool {
+    [
+        "index.lock",
+        // Git renames by path: a dead writer that finished first takes this
+        // capture's lock, so the rename that follows has no source file.
+        "unable to write new index file",
+    ]
+    .iter()
+    .any(|message| error.contains(message))
 }
 
 fn corrupt_index(error: &str) -> bool {

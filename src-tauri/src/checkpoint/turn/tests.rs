@@ -600,9 +600,10 @@ fn linked_worktrees_have_independent_recordings_and_indexes() {
     // Each worktree caches its own stat data; sharing one index would let the
     // worktrees overwrite each other's entries.
     let index_for = |path: &Path| {
-        f.store
-            .index_path(&std::fs::canonicalize(path).unwrap())
-            .unwrap()
+        let indexes = f.store.index_dir().unwrap();
+        let key = index_key(&std::fs::canonicalize(path).unwrap());
+        let generation = index_generation(&indexes, &key).unwrap();
+        index_file(&indexes, &key, generation)
     };
     assert_ne!(index_for(&f.repo), index_for(&linked));
     let git_dir = run_git(&linked, &["rev-parse", "--absolute-git-dir"]).unwrap();
@@ -705,7 +706,26 @@ fn checkpoints_scope_nested_workspaces_and_repositories_without_head() {
 
 fn private_index(f: &Fixture) -> PathBuf {
     let repo = std::fs::canonicalize(&f.repo).unwrap();
-    f.store.index_path(&repo).unwrap()
+    let indexes = f.store.index_dir().unwrap();
+    let key = index_key(&repo);
+    let generation = index_generation(&indexes, &key).unwrap();
+    index_file(&indexes, &key, generation)
+}
+
+/// The guard is per worktree, so its path must not follow the generation.
+fn private_guard(f: &Fixture) -> PathBuf {
+    let repo = std::fs::canonicalize(&f.repo).unwrap();
+    f.store
+        .index_dir()
+        .unwrap()
+        .join(format!("{}.capture", index_key(&repo)))
+}
+
+/// Git writes the index through a sibling lock file: `x.index.lock`.
+fn index_lock(index: &Path) -> PathBuf {
+    let mut lock = index.as_os_str().to_owned();
+    lock.push(".lock");
+    PathBuf::from(lock)
 }
 
 fn git_in_index(repo: &Path, index: &Path, args: &[&str]) -> Vec<u8> {
@@ -1079,28 +1099,84 @@ fn records_nested_unusual_paths_and_symlinks_with_a_persistent_index() {
 }
 
 #[test]
-fn a_stale_lock_heals_and_a_live_lock_is_reported() {
+fn a_leftover_lock_heals_under_the_capture_guard() {
     let f = Fixture::new();
     f.store.begin_turn("session", f.cwd(), "first").unwrap();
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
     let index = private_index(&f);
     let lock = index_lock(&index);
-    // A capture that died mid-write leaves the lock, and every later capture
-    // fails on it, so this worktree would never record again.
+    // A capture that died mid-write leaves its lock behind. The guard its
+    // process held is gone, so the next capture takes a fresh generation
+    // immediately instead of waiting for the lock to look old.
     std::fs::write(&lock, b"").unwrap();
-    set_past_mtime(&lock);
-    f.write("new.txt", "one\n");
     f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    assert_ne!(
+        private_index(&f),
+        index,
+        "the lock must move the capture on"
+    );
+    f.write("new.txt", "one\n");
     f.store.finish_turn("session", f.cwd(), "second").unwrap();
-    assert!(!lock.exists(), "the stale lock should have been cleared");
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .find(|file| file.relative == "new.txt")
+            .map(|file| file.additions),
+        Some(1)
+    );
+}
 
-    // A fresh lock can belong to a capture another app process is running
-    // against this shared directory. Report it and leave both files alone.
-    std::fs::write(&lock, b"").unwrap();
-    let error = f.store.begin_turn("session", f.cwd(), "third").unwrap_err();
-    assert!(error.contains("index.lock"), "{error}");
-    assert!(lock.exists(), "a live lock must survive");
-    assert!(index.exists(), "a live lock must not rebuild the index");
+#[test]
+fn concurrent_captures_of_one_workspace_serialize() {
+    let f = Fixture::new();
+    f.write("new.txt", "one\n");
+    let repo = std::fs::canonicalize(&f.repo).unwrap();
+    let indexes = f.store.index_dir().unwrap();
+    let captures = (0..2)
+        .map(|n| {
+            let repo = repo.clone();
+            let indexes = indexes.clone();
+            std::thread::spawn(move || {
+                capture_workspace(&repo, &repo, &format!("refs/monocode/test/{n}"), &indexes)
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = captures
+        .into_iter()
+        .map(|capture| capture.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(results.iter().all(|result| result.is_ok()), "{results:?}");
+    // Both saw the same workspace, so neither read the other's half-written
+    // index, and the index they share survived both captures.
+    let trees = results
+        .iter()
+        .map(|commit| {
+            let commit = commit.as_ref().unwrap();
+            let tree = run_git(&repo, &["rev-parse", &format!("{commit}^{{tree}}")]).unwrap();
+            String::from_utf8(tree).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(trees[0], trees[1]);
+    assert!(index_paths(&repo, &private_index(&f)).contains(&"new.txt".to_string()));
+}
+
+#[test]
+fn a_capture_guard_held_elsewhere_times_out() {
+    let f = Fixture::new();
+    let guard = private_guard(&f);
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    held.try_lock().unwrap();
+    let error = CaptureGuard::acquire_within(&guard, Duration::from_millis(50))
+        .err()
+        .expect("a guard another owner holds must not be taken twice");
+    assert!(error.contains("Another MonoCode instance"), "{error}");
 }
 
 #[cfg(unix)]
@@ -1131,4 +1207,40 @@ fn a_file_named_index_does_not_rebuild_the_index() {
     assert!(error.contains("index.html"), "{error}");
     // Rebuilding would replace the file and lose the stat cache.
     assert_eq!(std::fs::metadata(&index).unwrap().ino(), inode);
+}
+
+/// A `git` child of a killed app renames its lock by path. Abandoning the
+/// index name is what keeps it away from the capture that follows.
+#[test]
+fn a_dead_writer_cannot_reach_the_next_generation() {
+    let f = Fixture::new();
+    f.write("a.txt", "one\n");
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let dead = private_index(&f);
+    let lock = index_lock(&dead);
+    std::fs::write(&lock, b"").unwrap();
+
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("a.txt", "two\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    let live = private_index(&f);
+    assert_ne!(live, dead);
+    // The dead writer's lock is left alone: the capture moved to a path the
+    // dead writer never saw.
+    assert!(lock.exists());
+
+    // Whatever the dead writer does with its own path ...
+    std::fs::write(&lock, b"partial").unwrap();
+    std::fs::rename(&lock, &dead).unwrap();
+    // ... the current generation and its recording are untouched.
+    assert!(live.exists());
+    assert!(std::fs::read(&live).unwrap().starts_with(b"DIRC"));
+    assert_eq!(
+        f.store
+            .file_diff("session", f.cwd(), "a.txt")
+            .unwrap()
+            .current,
+        "two\n"
+    );
 }
