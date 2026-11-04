@@ -458,6 +458,14 @@ impl Monos {
         cx.notify();
     }
     /// The session the details panel shows as a page, if any.
+    /// A floating panel can show a chat while the workspace stays inactive.
+    pub(crate) fn floating_shows_session(&self, id: i64, cx: &App) -> bool {
+        self.roster.monos.iter().any(|mono| {
+            self.open_chat(&mono.id)
+                .is_some_and(|chat| chat.read(cx).summary.id == id)
+                && self.floating_shows(&mono.id, cx)
+        })
+    }
     pub(crate) fn routed_session(&self) -> Option<i64> {
         match self.route {
             Some(Route::Session(id)) => Some(id),

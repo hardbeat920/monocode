@@ -473,11 +473,11 @@ impl Shell {
             return false;
         }
         if self.mono_active(cx) {
-            return self
-                .monos
-                .as_ref()
-                .and_then(|m| m.read(cx).active_notification_session(cx))
-                == Some(id);
+            return self.monos.as_ref().is_some_and(|monos| {
+                let monos = monos.read(cx);
+                monos.active_notification_session(cx) == Some(id)
+                    || monos.routed_session() == Some(id)
+            });
         }
         self.workspace.active_tab().is_some_and(|tab| {
             self.workspace
@@ -663,6 +663,10 @@ impl Shell {
                 let id = chat.summary.id;
                 let seen = chat.responding()
                     || chat.summary.archived
+                    || self
+                        .monos
+                        .as_ref()
+                        .is_some_and(|monos| monos.read(cx).floating_shows_session(id, cx))
                     || (self.window_active && self.notice_session_visible(id, cx));
                 (id, seen, chat.has_pending_notification_inputs())
             })
