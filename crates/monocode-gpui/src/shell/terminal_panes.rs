@@ -126,8 +126,10 @@ impl Shell {
         {
             dock.open = false;
             self.slide_dock(false, cx);
-            if self.terminal_in_panel(cx) && self.panel_terminal_shown(cx) {
-                self.set_right_panel_open(false, window, cx);
+            // The panel's Terminal tab is never left empty: a fresh shell
+            // takes the place of the one pulled out, and the panel stays.
+            if self.terminal_in_panel(cx) {
+                self.ensure_panel_terminal(cx);
             }
         }
         let cwd = terminal.read(cx).cwd.clone();
@@ -408,6 +410,47 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn pulling_the_panels_last_terminal_out_leaves_a_fresh_one_behind(cx: &mut TestAppContext) {
+        use crate::right_panel::RightTab;
+        let (window, _, b) = window(cx);
+        for edge in [None, Some(Edge::Right)] {
+            window
+                .update(cx, |shell, w, cx| {
+                    cx.set_reduce_motion(true);
+                    shell.workspace.classic_layout = false;
+                    shell.workspace.new_layout_boxy = true;
+                    shell.layout_changed(cx);
+                    shell.workspace.preferences.set_terminal_placement("panel");
+                    shell.open(b, w, cx);
+                    shell.show_panel_terminal(w, cx);
+                    let project = shell.workspace.project.clone();
+                    assert_eq!(shell.terminals[&project].len(), 1);
+                    let pulled = shell.terminals[&project][0].clone();
+                    // Onto the title strip, then onto the chat's right edge.
+                    let (over, insert) = match edge {
+                        None => (None, Some(shell.visible_tabs(cx).len())),
+                        Some(edge) => (Some((b, edge)), None),
+                    };
+                    shell.drop_dock_terminal(0, over, insert, w, cx);
+                    assert!(
+                        shell
+                            .terminal_pane_views
+                            .values()
+                            .any(|t| *t == pulled)
+                    );
+                    // The panel stays open on a new shell.
+                    assert!(shell.workspace.right_panel_open);
+                    let panel = shell.right_panel.clone().unwrap();
+                    assert_eq!(panel.read(cx).tab(), RightTab::Terminal);
+                    assert_eq!(shell.terminals[&project].len(), 1);
+                    assert_ne!(shell.terminals[&project][0], pulled);
+                    assert_eq!(shell.workspace.docks[&project].terminals.len(), 1);
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]
