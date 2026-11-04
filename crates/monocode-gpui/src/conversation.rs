@@ -36,6 +36,11 @@ use crate::{
     transcript::TranscriptView,
 };
 pub(crate) use accounts::UsageResumed;
+
+/// How long the ring takes to grow into the full capsule.
+const METER_MORPH: std::time::Duration = std::time::Duration::from_millis(320);
+/// The widest the cost and cache values get; the unroll opens up to it.
+const METER_VALUES_MAX: f32 = 140.;
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
     SharedString, StyleRefinement, Subscription, Window, canvas, div, prelude::*, px,
@@ -203,8 +208,10 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
-    context_hover_generation: u64,
-    stats_hovered: bool,
+    meter_open: bool,
+    /// Whether the last paint showed only the ring, and how many times the
+    /// capsule has grown out of that: each growth is one morph animation.
+    meter_morph: std::cell::Cell<(Option<bool>, u32)>,
     stats_anchor: AnchorSlot,
     /// A one-second repaint loop runs while the cache countdown is on screen.
     stats_ticker: std::cell::Cell<bool>,
@@ -655,8 +662,8 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
-            context_hover_generation: 0,
-            stats_hovered: false,
+            meter_open: false,
+            meter_morph: Default::default(),
             stats_anchor: AnchorSlot::default(),
             stats_ticker: Default::default(),
             stats_wanted: Default::default(),
@@ -994,32 +1001,6 @@ impl Conversation {
             self.clear_submitted_mode(cx);
         }
     }
-    /// The tooltip holds a button, so closing waits briefly for the pointer to
-    /// cross from the ring to the tooltip.
-    fn set_context_hover(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        self.context_hover_generation = self.context_hover_generation.wrapping_add(1);
-        if hovered {
-            if !self.context_hovered {
-                self.context_hovered = true;
-                cx.notify();
-            }
-            return;
-        }
-        let generation = self.context_hover_generation;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(160))
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.context_hover_generation == generation && this.context_hovered {
-                    this.context_hovered = false;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
     /// A message sent now joins the follow-ups instead of starting a turn.
     fn sends_as_follow_up(&self) -> bool {
         self.stopping
@@ -3035,35 +3016,57 @@ impl Conversation {
             .child(self.workspace_bar(cx))
             .into_any_element()
     }
-    /// `$0.84 · Cache 4:12`: session spend and time left on the prompt
-    /// cache, each hidden when the provider cannot tell.
-    fn session_stats_chip(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    /// The footer's session meter: context ring, spend and prompt-cache state
+    /// in one capsule, with the details and the auto-compact switch in a
+    /// popover. Each part is hidden when the provider cannot tell.
+    fn session_meter(
+        &self,
+        show_context: bool,
+        can_compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         use monocode_core::context::{self as stats_mod, CacheState};
         let stats = stats_mod::SessionStats::from_turns(self.settings.turns.values());
-        stats.started_at?;
+        let has_stats = stats.started_at.is_some();
         let now = monocode_core::time::now_ms();
         let ttl = self.context.and_then(|usage| usage.cache_ttl_ms);
-        let cache = stats_mod::cache_state(&stats, ttl, now, self.busy);
+        let cache = has_stats
+            .then(|| stats_mod::cache_state(&stats, ttl, now, self.busy))
+            .flatten();
         let amber: gpui::Hsla = gpui::rgb(0xfbbf24).into();
+        let green: gpui::Hsla = gpui::rgb(0x34d399).into();
         let approx = if stats.cost_partial { "≥" } else { "" };
-        let cost = stats
-            .cost_usd
-            .map(|usd| format!("{approx}{}", stats_mod::format_cost(usd)));
-        let (cache_label, cache_color) = match cache {
-            Some(CacheState::Live) => (Some("Cache live".to_string()), content(0.45)),
-            Some(CacheState::Cold) => (Some("Cache cold".to_string()), content(0.3)),
-            Some(CacheState::Warm {
-                remaining_ms,
-                warning,
-            }) => (
-                Some(format!(
-                    "Cache {}",
-                    stats_mod::format_countdown(remaining_ms)
-                )),
-                if warning { amber } else { content(0.45) },
-            ),
-            None => (None, content(0.45)),
-        };
+        let cost = has_stats
+            .then(|| {
+                stats
+                    .cost_usd
+                    .map(|usd| format!("{approx}{}", stats_mod::format_cost(usd)))
+            })
+            .flatten();
+        // The capsule shows the state as a dot and a short value; the words
+        // live in the popover and the accessible label.
+        let (cache_label, cache_dot): (Option<String>, Option<(String, gpui::Hsla, bool)>) =
+            match cache {
+                Some(CacheState::Live) => (
+                    Some("cache live".into()),
+                    Some(("live".into(), green, false)),
+                ),
+                Some(CacheState::Cold) => (
+                    Some("cache cold".into()),
+                    Some(("cold".into(), content(0.35), true)),
+                ),
+                Some(CacheState::Warm {
+                    remaining_ms,
+                    warning,
+                }) => {
+                    let short = stats_mod::format_countdown(remaining_ms);
+                    (
+                        Some(format!("cache {short}")),
+                        Some((short, if warning { amber } else { content(0.35) }, false)),
+                    )
+                }
+                None => (None, None),
+            };
         if matches!(cache, Some(CacheState::Warm { .. })) {
             self.stats_wanted.set(true);
             if !self.stats_ticker.replace(true) {
@@ -3091,151 +3094,437 @@ impl Conversation {
                 .detach();
             }
         }
-        let mut parts: Vec<(String, gpui::Hsla)> = Vec::new();
-        parts.extend(cost.clone().map(|c| (c, content(0.45))));
-        parts.extend(cache_label.clone().map(|c| (c, cache_color)));
-        let percent = |hit: Option<f64>| hit.map_or("n/a".to_string(), |h| format!("{h:.0}%"));
-        let mut rows: Vec<(&str, String)> = Vec::new();
-        if let Some(cost) = &cost {
-            rows.push(("Cost (API list price)", cost.clone()));
+        let auto_available = self.cache_compaction_available();
+        let auto_on = auto_available && !self.keep_full_history;
+        let pending = auto_on && self.cache_compaction_pending();
+        let ratio = self.context.and_then(|usage| usage.ratio());
+        if !show_context && cost.is_none() && cache_dot.is_none() && !auto_available {
+            return None;
         }
-        if let Some(label) = &cache_label {
-            rows.push((
-                "Cache",
-                label.strip_prefix("Cache ").unwrap_or(label).to_string(),
-            ));
-        }
-        rows.push((
-            "Cache hit",
+        let open = self.meter_open;
+        let headline = ratio
+            .map(|r| format!("{:.0}% context used", r * 100.))
+            .unwrap_or_else(|| "No context used yet".into());
+        let detail = self.context.map(|usage| {
             format!(
-                "{} session · {} last turn",
-                percent(stats.session_hit_percent),
-                percent(stats.last_hit_percent)
-            ),
-        ));
-        rows.push((
-            "Cache tokens",
-            format!(
-                "{} read · {} written",
-                stats_mod::format_tokens(stats.cache_read_tokens),
-                stats_mod::format_tokens(stats.cache_write_tokens)
-            ),
-        ));
-        rows.push(("Agent worked", stats_mod::format_span(stats.working_ms)));
-        let rewrite = (cache == Some(CacheState::Cold))
-            .then(|| self.context.map(|usage| usage.used))
-            .flatten()
-            .filter(|used| *used > 0)
-            .map(|used| {
-                format!(
-                    "Next message re-writes ~{} tokens to cache",
-                    stats_mod::format_tokens(used)
-                )
-            });
-        let label = parts
+                "{} / {} tokens",
+                stats_mod::format_tokens(usage.used),
+                stats_mod::format_tokens(usage.window.unwrap_or(0))
+            )
+        });
+        let summary = cost
             .iter()
-            .map(|(text, _)| text.as_str())
+            .chain(cache_label.iter())
+            .map(String::as_str)
             .collect::<Vec<_>>()
             .join(", ");
-        let compact_button = self.cache_compaction_available().then(|| {
-            let off = self.keep_full_history;
-            let pending = self.cache_compaction_pending();
-            div()
-                .id("compact-next")
-                .role(Role::Button)
-                .aria_label(if off {
-                    "Auto-compact is off. Click to compact a large thread when the Cache expires."
-                } else if pending {
-                    "The next message compacts the thread first because the Cache expired. Click to turn auto-compact off."
+        let aria = [
+            show_context.then(|| headline.clone()),
+            (!summary.is_empty()).then_some(summary),
+            auto_available.then(|| {
+                if auto_on {
+                    "auto-compact on".to_string()
                 } else {
-                    "Auto-compact is on. A large thread is compacted when the Cache expires. Click to turn it off."
-                })
-                .h(px(18.))
-                .px(px(6.))
-                .ml(px(4.))
-                .rounded_full()
+                    "auto-compact off".to_string()
+                }
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+        let separator = || {
+            div()
+                .w(px(1.))
+                .h(px(10.))
+                .flex_shrink_0()
+                .bg(content(0.12))
+                .into_any_element()
+        };
+        let mut extras: Vec<gpui::AnyElement> = Vec::new();
+        if let Some(cost) = cost.clone() {
+            extras.push(
+                div()
+                    .text_color(content(1.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(cost)
+                    .into_any_element(),
+            );
+        }
+        if let Some((short, color, hollow)) = cache_dot.clone() {
+            extras.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .when(hollow, |d| d.border(px(1.25)).border_color(color))
+                            .when(!hollow, |d| d.bg(color)),
+                    )
+                    .child(
+                        div()
+                            .when(color == amber, |d| d.text_color(amber))
+                            .child(short),
+                    )
+                    .into_any_element(),
+            );
+        }
+        // With only the ring (and maybe the bolt) there is nothing to frame:
+        // the outline and the lopsided padding made it a pill around one dot.
+        let bare = extras.is_empty();
+        // The first paint, and a paint that shrinks back to the ring, take no
+        // animation. Growing into the pill morphs: the outline fades in and the
+        // values unroll beside the ring.
+        let (was_bare, morphs) = self.meter_morph.get();
+        let morphs = if was_bare.is_some_and(|was| was != bare) {
+            morphs + 1
+        } else {
+            morphs
+        };
+        self.meter_morph.set((Some(bare), morphs));
+        let animate = morphs > 0 && !bare && !cx.reduce_motion();
+        let lead = show_context;
+        let mut capsule_children: Vec<gpui::AnyElement> = Vec::new();
+        if show_context {
+            capsule_children
+                .push(crate::context_meter::labeled_ring(ratio.unwrap_or(0.)).into_any_element());
+        }
+        if !extras.is_empty() {
+            let mut row = div()
                 .flex()
                 .items_center()
-                .cursor_pointer()
-                .text_color(content(if off {
-                    0.4
-                } else if pending {
-                    0.9
-                } else {
-                    0.55
-                }))
-                .bg(content(if pending && !off { 0.12 } else { 0.05 }))
-                .hover(|s| s.bg(content(0.16)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(if off {
-                    "Auto-compact off"
-                } else if pending {
-                    "Compacts next"
-                } else {
-                    "Auto-compact"
-                })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.keep_full_history = !this.keep_full_history;
-                    cx.notify();
-                }))
+                .flex_shrink_0()
+                .gap(px(7.))
+                .overflow_hidden()
+                .when(lead, |d| d.pl(px(7.)));
+            for (ix, part) in extras.into_iter().enumerate() {
+                if lead || ix > 0 {
+                    row = row.child(separator());
+                }
+                row = row.child(part);
+            }
+            // The values clip to a width that opens up to their own.
+            capsule_children.push(if animate {
+                gpui::AnimationExt::with_animation(
+                    row,
+                    ("session-meter-values", morphs),
+                    gpui::Animation::new(METER_MORPH).with_easing(gpui::ease_out_quint()),
+                    |el, t| {
+                        if t >= 1. {
+                            el
+                        } else {
+                            el.max_w(px(METER_VALUES_MAX * t)).opacity(t)
+                        }
+                    },
+                )
+                .into_any_element()
+            } else {
+                row.into_any_element()
+            });
+        }
+        // The bolt marks auto-compact as on, beside the last value.
+        if auto_on {
+            capsule_children.push(
+                div()
+                    .when(!bare || lead, |d| d.ml(px(7.)))
+                    .child(icon("zap", 12.).text_color(content(0.7)))
+                    .into_any_element(),
+            );
+        }
+        let capsule = div()
+            .id("session-meter")
+            .role(Role::Button)
+            .aria_label(format!("Session meter: {aria}"))
+            .aria_expanded(open)
+            .child(self.stats_anchor.probe())
+            .flex_shrink_0()
+            .h(px(26.))
+            .rounded_full()
+            .border_1()
+            .border_color(if bare {
+                gpui::transparent_black()
+            } else {
+                content(0.12)
+            })
+            .when(bare, |d| d.px(px(5.)))
+            .when(!bare, |d| d.pl(px(6.)).pr(px(10.)))
+            .flex()
+            .items_center()
+            .text_size(px(11.))
+            .text_color(content(0.7))
+            .font_features(crate::right_panel::tabular())
+            .cursor_pointer()
+            .when(open, |d| d.bg(content(0.08)).text_color(content(1.)))
+            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(capsule_children)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.meter_open = !this.meter_open;
+                cx.notify();
+            }));
+        let capsule = if animate {
+            gpui::AnimationExt::with_animation(
+                capsule,
+                ("session-meter-shell", morphs),
+                gpui::Animation::new(METER_MORPH).with_easing(gpui::ease_out_quint()),
+                |el, t| {
+                    el.border_color(content(0.12 * t))
+                        .pl(px(5. + t))
+                        .pr(px(5. + 5. * t))
+                },
+            )
+            .into_any_element()
+        } else {
+            capsule.into_any_element()
+        };
+
+        let popover_body = open.then(|| {
+            let percent = |hit: Option<f64>| hit.map_or("n/a".to_string(), |h| format!("{h:.0}%"));
+            let rewrite = (cache == Some(CacheState::Cold))
+                .then(|| self.context.map(|usage| usage.used))
+                .flatten()
+                .filter(|used| *used > 0)
+                .map(|used| {
+                    format!(
+                        "Next message re-writes ~{} tokens to cache",
+                        stats_mod::format_tokens(used)
+                    )
+                });
+            let ring_color = match ratio {
+                Some(r) if r >= 0.9 => gpui::rgb(0xf87171).into(),
+                Some(r) if r >= 0.75 => amber,
+                _ => content(0.6),
+            };
+            let mut sections: Vec<gpui::AnyElement> = Vec::new();
+            if show_context {
+                sections.push(
+                    meter_section("Context")
+                        .child(meter_row(
+                            headline.clone(),
+                            detail.clone().unwrap_or_default(),
+                            true,
+                        ))
+                        .child(
+                            div()
+                                .h(px(4.))
+                                .my(px(6.))
+                                .rounded(px(2.))
+                                .bg(content(0.1))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(gpui::relative(ratio.unwrap_or(0.)))
+                                        .rounded(px(2.))
+                                        .bg(ring_color),
+                                ),
+                        )
+                        .when(can_compact, |d| {
+                            d.child(
+                                div()
+                                    .id("compact-context")
+                                    .role(Role::Button)
+                                    .aria_label("Compact context")
+                                    .mt(px(8.))
+                                    .h(px(24.))
+                                    .px(px(8.))
+                                    .rounded_md()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.8))
+                                    .bg(content(0.08))
+                                    .hover(|s| s.bg(content(0.14)).text_color(content(1.)))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child("Compact context")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.meter_open = false;
+                                        this.compact_context(cx);
+                                    })),
+                            )
+                        })
+                        .into_any_element(),
+                );
+            }
+            if has_stats {
+                sections.push(
+                    meter_section("Prompt cache")
+                        .when_some(cache_label.clone(), |d, label| {
+                            d.child(meter_row(
+                                "Status".into(),
+                                label.trim_start_matches("cache ").to_string(),
+                                false,
+                            ))
+                        })
+                        .child(meter_row(
+                            "Hit rate".into(),
+                            format!(
+                                "{} session · {} last turn",
+                                percent(stats.session_hit_percent),
+                                percent(stats.last_hit_percent)
+                            ),
+                            false,
+                        ))
+                        .child(meter_row(
+                            "Tokens".into(),
+                            format!(
+                                "{} read · {} written",
+                                stats_mod::format_tokens(stats.cache_read_tokens),
+                                stats_mod::format_tokens(stats.cache_write_tokens)
+                            ),
+                            false,
+                        ))
+                        .children(rewrite.map(|text| {
+                            div()
+                                .mt(px(4.))
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(amber)
+                                .child(text)
+                        }))
+                        .into_any_element(),
+                );
+                sections.push(
+                    meter_section("Session")
+                        .when_some(cost.clone(), |d, cost| {
+                            d.child(meter_row("Cost (API list price)".into(), cost, false))
+                        })
+                        .child(meter_row(
+                            "Agent worked".into(),
+                            stats_mod::format_span(stats.working_ms),
+                            false,
+                        ))
+                        .into_any_element(),
+                );
+            }
+            if auto_available {
+                let accent = accent_color();
+                sections.push(
+                    meter_section_bare()
+                        .child(
+                            div()
+                                .id("auto-compact")
+                                .role(Role::Switch)
+                                .aria_label("Auto-compact")
+                                .aria_description(
+                                    "Compact a large thread when the prompt cache expires.",
+                                )
+                                .flex()
+                                .items_start()
+                                .gap(px(10.))
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(
+                                    div()
+                                        .mt(px(1.))
+                                        .relative()
+                                        .w(px(28.))
+                                        .h(px(16.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(if auto_on { accent } else { content(0.18) })
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .top(px(2.))
+                                                .left(px(if auto_on { 14. } else { 2. }))
+                                                .size(px(12.))
+                                                .rounded_full()
+                                                .bg(gpui::white()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .line_height(px(18.))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(content(1.))
+                                                .child("Auto-compact"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .line_height(px(15.))
+                                                .text_color(content(0.5))
+                                                .child(
+                                                    "Compact a large thread when the prompt cache expires.",
+                                                ),
+                                        ),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.keep_full_history = !this.keep_full_history;
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element(),
+                );
+            }
+            let mut body = div().flex().flex_col();
+            for (ix, section) in sections.into_iter().enumerate() {
+                body = body.child(
+                    div()
+                        .when(ix > 0, |d| {
+                            d.mt(px(11.))
+                                .pt(px(11.))
+                                .border_t_1()
+                                .border_color(content(0.1))
+                        })
+                        .child(section),
+                );
+            }
+            body
         });
         Some(
             div()
-                .id("session-stats")
-                .role(Role::Group)
-                .aria_label(format!("Session {label}"))
-                .child(self.stats_anchor.probe())
                 .flex()
+                .flex_shrink_0()
                 .items_center()
-                .gap(px(4.))
-                .text_size(px(11.))
-                .font_features(crate::right_panel::tabular())
-                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    this.stats_hovered = *hovered;
-                    cx.notify();
-                }))
-                .children(
-                    parts
-                        .into_iter()
-                        .enumerate()
-                        .flat_map(|(i, (text, color))| {
-                            let dot = (i > 0).then(|| div().text_color(content(0.45)).child("·"));
-                            dot.into_iter()
-                                .map(IntoElement::into_any_element)
-                                .chain([div().text_color(color).child(text).into_any_element()])
-                        }),
-                )
-                .children(compact_button)
-                .when(self.stats_hovered, |d| {
+                .gap(px(8.))
+                .when(pending, |d| {
+                    d.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child("Compacts next"),
+                    )
+                })
+                .child(capsule)
+                .when_some(popover_body, |d, body| {
                     d.child(
                         popover(
-                            "session-stats-tooltip",
+                            "session-meter-popover",
                             Anchor::Slot(self.stats_anchor.clone()),
                         )
                         .side(Side::Top)
                         .align(Align::End)
-                        .max_width(300.)
-                        .padding(10.)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .text_size(px(11.))
-                                .line_height(px(16.))
-                                .children(rows.into_iter().map(|(name, value)| {
-                                    div()
-                                        .flex()
-                                        .justify_between()
-                                        .gap(px(16.))
-                                        .child(div().text_color(content(0.5)).child(name))
-                                        .child(div().text_color(content(1.)).child(value))
-                                }))
-                                .children(
-                                    rewrite
-                                        .map(|text| div().mt(px(4.)).text_color(amber).child(text)),
-                                ),
-                        ),
+                        .gap(7.)
+                        .width(290.)
+                        .padding(12.)
+                        .ignore(self.stats_anchor.clone())
+                        .on_dismiss({
+                            let this = cx.entity().downgrade();
+                            move |_, cx| {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.meter_open = false;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(body),
                     )
                 })
                 .into_any_element(),
@@ -3306,21 +3595,11 @@ impl Conversation {
             self.branch.clone()
         };
         let ratio = self.context.and_then(|usage| usage.ratio());
-        let show_context = ratio.is_some() || draft;
+        let show_context = ratio.is_some_and(|ratio| ratio > 0.);
         let can_compact = !new
             && !self.busy
             && self.summary.provider_id.is_some()
             && monocode_core::provider::supports_compact(Kind::from_id(&self.summary.provider));
-        let headline = ratio
-            .map(|r| format!("{:.0}% context used", r * 100.))
-            .unwrap_or_else(|| "No context used yet".into());
-        let detail = self.context.map(|usage| {
-            format!(
-                "{} / {} tokens",
-                monocode_core::context::format_tokens(usage.used),
-                monocode_core::context::format_tokens(usage.window.unwrap_or(0))
-            )
-        });
         div()
             .min_w_0()
             .flex()
@@ -3361,6 +3640,8 @@ impl Conversation {
                 div()
                     .ml_auto()
                     .flex_shrink_0()
+                    // The session meter's height, so the bar holds still when it appears.
+                    .min_h(px(26.))
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -3398,95 +3679,7 @@ impl Conversation {
                             )
                         },
                     )
-                    .children(self.session_stats_chip(cx))
-                    .when(show_context, |d| {
-                        d.child(
-                            div()
-                                .id("context-meter")
-                                .role(Role::Image)
-                                .aria_label(format!(
-                                    "{headline}{}",
-                                    detail
-                                        .as_ref()
-                                        .map(|s| format!(", {s}"))
-                                        .unwrap_or_default()
-                                ))
-                                .child(self.context_anchor.probe())
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    this.set_context_hover(*hovered, cx);
-                                }))
-                                .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
-                                .when(self.context_hovered, |d| {
-                                    d.child(
-                                        popover(
-                                            "context-tooltip",
-                                            Anchor::Slot(self.context_anchor.clone()),
-                                        )
-                                        .side(Side::Top)
-                                        .align(Align::End)
-                                        .max_width(240.)
-                                        .padding(10.)
-                                        .child(
-                                            div()
-                                                .id("context-tooltip-body")
-                                                .on_hover(cx.listener(
-                                                    |this, hovered: &bool, _, cx| {
-                                                        this.set_context_hover(*hovered, cx);
-                                                    },
-                                                ))
-                                                .flex()
-                                                .flex_col()
-                                                .text_size(px(12.))
-                                                .line_height(px(16.))
-                                                .text_color(content(1.))
-                                                .child(headline)
-                                                .when_some(detail, |d, detail| {
-                                                    d.child(
-                                                        div()
-                                                            .text_size(px(11.))
-                                                            .text_color(content(0.5))
-                                                            .child(detail),
-                                                    )
-                                                })
-                                                .when(can_compact, |d| {
-                                                    d.child(
-                                                        div()
-                                                            .id("compact-context")
-                                                            .role(Role::Button)
-                                                            .aria_label("Compact context")
-                                                            .mt(px(8.))
-                                                            .h(px(24.))
-                                                            .px(px(8.))
-                                                            .rounded_md()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .text_color(content(0.8))
-                                                            .bg(content(0.08))
-                                                            .hover(|s| {
-                                                                s.bg(content(0.14))
-                                                                    .text_color(content(1.))
-                                                            })
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                |_, _, cx| cx.stop_propagation(),
-                                                            )
-                                                            .child("Compact context")
-                                                            .on_click(cx.listener(
-                                                                |this, _, _, cx| {
-                                                                    this.context_hovered = false;
-                                                                    this.compact_context(cx);
-                                                                },
-                                                            )),
-                                                    )
-                                                }),
-                                        ),
-                                    )
-                                }),
-                        )
-                    }),
+                    .children(self.session_meter(show_context, can_compact, cx)),
             )
     }
 
@@ -4135,6 +4328,41 @@ fn send_button(
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 // GitPickerTrigger: the quiet `h-6` controls in the bar under the box.
+/// A titled block inside the session meter's popover.
+fn meter_section(title: &'static str) -> gpui::Div {
+    div().flex().flex_col().child(
+        div()
+            .mb(px(6.))
+            .text_size(px(11.))
+            .line_height(px(14.))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(content(0.5))
+            .child(title),
+    )
+}
+fn meter_section_bare() -> gpui::Div {
+    div().flex().flex_col()
+}
+/// A label and value, `strong` for the block's headline figure.
+fn meter_row(name: String, value: String, strong: bool) -> gpui::Div {
+    div()
+        .flex()
+        .justify_between()
+        .gap(px(12.))
+        .text_size(px(12.))
+        .line_height(px(18.))
+        .child(
+            div()
+                .text_color(if strong { content(1.) } else { content(0.5) })
+                .child(name),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(if strong { content(0.5) } else { content(1.) })
+                .child(value),
+        )
+}
 fn bar_trigger(
     id: &'static str,
     path: &'static str,
