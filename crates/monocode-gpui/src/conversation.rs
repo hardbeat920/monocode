@@ -2162,6 +2162,15 @@ impl Conversation {
             })
             .filter(|value| !value.is_empty() && *value != "default")
     }
+    /// The model trigger's fast-mode bolt: shown while fast mode is on,
+    /// unless beside mode already has its own Fast pill.
+    fn trigger_fast(&self, beside: bool) -> bool {
+        self.model_info().is_some_and(|model| {
+            model.fast
+                && self.settings.fast
+                && !(beside && model.efforts.is_empty() && model.tiers.is_empty())
+        })
+    }
     /// Combined ModelPicker trigger; beside mode renders these as separate pills.
     fn trigger_effort_label(&self) -> Option<SharedString> {
         if let Some(model) = self.model_info() {
@@ -2792,6 +2801,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let trigger_fast = self.trigger_fast(beside);
         let controls = if beside {
             self.model_controls(cx)
         } else {
@@ -2998,6 +3008,9 @@ impl Conversation {
                                                         .text_color(content(0.5))
                                                         .child(effort),
                                                 )
+                                            })
+                                            .when(trigger_fast, |d| {
+                                                d.child(fast_bolt())
                                             })
                                             .child(icon("chevron-down", 12.)),
                                     )
@@ -4828,4 +4841,11 @@ mod menu_tests {
             .unwrap();
         assert!(input_focused(window, cx));
     }
+}
+
+/// The amber bolt the model trigger carries while fast mode is on.
+pub(crate) fn fast_bolt() -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .child(icon("zap", 12.).text_color(gpui::rgb(0xfbbf24)))
 }

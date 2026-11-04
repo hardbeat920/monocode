@@ -1227,6 +1227,8 @@ impl TranscriptView {
         let Some((mascot, color, name)) = self.mono_look.clone() else {
             return div().into_any_element();
         };
+        // As a model's "Worked for" line: the Mono's mascot on a tile, then
+        // its name.
         let pill = div()
             .debug_selector(|| "mono-signature-pill".into())
             .flex()
@@ -1234,28 +1236,16 @@ impl TranscriptView {
             .flex_shrink_0()
             .max_w(px(320.))
             .items_center()
-            .gap_1p5()
-            .rounded_full()
-            .bg(content(0.07))
-            .py(px(2.))
-            .pl_2()
-            .pr_3()
+            .gap(px(8.))
             .child(
-                div()
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .child(crate::monos::avatar::avatar(
-                        &mascot, color, "idle", 14., true,
-                    )),
+                crate::tab_tile::mark_tile(
+                    &crate::tab_tile::ACTIVITY_TILE,
+                    crate::tab_tile::Face::Neutral,
+                    crate::monos::avatar::avatar(&mascot, color, "idle", 14., true),
+                )
+                .flex_shrink_0(),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(content(0.8))
-                    .child(name),
-            );
+            .child(div().min_w_0().truncate().child(name));
         div()
             .id(("mono-turn-header", turn))
             .flex()
