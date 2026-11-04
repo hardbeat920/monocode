@@ -3512,7 +3512,14 @@ impl Window {
         if self.platform_window.prepare_frame() {
             self.refresh();
         }
+        let frame_stats_start = crate::frame_stats::enabled().then(|| {
+            let views = self.invalidator.take_views();
+            crate::frame_stats::begin_frame(views.iter().copied());
+            self.invalidator.replace_views(views);
+            std::time::Instant::now()
+        });
         self.invalidate_entities();
+        let frame_stats_kind = (!self.layout_dirty_views.is_empty(), self.refreshing);
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.invalidator.set_dirty(false);
@@ -3649,6 +3656,11 @@ impl Window {
                 .window_profiler
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
             self.debug_frame_overlay.record_frame(draw_duration);
+        }
+
+        if let Some(start) = frame_stats_start {
+            let (layout, refresh) = frame_stats_kind;
+            crate::frame_stats::end_frame(start.elapsed(), layout, refresh);
         }
 
         // Exit the scope to obtain the arena-clear token this draw owes; the

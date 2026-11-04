@@ -13,6 +13,7 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+mod perf_scroll;
 pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
@@ -722,6 +723,7 @@ pub(crate) struct TranscriptView {
     messages: Vec<Message>,
     rows: Vec<UiRow>,
     streaming: bool,
+    perf_scroll: perf_scroll::PerfScroll,
     chat_layout: bool,
     anchor_prompts: bool,
     smooth_reveal: bool,
@@ -1903,7 +1905,7 @@ impl TranscriptView {
                     .relative()
                     .w_full()
                     .max_w(px(COLUMN))
-                    .px_4()
+                    .px(px(COLUMN_PAD))
                     .pt(px(top))
                     .pb(px(bottom))
                     .child(crate::monos::cards::launch(id, view.as_ref(), cx)),
@@ -1978,7 +1980,7 @@ impl TranscriptView {
                     .max_w(px(COLUMN))
                     .min_w_0()
                     .pl(px(56.))
-                    .pr(px(16.))
+                    .pr(px(COLUMN_PAD))
                     .pt_1()
                     .pb(px(if stacked { 0. } else { 20. }))
                     .flex()
@@ -2089,7 +2091,7 @@ impl TranscriptView {
                         .w_full()
                         .max_w(px(COLUMN))
                         .min_w_0()
-                        .px_4()
+                        .px(px(COLUMN_PAD))
                         .child(self.mono_header(self.source.len(), Some("Thinking…".into()), cx)),
                 )
             })
@@ -2507,6 +2509,7 @@ impl TranscriptView {
             messages: Vec::new(),
             rows: Vec::new(),
             streaming: false,
+            perf_scroll: Default::default(),
             chat_layout: true,
             anchor_prompts: true,
             smooth_reveal: true,
@@ -5568,7 +5571,7 @@ impl TranscriptView {
                             .w_full()
                             .max_w(px(COLUMN))
                             .min_w_0()
-                            .px_4()
+                            .px(px(COLUMN_PAD))
                             .pt(px(if card && self.mono {
                                 card_top
                             } else if first && !is_tool && !prose {
@@ -5597,7 +5600,7 @@ impl TranscriptView {
                             .when(user && self.chat_layout, |d| {
                                 d.pl(px(56.)).flex().justify_end()
                             })
-                            .when(user && self.mono, |d| d.pr(px(16.)))
+                            .when(user && self.mono, |d| d.pr(px(COLUMN_PAD)))
                             .child(
                                 div()
                                     .relative()
@@ -5802,12 +5805,13 @@ impl TranscriptView {
     /// Wrapped lines of a user message's text at the bubble's text width.
     fn prompt_lines(&self, text: &str, window: &Window) -> usize {
         let column = self.viewport.size.width.min(px(COLUMN));
-        // Row padding (`pl-14 pr-4` in the chat layout, `px-4` otherwise),
-        // the bubble's 36rem cap and its `px-3`.
+        // Row padding (`pl-14` and `COLUMN_PAD` in the chat layout,
+        // `COLUMN_PAD` both sides otherwise), the bubble's 36rem cap and its
+        // `px-3`.
         let bubble = if self.chat_layout {
-            (column - px(72.)).min(PROMPT_BUBBLE_MAX)
+            (column - px(56. + COLUMN_PAD)).min(PROMPT_BUBBLE_MAX)
         } else {
-            column - px(32.)
+            column - px(2. * COLUMN_PAD)
         };
         let text = SharedString::from(text.trim_end().to_owned());
         measurements::shape_prompt(text, Some(bubble - PROMPT_PAD_X), window)
@@ -5831,6 +5835,7 @@ impl TranscriptView {
 impl gpui::EventEmitter<ResponseRequest> for TranscriptView {}
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.perf_scroll(window, cx);
         let top = self.list.logical_scroll_top();
         // Rows that don't fill the viewport can't scroll, so their top being
         // on screen asks for older turns too. Layout must have run first.
@@ -6004,7 +6009,7 @@ impl Render for TranscriptView {
                             div()
                                 .w_full()
                                 .max_w(px(crate::theme::COLUMN))
-                                .px(px(16.))
+                                .px(px(COLUMN_PAD))
                                 .flex()
                                 .map(|d| {
                                     if beside_pill {

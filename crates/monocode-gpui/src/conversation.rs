@@ -475,7 +475,7 @@ impl Conversation {
     }
 
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(input::Input::new);
+        let input = cx.new(input::Input::session_composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
@@ -589,6 +589,7 @@ impl Conversation {
                 }
             })
         });
+        perf_prompt(cx);
         Self {
             editing_last_turn: Default::default(),
             btw: None,
@@ -1215,6 +1216,11 @@ impl Conversation {
             .detach();
         cx.spawn(async move |this, cx| {
             while let Ok(update) = rx.recv().await {
+                // Land each update on the spinners' 30Hz beat: the reply then
+                // redraws in their frames instead of adding frames of its own.
+                if !update.finished {
+                    crate::pulse::beat(cx).await;
+                }
                 let finished = update.finished;
                 if this
                     .update(cx, |this, cx| {
@@ -2903,8 +2909,10 @@ impl Conversation {
                     .flex_col()
                     .on_mouse_down(
                         MouseButton::Left,
+                        // Keep a focus-tracking ancestor from taking focus back.
                         cx.listener(|this, _, window, cx| {
-                            window.focus(&this.input.focus_handle(cx), cx)
+                            window.focus(&this.input.focus_handle(cx), cx);
+                            window.prevent_default();
                         }),
                     )
                     .child(self.completion.read(cx).composer_probe())
@@ -2914,7 +2922,7 @@ impl Conversation {
                     .child(
                         div()
                             .px_3()
-                            .pt(px(14.))
+                            .pt(px(10.))
                             .pb(px(14.))
                             .child(self.completion.clone()),
                     )
@@ -3413,6 +3421,48 @@ impl Conversation {
     }
 }
 
+/// For profiling without clicking: with `MONOCODE_PERF_PROMPT=<text>`, the
+/// first chat created switches to Claude and sends that text once, a few
+/// seconds after launch. scripts/perf/frame-run.sh sets it. It only runs
+/// while `MONOCODE_CLAUDE_BINARY` replaces `claude`, so it never reaches a
+/// real provider.
+fn perf_prompt(cx: &mut Context<Conversation>) {
+    static SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Some(prompt) = std::env::var("MONOCODE_PERF_PROMPT")
+        .ok()
+        .filter(|prompt| !prompt.is_empty())
+    else {
+        return;
+    };
+    if std::env::var_os("MONOCODE_CLAUDE_BINARY").is_none()
+        || SENT.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    cx.spawn(async move |this, cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(3))
+            .await;
+        this.update(cx, |this, cx| {
+            if this.summary.has_messages {
+                return;
+            }
+            let claude = monocode_core::provider::Kind::Claude.id();
+            if this.summary.provider != claude {
+                this.summary.provider = claude.into();
+                this.summary.provider_id = None;
+                this.model = None;
+                this.completion
+                    .update(cx, |completion, cx| completion.set_provider(claude, cx));
+                this.catalog.clear();
+            }
+            this.launch_prompt(prompt, cx);
+        })
+        .ok();
+    })
+    .detach();
+}
+
 /// The access mode the last composer pick left as the default for new chats.
 pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
     cx.try_global::<crate::settings::Preferences>()
@@ -3567,7 +3617,7 @@ mod composer_motion_tests {
                     } else {
                         composer.top() + px(1.)
                     };
-                    assert_eq!(field.top() - top, px(14.));
+                    assert_eq!(field.top() - top, px(10.));
                     assert_eq!(toolbar.top() - field.bottom(), px(14.));
                     assert_eq!(field.size.height, px(66.));
                     window

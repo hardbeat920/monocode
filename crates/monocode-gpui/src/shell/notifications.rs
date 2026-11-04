@@ -515,10 +515,12 @@ impl Shell {
     /// One pass per render: snapshots for the banners, then the reminders.
     pub(super) fn sync_notices(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = monocode_core::time::now_ms();
-        let prefs = self.workspace.preferences.clone();
-        if self.notification_state.sounds_enabled != prefs.sounds {
-            self.notification_state.sounds_enabled = prefs.sounds;
-            if prefs.sounds {
+        // This runs on every Shell frame; borrow the preferences below instead
+        // of cloning their JSON maps each time.
+        let sounds = self.workspace.preferences.sounds;
+        if self.notification_state.sounds_enabled != sounds {
+            self.notification_state.sounds_enabled = sounds;
+            if sounds {
                 self.notification_state.sounds_enabled_at = now;
             }
         }
@@ -605,6 +607,7 @@ impl Shell {
         }
         // After the completions above, so a turn that ended this frame counts now.
         self.reconcile_dock_badge(cx);
+        let prefs = &self.workspace.preferences;
         self.notification_state.approvals.update(cx, |notices, cx| {
             notices.sync(
                 &snapshots,
