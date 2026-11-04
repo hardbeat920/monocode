@@ -363,6 +363,17 @@ fn abort_commit(slot: &mut Option<QuitRun>, id: u32, label: &str) -> bool {
     true
 }
 
+fn abort_timed_out_commit(slot: &mut Option<QuitRun>, id: u32) -> bool {
+    if !slot
+        .as_ref()
+        .is_some_and(|run| run.id == id && run.stage == Stage::Committing)
+    {
+        return false;
+    }
+    *slot = None;
+    true
+}
+
 fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
     let Some(run) = slot.as_mut() else {
         return Next::Wait;
@@ -587,7 +598,7 @@ fn prompt_window(app: &AppHandle, replied: &HashSet<String>) -> Option<String> {
     pool.first().cloned()
 }
 
-/// Nothing waits forever: a webview that never answers still lets the app quit.
+/// A stalled commit aborts rather than discarding an unconfirmed save.
 fn watch_stage(app: &AppHandle, id: u32, stage: Stage, wait: Duration) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -602,7 +613,11 @@ fn watch_stage(app: &AppHandle, id: u32, stage: Stage, wait: Duration) {
         }
         match stage {
             Stage::Polling => start_confirm(&app, id),
-            Stage::Committing => confirm_quit(app),
+            Stage::Committing => {
+                if abort_timed_out_commit(&mut QUIT_RUN.lock().unwrap(), id) {
+                    let _ = app.emit(QUIT_ABORTED, id);
+                }
+            }
             Stage::Confirming => clear_run(id),
         }
     });
@@ -750,6 +765,24 @@ mod tests {
         assert!(open_commit(&mut slot, 1, labels));
         assert_eq!(record_ready(&mut slot, 1, "main"), Next::Wait);
         assert_eq!(record_ready(&mut slot, 1, "window-2"), Next::Exit);
+    }
+
+    #[test]
+    fn timed_out_commit_aborts_only_the_matching_quit() {
+        let mut slot = polling(&["main", "window-2"]);
+        assert!(open_commit(
+            &mut slot,
+            1,
+            vec!["main".into(), "window-2".into()]
+        ));
+        assert_eq!(record_ready(&mut slot, 1, "main"), Next::Wait);
+        assert!(!abort_timed_out_commit(&mut slot, 2));
+        assert!(abort_timed_out_commit(&mut slot, 1));
+        assert_eq!(record_ready(&mut slot, 1, "window-2"), Next::Wait);
+        assert!(slot.is_none());
+        assert!(begin_run(&mut slot, 2, vec!["main".into()]));
+        assert!(!abort_timed_out_commit(&mut slot, 1));
+        assert_eq!(slot.as_ref().map(|run| run.id), Some(2));
     }
 
     #[test]

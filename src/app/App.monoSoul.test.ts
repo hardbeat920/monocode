@@ -2,9 +2,15 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { createMono } from "../features/monos/model/mono";
+import { createMono, saveMonoSessionId } from "../features/monos/model/mono";
+import { newSession } from "../features/sessions/model/session";
+import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
-import { abortQuit, handleQuitRequested } from "./model/appLifecycle";
+import {
+  abortQuit,
+  commitQuit,
+  handleQuitRequested,
+} from "./model/appLifecycle";
 
 const state = vi.hoisted(() => ({
   sidebar: null as any,
@@ -12,10 +18,33 @@ const state = vi.hoisted(() => ({
   loadMono: vi.fn(),
   save: vi.fn(),
   loadFiles: vi.fn(),
+  floating: null as any,
   onClose: null as
     null | ((event: { preventDefault: () => void }) => Promise<void>),
   holdWrites: false,
   writes: [] as Array<() => void>,
+}));
+vi.mock("../features/monos/ui/MonoOverview", async (load) => {
+  const original =
+    await load<typeof import("../features/monos/ui/MonoOverview")>();
+  return {
+    ...original,
+    MonoOverview: (props: any) =>
+      createElement("div", {
+        "data-mono-overview": "",
+        "data-document": props.shownDocumentId,
+      }),
+  };
+});
+vi.mock("./hooks/useFloatingMono", () => ({
+  useFloatingMono: (
+    _sessions: unknown,
+    _snapshot: unknown,
+    _enabled: unknown,
+    host: unknown,
+  ) => {
+    state.floating = host;
+  },
 }));
 vi.mock("./shell/Sidebar", async (load) => {
   const original = await load<typeof import("./shell/Sidebar")>();
@@ -61,6 +90,11 @@ vi.mock("../features/notifications/hooks/useSessionReminders", () => ({
     open: vi.fn(),
     refresh: vi.fn(),
   }),
+}));
+vi.mock("../features/search/ui/SearchView", () => ({ SearchView: () => null }));
+vi.mock("../features/inbox/ui/InboxView", () => ({
+  InboxView: () => null,
+  LinkedWorkItemPanel: () => null,
 }));
 vi.mock("../features/mobile/hooks/useMobileWorkspace", () => ({
   useMobileWorkspace: () => {},
@@ -352,4 +386,545 @@ it("shows an error when the selected Soul cannot be loaded", async () => {
   );
   await act(async () => root.unmount());
   warn.mockRestore();
+});
+
+it("does not open an artifact after its Mono load is superseded", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  const other = createMono();
+  const session = newSession("codex", "/work");
+  let finish!: (value: unknown) => void;
+  const deferred = new Promise((resolve) => {
+    finish = resolve;
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementationOnce(async (id: string, host: any) => {
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    })
+    .mockReturnValueOnce(deferred)
+    .mockResolvedValue(session)
+    .mockResolvedValue(session);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  expect(state.sidebar.monos.activeId).toBe(first.id);
+  let opening!: Promise<void>;
+  await act(async () => {
+    opening = state.floating.openArtifact(other.id, "stale-artifact");
+  });
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => {
+    const stale = newSession("codex", "/other");
+    saveMonoSessionId(other.id, stale.id);
+    finish(stale);
+    await opening;
+  });
+  expect(
+    document
+      .querySelector("[data-mono-overview]")
+      ?.getAttribute("data-document"),
+  ).toBeNull();
+  await act(async () =>
+    state.floating.openArtifact(first.id, "current-artifact"),
+  );
+  expect(
+    document
+      .querySelector("[data-mono-overview]")
+      ?.getAttribute("data-document"),
+  ).toBe("current-artifact");
+  await act(async () => root.unmount());
+});
+
+it("retains the regular settings Soul draft across navigation and refuses shutdown after a failed save", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: mono.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  state.save.mockReset().mockRejectedValueOnce(new Error("disk failed"));
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(mono.id));
+  expect(state.title.onOpenMonoSettings).toBeTypeOf("function");
+  await act(async () => state.title.onOpenMonoSettings());
+  const soulButton = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-mono-settings] nav button",
+    ),
+  ].find((button) => button.textContent === "Soul")!;
+  await act(async () => soulButton.click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-settings] [data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Regular draft");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => state.title.onOpenInbox());
+  expect(state.sidebar.inboxActive).toBe(true);
+  expect(
+    document.querySelector("[data-mono-settings] [data-mono-soul] textarea"),
+  ).toBe(editor);
+  let quit!: boolean;
+  await act(async () => {
+    quit = await handleQuitRequested(91);
+  });
+  expect(quit).toBe(false);
+  expect(state.save).toHaveBeenCalledWith(
+    mono.id,
+    "soul",
+    "# Regular draft",
+    "old",
+  );
+  expect(editor.value).toBe("# Regular draft");
+  expect(
+    document.querySelector('[data-mono-settings] [role="alert"]')?.textContent,
+  ).toContain("Could not save");
+  await act(async () => root.unmount());
+  warn.mockRestore();
+});
+
+it("does not allow a timed-out quit to discard a pending Soul save", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: mono.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  let finishSave!: (hash: string) => void;
+  state.save.mockReset().mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishSave = resolve;
+    }),
+  );
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onEditSoul(mono.id));
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Pending");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  let quit!: Promise<void>;
+  await act(async () => {
+    quit = commitQuit(101);
+  });
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => abortQuit(101));
+  expect(editor.value).toBe("# Pending");
+  await act(async () => {
+    finishSave("new");
+    await quit;
+    expect(invoke).toHaveBeenCalledWith("quit_ready", {
+      id: 101,
+      persisted: false,
+    });
+  });
+  expect(editor.closest("[inert]")).toBeNull();
+  expect(editor.value).toBe("# Pending");
+  await act(async () => root.unmount());
+});
+
+it("freezes a regular Soul draft during replacement and keeps it if saving fails", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  const second = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: first.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  let fail!: (error: Error) => void;
+  state.save.mockReset().mockReturnValueOnce(
+    new Promise((_resolve, reject) => {
+      fail = reject;
+    }),
+  );
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  const soul = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-mono-settings] nav button",
+    ),
+  ].find((button) => button.textContent === "Soul")!;
+  await act(async () => soul.click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-settings] [data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Draft");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => state.sidebar.monos.onOpen(second.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  expect(editor.closest("[inert]")).not.toBeNull();
+  await act(async () => fail(new Error("write failed")));
+  expect(
+    document.querySelector("[data-mono-settings] [data-mono-soul] textarea"),
+  ).toBe(editor);
+  expect(editor.value).toBe("# Draft");
+  expect(editor.closest("[inert]")).toBeNull();
+  await act(async () => root.unmount());
+  warn.mockRestore();
+});
+
+it("does not reopen old settings after a pending new Mono load when settings were closed", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: first.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  let finish!: () => void;
+  state.loadMono
+    .mockReset()
+    .mockImplementationOnce(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    })
+    .mockImplementationOnce(
+      (id: string, host: any) =>
+        new Promise((resolve) => {
+          finish = () => {
+            const session = newSession("codex", "/work");
+            saveMonoSessionId(id, session.id);
+            host.add(session);
+            resolve(session);
+          };
+        }),
+    );
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  await act(async () => state.sidebar.monos.onCreate());
+  expect(finish).toBeTypeOf("function");
+  const dialog = document
+    .querySelector("[data-mono-settings]")!
+    .closest('[role="dialog"]')!;
+  await act(async () =>
+    dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+  );
+  await act(async () => finish());
+  expect(document.querySelector("[data-mono-settings]")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+it("does not let a delayed close of old settings close its replacement", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  const second = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: first.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  let finish!: (hash: string) => void;
+  state.save.mockReset().mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  const soul = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-mono-settings] nav button",
+    ),
+  ].find((button) => button.textContent === "Soul")!;
+  await act(async () => soul.click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-settings] [data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Draft");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => state.sidebar.monos.onOpen(second.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  const dialog = document
+    .querySelector("[data-mono-settings]")!
+    .closest('[role="dialog"]')!;
+  await act(async () =>
+    dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+  );
+  await act(async () => finish("saved"));
+  expect(document.querySelector("[data-mono-settings]")).not.toBeNull();
+  expect(
+    document.querySelector("[data-mono-settings] [data-mono-soul]"),
+  ).toBeNull();
+  await act(async () => root.unmount());
+});
+
+it("flushes both Soul editors and cancels quit when either save fails", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const first = createMono();
+  const second = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: first.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  state.save.mockReset().mockImplementation(async (id: string) => {
+    if (id === first.id) throw new Error("regular save failed");
+    return "saved";
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(first.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  const soul = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-mono-settings] nav button",
+    ),
+  ].find((button) => button.textContent === "Soul")!;
+  await act(async () => soul.click());
+  const regular = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-settings] [data-mono-soul] textarea",
+  )!;
+  await act(async () => state.sidebar.monos.onEditSoul(second.id));
+  const editors = [
+    ...document.querySelectorAll<HTMLTextAreaElement>(
+      "[data-mono-soul] textarea",
+    ),
+  ];
+  const direct = editors.find((editor) => editor !== regular)!;
+  const edit = (editor: HTMLTextAreaElement, text: string) => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, text);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => {
+    edit(regular, "# Regular");
+    edit(direct, "# Direct");
+  });
+  let quit!: boolean;
+  await act(async () => {
+    quit = await handleQuitRequested(111);
+  });
+  expect(quit).toBe(false);
+  expect(state.save).toHaveBeenCalledWith(first.id, "soul", "# Regular", "old");
+  expect(state.save).toHaveBeenCalledWith(second.id, "soul", "# Direct", "old");
+  expect(regular.value).toBe("# Regular");
+  expect(direct.value).toBe("# Direct");
+  await act(async () => root.unmount());
+  warn.mockRestore();
+});
+
+it("still closes regular settings after reopening the same Mono settings", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles.mockReset().mockResolvedValue({
+    id: mono.id,
+    dir: "/mono",
+    soul: "# Original",
+    soulHash: "old",
+    memory: "",
+    memoryHash: "m",
+    memoryPath: "/mono/MEMORY.md",
+    topics: [],
+  });
+  state.loadMono
+    .mockReset()
+    .mockImplementation(async (id: string, host: any) => {
+      const session = newSession("codex", "/work");
+      saveMonoSessionId(id, session.id);
+      host.add(session);
+      return session;
+    });
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onOpen(mono.id));
+  await act(async () => state.title.onOpenMonoSettings());
+  await act(async () => state.title.onOpenMonoSettings());
+  const dialog = document
+    .querySelector("[data-mono-settings]")!
+    .closest('[role="dialog"]')!;
+  await act(async () =>
+    dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+  );
+  expect(document.querySelector("[data-mono-settings]")).toBeNull();
+  await act(async () => root.unmount());
 });

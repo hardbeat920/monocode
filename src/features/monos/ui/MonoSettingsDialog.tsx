@@ -1,10 +1,12 @@
 import {
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -55,6 +57,8 @@ type Props = {
   runtimeMode: RuntimeMode;
   busy?: boolean;
   initialSection?: MonoSettingsSection;
+  leaveRef?: Ref<() => Promise<boolean>>;
+  frozen?: boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -71,12 +75,21 @@ export function MonoSettingsDialog({
   agent,
   status,
   initialSection = "general",
+  leaveRef,
+  frozen = false,
   onClose,
   ...general
 }: Props) {
   const [section, setSection] = useState(initialSection);
   const files = useMonoFiles(monoId, status);
   const saveSoul = useRef<() => Promise<boolean>>(null);
+  useImperativeHandle(
+    leaveRef,
+    () => () =>
+      section !== "soul" || !saveSoul.current
+        ? Promise.resolve(true)
+        : saveSoul.current(),
+  );
   const leaveSoul = (action: () => void) => {
     if (section !== "soul" || !saveSoul.current) action();
     else
@@ -99,6 +112,7 @@ export function MonoSettingsDialog({
         // Section headers leave room for the dialog's close button.
         style={{ "--mono-window-controls-width": "2rem" } as CSSProperties}
         data-mono-settings
+        inert={frozen || undefined}
       >
         <nav
           aria-label="Settings sections"

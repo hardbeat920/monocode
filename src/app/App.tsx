@@ -1179,19 +1179,30 @@ function Workspace({
   monoOverviewOpenRef.current = monoOverviewOpen;
   const monoOverviewTabRef = useRef(monoOverviewTab);
   monoOverviewTabRef.current = monoOverviewTab;
-  // The Mono whose settings dialog is open; another Mono's view closes it.
+  // Keep the settings target while the workspace view changes.
   const [monoSettingsFor, setMonoSettingsFor] = useState<string | null>(null);
   const [soulTarget, setSoulTarget] = useState<{
     id: string;
     agent: ReturnType<typeof monoLook>;
   }>();
   const saveSoul = useRef<() => Promise<boolean>>(null);
+  const saveSettingsSoul = useRef<() => Promise<boolean>>(null);
+  const settingsRequest = useRef(0);
+  const settingsVersion = useRef(0);
+  const settingsActive = useRef<string | null>(null);
+  const settingsSwitchCount = useRef(0);
+  const [settingsSwitching, setSettingsSwitching] = useState(false);
+  const settingsSnapshot = useRef<{
+    mono: NonNullable<ReturnType<typeof findMono>>;
+    session: Session;
+  } | null>(null);
   const soulRequest = useRef(0);
   const soulExitCount = useRef(0);
   const [soulFrozen, setSoulFrozen] = useState(false);
   const beginSoulExit = useCallback(async (): Promise<(() => void) | null> => {
     soulExitCount.current++;
     soulRequest.current++;
+    settingsRequest.current++;
     flushSync(() => setSoulFrozen(true));
     let released = false;
     const release = () => {
@@ -1201,7 +1212,11 @@ function Workspace({
       if (!soulExitCount.current) setSoulFrozen(false);
     };
     try {
-      if (saveSoul.current && !(await saveSoul.current())) {
+      const results = await Promise.all([
+        saveSoul.current?.() ?? Promise.resolve(true),
+        saveSettingsSoul.current?.() ?? Promise.resolve(true),
+      ]);
+      if (results.some((saved) => !saved)) {
         release();
         return null;
       }
@@ -1243,7 +1258,7 @@ function Workspace({
     void (async () => {
       if (saveSoul.current && !(await saveSoul.current())) return;
       if (!soulExitCount.current && request === soulRequest.current)
-        setSoulTarget(undefined);
+        flushSync(() => setSoulTarget(undefined));
     })();
   }, []);
   // A document opened from the chat shows on the overview's Documents tab,
@@ -1319,6 +1334,46 @@ function Workspace({
   const monoViewIdRef = useRef(monoViewId);
   monoViewIdRef.current = monoViewId;
   const monoViewRequest = useRef(0);
+  const openMonoSettings = useCallback(
+    (monoId: string, viewRequest?: number, loadedSession?: Session) => {
+      if (soulExitCount.current) return;
+      const request = ++settingsRequest.current;
+      settingsSwitchCount.current++;
+      flushSync(() => setSettingsSwitching(true));
+      void (async () => {
+        try {
+          if (saveSettingsSoul.current && !(await saveSettingsSoul.current()))
+            return;
+          if (
+            soulExitCount.current ||
+            request !== settingsRequest.current ||
+            (viewRequest !== undefined && viewRequest !== monoViewRequest.current)
+          ) return;
+          const mono = findMono(monoId);
+          const session = loadedSession ?? sessionsRef.current.find(
+            (entry) => entry.id === mono?.sessionId,
+          );
+          if (!mono || !session || settingsActive.current === monoId) return;
+          flushSync(() => {
+            settingsVersion.current++;
+            settingsActive.current = monoId;
+            settingsSnapshot.current = { mono, session };
+            setMonoSettingsFor(monoId);
+          });
+        } finally {
+          settingsSwitchCount.current--;
+          if (!settingsSwitchCount.current) setSettingsSwitching(false);
+        }
+      })();
+    },
+    [],
+  );
+  const closeMonoSettings = useCallback((version: number) => {
+    if (soulExitCount.current || version !== settingsVersion.current) return;
+    settingsRequest.current++;
+    settingsActive.current = null;
+    flushSync(() => setMonoSettingsFor(null));
+  }, []);
   const closeMonoView = useCallback(() => {
     monoViewRequest.current += 1;
     monoViewIdRef.current = null;
@@ -5132,7 +5187,7 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
-    async (monoId: string) => {
+    async (monoId: string, onOpened?: (session: Session) => void) => {
       setMonoActivity(null);
       workspaceNavigation.cancel();
       const request = ++monoViewRequest.current;
@@ -5171,6 +5226,7 @@ function Workspace({
       setProjectTerminalFocused(false);
       setComposerFocused(true);
       setComposerFocusToken((token) => token + 1);
+      onOpened?.(session);
     },
     [ensureOpenSession, workspaceNavigation.cancel],
   );
@@ -5202,11 +5258,27 @@ function Workspace({
   }, [closeMonoView, monosEnabled, onOpenMono]);
 
   /** A new Mono opens straight away, ready to be told what it works on. */
-  const onCreateMono = useCallback((projects?: readonly string[]) => {
-    const monoId = createMono(projects).id;
-    setMonoSettingsFor(monoId);
-    void onOpenMono(monoId);
-  }, [onOpenMono]);
+  const onCreateMono = useCallback(
+    (projects?: readonly string[]) => {
+      if (soulExitCount.current) return;
+      const request = ++settingsRequest.current;
+      const viewRequest = monoViewRequest.current;
+      void (async () => {
+        if (saveSettingsSoul.current && !(await saveSettingsSoul.current())) return;
+        if (
+          soulExitCount.current ||
+          request !== settingsRequest.current ||
+          viewRequest !== monoViewRequest.current
+        ) return;
+        const monoId = createMono(projects).id;
+        void onOpenMono(monoId, (session) => {
+          if (soulExitCount.current || request !== settingsRequest.current) return;
+          openMonoSettings(monoId, monoViewRequest.current, session);
+        });
+      })();
+    },
+    [onOpenMono, openMonoSettings],
+  );
 
   const onResetMono = useCallback(
     async (sessionId: string): Promise<void> => {
@@ -13546,9 +13618,7 @@ function Workspace({
     questionInteraction: onQuestionInteraction,
     reveal: onOpenMono,
     openArtifact: async (monoId, id) => {
-      await onOpenMono(monoId);
-      const sessionId = findMono(monoId)?.sessionId;
-      if (sessionId) onOpenMonoArtifact(sessionId, id);
+      await onOpenMono(monoId, (session) => onOpenMonoArtifact(session.id, id));
     },
     openFile: onOpenFile,
     resume: onUsageLimitResume,
@@ -13812,33 +13882,45 @@ function Workspace({
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
-  const monoSettingsDialog =
-    monoCovers &&
-    monoViewMono &&
-    monoViewSession &&
-    monoSettingsFor === monoViewMono.id ? (
+  const settingsMono = monoSettingsFor ? findMono(monoSettingsFor) : undefined;
+  const settingsSession = settingsMono?.sessionId
+    ? sessions.find((entry) => entry.id === settingsMono.sessionId)
+    : undefined;
+  if (
+    settingsMono &&
+    settingsSession &&
+    settingsSnapshot.current?.mono.id === monoSettingsFor
+  ) settingsSnapshot.current = { mono: settingsMono, session: settingsSession };
+  const settings =
+    settingsSnapshot.current?.mono.id === monoSettingsFor
+      ? settingsSnapshot.current
+      : null;
+  const settingsDialogVersion = settingsVersion.current;
+  const monoSettingsDialog = settings ? (
       <MonoSettingsDialog
-        key={monoViewMono.id}
-        monoId={monoViewMono.id}
-        agent={monoLook(monoViewMono)}
-        status={monoState(monoViewSession).status}
-        cwd={monoViewSession.cwd}
-        harness={monoViewSession.harness}
-        model={monoViewSession.model}
-        modelSettings={monoViewSession.modelSettings}
-        runtimeMode={monoViewSession.runtimeMode}
-        busy={!!monoViewSession.busy}
+        key={settings.mono.id}
+        monoId={settings.mono.id}
+        agent={monoLook(settings.mono)}
+        status={monoState(settings.session).status}
+        cwd={settings.session.cwd}
+        harness={settings.session.harness}
+        model={settings.session.model}
+        modelSettings={settings.session.modelSettings}
+        runtimeMode={settings.session.runtimeMode}
+        busy={!!settings.session.busy}
         onModelChange={(harness, model) =>
-          onModelChange(monoViewSession.id, harness, model)
+          onModelChange(settings.session.id, harness, model)
         }
-        onModelSettingsChange={(settings) =>
-          onModelSettingsChange(monoViewSession.id, settings)
+        onModelSettingsChange={(modelSettings) =>
+          onModelSettingsChange(settings.session.id, modelSettings)
         }
         onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(monoViewSession.id, mode)
+          onRuntimeModeChange(settings.session.id, mode)
         }
-        onReset={() => onResetMono(monoViewSession.id)}
-        onClose={() => setMonoSettingsFor(null)}
+        onReset={() => onResetMono(settings.session.id)}
+        leaveRef={saveSettingsSoul}
+        frozen={soulFrozen || settingsSwitching}
+        onClose={() => closeMonoSettings(settingsDialogVersion)}
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -13876,7 +13958,7 @@ function Workspace({
     void (async () => {
       if (saveSoul.current && !(await saveSoul.current())) return;
       if (!soulExitCount.current && request === soulRequest.current)
-        setSoulTarget(target);
+        flushSync(() => setSoulTarget(target));
     })();
   }, []);
   const onDeleteRailMono = useCallback(
@@ -14012,7 +14094,7 @@ function Workspace({
   );
   const onToggleMonoOverview = () => setMonoOverviewOpen(!monoOverviewOpen);
   const onOpenMonoViewSettings = monoViewMono
-    ? () => setMonoSettingsFor(monoViewMono.id)
+    ? () => openMonoSettings(monoViewMono.id, monoViewRequest.current)
     : undefined;
   // A new session takes over from a Mono in view.
   const onNewFromTitleBar = () => {
@@ -14604,7 +14686,6 @@ function Workspace({
                         </main>
                       </div>
                       {monoCovers ? monoOverviewPanel : null}
-                      {monoSettingsDialog}
                     </div>
                   </div>
                   {searchViewOpen ||
@@ -14895,6 +14976,7 @@ function Workspace({
             />
           ) : null}
         </div>
+        {monoSettingsDialog}
         {soulTarget ? (
           <MonoSoulDialog
             key={soulTarget.id}
