@@ -47,6 +47,7 @@ export function ProviderSignInDialog({
       () => {
         if (attempt.current === controller) {
           attempt.current = null;
+          setError(null);
           setState("complete");
         }
       },

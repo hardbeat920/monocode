@@ -290,9 +290,12 @@ describe("ProviderSignInDialog", () => {
     ).not.toContain("Could not copy");
   });
 
-  it("keeps a completed sign-in clear of a late copy failure", async () => {
+  it("clears an action error on successful sign-in and ignores a later failure", async () => {
     let rejectCopy!: (error: Error) => void;
     let finishLogin!: () => void;
+    clipboard.copyText.mockRejectedValueOnce(
+      new Error("pending clipboard failure"),
+    );
     clipboard.copyText.mockImplementationOnce(
       () =>
         new Promise<void>((_resolve, reject) => {
@@ -319,8 +322,15 @@ describe("ProviderSignInDialog", () => {
         "https://claude.ai/oauth/authorize?state=old",
       ),
     );
+    await act(async () => button("Copy sign-in link").click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Could not copy sign-in link.",
+    );
     act(() => button("Copy sign-in link").click());
     await act(async () => finishLogin());
+    expect(
+      document.querySelector('[role="dialog"]')?.textContent,
+    ).not.toContain("Could not copy");
     await act(async () => rejectCopy(new Error("late clipboard failure")));
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       "Signed in to Claude Code",
