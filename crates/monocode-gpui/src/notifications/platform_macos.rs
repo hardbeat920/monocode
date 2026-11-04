@@ -202,6 +202,7 @@ pub fn drain_clicks() -> Vec<Target> {
         .unwrap_or_default()
 }
 
+/// Paint the Dock tile. Call on the main thread; a count of zero clears it.
 pub fn set_dock_badge(count: usize) {
     let Some(main) = MainThreadMarker::new() else {
         return;

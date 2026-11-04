@@ -354,6 +354,9 @@ impl Shell {
                         if let Some(permission) = permission {
                             this.notification_state.permission = permission;
                             this.notification_state.permission_probe = None;
+                            // macOS drops badge writes made before the grant, and the
+                            // cached count does not change on its own: resend it.
+                            platform::set_dock_badge(this.notification_state.badge);
                             cx.notify();
                         }
                         for target in platform::drain_clicks() {
@@ -488,6 +491,7 @@ impl Shell {
         )
     }
 
+    /// One pass per render: snapshots for the banners, then the reminders.
     pub(super) fn sync_notices(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = monocode_core::time::now_ms();
         let prefs = self.workspace.preferences.clone();
@@ -652,6 +656,7 @@ impl Shell {
         }
     }
 
+    /// Forward a finished, input, or reminder notice to the phone and the OS.
     pub(super) fn deliver_session_notice(
         &mut self,
         summary: &Session,
