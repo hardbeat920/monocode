@@ -57,6 +57,7 @@ import { SessionPane } from "../../sessions/ui/SessionPane";
 import type { TranscriptPool } from "../../sessions/ui/TranscriptPool";
 import type { SessionFolderTarget } from "../../sessions/model/sessionFolders";
 import type { Worktree } from "../../source-control/model/worktrees";
+import type { RemoteChoice } from "../../connections/model/remoteSessionState";
 
 type Shared = {
   workspaceSwitchingSessionId?: string;
@@ -84,6 +85,7 @@ type Shared = {
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
   onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onRemoteChoice?: (shellId: string, choice: RemoteChoice) => void;
   onWorkspaceModeChange: (
     sessionId: string,
     mode: WorkspaceMode,
@@ -231,6 +233,7 @@ function PaneTreeComponent({
   onCwdChange,
   onBranchChange,
   onWorktreeChange,
+  onRemoteChoice,
   onWorkspaceModeChange,
   onWorktreeBaseChange,
   onManageWorktrees,
@@ -797,6 +800,7 @@ function PaneTreeComponent({
                   onCwdChange={onCwdChange}
                   onBranchChange={onBranchChange}
                   onWorktreeChange={onWorktreeChange}
+                  onRemoteChoice={onRemoteChoice}
                   onWorkspaceModeChange={onWorkspaceModeChange}
                   onWorktreeBaseChange={onWorktreeBaseChange}
                   onManageWorktrees={onManageWorktrees}
