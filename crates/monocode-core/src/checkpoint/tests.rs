@@ -1057,8 +1057,8 @@ fn drops_entries_that_become_ignored_before_recording() {
     f.write("debris/log.txt", "first\n");
     f.store.begin_turn("session", f.cwd(), "first").unwrap();
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
-    assert!(index_paths(&f.repo, &private_index(&f)).contains(&"debris/log.txt".to_string()));
-    let previous = private_index(&f);
+    let index = private_index(&f);
+    assert!(index_paths(&f.repo, &index).contains(&"debris/log.txt".to_string()));
 
     // The sensitive bytes go into the file the index already captured. A new
     // path would be ignored by `add` either way, so it could not tell a prune
@@ -1068,23 +1068,9 @@ fn drops_entries_that_become_ignored_before_recording() {
     f.write("debris/log.txt", secret);
     f.store.begin_turn("session", f.cwd(), "second").unwrap();
     f.store.finish_turn("session", f.cwd(), "second").unwrap();
-    // Counted before `private_index`: that helper cleans stale files itself, so
-    // asking it first cannot prove the capture rotated the old file away.
-    let left = std::fs::read_dir(f.store.root.join("indexes"))
-        .unwrap()
-        .flatten()
-        .count();
-    assert_eq!(left, 1, "{previous:?} should have been rotated away");
-    // The rule set rotates the index instead of inheriting entries it excludes.
-    assert_ne!(private_index(&f), previous);
-    let rotated = private_index(&f);
-    let paths = index_paths(&f.repo, &private_index(&f));
-    assert!(!paths.contains(&"debris/log.txt".to_string()));
-    // Rewriting the same rule bytes keeps the cache; only content rotates it.
-    f.write(".gitignore", "debris/\n");
-    f.store.begin_turn("session", f.cwd(), "third").unwrap();
-    f.store.finish_turn("session", f.cwd(), "third").unwrap();
-    assert_eq!(private_index(&f), rotated);
+    // The cached index loses the entry instead of being rotated away.
+    assert_eq!(private_index(&f), index);
+    assert!(!index_paths(&f.repo, &index).contains(&"debris/log.txt".to_string()));
     // Neither the captured-then-ignored file's new bytes nor anything else the
     // rules now exclude reaches the object database.
     let oid = String::from_utf8(
@@ -1103,7 +1089,7 @@ fn drops_entries_that_become_ignored_before_recording() {
 }
 
 #[test]
-fn untracked_nested_ignore_rules_also_rotate_the_index() {
+fn untracked_nested_ignore_rules_also_drop_entries() {
     let f = Fixture::new();
     // A rule file that is itself ignored still applies. Written before the
     // baseline so the only thing that changes later is the nested rule, which
@@ -1112,16 +1098,16 @@ fn untracked_nested_ignore_rules_also_rotate_the_index() {
     f.write("nested/secret.txt", "visible\n");
     f.store.begin_turn("session", f.cwd(), "first").unwrap();
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
-    assert!(index_paths(&f.repo, &private_index(&f)).contains(&"nested/secret.txt".to_string()));
-    let previous = private_index(&f);
+    let index = private_index(&f);
+    assert!(index_paths(&f.repo, &index).contains(&"nested/secret.txt".to_string()));
 
     f.write("nested/.gitignore", "secret.txt\n");
     let secret = "SENSITIVE-9c31ab77\n";
     f.write("nested/secret.txt", secret);
     f.store.begin_turn("session", f.cwd(), "second").unwrap();
     f.store.finish_turn("session", f.cwd(), "second").unwrap();
-    assert_ne!(private_index(&f), previous);
-    assert!(!index_paths(&f.repo, &private_index(&f)).contains(&"nested/secret.txt".to_string()));
+    assert_eq!(private_index(&f), index);
+    assert!(!index_paths(&f.repo, &index).contains(&"nested/secret.txt".to_string()));
     let oid = String::from_utf8(
         run_git(
             &f.repo,
@@ -1130,6 +1116,36 @@ fn untracked_nested_ignore_rules_also_rotate_the_index() {
         .unwrap(),
     )
     .unwrap();
+    assert!(run_git(&f.repo, &["cat-file", "-e", oid.trim()]).is_err());
+}
+
+#[test]
+fn drops_a_file_git_stopped_tracking_once_a_rule_covers_it() {
+    let f = Fixture::new();
+    f.write(".env", "TOKEN=old\n");
+    run_git(&f.repo, &["add", "-f", ".env"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "track env"]).unwrap();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert!(index_paths(&f.repo, &private_index(&f)).contains(&".env".to_string()));
+
+    // The rules never change again: the cached entry outlives the tracking.
+    f.write(".gitignore", ".env\n");
+    run_git(&f.repo, &["rm", "--cached", ".env"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "stop tracking env"]).unwrap();
+    let secret = "TOKEN=SENSITIVE-1d5c7a20\n";
+    f.write(".env", secret);
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert!(!index_paths(&f.repo, &private_index(&f)).contains(&".env".to_string()));
+    let oid = String::from_utf8(
+        run_git(&f.repo, &["hash-object", "--no-filters", "--", ".env"]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join(".env")).unwrap(),
+        secret
+    );
     assert!(run_git(&f.repo, &["cat-file", "-e", oid.trim()]).is_err());
 }
 
@@ -1219,19 +1235,51 @@ fn records_nested_unusual_paths_and_symlinks_with_a_persistent_index() {
 }
 
 #[test]
-fn keeps_a_lock_another_capture_is_using() {
+fn a_stale_lock_heals_and_a_live_lock_is_reported() {
     let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
     let index = private_index(&f);
-    let name = index.file_name().unwrap().to_string_lossy().into_owned();
-    let digest = &name[..name.len() - name.rsplit_once('-').unwrap().1.len() - 1];
-    // Git takes `<index>.lock` while it writes, and the Tauri app shares this
-    // directory, so that file can belong to a capture running right now.
-    let lock = index.with_file_name(format!("{name}.lock"));
+    let lock = index_lock(&index);
+    // A capture that died mid-write leaves the lock, and every later capture
+    // fails on it, so this worktree would never record again.
     std::fs::write(&lock, b"").unwrap();
-    let stale = index.with_file_name(format!("{digest}-superseded.index"));
-    std::fs::write(&stale, b"").unwrap();
+    set_past_mtime(&lock);
+    f.write("new.txt", "one\n");
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert!(!lock.exists(), "the stale lock should have been cleared");
 
-    assert_eq!(private_index(&f), index);
-    assert!(lock.exists(), "a live lock must survive the cleanup");
-    assert!(!stale.exists(), "a superseded index should be removed");
+    // A fresh lock can belong to a capture another app process is running
+    // against this shared directory. Report it and leave both files alone.
+    std::fs::write(&lock, b"").unwrap();
+    let error = f.store.begin_turn("session", f.cwd(), "third").unwrap_err();
+    assert!(error.contains("index.lock"), "{error}");
+    assert!(lock.exists(), "a live lock must survive");
+    assert!(index.exists(), "a live lock must not rebuild the index");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_named_index_does_not_rebuild_the_index() {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.write("index.html", "<html>\n");
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let index = private_index(&f);
+    let inode = std::fs::metadata(&index).unwrap().ino();
+
+    let file = f.repo.join("index.html");
+    std::fs::write(&file, "<html>two\n").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let error = f
+        .store
+        .begin_turn("session", f.cwd(), "second")
+        .unwrap_err();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(error.contains("index.html"), "{error}");
+    // Rebuilding would replace the file and lose the stat cache.
+    assert_eq!(std::fs::metadata(&index).unwrap().ino(), inode);
 }

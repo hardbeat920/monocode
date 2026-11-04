@@ -57,32 +57,13 @@ struct Change {
 }
 
 impl CheckpointStore {
-    /// One index per worktree and ignore rule set, kept so its stat cache
-    /// survives between turns. Linked worktrees have distinct roots and must
-    /// not share the cache, and new ignore rules must not inherit entries
-    /// they now exclude: a rule change rotates the file instead of scanning
-    /// every entry, which costs minutes on a workspace with tens of thousands
-    /// of untracked files.
-    // shortcut: an untracked `.gitignore` below the worktree root is found by
-    // the untracked walk, but a rule that only changes by renaming a directory
-    // into an existing pattern is not in the signature.
+    /// One index per worktree, kept so its stat cache survives between turns.
+    /// Linked worktrees have distinct roots and must not share the cache.
     fn index_path(&self, repo: &Path) -> Result<PathBuf, String> {
         let dir = self.root.join("indexes");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let digest = format!("{:x}", Sha256::digest(path_to_js(repo).as_bytes()));
-        let name = format!("{digest}-{}.index", ignore_signature(repo));
-        // Captures for one worktree are serialized by `exclusive`. Another
-        // process sharing this directory is not: it can lose a file to this
-        // cleanup and rebuild: one slow capture, not a corrupted repository.
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let file = entry.file_name().to_string_lossy().into_owned();
-                if file != name && file.starts_with(&digest) && file.ends_with(".index") {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-        }
-        Ok(dir.join(name))
+        Ok(dir.join(format!("{digest}.index")))
     }
 
     pub(super) fn begin_turn(&self, session_id: &str, cwd: &str, id: &str) -> Result<(), String> {
@@ -730,159 +711,6 @@ fn stdin_failure(code: i32, stderr: &[u8]) -> String {
     }
 }
 
-/// Content, not mtime: a checkout that rewrites a `.gitignore` with identical
-/// bytes must keep the stat cache. Every file whose rules apply to the
-/// worktree is included -- the root and tracked `.gitignore` files, the ones
-/// Git has not tracked yet, and the exclude files outside the worktree -- so
-/// that a rule change rotates the index instead of inheriting entries it now
-/// excludes.
-fn ignore_signature(repo: &Path) -> String {
-    let mut items = vec![signature_item(&repo.join(".gitignore"))];
-    let listing = run_git(repo, &["ls-files", "-z", "--full-name", "--", "."])
-        .map(|listing| ignore_files(repo, &listing))
-        .unwrap_or_else(|_| vec![b"\0ls-files failed".to_vec()]);
-    items.extend(listing);
-    // An untracked `.gitignore` changes the rules just as much, so the walk
-    // Git already needs for `add` decides it too. No exclusion flags: a rule
-    // file that is itself ignored still applies, and filtering it out here
-    // would let a real rule change go unnoticed.
-    let untracked = run_git(repo, &["ls-files", "-z", "--others", "--", "."])
-        .map(|listing| ignore_files(repo, &listing))
-        .unwrap_or_else(|_| vec![b"\0untracked failed".to_vec()]);
-    items.extend(untracked);
-    // Both the per-worktree and the shared Git directory may back the exclude
-    // file; a linked worktree keeps its own Git dir.
-    let mut dirs = 0;
-    for args in [
-        &["rev-parse", "--absolute-git-dir"][..],
-        &["rev-parse", "--git-common-dir"][..],
-    ] {
-        let Ok(dir) = run_git(repo, args) else {
-            continue;
-        };
-        let dir = os_path(git_path_bytes(&dir));
-        let dir = if dir.is_absolute() {
-            dir
-        } else {
-            repo.join(dir)
-        };
-        items.push(signature_item(&dir.join("info").join("exclude")));
-        dirs += 1;
-    }
-    if dirs == 0 {
-        items.push(b"\0git dir failed".to_vec());
-    }
-    items.extend(excludes_items(repo));
-    items.sort();
-    items.dedup();
-    let mut hasher = Sha256::new();
-    for item in items {
-        // Length-prefixed so the path and the content cannot run together.
-        hasher.update((item.len() as u64).to_le_bytes());
-        hasher.update(&item);
-    }
-    format!("{:x}", hasher.finalize())
-}
-
-/// The `.gitignore` files in a NUL-delimited Git listing, as signature items.
-fn ignore_files(repo: &Path, listing: &[u8]) -> Vec<Vec<u8>> {
-    let mut items = Vec::new();
-    for path in nul_records(listing) {
-        if path.rsplit(|byte| *byte == b'/').next() == Some(b".gitignore") {
-            items.push(signature_item(&repo.join(os_path(path))));
-        }
-    }
-    items
-}
-
-fn signature_item(path: &Path) -> Vec<u8> {
-    let mut item = path_bytes(path);
-    item.push(0);
-    // The state byte keeps a file whose bytes happen to spell `missing` from
-    // hashing like an absent file.
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            item.push(0);
-            item.extend_from_slice(&bytes);
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => item.push(1),
-        // An unreadable rule file must not hash like an absent one either.
-        Err(_) => item.push(2),
-    }
-    item
-}
-
-/// A value Git printed on its own line, without the line break. Trailing
-/// spaces are part of the value: `core.excludesFile` may end in one.
-fn git_path_bytes(bytes: &[u8]) -> &[u8] {
-    let mut end = bytes.len();
-    while end > 0 && matches!(bytes[end - 1], b'\n' | b'\r') {
-        end -= 1;
-    }
-    &bytes[..end]
-}
-
-fn excludes_file(repo: &Path, bytes: &[u8]) -> PathBuf {
-    let path = match std::str::from_utf8(bytes) {
-        Ok(text) => expand_home(text),
-        // `~` cannot be expanded on bytes that are not text.
-        Err(_) => os_path(bytes),
-    };
-    // Git resolves a relative excludes file against the worktree.
-    if path.is_absolute() {
-        path
-    } else {
-        repo.join(path)
-    }
-}
-
-/// `core.excludesFile` when configured, else the XDG file Git falls back to.
-fn excludes_items(repo: &Path) -> Vec<Vec<u8>> {
-    match run_git(repo, &["config", "--get", "core.excludesFile"]) {
-        Ok(configured) => {
-            let configured = git_path_bytes(&configured);
-            let path = if configured.is_empty() {
-                xdg_excludes()
-            } else {
-                excludes_file(repo, configured)
-            };
-            vec![signature_item(&path)]
-        }
-        Err(_) => vec![signature_item(&xdg_excludes())],
-    }
-}
-
-fn xdg_excludes() -> PathBuf {
-    match std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir).join("git").join("ignore"),
-        None => expand_home("~/.config/git/ignore"),
-    }
-}
-
-fn os_path(bytes: &[u8]) -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-    }
-}
-
-fn path_bytes(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        path.as_os_str().as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        path.to_string_lossy().as_bytes().to_vec()
-    }
-}
-
 fn capture_workspace(
     root: &Path,
     repo: &Path,
@@ -890,15 +718,55 @@ fn capture_workspace(
     index: &Path,
 ) -> Result<String, String> {
     match capture_workspace_once(root, repo, reference, index) {
-        // An index left by an interrupted capture can be stale or truncated.
-        // Rebuilding it restores the stat cache; the user's index and a lock
-        // another process holds are never touched.
-        Err(error) if error.contains("index") => {
+        // A lock left by an interrupted capture blocks every later one. A
+        // fresh lock can belong to another app process sharing this
+        // directory, so it is reported instead of removed.
+        Err(error) if error.contains("index.lock") => {
+            let lock = index_lock(index);
+            if !stale_lock(&lock) {
+                return Err(error);
+            }
+            let _ = std::fs::remove_file(&lock);
+            let _ = std::fs::remove_file(index);
+            capture_workspace_once(root, repo, reference, index)
+        }
+        // An index left by an interrupted capture can also be truncated.
+        // Rebuilding it restores the stat cache.
+        Err(error) if corrupt_index(&error) => {
             let _ = std::fs::remove_file(index);
             capture_workspace_once(root, repo, reference, index)
         }
         result => result,
     }
+}
+
+/// Git writes an index through a sibling lock file: `x.index.lock`.
+fn index_lock(index: &Path) -> PathBuf {
+    let mut lock = index.as_os_str().to_owned();
+    lock.push(".lock");
+    PathBuf::from(lock)
+}
+
+/// Long enough for any capture this app runs, short enough that a crash costs
+/// one turn.
+fn stale_lock(lock: &Path) -> bool {
+    std::fs::metadata(lock)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > std::time::Duration::from_secs(10 * 60))
+}
+
+fn corrupt_index(error: &str) -> bool {
+    [
+        "index file corrupt",
+        "bad index file",
+        "index file smaller than expected",
+        "unknown index entry format",
+        "Unable to read index",
+    ]
+    .iter()
+    .any(|message| error.contains(message))
 }
 
 fn capture_workspace_once(
@@ -941,9 +809,11 @@ fn capture_workspace_once(
         .map(entry_path)
         .collect::<Result<Vec<_>, String>>()?;
     let present: HashSet<&[u8]> = indexed.iter().copied().collect();
+    let mut head_paths: HashSet<&[u8]> = HashSet::new();
     let mut align = Vec::new();
     for entry in nul_records(&head) {
         let path = entry_path(entry)?;
+        head_paths.insert(path);
         if !present.contains(path) {
             // Keep the recorded mode and object id, including symlinks and
             // submodules, and never rewrite an entry that still has stat data.
@@ -960,8 +830,42 @@ fn capture_workspace_once(
             return Err(stdin_failure(code, &stderr));
         }
     }
-    // Ignore rules are applied when the index is chosen (`index_path`): they
-    // rotate the file, so excluded content never reaches the object database.
+    // Git applies no ignore rule to a path already in the index, so an entry
+    // Git stopped tracking would be captured again and its bytes written into
+    // the object database. Drop those before the add: a file HEAD tracks can
+    // legitimately match a rule, and those stay.
+    let ignored = run(
+        repo,
+        &[
+            "ls-files",
+            "-c",
+            "-i",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+        ],
+    )?;
+    let mut removals = Vec::new();
+    for path in nul_records(&ignored) {
+        if !head_paths.contains(path) {
+            removals.extend_from_slice(path);
+            removals.push(0);
+        }
+    }
+    if !removals.is_empty() {
+        let (code, _, stderr) = run_with_input(
+            index_command(
+                repo,
+                index,
+                &["update-index", "--force-remove", "-z", "--stdin"],
+            ),
+            removals,
+        )?;
+        if code != 0 {
+            return Err(stdin_failure(code, &stderr));
+        }
+    }
     let durable = [
         "-c",
         "core.fsync=objects,reference",
