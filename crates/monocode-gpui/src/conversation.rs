@@ -589,6 +589,7 @@ impl Conversation {
                 }
             })
         });
+        perf_prompt(cx);
         Self {
             editing_last_turn: Default::default(),
             btw: None,
@@ -1215,6 +1216,11 @@ impl Conversation {
             .detach();
         cx.spawn(async move |this, cx| {
             while let Ok(update) = rx.recv().await {
+                // Land each update on the spinners' 30Hz beat: the reply then
+                // redraws in their frames instead of adding frames of its own.
+                if !update.finished {
+                    crate::pulse::beat(cx).await;
+                }
                 let finished = update.finished;
                 if this
                     .update(cx, |this, cx| {
@@ -3411,6 +3417,48 @@ impl Conversation {
             )
             .into_any()
     }
+}
+
+/// For profiling without clicking: with `MONOCODE_PERF_PROMPT=<text>`, the
+/// first chat created switches to Claude and sends that text once, a few
+/// seconds after launch. scripts/perf/frame-run.sh sets it. It only runs
+/// while `MONOCODE_CLAUDE_BINARY` replaces `claude`, so it never reaches a
+/// real provider.
+fn perf_prompt(cx: &mut Context<Conversation>) {
+    static SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Some(prompt) = std::env::var("MONOCODE_PERF_PROMPT")
+        .ok()
+        .filter(|prompt| !prompt.is_empty())
+    else {
+        return;
+    };
+    if std::env::var_os("MONOCODE_CLAUDE_BINARY").is_none()
+        || SENT.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    cx.spawn(async move |this, cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(3))
+            .await;
+        this.update(cx, |this, cx| {
+            if this.summary.has_messages {
+                return;
+            }
+            let claude = monocode_core::provider::Kind::Claude.id();
+            if this.summary.provider != claude {
+                this.summary.provider = claude.into();
+                this.summary.provider_id = None;
+                this.model = None;
+                this.completion
+                    .update(cx, |completion, cx| completion.set_provider(claude, cx));
+                this.catalog.clear();
+            }
+            this.launch_prompt(prompt, cx);
+        })
+        .ok();
+    })
+    .detach();
 }
 
 /// The access mode the last composer pick left as the default for new chats.

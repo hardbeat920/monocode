@@ -26,6 +26,7 @@ mod file_editor;
 mod file_icons;
 mod fixtures;
 mod fonts;
+mod frame_log;
 mod fs_watch;
 mod git_cache;
 mod git_graph;
@@ -422,6 +423,7 @@ fn main() {
             image_memory::init(cx);
             #[cfg(target_os = "macos")]
             memory_log::start(cx);
+            frame_log::start(cx);
             gpu_trim::start(cx);
             #[cfg(target_os = "macos")]
             hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
