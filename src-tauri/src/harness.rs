@@ -1005,6 +1005,7 @@ impl HarnessHost {
 struct LoginSpawnReservation<'a> {
     host: &'a HarnessHost,
     session_id: &'a str,
+    owns_spawn: bool,
 }
 
 #[cfg(not(windows))]
@@ -1022,7 +1023,22 @@ impl Drop for RejectedCleanupReservation<'_> {
 impl<'a> LoginSpawnReservation<'a> {
     fn new(host: &'a HarnessHost, session_id: &'a str) -> Self {
         host.lock_inner().active_spawns += 1;
-        Self { host, session_id }
+        Self {
+            host,
+            session_id,
+            owns_spawn: false,
+        }
+    }
+
+    fn begin(
+        &mut self,
+        account: Option<&str>,
+    ) -> Result<(u64, u64, Option<Arc<LiveChild>>), String> {
+        let spawn = self
+            .host
+            .begin_spawn_for_account(self.session_id, account)?;
+        self.owns_spawn = true;
+        Ok(spawn)
     }
 }
 
@@ -1030,6 +1046,9 @@ impl Drop for LoginSpawnReservation<'_> {
     fn drop(&mut self) {
         let mut inner = self.host.lock_inner();
         inner.active_spawns -= 1;
+        if !self.owns_spawn {
+            return;
+        }
         inner.spawning.remove(self.session_id);
         if !inner.children.contains_key(self.session_id)
             && !inner.stopping.contains_key(self.session_id)
@@ -1652,9 +1671,8 @@ pub fn harness_spawn(
     }
     #[cfg(not(windows))]
     host.recover_rejected(&session_id)?;
-    let _login_spawn = LoginSpawnReservation::new(&host, &session_id);
-    let (epoch, kill_all, prev) =
-        host.begin_spawn_for_account(&session_id, login_account.as_deref())?;
+    let mut login_spawn = LoginSpawnReservation::new(&host, &session_id);
+    let (epoch, kill_all, prev) = login_spawn.begin(login_account.as_deref())?;
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
@@ -4434,8 +4452,8 @@ mod tests {
         }
         let login_pid = login.pid;
         let pending_id = "monocode-provider-login-codex";
-        let (login_epoch, login_generation, _) = host.begin_spawn(pending_id).unwrap();
-        let login_reservation = LoginSpawnReservation::new(&host, pending_id);
+        let mut login_reservation = LoginSpawnReservation::new(&host, pending_id);
+        let (login_epoch, login_generation, _) = login_reservation.begin(None).unwrap();
         let (probe_epoch, probe_generation, _) = host.begin_spawn("probe-starting").unwrap();
         let login_waiter = thread::spawn(move || {
             let _ = login_child.wait();
@@ -4549,8 +4567,8 @@ mod tests {
     fn completed_login_waits_for_frontend_ack_before_retry() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-claude";
-        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = reservation.begin(None).unwrap();
         let (live, mut child) = live_group("sleep 30 & exit 0");
         let pid = live.pid;
         assert!(host
@@ -4829,10 +4847,8 @@ mod tests {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
         let other = "monocode-provider-login-workspace-2-claude";
-        let (epoch, generation, _) = host
-            .begin_spawn_for_account(id, Some("claude:default"))
-            .unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = reservation.begin(Some("claude:default")).unwrap();
         host.stop_window_logins("main").unwrap();
         assert!(!host.spawn_stamp_current(id, epoch, generation));
         assert!(host
@@ -5072,10 +5088,8 @@ mod tests {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
         let next = "monocode-provider-login-workspace-2-claude";
-        let _ = host
-            .begin_spawn_for_account(id, Some("claude:default"))
-            .unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
         let (live, child) = live_group("sleep 30 & wait");
         let pid = live.pid;
         assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| {
@@ -5099,10 +5113,8 @@ mod tests {
     fn rejected_login_cleanup_times_out_and_recovers_without_overlapping() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
-        let _ = host
-            .begin_spawn_for_account(id, Some("claude:default"))
-            .unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
         let (live, child) = live_group("sleep 30 & wait");
         let pid = live.pid;
         let started = Instant::now();
@@ -5121,10 +5133,8 @@ mod tests {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
         let next = "monocode-provider-login-workspace-2-claude";
-        let _ = host
-            .begin_spawn_for_account(id, Some("claude:default"))
-            .unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
         let (live, child) = live_group("sleep 3 & exit 0");
         let pid = live.pid;
         assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| Ok(())).is_err());
@@ -5201,10 +5211,8 @@ mod tests {
         let (release_tx, release_rx) = mpsc::channel();
         let spawn_host = host.clone();
         let spawn = thread::spawn(move || {
-            let reservation = LoginSpawnReservation::new(&spawn_host, id);
-            let (epoch, generation, _) = spawn_host
-                .begin_spawn_for_account(id, Some("claude:default"))
-                .unwrap();
+            let mut reservation = LoginSpawnReservation::new(&spawn_host, id);
+            let (epoch, generation, _) = reservation.begin(Some("claude:default")).unwrap();
             reserved_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             let (live, child) = live_group("sleep 30 & wait");
@@ -5239,10 +5247,8 @@ mod tests {
     fn shutdown_reports_a_pending_spawn_after_its_bound() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
-        let reservation = LoginSpawnReservation::new(&host, id);
-        let _ = host
-            .begin_spawn_for_account(id, Some("claude:default"))
-            .unwrap();
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
         let started = Instant::now();
         assert!(host.kill_all_for_exit().is_err());
         assert!(started.elapsed() < Duration::from_secs(7));
@@ -5261,6 +5267,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_same_id_login_start_cannot_release_the_first_spawn() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let mut first = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = first.begin(Some("claude:default")).unwrap();
+        let mut second = LoginSpawnReservation::new(&host, id);
+        assert!(second.begin(Some("claude:default")).is_err());
+        drop(second);
+        assert!(host.lock_inner().spawning.contains(id));
+        assert_eq!(
+            host.lock_inner().login_accounts.get(id).map(String::as_str),
+            Some("claude:default")
+        );
+        assert_eq!(host.lock_inner().active_spawns, 1);
+        assert!(host
+            .begin_spawn_for_account(id, Some("claude:default"))
+            .is_err());
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.stop_window_logins("main").unwrap();
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_some());
+        reap_rejected_spawn(&host, id, child, pid).unwrap();
+        drop(first);
+        assert!(!tree_alive(pid));
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
     fn confirmed_quit_keeps_the_spawn_gate_closed() {
         let host = HarnessHost::new();
         host.kill_all_for_exit().unwrap();
@@ -5271,8 +5313,8 @@ mod tests {
     fn login_spawn_reservation_blocks_overlap_until_rejected_child_is_reaped() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-claude";
-        let _ = host.begin_spawn(id).unwrap();
-        let reservation = LoginSpawnReservation::new(&host, id);
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(None).unwrap();
         assert!(host.begin_spawn(id).is_err());
         host.kill_session(id);
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
