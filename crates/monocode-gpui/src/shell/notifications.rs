@@ -323,6 +323,7 @@ impl Shell {
         .detach();
     }
 
+    /// Install the notification bridge: permission, Dock badge, and the poll.
     pub(super) fn start_native_notifications(&mut self, cx: &mut Context<Self>) {
         platform::set_dock_badge(0);
         // macOS 12+ ignores Dock badges until the app has been granted the
@@ -452,6 +453,7 @@ impl Shell {
         }
     }
 
+    /// True when the user can actually see this session's chat right now.
     pub(super) fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
         if self.app_view_open() || self.settings.is_some() || self.search_page() {
             return false;
@@ -626,7 +628,7 @@ impl Shell {
     /// Drop completion marks the user has already seen, then push the badge:
     /// one count per session that waits for input or finished unseen. Call it
     /// after any event that changes either side; render is not guaranteed.
-    fn reconcile_dock_badge(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reconcile_dock_badge(&mut self, cx: &mut Context<Self>) {
         let chats = self.notification_chats(cx);
         let snapshot: Vec<_> = chats
             .iter()

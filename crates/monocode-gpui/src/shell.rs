@@ -1537,6 +1537,9 @@ impl Shell {
                             });
                         }
                         this.refresh_session_mark(id, cx);
+                        // Archiving hides the session without a render here, and
+                        // the badge would keep counting it until the next event.
+                        this.reconcile_dock_badge(cx);
                         if archived && this.workspace.tab_of(id).is_some() {
                             this.close_pane(id, window, cx);
                         } else {
