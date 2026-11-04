@@ -438,7 +438,7 @@ export async function attachLogin(
   return active.line ?? null;
 }
 
-export function killAllChildren(preserveLoginOnWindows = false): Promise<void> {
+export function killAllChildren(windowUnload = false): Promise<void> {
   lineHandlers.clear();
   exitHandlers.clear();
   lineBuffer.clear();
@@ -450,7 +450,7 @@ export function killAllChildren(preserveLoginOnWindows = false): Promise<void> {
   ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
-  return invoke("harness_kill_all", { preserveLoginOnWindows });
+  return invoke("harness_kill_all", { windowUnload });
 }
 
 type ResolvedHarnessBinary = { path: string; args?: string[] };

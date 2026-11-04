@@ -64,6 +64,15 @@ describe("isCurrentChildExit", () => {
 });
 
 describe("child bridge", () => {
+  it("requests window-scoped unload cleanup", async () => {
+    mocks.invoke.mockResolvedValue(undefined);
+    const child = await loadChild();
+    await child.killAllChildren(true);
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_kill_all", {
+      windowUnload: true,
+    });
+  });
+
   it("does not require a native exit acknowledgment from a headless host", async () => {
     const child = await loadChild();
     const invoke = vi.fn(async () => undefined);
