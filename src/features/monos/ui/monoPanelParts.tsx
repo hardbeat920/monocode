@@ -376,8 +376,8 @@ export function FileField({
   const [error, setError] = useState(false);
   const save = (overwrite = false): Promise<boolean> => {
     if (pending.current) return pending.current;
-    if (blocked.current && !overwrite) return Promise.resolve(false);
     if (draftRef.current === base.current.value) return Promise.resolve(true);
+    if (blocked.current && !overwrite) return Promise.resolve(false);
     const text = draftRef.current;
     const request = (async () => {
       try {
@@ -410,7 +410,8 @@ export function FileField({
   };
   useImperativeHandle(saveRef, () => async () => {
     do {
-      if (!(await save())) return false;
+      if (!(await save()) && draftRef.current !== base.current.value)
+        return false;
     } while (draftRef.current !== base.current.value);
     return true;
   });
