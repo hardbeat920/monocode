@@ -221,58 +221,62 @@ setInterval(() => {}, 1000);
   15_000,
 );
 
-it("confirms a login stop only after the host emits process exit", async () => {
-  const loginId = "monocode-provider-login-test-claude";
-  const directory = mkdtempSync(join(tmpdir(), "monocode-login-stop-test-"));
-  const file = join(directory, "provider.cjs");
-  writeFileSync(
-    file,
-    `const { spawn } = require('node:child_process');
+it.skipIf(process.platform === "win32")(
+  "confirms a login stop only after the host emits process exit",
+  async () => {
+    const loginId = "monocode-provider-login-test-claude";
+    const directory = mkdtempSync(join(tmpdir(), "monocode-login-stop-test-"));
+    const file = join(directory, "provider.cjs");
+    writeFileSync(
+      file,
+      `const { spawn } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
 child.stdout.once('data', () => console.log(child.pid));
 setInterval(() => {}, 1000);
 `,
-  );
-  const backend = new HostChildBackend();
-  let exited = false;
-  let descendant: number | undefined;
-  const unlisten = await backend.listen("harness-exit", () => {
-    exited = true;
-  });
-  const unlistenOutput = await backend.listen<{ line: string }>(
-    "harness-stdout",
-    ({ payload }) => {
-      descendant = Number(payload.line);
-    },
-  );
-  try {
-    const pid = await backend.invoke<number>("harness_spawn", {
-      sessionId: loginId,
-      command: file,
-      args: [],
-      cwd: directory,
+    );
+    const backend = new HostChildBackend();
+    let exited = false;
+    let descendant: number | undefined;
+    const unlisten = await backend.listen("harness-exit", () => {
+      exited = true;
     });
-    await vi.waitFor(() => expect(descendant).toBeTruthy());
-    const stopping = backend.invoke("harness_stop", { sessionId: loginId });
-    await expect(
-      backend.invoke("harness_spawn", {
+    const unlistenOutput = await backend.listen<{ line: string }>(
+      "harness-stdout",
+      ({ payload }) => {
+        descendant = Number(payload.line);
+      },
+    );
+    try {
+      const pid = await backend.invoke<number>("harness_spawn", {
         sessionId: loginId,
         command: file,
         args: [],
         cwd: directory,
-      }),
-    ).rejects.toThrow("has not exited");
-    await stopping;
-    expect(exited).toBe(true);
-    expect(() => process.kill(pid, 0)).toThrow();
-    expect(() => process.kill(descendant!, 0)).toThrow();
-  } finally {
-    unlisten();
-    unlistenOutput();
-    await backend.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-}, 15_000);
+      });
+      await vi.waitFor(() => expect(descendant).toBeTruthy());
+      const stopping = backend.invoke("harness_stop", { sessionId: loginId });
+      await expect(
+        backend.invoke("harness_spawn", {
+          sessionId: loginId,
+          command: file,
+          args: [],
+          cwd: directory,
+        }),
+      ).rejects.toThrow("has not exited");
+      await stopping;
+      expect(exited).toBe(true);
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(() => process.kill(descendant!, 0)).toThrow();
+    } finally {
+      unlisten();
+      unlistenOutput();
+      await backend.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);
 
 it("refuses Windows host login before spawning or reserving an account", async () => {
   const backend = new HostChildBackend({}, true);
@@ -316,7 +320,7 @@ it("the Windows guard refuses login before launching its provider", async () => 
     process.execPath,
     [
       "-e",
-      "Object.defineProperty(process, 'platform', { value: 'win32' }); const fs = require('node:fs'); const net = require('node:net'); fs.createReadStream = (_, options) => new net.Socket({ fd: options.fd, readable: true, writable: false }); require('node:module').syncBuiltinESMExports(); import(process.argv[1]);",
+      "Object.defineProperty(process, 'platform', { value: 'win32' }); const fs = require('node:fs'); const net = require('node:net'); fs.createReadStream = (_, options) => new net.Socket({ fd: options.fd, readable: true, writable: false }); require('node:module').syncBuiltinESMExports(); import(require('node:url').pathToFileURL(process.argv[1]).href);",
       resolve("build/host/provider-guard.mjs"),
       process.execPath,
       provider,

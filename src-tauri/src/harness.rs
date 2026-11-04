@@ -1244,10 +1244,7 @@ pub fn harness_spawn(
     let wait_id = session_id.clone();
     let wait_pid = pid;
     thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
-        if wait_id.starts_with(LOGIN_CHILD_PREFIX) {
-            wait_for_login_tree_exit(wait_pid);
-        }
+        let code = wait_for_child_exit(child);
         // Deliver the final batched lines before the exit that follows them.
         let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
         if let Some(store) = wait_store {
@@ -1505,7 +1502,11 @@ fn stop_login_tree(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn reap_rejected_spawn(host: &HarnessHost, session_id: &str, mut child: Child, pid: u32) {
+fn wait_for_child_exit(mut child: Child) -> Option<i32> {
+    child.wait().ok().and_then(|status| status.code())
+}
+
+fn reap_rejected_spawn(host: &HarnessHost, session_id: &str, child: Child, pid: u32) {
     #[cfg(windows)]
     {
         let _ = pid;
@@ -1514,6 +1515,7 @@ fn reap_rejected_spawn(host: &HarnessHost, session_id: &str, mut child: Child, p
     #[cfg(not(windows))]
     {
         let _ = (host, session_id);
+        let mut child = child;
         terminate_all(&[pid]);
         let _ = child.wait();
         wait_for_login_tree_exit(pid);
@@ -3800,6 +3802,25 @@ mod tests {
         stop_login_tree(pid).unwrap();
         let _ = waiter.join();
         assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn successful_login_exit_does_not_wait_for_browser_descendant() {
+        let child = spawn_group("sleep 30 & exit 0");
+        let pid = child.id();
+        let (tx, rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _ = tx.send(wait_for_child_exit(child));
+        });
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        let descendant_alive = tree_alive(pid);
+        stop_login_tree(pid).unwrap();
+        waiter.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "successful login waited for its browser child"
+        );
+        assert!(descendant_alive, "test did not retain a browser descendant");
     }
 
     #[test]
