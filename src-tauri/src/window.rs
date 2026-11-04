@@ -615,7 +615,7 @@ pub fn confirm_quit(app: AppHandle) {
     // process is gone, but a macOS terminate that skips the run loop would not
     // reach it — and `kill_all`'s SIGKILL wait only works while we're alive.
     if let Some(host) = app.try_state::<crate::harness::HarnessHost>() {
-        if let Err(error) = host.kill_all() {
+        if let Err(error) = host.kill_all_for_exit() {
             ALLOW_EXIT.store(false, Ordering::SeqCst);
             let _ = app.emit(QUIT_ABORTED, ());
             app.dialog()

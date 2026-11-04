@@ -733,13 +733,21 @@ impl HarnessHost {
     }
 
     pub(crate) fn kill_all(&self) -> Result<(), String> {
+        self.kill_all_mode(false)
+    }
+
+    pub(crate) fn kill_all_for_exit(&self) -> Result<(), String> {
+        self.kill_all_mode(true)
+    }
+
+    fn kill_all_mode(&self, final_exit: bool) -> Result<(), String> {
         #[cfg(not(windows))]
         {
-            self.kill_all_with(signal_login_tree)
+            self.kill_all_with(signal_login_tree, final_exit)
         }
         #[cfg(windows)]
         {
-            self.kill_all_windows()
+            self.kill_all_windows(final_exit)
         }
     }
 
@@ -769,13 +777,18 @@ impl HarnessHost {
     }
 
     #[cfg(not(windows))]
-    fn kill_all_with(&self, stop_login: impl Fn(u32) -> Result<(), String>) -> Result<(), String> {
+    fn kill_all_with(
+        &self,
+        stop_login: impl Fn(u32) -> Result<(), String>,
+        final_exit: bool,
+    ) -> Result<(), String> {
         let _shutdown = self
             .shutdown_guard
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let (kids, logins) = {
+        let (was_shutting_down, kids, logins) = {
             let mut inner = self.lock_inner();
+            let was_shutting_down = inner.shutting_down;
             inner.shutting_down = true;
             self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
             let mut kids = Vec::new();
@@ -802,42 +815,51 @@ impl HarnessHost {
                 .cloned()
                 .collect();
             inner.login_lines.retain(|id, _| logins.contains(id));
-            (kids, logins)
+            (was_shutting_down, kids, logins)
         };
-        self.stop_all_sse();
-        let pids: Vec<_> = kids.iter().map(|live| live.pid).collect();
-        drop(kids);
-        terminate_all(&pids);
-        let mut error = None;
-        for id in logins {
-            if let Err(reason) = self.stop_session_with(&id, false, &stop_login) {
-                error.get_or_insert(reason);
+        let result = (|| {
+            self.stop_all_sse();
+            let pids: Vec<_> = kids.iter().map(|live| live.pid).collect();
+            drop(kids);
+            terminate_all(&pids);
+            let mut error = None;
+            for id in logins {
+                if let Err(reason) = self.stop_session_with(&id, false, &stop_login) {
+                    error.get_or_insert(reason);
+                }
             }
-        }
-        self.wait_for_shutdown_cleanup()?;
-        let rejected: Vec<_> = self.lock_inner().rejected.keys().cloned().collect();
-        for id in rejected {
-            if let Err(reason) = self.recover_rejected(&id) {
-                error.get_or_insert(reason);
+            self.wait_for_shutdown_cleanup()?;
+            let rejected: Vec<_> = self.lock_inner().rejected.keys().cloned().collect();
+            for id in rejected {
+                if let Err(reason) = self.recover_rejected(&id) {
+                    error.get_or_insert(reason);
+                }
             }
+            self.wait_for_shutdown_cleanup()?;
+            let inner = self.lock_inner();
+            if !inner.rejected.is_empty() || !inner.uncertain.is_empty() {
+                return Err(
+                    error.unwrap_or_else(|| "Harness process cleanup is unconfirmed".into())
+                );
+            }
+            error.map_or(Ok(()), Err)
+        })();
+        if !final_exit || result.is_err() {
+            self.lock_inner().shutting_down = was_shutting_down;
         }
-        self.wait_for_shutdown_cleanup()?;
-        let inner = self.lock_inner();
-        if !inner.rejected.is_empty() || !inner.uncertain.is_empty() {
-            return Err(error.unwrap_or_else(|| "Harness process cleanup is unconfirmed".into()));
-        }
-        error.map_or(Ok(()), Err)
+        result
     }
 
     #[cfg(windows)]
-    fn kill_all_windows(&self) -> Result<(), String> {
+    fn kill_all_windows(&self, final_exit: bool) -> Result<(), String> {
         let _shutdown = self
             .shutdown_guard
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let kids: Vec<(String, Arc<LiveChild>)> =
+        let (was_shutting_down, kids): (bool, Vec<(String, Arc<LiveChild>)>) =
             {
                 let mut inner = self.lock_inner();
+                let was_shutting_down = inner.shutting_down;
                 inner.shutting_down = true;
                 self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
                 let mut kids: Vec<_> = inner.children.drain().collect();
@@ -849,7 +871,7 @@ impl HarnessHost {
                 inner.uncertain.extend(kids.iter().filter_map(|(id, _)| {
                     id.starts_with(LOGIN_CHILD_PREFIX).then_some(id.clone())
                 }));
-                kids
+                (was_shutting_down, kids)
             };
         self.stop_all_sse();
         let pids: Vec<u32> = kids
@@ -860,7 +882,11 @@ impl HarnessHost {
         // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
         drop(kids);
         terminate_all(&pids);
-        self.wait_for_shutdown_cleanup()
+        let result = self.wait_for_shutdown_cleanup();
+        if !final_exit || result.is_err() {
+            self.lock_inner().shutting_down = was_shutting_down;
+        }
+        result
     }
 
     fn kill_non_login(&self) {
@@ -4294,6 +4320,7 @@ mod tests {
         let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         host.kill_all().unwrap();
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
+        assert!(host.begin_spawn("reopened-window").is_ok());
     }
 
     #[test]
@@ -4659,11 +4686,14 @@ mod tests {
         let (signal_tx, signal_rx) = mpsc::channel();
         let cleanup_host = host.clone();
         let cleanup = thread::spawn(move || {
-            cleanup_host.kill_all_with(|selected_pid| {
-                selected_tx.send(selected_pid).unwrap();
-                signal_rx.recv().unwrap();
-                signal_login_tree(selected_pid)
-            })
+            cleanup_host.kill_all_with(
+                |selected_pid| {
+                    selected_tx.send(selected_pid).unwrap();
+                    signal_rx.recv().unwrap();
+                    signal_login_tree(selected_pid)
+                },
+                false,
+            )
         });
         assert_eq!(
             selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
@@ -4690,7 +4720,7 @@ mod tests {
         assert_eq!(waiter.join().unwrap(), Some(0));
         assert!(!tree_alive(pid));
         host.acknowledge_login_exit(id, pid).unwrap();
-        assert!(host.begin_spawn(id).is_err());
+        assert!(host.begin_spawn(id).is_ok());
     }
 
     #[test]
@@ -5214,10 +5244,27 @@ mod tests {
             .begin_spawn_for_account(id, Some("claude:default"))
             .unwrap();
         let started = Instant::now();
-        assert!(host.kill_all().is_err());
+        assert!(host.kill_all_for_exit().is_err());
         assert!(started.elapsed() < Duration::from_secs(7));
+        assert!(host
+            .begin_spawn_for_account("another-window", Some("codex:default"))
+            .is_ok());
+        assert!(host
+            .begin_spawn_for_account("same-account", Some("claude:default"))
+            .is_err());
         drop(reservation);
-        host.kill_all().unwrap();
+        assert!(host
+            .begin_spawn_for_account("same-account", Some("claude:default"))
+            .is_ok());
+        host.kill_all_for_exit().unwrap();
+        assert!(host.begin_spawn("after-retried-quit").is_err());
+    }
+
+    #[test]
+    fn confirmed_quit_keeps_the_spawn_gate_closed() {
+        let host = HarnessHost::new();
+        host.kill_all_for_exit().unwrap();
+        assert!(host.begin_spawn("after-exit-confirmation").is_err());
     }
 
     #[test]
