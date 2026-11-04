@@ -72,10 +72,14 @@ fn config_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 fn credentials(config: Option<PathBuf>) -> Option<Value> {
+    // On macOS the CLI keeps its login in Keychain only. An item that is there
+    // but blank (the CLI clears it when a refresh fails) means signed out; an
+    // old .credentials.json must not stand in for it, or the footer would
+    // promise a renewal with a long-dead refresh token and hide Sign in.
     #[cfg(target_os = "macos")]
     {
-        if let Some(value) = keychain(config.as_deref()) {
-            return Some(value);
+        if let Some(raw) = keychain(config.as_deref()) {
+            return credential_blob(&raw);
         }
     }
     let dir = config.or_else(|| {
@@ -143,7 +147,8 @@ fn keychain_service(config: Option<&std::path::Path>) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
+/// The raw Keychain secret, or None when there is no item (or it cannot be read).
+fn keychain(config: Option<&std::path::Path>) -> Option<String> {
     use crate::process;
     use std::{
         process::{Command, Stdio},
@@ -187,7 +192,7 @@ fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
     process::terminate(&mut child);
     drop(rx);
     let _ = reader.join();
-    credential_blob(&result?)
+    result
 }
 
 #[cfg(test)]

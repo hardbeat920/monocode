@@ -443,9 +443,12 @@ fn usage_error(status: u16) -> ClaudeUsageFetch {
 fn read_claude_credentials(config_dir: Option<&std::path::Path>) -> Option<ClaudeCredentials> {
     #[cfg(target_os = "macos")]
     {
+        // A Keychain item that is present but blank (the CLI clears it when a
+        // refresh fails) means signed out. An old .credentials.json must not
+        // stand in for it with a long-dead refresh token.
         let service = claude_keychain_service(config_dir);
-        if let Some(creds) = read_macos_keychain_credentials(&service) {
-            return Some(creds);
+        if let Some(secret) = read_macos_keychain_secret(&service) {
+            return credentials_from_blob(&secret);
         }
     }
     read_credentials_file(config_dir)
@@ -533,7 +536,7 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(target_os = "macos")]
-fn read_macos_keychain_credentials(service: &str) -> Option<ClaudeCredentials> {
+fn read_macos_keychain_secret(service: &str) -> Option<String> {
     let candidates = [
         {
             let mut args = keychain_find_args(service);
@@ -553,9 +556,7 @@ fn read_macos_keychain_credentials(service: &str) -> Option<ClaudeCredentials> {
     ];
     for args in candidates {
         if let Some(secret) = security_output(&args) {
-            if let Some(creds) = credentials_from_blob(&secret) {
-                return Some(creds);
-            }
+            return Some(secret);
         }
     }
     None
