@@ -586,6 +586,81 @@ fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &m
 }
 
 #[gpui::test]
+fn failed_completion_focus_scrolls_after_moving_between_windows(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let workspace: gpui::AnyWindowHandle = s.window.into();
+    workspace
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                for id in ["first", "second"] {
+                    m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                        id: id.into(),
+                        text: "completion".into(),
+                        internal: true,
+                        sent_at: None,
+                        error: Some("Long failure. ".repeat(500)),
+                        attachments: Vec::new(),
+                    });
+                }
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let mut main = gpui::VisualTestContext::from_window(workspace, cx);
+    main.run_until_parked();
+    main.refresh().unwrap();
+    s.manager
+        .update(&mut main, |m, cx| m.open_floating(s.id.clone(), cx));
+    main.run_until_parked();
+    let panel = s.manager.read_with(&main, |m, _| m.floating[0]);
+    let mut floating = gpui::VisualTestContext::from_window(panel, cx);
+    panel
+        .update(&mut floating, |_, w, _| w.activate_window())
+        .unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let chat = s
+        .manager
+        .read_with(&floating, |m, _| m.chats[&s.id].clone());
+    let second = chat.read_with(&floating, |c, _| c.queue_test_focus("second", 0));
+    panel
+        .update(&mut floating, |_, w, cx| w.focus(&second, cx))
+        .unwrap();
+    floating.refresh().unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let list = floating.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = floating.debug_bounds("mono-queue-retry-second").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "floating action {retry:?} outside {list:?}"
+    );
+
+    s.manager
+        .update(&mut floating, |m, cx| m.hide_floating(&s.id, cx));
+    floating.run_until_parked();
+    workspace
+        .update(&mut main, |_, w, _| w.activate_window())
+        .unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let first = chat.read_with(&main, |c, _| c.queue_test_focus("first", 0));
+    workspace
+        .update(&mut main, |_, w, cx| w.focus(&first, cx))
+        .unwrap();
+    main.refresh().unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let list = main.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = main.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "workspace action {retry:?} outside {list:?}"
+    );
+}
+
+#[gpui::test]
 fn floating_chat_leaves_the_workspace_selection_alone(cx: &mut TestAppContext) {
     let s = setup(cx);
     let other = cx.update(|cx| {

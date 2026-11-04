@@ -8,6 +8,7 @@ pub(super) struct ChatState {
     queue_scroll: gpui::ScrollHandle,
     queue_ids: Vec<String>,
     queue_list_focus: Option<gpui::FocusHandle>,
+    queue_window: Option<gpui::AnyWindowHandle>,
     queue_focus: std::collections::HashMap<String, ([gpui::FocusHandle; 2], [Subscription; 2])>,
     pub(super) emoji: bool,
     pub(super) delivered: std::collections::HashSet<String>,
@@ -585,6 +586,10 @@ impl Conversation {
             }
             self.mono_ui.queue_scroll = gpui::ScrollHandle::new();
             self.mono_ui.queue_ids.clone_from(&failed_ids);
+        }
+        if self.mono_ui.queue_window != Some(window.window_handle()) {
+            self.mono_ui.queue_focus.clear();
+            self.mono_ui.queue_window = Some(window.window_handle());
         }
         self.mono_ui
             .queue_focus
