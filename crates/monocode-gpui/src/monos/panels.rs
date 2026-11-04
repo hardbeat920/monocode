@@ -7,7 +7,7 @@ use crate::{
 use gpui::{AnyView, Div, FontWeight, Stateful};
 use monocode_core::mono::heartbeat;
 use monocode_core::project_appearance::{MASCOTS, ProjectAppearance};
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum OverviewTab {
     Overview,
     Sessions,
@@ -39,6 +39,80 @@ impl Route {
             Self::Habit(id) => format!("habit:{id}"),
             Self::NewHabit => "new-habit".into(),
         }
+    }
+}
+/// What a Mono's details panel showed when another Mono was opened.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PanelView {
+    pub(super) tab: OverviewTab,
+    pub(super) previous: OverviewTab,
+    pub(super) route: Option<Route>,
+}
+impl Default for PanelView {
+    fn default() -> Self {
+        Self {
+            tab: OverviewTab::Overview,
+            previous: OverviewTab::Overview,
+            route: None,
+        }
+    }
+}
+impl PanelView {
+    /// The view to show again, keeping only a page whose subject still exists.
+    /// Reviews and habit pages depend on state reloaded per Mono, so they
+    /// return to their tab's list.
+    pub(super) fn restored(mut self, exists: impl Fn(&Route) -> bool) -> Self {
+        self.route = self.route.filter(|route| {
+            matches!(route, Route::Session(_) | Route::Document(_)) && exists(route)
+        });
+        self
+    }
+}
+impl Monos {
+    pub(super) fn remember_panel_view(&mut self) {
+        if let Some(id) = self.active.clone() {
+            let view = PanelView {
+                tab: self.overview_tab,
+                previous: self.overview_previous,
+                route: self.route.clone(),
+            };
+            self.panel_views.insert(id, view);
+        }
+    }
+    /// Restores `id`'s remembered view. Callers may be inside the Shell's own
+    /// update, so whether a session still exists unarchived is checked after.
+    pub(super) fn restore_panel_view(&mut self, id: &str, cx: &mut Context<Self>) {
+        let saved = self.panel_views.get(id).cloned().unwrap_or_default();
+        let mono = self.roster.get(id);
+        let view = saved.restored(|route: &Route| match route {
+            Route::Session(_) => true,
+            Route::Document(document) => {
+                mono.is_some_and(|m| m.documents.iter().any(|d| &d.id == document))
+            }
+            _ => false,
+        });
+        if let Some(Route::Session(session)) = view.route {
+            cx.spawn(async move |this, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    let live = this.owner.upgrade().is_some_and(|owner| {
+                        owner
+                            .read(cx)
+                            .mono_session_views(cx)
+                            .iter()
+                            .any(|v| v.id == session && !v.archived)
+                    });
+                    if !live && this.route == Some(Route::Session(session)) {
+                        this.route = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        self.overview_tab = view.tab;
+        self.overview_previous = view.previous;
+        self.overview_reveal = None;
+        self.route = view.route;
     }
 }
 pub(super) struct OpenPicker {

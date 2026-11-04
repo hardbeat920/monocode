@@ -297,16 +297,97 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             })
             .unwrap();
         visual.run_until_parked();
-        assert!(
-            visual.debug_bounds(page).is_none(),
-            "returning to a Mono must not replay an old page's exit"
-        );
+        let tab = if kind == "session" {
+            OverviewTab::Sessions
+        } else {
+            OverviewTab::Documents
+        };
         assert_eq!(
-            visual.debug_bounds("mono-detail-base").unwrap().left(),
-            stack.left()
+            visual.debug_bounds(page).unwrap().left(),
+            stack.left(),
+            "returning to a Mono shows its remembered page in place, without sliding"
         );
+        assert_eq!(s.manager.read_with(visual, |m, _| m.overview_tab), tab);
     }
 }
+#[gpui::test]
+fn each_mono_remembers_its_details_tab_and_open_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let session = s
+        .window
+        .update(cx, |shell, _, _| shell.workspace.active.unwrap())
+        .unwrap();
+    let action = json!({"type":"session", "sessionId":session});
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &action, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+    let view = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            (m.active.clone().unwrap(), m.overview_tab, m.route.clone())
+        })
+    };
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Overview, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.select_overview(OverviewTab::Habits, cx);
+                m.open(&s.id, w, cx);
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view(cx),
+        (
+            s.id.clone(),
+            OverviewTab::Sessions,
+            Some(Route::Session(session))
+        )
+    );
+    // An archived session falls back to the list; the other Mono keeps its tab.
+    s.window
+        .update(cx, |shell, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&other, w, cx));
+            shell.mono_remove(session, false, w, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+}
+
+#[test]
+fn restored_panel_views_keep_only_pages_whose_subject_exists() {
+    let view = |route| PanelView {
+        tab: OverviewTab::Habits,
+        previous: OverviewTab::Overview,
+        route: Some(route),
+    };
+    let missing = view(Route::Session(7)).restored(|_| false);
+    assert_eq!((missing.tab, missing.route), (OverviewTab::Habits, None));
+    let kept = view(Route::Document("d".into())).restored(|_| true);
+    assert_eq!(kept.route, Some(Route::Document("d".into())));
+    assert_eq!(
+        view(Route::Habit("h".into())).restored(|_| true).route,
+        None
+    );
+}
+
 fn setup(cx: &mut TestAppContext) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-monos-{}", mono::new_id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -45,7 +45,7 @@ use monocode_core::{
     provider::Kind,
     store::Session,
 };
-use panels::{OpenPicker, OverviewTab, Route, SettingsSection};
+use panels::{OpenPicker, OverviewTab, PanelView, Route, SettingsSection};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -104,6 +104,9 @@ pub(crate) struct Monos {
     contributions_loading: HashSet<String>,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
+    /// Each Mono's details-panel tab and open page, restored when it is
+    /// opened again.
+    panel_views: HashMap<String, PanelView>,
     settings: Option<SettingsSection>,
     settings_focus: gpui::FocusHandle,
     fields: HashMap<String, Entity<Input>>,
@@ -338,6 +341,7 @@ impl Monos {
             contributions_loading: HashSet::new(),
             overview_reveal: None,
             route: None,
+            panel_views: HashMap::new(),
             settings: None,
             settings_focus: cx.focus_handle(),
             fields: HashMap::new(),
@@ -1075,7 +1079,8 @@ impl Monos {
         if self.active.as_deref() != Some(id) {
             self.save_open_file(cx);
             self.pause_changes(cx);
-            self.route = None;
+            self.remember_panel_view();
+            self.restore_panel_view(id, cx);
             self.details.update(cx, |details, cx| details.reset(cx));
             self.fields.retain(|k, _| k.starts_with("file:"));
             self.files = None;
@@ -1110,6 +1115,7 @@ impl Monos {
         self.save_open_file(cx);
         self.pause_changes(cx);
         self.hide_html(cx);
+        self.remember_panel_view();
         if self.active.take().is_some() {
             self.details.update(cx, |details, cx| details.reset(cx));
             self.settings = None;

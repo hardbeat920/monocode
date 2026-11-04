@@ -54,7 +54,7 @@ impl Overview {
     }
 
     pub(super) fn reset(&mut self, cx: &mut Context<Self>) {
-        self.stack = PanelStack::default();
+        self.stack = PanelStack::restoring();
         self.native_content = false;
         cx.notify();
     }
