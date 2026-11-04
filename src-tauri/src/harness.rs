@@ -156,6 +156,8 @@ fn antigravity_args() -> Vec<String> {
 struct LiveChild {
     cwd: PathBuf,
     stdin: Mutex<ChildStdin>,
+    // Hold the leader's PID until cancellation has sent its last group signal.
+    reap_guard: Mutex<()>,
     pid: u32,
     identity: Option<String>,
     account: Option<HarnessAccount>,
@@ -168,6 +170,7 @@ struct LiveSse {
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     stopping: HashMap<String, Arc<LiveChild>>,
+    failed_stops: HashSet<String>,
     completed_logins: HashMap<String, (u32, Option<i32>)>,
     spawning: HashSet<String>,
     uncertain: HashSet<String>,
@@ -206,6 +209,7 @@ impl HarnessHost {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
                 stopping: HashMap::new(),
+                failed_stops: HashSet::new(),
                 completed_logins: HashMap::new(),
                 spawning: HashSet::new(),
                 uncertain: HashSet::new(),
@@ -234,7 +238,7 @@ impl HarnessHost {
         stop: impl FnOnce(u32) -> Result<(), String>,
     ) -> Result<LoginStopResult, String> {
         let live = {
-            let mut inner = self.lock_inner();
+            let inner = self.lock_inner();
             if let Some(&(pid, code)) = inner.completed_logins.get(session_id) {
                 return Ok(LoginStopResult {
                     completed: true,
@@ -247,16 +251,39 @@ impl HarnessHost {
                 .get(session_id)
                 .or_else(|| inner.children.get(session_id))
                 .cloned();
-            if let Some(live) = &live {
-                inner.stopping.insert(session_id.to_owned(), live.clone());
-            } else if require_existing {
-                inner.uncertain.insert(session_id.to_owned());
-                return Err("Previous login process exit could not be confirmed".into());
-            }
             live
         };
         if let Some(live) = live {
-            stop(live.pid)?;
+            let _reap = live.reap_guard.lock().unwrap_or_else(|e| e.into_inner());
+            let mut inner = self.lock_inner();
+            if let Some(&(pid, code)) = inner.completed_logins.get(session_id) {
+                return Ok(LoginStopResult {
+                    completed: true,
+                    code,
+                    pid: Some(pid),
+                });
+            }
+            let current = inner
+                .stopping
+                .get(session_id)
+                .or_else(|| inner.children.get(session_id));
+            if !current.is_some_and(|current| Arc::ptr_eq(current, &live)) {
+                inner.uncertain.insert(session_id.to_owned());
+                return Err("Previous login process exit could not be confirmed".into());
+            }
+            inner.stopping.insert(session_id.to_owned(), live.clone());
+            drop(inner);
+            let result = stop(live.pid);
+            let mut inner = self.lock_inner();
+            if result.is_err() {
+                inner.failed_stops.insert(session_id.to_owned());
+            } else {
+                inner.failed_stops.remove(session_id);
+            }
+            drop(inner);
+            drop(_reap);
+            result?;
+            wait_for_login_tree_exit(live.pid);
             let mut inner = self.lock_inner();
             if inner
                 .stopping
@@ -265,6 +292,9 @@ impl HarnessHost {
             {
                 inner.stopping.remove(session_id);
             }
+        } else if require_existing {
+            self.lock_inner().uncertain.insert(session_id.to_owned());
+            return Err("Previous login process exit could not be confirmed".into());
         }
         Ok(LoginStopResult {
             completed: false,
@@ -369,7 +399,24 @@ impl HarnessHost {
     #[cfg(not(windows))]
     fn wait_for_login_exit(&self, session_id: &str, pid: u32, child: &mut Child) -> Option<i32> {
         loop {
+            let live = {
+                let inner = self.lock_inner();
+                inner
+                    .stopping
+                    .get(session_id)
+                    .or_else(|| inner.children.get(session_id))
+                    .cloned()
+            };
+            let _reap = live
+                .as_ref()
+                .map(|live| live.reap_guard.lock().unwrap_or_else(|e| e.into_inner()));
             let mut inner = self.lock_inner();
+            if inner.failed_stops.contains(session_id) {
+                drop(inner);
+                drop(_reap);
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
             match child.try_wait() {
                 Ok(Some(status)) => {
                     // A stop arriving after reaping sees completion, never a reusable PID.
@@ -510,6 +557,7 @@ impl HarnessHost {
                 self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
                 let mut kids: Vec<_> = inner.children.drain().collect();
                 kids.extend(inner.stopping.drain());
+                inner.failed_stops.clear();
                 inner.completed_logins.clear();
                 inner.login_lines.clear();
                 #[cfg(windows)]
@@ -1246,6 +1294,7 @@ pub fn harness_spawn(
     let live = Arc::new(LiveChild {
         cwd: workdir.clone(),
         stdin: Mutex::new(stdin),
+        reap_guard: Mutex::new(()),
         pid,
         identity: crate::resources::identity(pid),
         account,
@@ -1568,7 +1617,7 @@ pub fn harness_stop(
     #[cfg(not(windows))]
     {
         let _ = require_existing;
-        host.stop_session_with(&session_id, false, stop_login_tree)
+        host.stop_session_with(&session_id, false, signal_login_tree)
     }
 }
 
@@ -1582,7 +1631,7 @@ pub fn harness_ack_login_exit(
 }
 
 #[cfg(not(windows))]
-fn stop_login_tree(pid: u32) -> Result<(), String> {
+fn signal_login_tree(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
         let group = -(pid as i32);
@@ -1597,6 +1646,12 @@ fn stop_login_tree(pid: u32) -> Result<(), String> {
     }
     #[cfg(not(any(unix, windows)))]
     terminate_all(&[pid]);
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+fn stop_login_tree(pid: u32) -> Result<(), String> {
+    signal_login_tree(pid)?;
     wait_for_login_tree_exit(pid);
     Ok(())
 }
@@ -3620,6 +3675,7 @@ mod tests {
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
+                reap_guard: Mutex::new(()),
                 pid,
                 identity: crate::resources::identity(pid),
                 account: None,
@@ -3782,6 +3838,7 @@ mod tests {
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
+                reap_guard: Mutex::new(()),
                 pid,
                 identity: crate::resources::identity(pid),
                 account: None,
@@ -3941,7 +3998,10 @@ mod tests {
         assert!(tree_alive(pid));
         let mut completed = None;
         host.publish_exit(id, pid, || {
-            completed = Some(host.stop_session_with(id, false, stop_login_tree).unwrap());
+            completed = Some(
+                host.stop_session_with(id, false, signal_login_tree)
+                    .unwrap(),
+            );
             assert!(host.begin_spawn(id).is_err());
         });
         let completed = completed.unwrap();
@@ -3971,11 +4031,101 @@ mod tests {
         let waiter_host = host.clone();
         let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
         thread::sleep(Duration::from_millis(100));
-        let stopped = host.stop_session_with(id, true, stop_login_tree).unwrap();
+        let stopped = host.stop_session_with(id, true, signal_login_tree).unwrap();
         assert!(!stopped.completed);
         assert_eq!(waiter.join().unwrap(), None);
         assert!(!tree_alive(pid));
         assert!(host.begin_spawn(id).is_err());
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn stop_keeps_leader_identity_until_its_group_signal_is_sent() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (signal_tx, signal_rx) = mpsc::channel();
+        let stop_host = host.clone();
+        let stopper = thread::spawn(move || {
+            stop_host.stop_session_with(id, true, |selected_pid| {
+                selected_tx.send(selected_pid).unwrap();
+                signal_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        assert!(host.begin_spawn("monocode-provider-login-codex").is_ok());
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let still_owned = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                status.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            ) == 0
+        };
+        let not_reaped = !host.lock_inner().completed_logins.contains_key(id);
+        signal_tx.send(()).unwrap();
+        assert!(!stopper.join().unwrap().unwrap().completed);
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(still_owned && not_reaped);
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn failed_signal_keeps_leader_identity_for_a_safe_retry() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        assert!(host
+            .stop_session_with(id, true, |_| Err("signal failed".into()))
+            .is_err());
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert!(!host.lock_inner().completed_logins.contains_key(id));
+        assert!(
+            !host
+                .stop_session_with(id, true, |_| Ok(()))
+                .unwrap()
+                .completed
+        );
+        assert_eq!(waiter.join().unwrap(), Some(0));
         host.acknowledge_login_exit(id, pid).unwrap();
         assert!(host.begin_spawn(id).is_ok());
     }
@@ -4018,7 +4168,7 @@ mod tests {
             let mut child = child;
             let _ = child.wait();
         });
-        host.stop_session_with("login", true, stop_login_tree)
+        host.stop_session_with("login", true, signal_login_tree)
             .unwrap();
         assert!(host.begin_spawn("login").is_ok());
         let _ = waiter.join();
