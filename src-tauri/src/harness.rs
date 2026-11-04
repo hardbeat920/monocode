@@ -170,6 +170,7 @@ struct HarnessInner {
     stopping: HashMap<String, Arc<LiveChild>>,
     spawning: HashSet<String>,
     uncertain: HashSet<String>,
+    login_lines: HashMap<String, String>,
     epochs: HashMap<String, u64>,
 }
 
@@ -206,6 +207,7 @@ impl HarnessHost {
                 stopping: HashMap::new(),
                 spawning: HashSet::new(),
                 uncertain: HashSet::new(),
+                login_lines: HashMap::new(),
                 epochs: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
@@ -301,6 +303,7 @@ impl HarnessHost {
         *epoch += 1;
         let epoch = *epoch;
         let prev = inner.children.remove(session_id);
+        inner.login_lines.remove(session_id);
         Ok((epoch, kill_all, prev))
     }
 
@@ -343,7 +346,38 @@ impl HarnessHost {
         if inner.children.get(session_id).map(|live| live.pid) != Some(pid) {
             return None;
         }
+        inner.login_lines.remove(session_id);
         inner.children.remove(session_id)
+    }
+
+    #[cfg(any(windows, test))]
+    fn login_snapshot(&self, session_id: &str) -> Option<LoginSnapshot> {
+        if !session_id.starts_with(LOGIN_CHILD_PREFIX) {
+            return None;
+        }
+        let inner = self.lock_inner();
+        let live = inner.children.get(session_id)?;
+        Some(LoginSnapshot {
+            pid: live.pid,
+            line: inner.login_lines.get(session_id).cloned(),
+        })
+    }
+
+    #[cfg(any(windows, test))]
+    fn record_login_line(&self, session_id: &str, pid: u32, line: &str) {
+        if !line.contains("If the browser didn't open, visit: https://") {
+            return;
+        }
+        let mut inner = self.lock_inner();
+        if inner
+            .children
+            .get(session_id)
+            .is_some_and(|live| live.pid == pid)
+        {
+            inner
+                .login_lines
+                .insert(session_id.to_owned(), line.to_owned());
+        }
     }
 
     fn kill_account(&self, provider: &str, account_id: &str) {
@@ -407,6 +441,7 @@ impl HarnessHost {
                 self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
                 let mut kids: Vec<_> = inner.children.drain().collect();
                 kids.extend(inner.stopping.drain());
+                inner.login_lines.clear();
                 #[cfg(windows)]
                 inner.uncertain.extend(kids.iter().filter_map(|(id, _)| {
                     id.starts_with(LOGIN_CHILD_PREFIX).then_some(id.clone())
@@ -422,6 +457,37 @@ impl HarnessHost {
         // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
         drop(kids);
         terminate_all(&pids);
+    }
+
+    #[cfg(any(windows, test))]
+    fn kill_non_login(&self) {
+        let mut kids = Vec::new();
+        {
+            let mut inner = self.lock_inner();
+            for (id, epoch) in &mut inner.epochs {
+                if !id.starts_with(LOGIN_CHILD_PREFIX) {
+                    *epoch += 1;
+                }
+            }
+            inner.children.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.pid);
+                    false
+                }
+            });
+            inner.stopping.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.pid);
+                    false
+                }
+            });
+        }
+        self.stop_all_sse();
+        terminate_all(&kids);
     }
 
     fn insert_sse(&self, session_id: String, live: Arc<LiveSse>) -> Option<Arc<LiveSse>> {
@@ -1139,6 +1205,12 @@ pub fn harness_spawn(
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            #[cfg(windows)]
+            if stdout_id.starts_with(LOGIN_CHILD_PREFIX) {
+                if let Some(stdout_host) = stdout_app.try_state::<HarnessHost>() {
+                    stdout_host.record_login_line(&stdout_id, pid, &line);
+                }
+            }
             if let Some(store) = &stdout_store {
                 if line.contains("\"turn/completed\"")
                     || line.contains("\"item/started\"")
@@ -1372,6 +1444,29 @@ pub fn harness_login_mode() -> &'static str {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginSnapshot {
+    pid: u32,
+    line: Option<String>,
+}
+
+#[tauri::command]
+pub fn harness_login_snapshot(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+) -> Option<LoginSnapshot> {
+    #[cfg(windows)]
+    {
+        host.login_snapshot(&session_id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (host, session_id);
+        None
+    }
+}
+
 #[tauri::command(async)]
 pub fn harness_stop(
     host: State<'_, HarnessHost>,
@@ -1447,10 +1542,19 @@ fn wait_for_login_tree_exit(pid: u32) {
     let _ = pid;
 }
 
-/// Off the main thread: `kill_all` waits for the children to die before it
-/// returns, and a window close calls this while the app keeps running.
+/// Window unload leaves Windows logins in the app-owned job for another
+/// window to attach; full app exit still calls `kill_all`.
 #[tauri::command(async)]
-pub fn harness_kill_all(host: State<'_, HarnessHost>) -> Result<(), String> {
+pub fn harness_kill_all(
+    host: State<'_, HarnessHost>,
+    preserve_login_on_windows: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    if preserve_login_on_windows == Some(true) {
+        host.kill_non_login();
+        return Ok(());
+    }
+    let _ = preserve_login_on_windows;
     host.kill_all();
     Ok(())
 }
@@ -3583,6 +3687,79 @@ mod tests {
             }),
             child,
         )
+    }
+
+    #[test]
+    fn window_cleanup_preserves_login_registration_and_link_until_exit() {
+        let host = HarnessHost::new();
+        let login_id = "monocode-provider-login-claude";
+        let (login, mut login_child) = live_group("sleep 30");
+        let (ordinary, mut ordinary_child) = live_group("sleep 30");
+        let ordinary_pid = ordinary.pid;
+        {
+            let mut inner = host.lock_inner();
+            inner.children.insert(login_id.into(), login.clone());
+            inner.children.insert("probe".into(), ordinary);
+            inner.login_lines.insert(
+                login_id.into(),
+                "If the browser didn't open, visit: https://claude.ai/example".into(),
+            );
+        }
+        let login_pid = login.pid;
+        let pending_id = "monocode-provider-login-codex";
+        let (login_epoch, login_generation, _) = host.begin_spawn(pending_id).unwrap();
+        let login_reservation = LoginSpawnReservation {
+            host: &host,
+            session_id: pending_id,
+        };
+        let (probe_epoch, probe_generation, _) = host.begin_spawn("probe-starting").unwrap();
+        let login_waiter = thread::spawn(move || {
+            let _ = login_child.wait();
+        });
+        let ordinary_waiter = thread::spawn(move || {
+            let _ = ordinary_child.wait();
+        });
+        host.kill_non_login();
+        assert!(host.spawn_stamp_current(pending_id, login_epoch, login_generation));
+        assert!(!host.spawn_stamp_current("probe-starting", probe_epoch, probe_generation));
+        drop(login_reservation);
+        assert_eq!(host.get(login_id).map(|live| live.pid), Some(login_pid));
+        assert!(host.lock_inner().login_lines.contains_key(login_id));
+        assert!(host.get("probe").is_none());
+        assert!(!tree_alive(ordinary_pid));
+        assert!(host.begin_spawn(login_id).is_err());
+        host.kill_all();
+        let _ = login_waiter.join();
+        let _ = ordinary_waiter.join();
+    }
+
+    #[test]
+    fn login_snapshot_keeps_only_the_current_child_link() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let (live, child) = live_child();
+        let pid = live.pid;
+        host.lock_inner().children.insert(id.into(), live);
+        host.record_login_line(
+            id,
+            pid + 1,
+            "If the browser didn't open, visit: https://claude.ai/stale",
+        );
+        assert!(host.login_snapshot(id).unwrap().line.is_none());
+        host.record_login_line(
+            id,
+            pid,
+            "If the browser didn't open, visit: https://claude.ai/current",
+        );
+        let snapshot = host.login_snapshot(id).unwrap();
+        assert_eq!(snapshot.pid, pid);
+        assert_eq!(
+            snapshot.line.as_deref(),
+            Some("If the browser didn't open, visit: https://claude.ai/current")
+        );
+        host.remove_if_pid(id, pid);
+        assert!(host.login_snapshot(id).is_none());
+        reap(child);
     }
 
     #[test]

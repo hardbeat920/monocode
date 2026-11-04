@@ -91,6 +91,20 @@ function connectedLimits(provider: RateLimitProvider): ProviderRateLimits {
 }
 
 describe("UsageFooter provider authentication", () => {
+  it("reopens the session sign-in from the footer after its dialog closes", () => {
+    const reopen = vi.fn();
+    act(() =>
+      root.render(
+        createElement(UsageFooter, {
+          providers: [],
+          session: { id: "session", harness: "claude", authRequired: true },
+          onOpenSignIn: reopen,
+        }),
+      ),
+    );
+    act(() => button("Open sign-in").click());
+    expect(reopen).toHaveBeenCalledOnce();
+  });
   it("reuses usage on remount and only fetches again on Refresh", async () => {
     rateLimitsFetch.fetchCodexRateLimits.mockResolvedValue(
       connectedLimits("codex"),

@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const child = vi.hoisted(() => ({
   killChild: vi.fn(async () => undefined),
   stopChild: vi.fn(async () => undefined),
+  attachLogin: vi.fn<(_id: string) => Promise<string | null | undefined>>(
+    async () => undefined,
+  ),
   loginMode: vi.fn(async () => "terminate"),
   spawnChild: vi.fn(async () => undefined),
   writeChild: vi.fn(async () => undefined),
@@ -40,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   child.killChild.mockReset().mockResolvedValue(undefined);
   child.stopChild.mockReset();
+  child.attachLogin.mockReset().mockResolvedValue(undefined);
   child.loginMode.mockReset().mockResolvedValue("terminate");
   child.stopChild.mockImplementation(async (id: string) => {
     queueMicrotask(() => {
@@ -201,6 +205,38 @@ describe("harness login", () => {
     await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
     (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
     await expect(fresh).resolves.toBeUndefined();
+  });
+
+  it("reattaches a named Windows login after its owning webview unloads", async () => {
+    child.loginMode.mockResolvedValue("detach");
+    const firstOwner = new AbortController();
+    const first = loginHarness("claude", "work", { signal: firstOwner.signal });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    firstOwner.abort();
+    await expect(first).rejects.toThrow("still running");
+    resetHarnessLoginState();
+    child.attachLogin.mockResolvedValueOnce(
+      "If the browser didn't open, visit: https://claude.ai/oauth/authorize?state=shared",
+    );
+    const secondOwner = new AbortController();
+    const onUrl = vi.fn();
+    const second = loginHarness("claude", "work", {
+      signal: secondOwner.signal,
+      onUrl,
+    });
+    await vi.waitFor(() =>
+      expect(onUrl).toHaveBeenCalledWith(
+        "https://claude.ai/oauth/authorize?state=shared",
+      ),
+    );
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    await submitHarnessLoginCode("claude", "code", secondOwner.signal, "work");
+    expect(child.writeChild).toHaveBeenCalledWith(
+      "monocode-provider-login-claude-work",
+      "code",
+    );
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await expect(second).resolves.toBeUndefined();
   });
 
   it("reconnects during a pending Windows spawn without starting or stopping a second child", async () => {

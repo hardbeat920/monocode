@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // Keep this as .ts because the project test glob intentionally excludes .test.tsx.
-import { act, createElement, useState } from "react";
+import { act, createElement, Fragment, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,6 +31,7 @@ vi.mock("../../../integrations/harness/core/auth", () => ({
   loginHarness: auth.loginHarness,
   hasResumableHarnessLogin: auth.hasResumableHarnessLogin,
   onHarnessLoginEnd: auth.onHarnessLoginEnd,
+  supportsHarnessLogin: () => true,
   submitHarnessLoginCode: auth.submitHarnessLoginCode,
 }));
 const clipboard = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ import { ProviderSignInDialog } from "./ProviderSignInDialog";
 import { useProviderSignInRequestGuard } from "../../../app/hooks/useProviderSignInRequestGuard";
 import { newSession } from "../model/session";
 import { withUsageLimitAccount } from "../model/usageLimit";
+import { UsageFooter } from "../../../app/shell/UsageFooter";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -77,6 +79,52 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("ProviderSignInDialog", () => {
+  it("reopens a detached named-account login after closing its original dialog", async () => {
+    auth.hasResumableHarnessLogin.mockReturnValue(true);
+    auth.loginHarness.mockImplementation((_harness, _account, options) => {
+      options?.onMode?.("detach");
+      return new Promise<void>((_resolve, reject) =>
+        options?.signal?.addEventListener("abort", () =>
+          reject(new Error("still running")),
+        ),
+      );
+    });
+    function Workspace() {
+      const [open, setOpen] = useState(true);
+      return createElement(
+        Fragment,
+        null,
+        createElement(UsageFooter, {
+          providers: [],
+          session: {
+            id: "same",
+            harness: "claude",
+            authRequired: true,
+            providerAccountId: "work",
+          },
+          onOpenSignIn: open ? undefined : () => setOpen(true),
+        }),
+        open
+          ? createElement(ProviderSignInDialog, {
+              harness: "claude",
+              providerAccountId: "work",
+              onClose: () => setOpen(false),
+            })
+          : null,
+      );
+    }
+    act(() => root.render(createElement(Workspace)));
+    act(() => button("Continue sign-in").click());
+    await act(async () => button("Close").click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    act(() => button("Open sign-in").click());
+    act(() => button("Continue sign-in").click());
+    expect(auth.loginHarness).toHaveBeenCalledTimes(2);
+    expect(auth.loginHarness.mock.calls.map((call) => call[1])).toEqual([
+      "work",
+      "work",
+    ]);
+  });
   it("closes and cancels the old dialog when a usage-limit account switch keeps the session", async () => {
     let switchAccount!: () => void;
     auth.loginHarness.mockImplementation(

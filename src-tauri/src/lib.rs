@@ -511,6 +511,7 @@ pub fn run() {
             harness::harness_write,
             harness::harness_kill,
             harness::harness_login_mode,
+            harness::harness_login_snapshot,
             harness::harness_stop,
             harness::harness_kill_all,
             harness::harness_http,

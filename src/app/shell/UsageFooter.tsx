@@ -79,6 +79,7 @@ export function UsageFooter({
   projectTerminalOpen = false,
   onSelectAccount,
   onManageAccounts,
+  onOpenSignIn,
   inset = false,
   pressureSlot,
 }: {
@@ -97,6 +98,7 @@ export function UsageFooter({
     accountId: string,
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
+  onOpenSignIn?: () => void;
   /** Sits on the inset layout's outer glass, below the card. */
   inset?: boolean;
   /** Receives the slot beside the terminal button for the pressure chip. */
@@ -153,6 +155,15 @@ export function UsageFooter({
           ) : null
         }
       />
+      {onOpenSignIn ? (
+        <button
+          type="button"
+          className="shrink-0 text-amber-600 underline dark:text-amber-300"
+          onClick={onOpenSignIn}
+        >
+          Open sign-in
+        </button>
+      ) : null}
       {showTerminals || showTerminalButton || pressureSlot ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {pressureSlot ? (

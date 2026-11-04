@@ -334,30 +334,31 @@ async function runHarnessLogin(
       else resolve();
     };
 
+    const handleLine = (line: string) => {
+      if (harness !== "claude") return;
+      const match = line.match(
+        /If the browser didn't open, visit: (https:\/\/\S+)/,
+      );
+      if (!match) return;
+      try {
+        const url = new URL(match[1]);
+        if (
+          ![
+            "claude.ai",
+            "platform.claude.com",
+            "console.anthropic.com",
+          ].includes(url.hostname)
+        )
+          return;
+        run.url = url.href;
+        run.listeners.forEach((listener) => listener(url.href));
+      } catch {
+        /* Ignore malformed provider output. */
+      }
+    };
     child.watchChild(
       childId,
-      (line) => {
-        if (harness !== "claude") return;
-        const match = line.match(
-          /If the browser didn't open, visit: (https:\/\/\S+)/,
-        );
-        if (!match) return;
-        try {
-          const url = new URL(match[1]);
-          if (
-            ![
-              "claude.ai",
-              "platform.claude.com",
-              "console.anthropic.com",
-            ].includes(url.hostname)
-          )
-            return;
-          run.url = url.href;
-          run.listeners.forEach((listener) => listener(url.href));
-        } catch {
-          /* Ignore malformed provider output. */
-        }
-      },
+      handleLine,
       (code) => {
         if (run.controller.signal.aborted) {
           exited = true;
@@ -393,12 +394,31 @@ async function runHarnessLogin(
       accountId && accountId !== "default" && supportsAccountProfiles(harness)
         ? { provider: harness, id: accountId }
         : undefined;
-    run.spawned = true;
-    spawn = account
-      ? child.spawnChild(childId, path, [...args], cwd, account, harness)
-      : child.spawnChild(childId, path, [...args], cwd, undefined, harness);
+    spawn = (async () => {
+      if (mode === "detach") {
+        const line = await child.attachLogin(childId);
+        if (line !== undefined) {
+          run.spawned = true;
+          if (line) handleLine(line);
+          return;
+        }
+        if (run.controller.signal.aborted)
+          throw new Error("Sign-in cancelled.");
+      }
+      run.spawned = true;
+      await (account
+        ? child.spawnChild(childId, path, [...args], cwd, account, harness)
+        : child.spawnChild(childId, path, [...args], cwd, undefined, harness));
+    })();
     abort = () => {
       if (timer) clearTimeout(timer);
+      if (mode === "detach") {
+        void spawn.then(
+          () => finish(new Error("Sign-in cancelled.")),
+          () => finish(new Error("Sign-in cancelled.")),
+        );
+        return;
+      }
       void spawn
         .then(() => {
           run.retryStop = requestStop;

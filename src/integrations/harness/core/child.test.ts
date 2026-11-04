@@ -64,6 +64,31 @@ describe("isCurrentChildExit", () => {
 });
 
 describe("child bridge", () => {
+  it("replays a matching exit that arrives while another window attaches to a login", async () => {
+    installResolvedListeners();
+    const snapshot = deferred<{ pid: number; line: string }>();
+    mocks.invoke.mockImplementation((command: string) =>
+      command === "harness_login_snapshot"
+        ? snapshot.promise
+        : Promise.resolve(),
+    );
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const onExit = vi.fn();
+    child.watchChild("monocode-provider-login-claude", vi.fn(), onExit);
+    const attaching = child.attachLogin("monocode-provider-login-claude");
+    mocks.handlers.get("harness-exit")?.({
+      payload: {
+        sessionId: "monocode-provider-login-claude",
+        code: 0,
+        pid: 42,
+      } as never,
+    });
+    snapshot.resolve({ pid: 42, line: "link" });
+    await expect(attaching).resolves.toBe("link");
+    expect(onExit).toHaveBeenCalledWith(0);
+    release();
+  });
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();
     mocks.listen.mockImplementation(

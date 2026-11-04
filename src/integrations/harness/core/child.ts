@@ -408,7 +408,29 @@ export function loginMode(): Promise<"terminate" | "detach" | "unsupported"> {
   return invoke("harness_login_mode");
 }
 
-export function killAllChildren(): Promise<void> {
+export async function attachLogin(
+  sessionId: string,
+): Promise<string | null | undefined> {
+  const release = await acquireHarnessBridge();
+  let active: { pid: number; line?: string | null } | null;
+  try {
+    active = await invoke("harness_login_snapshot", { sessionId });
+  } finally {
+    release();
+  }
+  if (!active) return undefined;
+  livePid.set(sessionId, active.pid);
+  const exits = pendingExit.get(sessionId);
+  pendingExit.delete(sessionId);
+  const exited = exits?.find((event) => event.pid === active.pid);
+  if (exited) {
+    livePid.delete(sessionId);
+    exitHandlers.get(sessionId)?.(exited.code);
+  }
+  return active.line ?? null;
+}
+
+export function killAllChildren(preserveLoginOnWindows = false): Promise<void> {
   lineHandlers.clear();
   exitHandlers.clear();
   lineBuffer.clear();
@@ -420,7 +442,7 @@ export function killAllChildren(): Promise<void> {
   ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
-  return invoke("harness_kill_all");
+  return invoke("harness_kill_all", { preserveLoginOnWindows });
 }
 
 type ResolvedHarnessBinary = { path: string; args?: string[] };
