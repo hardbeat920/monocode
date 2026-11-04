@@ -1,7 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "../../../platform/tauri/fs";
 import { supportsAccountProfiles } from "../../../features/providers/model/providerAccounts";
-import { HARNESS_TITLE, type HarnessId } from "../../../features/sessions/model/session";
+import {
+  HARNESS_TITLE,
+  type HarnessId,
+} from "../../../features/sessions/model/session";
 import * as child from "./child";
 import { harnessLoginArgs } from "./authSupport";
 
@@ -43,7 +46,19 @@ const LOGIN_RESOLVERS: Partial<
   devin: () => child.resolveDevinBinary(),
 };
 
-const inflight = new Map<string, Promise<void>>();
+type LoginRun = {
+  promise: Promise<void>;
+  controller: AbortController;
+  owners: number;
+  url?: string;
+  listeners: Set<(url: string) => void>;
+  signals: Set<AbortSignal>;
+};
+const inflight = new Map<string, LoginRun>();
+
+function loginKey(harness: HarnessId, accountId?: string): string {
+  return `${harness}:${accountId ?? "default"}`;
+}
 
 /**
  * Launch the provider's own login flow. The child owns browser opening and
@@ -53,21 +68,81 @@ const inflight = new Map<string, Promise<void>>();
 export function loginHarness(
   harness: HarnessId,
   accountId?: string,
+  options?: { signal?: AbortSignal; onUrl?: (url: string) => void },
 ): Promise<void> {
-  const key = `${harness}:${accountId ?? "default"}`;
-  const current = inflight.get(key);
-  if (current) return current;
+  if (options?.signal?.aborted)
+    return Promise.reject(new Error("Sign-in cancelled."));
+  const key = loginKey(harness, accountId);
+  let run = inflight.get(key);
+  if (!run) {
+    const next: LoginRun = {
+      promise: Promise.resolve(),
+      controller: new AbortController(),
+      owners: 0,
+      listeners: new Set(),
+      signals: new Set(),
+    };
+    next.promise = runHarnessLogin(harness, accountId, next).finally(() => {
+      if (inflight.get(key) === next) inflight.delete(key);
+    });
+    inflight.set(key, next);
+    run = next;
+  }
+  run.owners++;
+  if (options?.onUrl) {
+    run.listeners.add(options.onUrl);
+    if (run.url) options.onUrl(run.url);
+  }
+  if (!options?.signal) return run.promise;
 
-  const run = runHarnessLogin(harness, accountId).finally(() => {
-    if (inflight.get(key) === run) inflight.delete(key);
+  const owned = run;
+  owned.signals.add(options.signal);
+  return new Promise<void>((resolve, reject) => {
+    const detach = () => {
+      options.signal?.removeEventListener("abort", abort);
+      if (options.signal) owned.signals.delete(options.signal);
+      if (options.onUrl) owned.listeners.delete(options.onUrl);
+    };
+    const abort = () => {
+      detach();
+      if (--owned.owners === 0) owned.controller.abort();
+      // A retry must wait for the old child to be gone and its watcher removed.
+      void (
+        owned.controller.signal.aborted
+          ? owned.promise.catch(() => undefined)
+          : Promise.resolve()
+      ).then(() => reject(new Error("Sign-in cancelled.")));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    owned.promise.then(
+      () => {
+        detach();
+        resolve();
+      },
+      (error) => {
+        detach();
+        reject(error);
+      },
+    );
   });
-  inflight.set(key, run);
-  return run;
+}
+
+export function submitHarnessLoginCode(
+  harness: HarnessId,
+  code: string,
+  owner: AbortSignal,
+): Promise<void> {
+  const run = inflight.get(loginKey(harness));
+  if (!run || owner.aborted || !run.signals.has(owner) || !code.trim()) {
+    return Promise.reject(new Error("This sign-in is no longer active."));
+  }
+  return child.writeChild(loginChildId(harness), code.trim());
 }
 
 async function runHarnessLogin(
   harness: HarnessId,
-  accountId?: string,
+  accountId: string | undefined,
+  run: LoginRun,
 ): Promise<void> {
   const args = harnessLoginArgs(harness);
   const resolve = LOGIN_RESOLVERS[harness];
@@ -78,18 +153,23 @@ async function runHarnessLogin(
   }
 
   const [{ path }, cwd] = await Promise.all([resolve(), homeDir()]);
+  if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
   const childId = loginChildId(harness, accountId);
   await child.killChild(childId).catch(() => undefined);
+  if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let lastError = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let spawn: Promise<void>;
+    let abort = () => undefined;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      run.controller.signal.removeEventListener("abort", abort);
       child.unwatchChild(childId);
       if (error) reject(error);
       else resolve();
@@ -97,8 +177,30 @@ async function runHarnessLogin(
 
     child.watchChild(
       childId,
-      () => undefined,
+      (line) => {
+        if (harness !== "claude") return;
+        const match = line.match(
+          /If the browser didn't open, visit: (https:\/\/\S+)/,
+        );
+        if (!match) return;
+        try {
+          const url = new URL(match[1]);
+          if (
+            ![
+              "claude.ai",
+              "platform.claude.com",
+              "console.anthropic.com",
+            ].includes(url.hostname)
+          )
+            return;
+          run.url = url.href;
+          run.listeners.forEach((listener) => listener(url.href));
+        } catch {
+          /* Ignore malformed provider output. */
+        }
+      },
       (code) => {
+        if (run.controller.signal.aborted) return;
         if (code === 0) {
           finish();
           return;
@@ -115,8 +217,10 @@ async function runHarnessLogin(
         if (line.trim()) lastError = line.trim();
       },
     );
+    if (settled) return;
 
     timer = setTimeout(() => {
+      if (run.controller.signal.aborted) return;
       // Keep the run in `inflight` until the old child is gone. Otherwise a
       // quick retry can be spawned under the same id and then killed by this
       // timeout's late cleanup.
@@ -136,10 +240,19 @@ async function runHarnessLogin(
       accountId && accountId !== "default" && supportsAccountProfiles(harness)
         ? { provider: harness, id: accountId }
         : undefined;
-    const spawn = account
+    spawn = account
       ? child.spawnChild(childId, path, [...args], cwd, account, harness)
       : child.spawnChild(childId, path, [...args], cwd, undefined, harness);
+    abort = () => {
+      void spawn
+        .catch(() => undefined)
+        .then(() => child.killChild(childId).catch(() => undefined))
+        .then(() => finish(new Error("Sign-in cancelled.")));
+    };
+    run.controller.signal.addEventListener("abort", abort, { once: true });
+    if (run.controller.signal.aborted) abort();
     void spawn.catch((error) => {
+      if (run.controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       finish(
         new Error(

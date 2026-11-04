@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const child = vi.hoisted(() => ({
   killChild: vi.fn(async () => undefined),
   spawnChild: vi.fn(async () => undefined),
+  writeChild: vi.fn(async () => undefined),
   unwatchChild: vi.fn(),
   watchChild: vi.fn(),
   resolveClaudeBinary: vi.fn(async () => ({ path: "/bin/claude" })),
@@ -13,7 +14,9 @@ const child = vi.hoisted(() => ({
 }));
 
 vi.mock("./child", () => child);
-vi.mock("../../../platform/tauri/fs", () => ({ homeDir: vi.fn(async () => "/home/alice") }));
+vi.mock("../../../platform/tauri/fs", () => ({
+  homeDir: vi.fn(async () => "/home/alice"),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "test-window" }),
 }));
@@ -23,6 +26,7 @@ import {
   isHarnessAuthError,
   latestTurnNeedsHarnessLogin,
   loginHarness,
+  submitHarnessLoginCode,
   resetHarnessLoginState,
   supportsHarnessLogin,
 } from "./auth";
@@ -100,8 +104,7 @@ describe("harness login", () => {
     );
 
     const onExit = child.watchChild.mock.calls[0]?.[2] as
-      | ((code: number | null) => void)
-      | undefined;
+      ((code: number | null) => void) | undefined;
     onExit?.(0);
     await expect(login).resolves.toBeUndefined();
   });
@@ -117,6 +120,109 @@ describe("harness login", () => {
     onExit?.(0);
     await first;
     expect(child.spawnChild).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a browser-closed login and permits a fresh attempt", async () => {
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(first).rejects.toThrow("cancelled");
+    expect(child.killChild).toHaveBeenCalledTimes(2);
+    const second = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await expect(second).resolves.toBeUndefined();
+  });
+
+  it("does not kill another caller's shared login when the dialog cancels", async () => {
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    const shared = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(first).rejects.toThrow("cancelled");
+    expect(child.killChild).toHaveBeenCalledTimes(1);
+    (child.watchChild.mock.calls[0]?.[2] as (code: number) => void)(0);
+    await expect(shared).resolves.toBeUndefined();
+  });
+
+  it("does not spawn after cancellation during binary resolution", async () => {
+    let resolveBinary!: (value: { path: string }) => void;
+    child.resolveClaudeBinary.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBinary = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const login = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    controller.abort();
+    resolveBinary({ path: "/bin/claude" });
+    await expect(login).rejects.toThrow("cancelled");
+    expect(child.spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("waits for an in-progress spawn before killing and retrying", async () => {
+    let finishSpawn!: () => void;
+    child.spawnChild.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSpawn = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    finishSpawn();
+    await expect(first).rejects.toThrow("cancelled");
+    const second = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await second;
+  });
+
+  it("exposes Claude's printed URL and accepts a pasted code only for its owner", async () => {
+    const controller = new AbortController();
+    const onUrl = vi.fn();
+    const login = loginHarness("claude", undefined, {
+      signal: controller.signal,
+      onUrl,
+    });
+    await vi.waitFor(() => expect(child.watchChild).toHaveBeenCalledOnce());
+    (child.watchChild.mock.calls[0]?.[1] as (line: string) => void)(
+      "If the browser didn't open, visit: https://claude.ai/oauth/authorize?state=private",
+    );
+    expect(onUrl).toHaveBeenCalledWith(
+      "https://claude.ai/oauth/authorize?state=private",
+    );
+    (child.watchChild.mock.calls[0]?.[1] as (line: string) => void)(
+      "If the browser didn't open, visit: https://claude.ai.evil.example/steal",
+    );
+    expect(onUrl).toHaveBeenCalledOnce();
+    await expect(
+      submitHarnessLoginCode(
+        "claude",
+        "sample-code",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("no longer active");
+    await submitHarnessLoginCode("claude", "sample-code", controller.signal);
+    expect(child.writeChild).toHaveBeenCalledWith(
+      "monocode-provider-login-test-window-claude",
+      "sample-code",
+    );
+    (child.watchChild.mock.calls[0]?.[2] as (code: number) => void)(0);
+    await login;
   });
 
   it("does not invent one login flow for multi-provider harnesses", async () => {
