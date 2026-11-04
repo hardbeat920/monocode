@@ -8605,6 +8605,9 @@ impl Render for Shell {
                     } else {
                         this.resume_git(cx);
                         this.check_github_star(true, cx);
+                        if let Some(center) = crate::accounts::get(cx) {
+                            center.update(cx, |center, cx| center.app_reactivated(cx));
+                        }
                     }
                 }));
             self.observations
