@@ -907,6 +907,32 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
 });
 
+it("puts a message sent while background work runs below the reply it follows", () => {
+  const blocks: Block[] = [
+    { id: "ask", role: "user", text: "Is the server up?", startedAt: 1000 },
+    tool("check"),
+    { id: "answer", role: "assistant", text: "It is up." },
+    {
+      ...tool("wait", "in_progress"),
+      tool: { kind: "shell", status: "in_progress", background: true },
+    },
+    { id: "why", role: "user", text: "Why so slow?", sentAt: 1100 },
+  ];
+  render(blocks, { busy: true, agentName: "Captain" });
+  const turn = container.querySelector('[data-transcript-turn="ask"]')!;
+  const answer = [...turn.querySelectorAll("p")].find(
+    (node) => node.textContent === "It is up.",
+  )!;
+  const ask = turn.querySelector('[data-prompt-anchor="ask"]')!;
+  const why = turn.querySelector('[data-prompt-anchor="why"]')!;
+  const work = turn.querySelector("[data-mono-work]")!;
+  const follows = (a: Node, b: Node) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(follows(ask, work)).toBe(true);
+  expect(follows(work, answer)).toBe(true);
+  expect(follows(answer, why)).toBe(true);
+});
+
 it("stacks the next message onto one the Mono only reacted to", () => {
   const props = {
     agentName: "Captain",
