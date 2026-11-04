@@ -14,6 +14,10 @@ vi.mock("../../sessions/ui/ModelPicker", () => ({
   ModelSettingRows: () => null,
 }));
 
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+
 const saveFile = vi.hoisted(() => vi.fn());
 const loadFiles = vi.hoisted(() => vi.fn());
 
@@ -232,6 +236,7 @@ it("keeps a conflicting soul draft open when closing", async () => {
     "soul",
     "# Changed soul",
     "soul",
+    expect.any(String),
   );
   expect(onClose).not.toHaveBeenCalled();
   expect(editor.value).toBe("# Changed soul");
@@ -303,6 +308,7 @@ it("keeps a conflicting draft if the file changes again when keeping mine", asyn
     "soul",
     "# Draft",
     "fresh",
+    expect.any(String),
   );
   expect(editor.value).toBe("# Draft");
   expect(dialog().textContent).toContain("changed this while you were editing");

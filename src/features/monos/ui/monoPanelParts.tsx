@@ -1,4 +1,7 @@
+import { invoke } from "@tauri-apps/api/core";
+import { copyText } from "../../../platform/tauri/clipboard";
 import {
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -332,6 +335,26 @@ export function ColorPicker({
   );
 }
 
+async function recoveryCommand<T>(
+  command: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  let timer = 0;
+  try {
+    return await Promise.race([
+      invoke<T>(command, args),
+      new Promise<never>((_resolve, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error("Timed out; the draft is still open")),
+          8000,
+        );
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 /**
  * One of the agent's files, edited in place in a box that grows with its
  * text. Saves on blur over the version it opened, so a change the agent made
@@ -347,6 +370,7 @@ export function FileField({
   placeholder,
   autoFocus = false,
   saveRef,
+  onRecoverClose,
 }: {
   monoId: string;
   file: MonoFile;
@@ -358,61 +382,213 @@ export function FileField({
   placeholder: string;
   autoFocus?: boolean;
   saveRef?: Ref<() => Promise<boolean>>;
+  onRecoverClose?: (path: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [conflict, setConflict] = useState(false);
   // The version the draft started from; a newer one replaces a clean draft.
   const base = useRef({ value, hash });
   const seenHash = useRef(hash);
-  if (seenHash.current !== hash && draft === base.current.value) {
+  const uncertain = useRef(false);
+  const [uncertainSave, setUncertainSave] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  if (
+    !uncertain.current &&
+    seenHash.current !== hash &&
+    draft === base.current.value
+  ) {
     seenHash.current = hash;
     base.current = { value, hash };
     setDraft(value);
   }
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  const pending = useRef<Promise<boolean> | null>(null);
+  const pending = useRef<{ id: string; promise: Promise<boolean> } | null>(
+    null,
+  );
+  const unconfirmed = useRef(new Set<string>());
+  const generation = useRef(0);
+  const cancelFlushes = useRef(new Set<() => void>());
+  const recovering = useRef(false);
+  const [slow, setSlow] = useState(false);
+  const [recovery, setRecovery] = useState<{ text: string; path: string }>();
+  const recoveryRef = useRef<{ text: string; path: string } | undefined>(
+    undefined,
+  );
+  const [recoveryError, setRecoveryError] = useState<string>();
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
   const blocked = useRef(false);
   const [error, setError] = useState(false);
-  const save = (overwrite = false): Promise<boolean> => {
-    if (pending.current) return pending.current;
-    if (draftRef.current === base.current.value) return Promise.resolve(true);
-    if (blocked.current && !overwrite) return Promise.resolve(false);
+  const fence = async (ids: string[]) => {
+    for (const id of ids) {
+      await recoveryCommand("mono_cancel_soul_save", {
+        mono: monoId,
+        requestId: id,
+      });
+      unconfirmed.current.delete(id);
+    }
+  };
+  const save = (
+    overwrite = false,
+    retryUncertain = false,
+  ): Promise<boolean> => {
+    if (recovering.current) return Promise.resolve(false);
+    if (pending.current) return pending.current.promise;
+    if (uncertain.current && !overwrite && !retryUncertain) {
+      setConflict(true);
+      return Promise.resolve(false);
+    }
+    if (
+      !uncertain.current &&
+      draftRef.current === base.current.value &&
+      !unconfirmed.current.size
+    )
+      return Promise.resolve(true);
+    if (
+      blocked.current &&
+      !overwrite &&
+      draftRef.current !== base.current.value
+    )
+      return Promise.resolve(false);
     const text = draftRef.current;
+    const attempt = generation.current;
+    const id = crypto.randomUUID();
+    const previous = [...unconfirmed.current];
+    unconfirmed.current.add(id);
     const request = (async () => {
+      let invoked = false;
       try {
+        await fence(previous);
+        if (attempt !== generation.current) return false;
+        if (!uncertain.current && text === base.current.value) {
+          unconfirmed.current.delete(id);
+          return true;
+        }
         const expectedHash = overwrite
           ? (await loadMonoFiles(monoId))[`${file}Hash`]
           : base.current.hash;
-        const next = await saveMonoFile(monoId, file, text, expectedHash);
+        if (attempt !== generation.current) return false;
+        invoked = true;
+        const next = await saveMonoFile(monoId, file, text, expectedHash, id);
+        unconfirmed.current.delete(id);
+        if (attempt !== generation.current) return false;
         base.current = { value: text, hash: next };
+        uncertain.current = false;
+        setUncertainSave(false);
         blocked.current = false;
         setConflict(false);
         setError(false);
         return true;
       } catch (error) {
+        if (attempt !== generation.current) return false;
         blocked.current = true;
-        if (error instanceof MonoFileConflict) setConflict(true);
-        else {
+        if (error instanceof MonoFileConflict) {
+          unconfirmed.current.delete(id);
+          setConflict(true);
+        } else {
+          if (invoked) {
+            uncertain.current = true;
+            setUncertainSave(true);
+          }
           setError(true);
           console.warn(`Could not save ${label}`, error);
         }
         return false;
       }
     })();
-    pending.current = request;
+    pending.current = { id, promise: request };
+    const timer = window.setTimeout(() => setSlow(true), 5000);
     void request.then(() => {
-      pending.current = null;
+      window.clearTimeout(timer);
+      if (pending.current?.promise === request) {
+        pending.current = null;
+        if (mounted.current) {
+          setSlow(false);
+          if (uncertain.current) setConflict(true);
+        }
+      }
     });
     return request;
   };
   useImperativeHandle(saveRef, () => async () => {
-    do {
-      if (!(await save()) && draftRef.current !== base.current.value)
-        return false;
-    } while (draftRef.current !== base.current.value);
-    return true;
+    if (recovering.current) return false;
+    const attempt = generation.current;
+    let cancel!: () => void;
+    const cancelled = new Promise<boolean>((resolve) => {
+      cancel = () => resolve(false);
+    });
+    cancelFlushes.current.add(cancel);
+    try {
+      do {
+        const saved = await Promise.race([save(), cancelled]);
+        if (attempt !== generation.current || recovering.current) return false;
+        if (!saved) return false;
+      } while (uncertain.current || draftRef.current !== base.current.value);
+      return true;
+    } finally {
+      cancelFlushes.current.delete(cancel);
+    }
   });
+  const saveRecovery = async () => {
+    const text = draftRef.current;
+    setRecoveryBusy(true);
+    setRecoveryError(undefined);
+    try {
+      const path = await recoveryCommand<string>("mono_save_soul_recovery", {
+        mono: monoId,
+        text,
+      });
+      if (draftRef.current !== text) {
+        setRecoveryError(
+          "The draft changed while saving the copy. Save another copy before closing.",
+        );
+        return;
+      }
+      setPathCopied(false);
+      recoveryRef.current = { text, path };
+      setRecovery(recoveryRef.current);
+    } catch (error) {
+      setRecoveryError(`Could not save a recovery copy: ${String(error)}`);
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
+  const closeWithRecovery = async () => {
+    if (!recovery || recovery.text !== draftRef.current || recovering.current)
+      return;
+    recovering.current = true;
+    setRecoveryBusy(true);
+    if (unconfirmed.current.size) {
+      uncertain.current = true;
+      setUncertainSave(true);
+    }
+    generation.current++;
+    for (const cancel of cancelFlushes.current) cancel();
+    try {
+      await fence([...unconfirmed.current]);
+      if (recovery.text !== draftRef.current) {
+        setRecoveryError(
+          "The draft changed. Save another recovery copy before closing.",
+        );
+        recoveryRef.current = undefined;
+        setRecovery(undefined);
+        return;
+      }
+      onRecoverClose?.(recovery.path);
+    } catch (error) {
+      setRecoveryError(`Could not stop waiting safely: ${String(error)}`);
+    } finally {
+      recovering.current = false;
+      setRecoveryBusy(false);
+    }
+  };
   return (
     <>
       <MarkdownSourceEditor
@@ -422,11 +598,90 @@ export function FileField({
         value={draft}
         autoFocus={autoFocus}
         placeholder={placeholder}
-        onChange={setDraft}
+        onChange={(text) => {
+          draftRef.current = text;
+          setDraft(text);
+          recoveryRef.current = undefined;
+          setRecovery(undefined);
+          setPathCopied(false);
+        }}
         onBlur={() => {
           if (draftRef.current !== base.current.value) void save();
         }}
       />
+      {onRecoverClose && (slow || error || conflict || recovery) ? (
+        <div
+          className="space-y-2 px-3 pb-3 text-xs text-content/70"
+          role="status"
+        >
+          <p>
+            The Soul save has not been confirmed. You can save a separate
+            recovery copy; the earlier save may still finish.
+          </p>
+          <button
+            type="button"
+            disabled={recoveryBusy}
+            onClick={() => void saveRecovery()}
+            className="rounded px-1.5 py-0.5 hover:bg-content/8"
+          >
+            Save recovery copy
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              void copyText(draftRef.current).catch((error) =>
+                setRecoveryError(`Could not copy draft: ${String(error)}`),
+              )
+            }
+            className="rounded px-1.5 py-0.5 hover:bg-content/8"
+          >
+            Copy draft
+          </button>
+          {recovery ? (
+            <div>
+              <p>
+                Recovery copy: <code>{recovery.path}</code>
+              </p>
+              <p>Keep this file; it will not be removed automatically.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  const path = recovery.path;
+                  void copyText(path)
+                    .then(() => {
+                      if (recoveryRef.current?.path === path)
+                        setPathCopied(true);
+                    })
+                    .catch((error) =>
+                      setRecoveryError(
+                        `Could not copy the recovery path: ${String(error)}`,
+                      ),
+                    );
+                }}
+                className="rounded px-1.5 py-0.5 hover:bg-content/8"
+              >
+                {pathCopied ? "Recovery path copied" : "Copy recovery path"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPathCopied(true)}
+                className="rounded px-1.5 py-0.5 hover:bg-content/8"
+              >
+                I have recorded the recovery path
+              </button>
+              <button
+                type="button"
+                disabled={recoveryBusy || !pathCopied}
+                onClick={() => void closeWithRecovery()}
+                className="rounded px-1.5 py-0.5 hover:bg-content/8"
+              >
+                Close editor and keep recovery copy
+              </button>
+            </div>
+          ) : null}
+          {recoveryError ? <p role="alert">{recoveryError}</p> : null}
+        </div>
+      ) : null}
       {error ? (
         <div role="alert" className="px-2 text-xs text-red-400">
           Could not save.{" "}
@@ -434,7 +689,7 @@ export function FileField({
             type="button"
             onClick={() => {
               blocked.current = false;
-              void save();
+              void save(false, true);
             }}
           >
             Retry
@@ -444,10 +699,13 @@ export function FileField({
       {conflict ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[11px] leading-4 text-content/60">
           <span className="min-w-0 flex-1">
-            {author} changed this while you were editing.
+            {uncertainSave
+              ? "An earlier save may still finish. Retry saving or keep a recovery copy."
+              : `${author} changed this while you were editing.`}
           </span>
           <button
             type="button"
+            disabled={uncertainSave}
             onClick={() => {
               const original = draftRef.current;
               void loadMonoFiles(monoId)
@@ -462,6 +720,8 @@ export function FileField({
                   draftRef.current = latest.value;
                   setDraft(latest.value);
                   blocked.current = false;
+                  uncertain.current = false;
+                  setUncertainSave(false);
                   setConflict(false);
                 })
                 .catch((error) => {
@@ -475,6 +735,7 @@ export function FileField({
           </button>
           <button
             type="button"
+            disabled={uncertainSave && !!pending.current}
             onClick={() => void save(true)}
             className="rounded px-1.5 py-0.5 text-content/70 hover:bg-content/8 hover:text-content"
           >

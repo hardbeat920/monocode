@@ -59,12 +59,14 @@ export function SoulPage({
   files,
   onBack,
   saveRef,
+  onRecoverClose,
 }: {
   monoId: string;
   agent: MonoLook;
   files: MonoFiles | undefined;
   onBack?: () => void;
   saveRef?: Ref<() => Promise<boolean>>;
+  onRecoverClose?: (path: string) => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-soul>
@@ -73,6 +75,7 @@ export function SoulPage({
         {files ? (
           <FileField
             saveRef={saveRef}
+            onRecoverClose={onRecoverClose}
             key={`${monoId}:soul`}
             monoId={monoId}
             file="soul"

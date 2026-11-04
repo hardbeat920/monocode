@@ -10,6 +10,7 @@ export function MonoSoulDialog({
   saveRef,
   frozen,
   onClose,
+  onRecoverClose,
 }: {
   monoId: string;
   agent: MonoLook;
@@ -17,6 +18,7 @@ export function MonoSoulDialog({
   saveRef: Ref<() => Promise<boolean>>;
   frozen: boolean;
   onClose: () => void;
+  onRecoverClose: (path: string) => void;
 }) {
   const [loadError, setLoadError] = useState(false);
   const files = useMonoFiles(monoId, status, setLoadError);
@@ -40,6 +42,7 @@ export function MonoSoulDialog({
             agent={agent}
             files={files}
             saveRef={saveRef}
+            onRecoverClose={onRecoverClose}
           />
         )}
       </div>

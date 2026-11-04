@@ -59,6 +59,7 @@ type Props = {
   initialSection?: MonoSettingsSection;
   leaveRef?: Ref<() => Promise<boolean>>;
   frozen?: boolean;
+  onRecoverClose?: (path: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -77,6 +78,7 @@ export function MonoSettingsDialog({
   initialSection = "general",
   leaveRef,
   frozen = false,
+  onRecoverClose,
   onClose,
   ...general
 }: Props) {
@@ -147,6 +149,7 @@ export function MonoSettingsDialog({
               agent={agent}
               files={files}
               saveRef={saveSoul}
+              onRecoverClose={onRecoverClose ?? onClose}
             />
           ) : (
             <MemoryPage monoId={monoId} files={files} />

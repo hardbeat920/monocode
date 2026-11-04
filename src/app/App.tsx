@@ -1,7 +1,10 @@
 import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { useMobileWorkspace } from "../features/mobile/hooks/useMobileWorkspace";
-import { hasMobileAttachments, mobileAttachments } from "../features/mobile/model/mobileAttachments";
+import {
+  hasMobileAttachments,
+  mobileAttachments,
+} from "../features/mobile/model/mobileAttachments";
 import {
   applyMobileChoice,
   mobileWorkspaceChoice,
@@ -1142,8 +1145,12 @@ function Workspace({
     const tab = newTab(session.id);
     return { session, tab };
   });
-  const { sessions, setSessions, sessionsRef, store: sessionState } =
-    useWorkspaceSessionState(
+  const {
+    sessions,
+    setSessions,
+    sessionsRef,
+    store: sessionState,
+  } = useWorkspaceSessionState(
       () => windowTransfer?.sessions ?? resumed?.sessions ?? [seed.session],
     );
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
@@ -1185,6 +1192,7 @@ function Workspace({
     id: string;
     agent: ReturnType<typeof monoLook>;
   }>();
+  const [soulRecoveryPaths, setSoulRecoveryPaths] = useState<string[]>([]);
   const saveSoul = useRef<() => Promise<boolean>>(null);
   const saveSettingsSoul = useRef<() => Promise<boolean>>(null);
   const settingsRequest = useRef(0);
@@ -1199,7 +1207,8 @@ function Workspace({
   const soulRequest = useRef(0);
   const soulExitCount = useRef(0);
   const [soulFrozen, setSoulFrozen] = useState(false);
-  const beginSoulExit = useCallback(async (
+  const beginSoulExit = useCallback(
+    async (
     onAcquire?: (release: () => void) => void,
   ): Promise<(() => void) | null> => {
     soulExitCount.current++;
@@ -1215,11 +1224,19 @@ function Workspace({
     };
     onAcquire?.(release);
     try {
-      const results = await Promise.all([
+        let timeout = 0;
+        const pending = Promise.all([
         saveSoul.current?.() ?? Promise.resolve(true),
         saveSettingsSoul.current?.() ?? Promise.resolve(true),
       ]);
-      if (results.some((saved) => !saved)) {
+        const results = await Promise.race([
+          pending,
+          new Promise<null>((resolve) => {
+            timeout = window.setTimeout(() => resolve(null), 8000);
+          }),
+        ]);
+        window.clearTimeout(timeout);
+        if (!results || results.some((saved) => !saved)) {
         release();
         return null;
       }
@@ -1229,12 +1246,15 @@ function Workspace({
       console.warn("Could not save the Mono's soul", error);
       return null;
     }
-  }, []);
+    },
+    [],
+  );
   const quitSoulRelease = useRef<(() => void) | null>(null);
   const cancelSoulQuit = useRef<(() => void) | null>(null);
   const quitSoulRequest = useRef(0);
   const quitSoulId = useRef<number | null>(null);
-  const beforeSoulQuit = useCallback(async (id: number) => {
+  const beforeSoulQuit = useCallback(
+    async (id: number) => {
     const request = ++quitSoulRequest.current;
     quitSoulId.current = id;
     const previousRelease = quitSoulRelease.current;
@@ -1260,7 +1280,9 @@ function Workspace({
     }
     cancelSoulQuit.current = null;
     return true;
-  }, [beginSoulExit]);
+    },
+    [beginSoulExit],
+  );
   const abortSoulQuit = useCallback((id: number) => {
     if (quitSoulId.current !== null && quitSoulId.current !== id) return;
     quitSoulRequest.current++;
@@ -1269,6 +1291,14 @@ function Workspace({
     quitSoulRelease.current = null;
     cancelSoulQuit.current = null;
     quitSoulId.current = null;
+  }, []);
+  const recoverCloseSoul = useCallback((path: string) => {
+    if (soulExitCount.current) return;
+    soulRequest.current++;
+    flushSync(() => {
+      setSoulRecoveryPaths((paths) => [...paths, path]);
+      setSoulTarget(undefined);
+    });
   }, []);
   const closeSoul = useCallback(() => {
     if (soulExitCount.current) return;
@@ -1360,17 +1390,27 @@ function Workspace({
       flushSync(() => setSettingsSwitching(true));
       void (async () => {
         try {
-          if (saveSettingsSoul.current && !(await saveSettingsSoul.current()))
-            return;
+          if (saveSettingsSoul.current) {
+            let timer = 0;
+            const saved = await Promise.race([
+              saveSettingsSoul.current(),
+              new Promise<false>((resolve) => {
+                timer = window.setTimeout(() => resolve(false), 8000);
+              }),
+            ]).finally(() => window.clearTimeout(timer));
+            if (!saved) return;
+          }
           if (
             soulExitCount.current ||
             request !== settingsRequest.current ||
-            (viewRequest !== undefined && viewRequest !== monoViewRequest.current)
-          ) return;
+            (viewRequest !== undefined &&
+              viewRequest !== monoViewRequest.current)
+          )
+            return;
           const mono = findMono(monoId);
-          const session = loadedSession ?? sessionsRef.current.find(
-            (entry) => entry.id === mono?.sessionId,
-          );
+          const session =
+            loadedSession ??
+            sessionsRef.current.find((entry) => entry.id === mono?.sessionId);
           if (!mono || !session || settingsActive.current === monoId) return;
           flushSync(() => {
             settingsVersion.current++;
@@ -1386,12 +1426,20 @@ function Workspace({
     },
     [],
   );
-  const closeMonoSettings = useCallback((version: number) => {
-    if (soulExitCount.current || version !== settingsVersion.current) return;
+  const closeMonoSettings = useCallback(
+    (version: number, recovered = false) => {
+      if (
+        soulExitCount.current ||
+        version !== settingsVersion.current ||
+        (settingsSwitchCount.current && !recovered)
+      )
+        return;
     settingsRequest.current++;
     settingsActive.current = null;
     flushSync(() => setMonoSettingsFor(null));
-  }, []);
+    },
+    [],
+  );
   const closeMonoView = useCallback(() => {
     monoViewRequest.current += 1;
     monoViewIdRef.current = null;
@@ -1693,7 +1741,10 @@ function Workspace({
   const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
   const queueDispatchingRef = useRef(new Set<string>());
   const [queueDispatchVersion, setQueueDispatchVersion] = useState(0);
-  const mobileUsageActions = useRef<{ resume: (id: string) => Promise<boolean>; automatic: (id: string, enabled: boolean) => void } | null>(null);
+  const mobileUsageActions = useRef<{
+    resume: (id: string) => Promise<boolean>;
+    automatic: (id: string, enabled: boolean) => void;
+  } | null>(null);
   const mobileUsagePending = useRef(new Set<string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
@@ -1959,29 +2010,28 @@ function Workspace({
           const previous = sessionsRef.current;
           const textOnly = [...batches.values()].every((events) =>
             events.every(
-              (event) => event.type === "message.delta" || event.type === "reasoning.delta",
+              (event) =>
+                event.type === "message.delta" ||
+                event.type === "reasoning.delta",
             ),
           );
-          const next = sessionState.update(
-            (current) => {
+          const next = sessionState.update((current) => {
               const updated = current.map((session) => {
                 const events = batches.get(session.id);
                 if (!events) return session;
                 const updated = applyHarnessEvents(session, events);
                 noteStreamApplied(
-                  session.blocks, updated.blocks, events,
+                session.blocks,
+                updated.blocks,
+                events,
                   harnessEvents.isForeground(session.id),
                 );
                 return updated;
               });
-              return updated.some(
-                (session, index) => session !== current[index],
-              )
+            return updated.some((session, index) => session !== current[index])
                 ? updated
                 : current;
-            },
-            textOnly,
-          );
+          }, textOnly);
           if (!textOnly && next !== previous) syncDockBadge(next);
         },
       ),
@@ -2374,8 +2424,7 @@ function Workspace({
 
   // The footer's usage follows what is in view: under the inset layout a
   // Mono's tab keeps the footer, which then reads the Mono's model.
-  const usageSource =
-    insetLayout && monoViewSession ? monoViewSession : active;
+  const usageSource = insetLayout && monoViewSession ? monoViewSession : active;
   const usageProviders = useMemo(() => {
     if (
       usageSource?.harness === "claude" ||
@@ -2676,7 +2725,9 @@ function Workspace({
             projectTerminalsRef.current,
             lastDockSideRef.current ?? undefined,
             keepWorkspaceTab,
-          ).finally(() => (toTray ? hideCurrentWindow() : closeCurrentWindow()));
+          ).finally(() =>
+            toTray ? hideCurrentWindow() : closeCurrentWindow(),
+          );
         } finally {
           releaseSoul();
         }
@@ -4571,10 +4622,16 @@ function Workspace({
       setTabs((prev) => {
         const selectedId = activeTabIdRef.current;
         const selected = prev.find((tab) => tab.id === selectedId);
-        if (!selected || (selected.focusedId === paneId && !selected.diffFocused)) return prev;
-        return prev.map((tab) => tab.id === selectedId
+        if (
+          !selected ||
+          (selected.focusedId === paneId && !selected.diffFocused)
+        )
+          return prev;
+        return prev.map((tab) =>
+          tab.id === selectedId
           ? { ...tab, focusedId: paneId, diffFocused: false }
-          : tab);
+            : tab,
+        );
       });
       setComposerFocused(
         sessionsRef.current.some((session) => session.id === paneId),
@@ -5282,15 +5339,18 @@ function Workspace({
       const request = ++settingsRequest.current;
       const viewRequest = monoViewRequest.current;
       void (async () => {
-        if (saveSettingsSoul.current && !(await saveSettingsSoul.current())) return;
+        if (saveSettingsSoul.current && !(await saveSettingsSoul.current()))
+          return;
         if (
           soulExitCount.current ||
           request !== settingsRequest.current ||
           viewRequest !== monoViewRequest.current
-        ) return;
+        )
+          return;
         const monoId = createMono(projects).id;
         void onOpenMono(monoId, (session) => {
-          if (soulExitCount.current || request !== settingsRequest.current) return;
+          if (soulExitCount.current || request !== settingsRequest.current)
+            return;
           openMonoSettings(monoId, monoViewRequest.current, session);
         });
       })();
@@ -9227,40 +9287,68 @@ function Workspace({
       const text = typeof params.text === "string" ? params.text.trim() : "";
       if (
         (method === "session.start" || method === "conversation.send") &&
-        ((!text && !hasMobileAttachments(params.attachments)) || text.length > 100_000)
+        ((!text && !hasMobileAttachments(params.attachments)) ||
+          text.length > 100_000)
       )
         throw new Error("Enter a message under 100,000 characters");
       if (method === "session.start") {
-        const paths = [...loadRecents().map((project) => project.path), ...loadPinnedProjects(), ...listMonos().flatMap((mono) => mono.projects)];
-        const cwd = paths.find((path) => mobileProjectId(path) === params.projectId);
+        const paths = [
+          ...loadRecents().map((project) => project.path),
+          ...loadPinnedProjects(),
+          ...listMonos().flatMap((mono) => mono.projects),
+        ];
+        const cwd = paths.find(
+          (path) => mobileProjectId(path) === params.projectId,
+        );
         if (!cwd) throw new Error("Project is no longer available");
         const id = String(params.sessionId ?? "");
         if (!id) throw new Error("Missing mobile session ID");
-        const existing = sessionsRef.current.find(current => current.id === id) ?? await getSession(id);
-        if (existing?.blocks.some(block => block.appRequestId === commandId)) return { sessionId: id };
+        const existing =
+          sessionsRef.current.find((current) => current.id === id) ??
+          (await getSession(id));
+        if (existing?.blocks.some((block) => block.appRequestId === commandId))
+          return { sessionId: id };
         // Staged before the session exists, so a bad file leaves nothing behind.
         const attachments = await mobileAttachments(params.attachments);
         const session = existing ?? {
-          ...applyMobileChoice(mobileNewSession(cwd, sessionDefaults?.runtimeMode), params),
+          ...applyMobileChoice(
+            mobileNewSession(cwd, sessionDefaults?.runtimeMode),
+            params,
+          ),
           ...(await mobileWorkspaceChoice(cwd, params)),
         };
         // A placeholder title, so the first send seeds and generates one as the composer does.
         session.id = id;
         if (!existing) session.title = HARNESS_LABEL[session.harness];
-        if (!sessionsRef.current.some(current => current.id === id))
-          updateSessionState(sessionsRef, setSessions, (current) => [...current, session]);
-        if (!submitSessionRef.current(session.id, text, attachments, { appRequestId: commandId }))
+        if (!sessionsRef.current.some((current) => current.id === id))
+          updateSessionState(sessionsRef, setSessions, (current) => [
+            ...current,
+            session,
+          ]);
+        if (
+          !submitSessionRef.current(session.id, text, attachments, {
+            appRequestId: commandId,
+          })
+        )
           throw new Error("Desktop could not start this session");
-        await upsertSession(sessionsRef.current.find((current) => current.id === session.id) ?? session);
+        await upsertSession(
+          sessionsRef.current.find((current) => current.id === session.id) ??
+            session,
+        );
         return { sessionId: session.id };
       }
       const conversationId = String(params.conversationId ?? "");
-      const mono = conversationId.startsWith("mono:") ? findMono(conversationId.slice(5)) : undefined;
-      if (conversationId.startsWith("mono:") && !mono) throw new Error("Mono is no longer available");
+      const mono = conversationId.startsWith("mono:")
+        ? findMono(conversationId.slice(5))
+        : undefined;
+      if (conversationId.startsWith("mono:") && !mono)
+        throw new Error("Mono is no longer available");
       if (method === "session.rename") {
         // As the sidebar's rename, which also renames a session that isn't open.
-        const title = typeof params.title === "string" ? params.title.trim() : "";
-        if (!title || title.length > 200) throw new Error("Enter a title under 200 characters");
+        const title =
+          typeof params.title === "string" ? params.title.trim() : "";
+        if (!title || title.length > 200)
+          throw new Error("Enter a title under 200 characters");
         if (mono) throw new Error("A Mono's conversation can't be renamed");
         await onRenameHistorySession(conversationId, title);
         return { sessionId: conversationId };
@@ -9269,25 +9357,46 @@ function Workspace({
         // As the CLI's delete and archive: no desktop dialogs, and the worktree stays.
         const mode = method === "session.archive" ? "archive" : "delete";
         const verb = mode === "archive" ? "archived" : "deleted";
-        const target = mono ? undefined : await ensureOpenSessionRef.current(conversationId);
-        if (!target || target.orchestrationLeadId || isMonoSession(target.id) || isHabitRun(target.id))
+        const target = mono
+          ? undefined
+          : await ensureOpenSessionRef.current(conversationId);
+        if (
+          !target ||
+          target.orchestrationLeadId ||
+          isMonoSession(target.id) ||
+          isHabitRun(target.id)
+        )
           throw new Error(`This session can't be ${verb} from the phone`);
         if (!(await onRemoveHistorySession(target.id, mode, true, "cli")))
-          throw new Error(`Session could not be ${verb}; another session operation is in progress`);
+          throw new Error(
+            `Session could not be ${verb}; another session operation is in progress`,
+          );
         return { sessionId: target.id };
       }
-      const monoSession = mono ? await ensureMonoSession(mono.id, {
+      const monoSession = mono
+        ? await ensureMonoSession(mono.id, {
         home: homeDir,
         load: ensureOpenSessionRef.current,
         create: (path) => newDefaultSession(path),
-        add: (created) => updateSessionState(sessionsRef, setSessions, (current) => [...current, created]),
-      }) : undefined;
+            add: (created) =>
+              updateSessionState(sessionsRef, setSessions, (current) => [
+                ...current,
+                created,
+              ]),
+          })
+        : undefined;
       const sessionId = monoSession?.id ?? conversationId;
-      const session = monoSession ?? await ensureOpenSessionRef.current(sessionId);
+      const session =
+        monoSession ?? (await ensureOpenSessionRef.current(sessionId));
       if (!session) throw new Error("Session is no longer available");
-      if (method === "session.resumeUsage" || method === "session.resumeUsageAtReset") {
+      if (
+        method === "session.resumeUsage" ||
+        method === "session.resumeUsageAtReset"
+      ) {
         await recoverMobileUsage({
-          session: sessionsRef.current.find((current) => current.id === session.id),
+          session: sessionsRef.current.find(
+            (current) => current.id === session.id,
+          ),
           token: params.token,
           automatic: method === "session.resumeUsageAtReset",
           enabled: params.enabled,
@@ -9305,20 +9414,37 @@ function Workspace({
         // The phone's model sheet, through the same paths as the composer's
         // pickers, so a provider switch hands off on the next send as here.
         const choice = mobileChoice(params);
-        if (choice.harness && choice.model && (choice.harness !== session.harness || choice.model !== session.model))
+        if (
+          choice.harness &&
+          choice.model &&
+          (choice.harness !== session.harness || choice.model !== session.model)
+        )
           onModelChange(session.id, choice.harness, choice.model);
         if (choice.modelSettings) {
-          const resolved = resolveModel(choice.harness ?? session.harness, choice.model ?? session.model);
-          onModelSettingsChange(session.id, mergeModelSettings(resolved, choice.modelSettings));
+          const resolved = resolveModel(
+            choice.harness ?? session.harness,
+            choice.model ?? session.model,
+          );
+          onModelSettingsChange(
+            session.id,
+            mergeModelSettings(resolved, choice.modelSettings),
+          );
         }
-        if (choice.runtimeMode) onRuntimeModeChange(session.id, choice.runtimeMode);
+        if (choice.runtimeMode)
+          onRuntimeModeChange(session.id, choice.runtimeMode);
         return { sessionId: session.id };
       }
-      if (method === "session.answerQuestion" || method === "session.keepQuestionOpen") {
+      if (
+        method === "session.answerQuestion" ||
+        method === "session.keepQuestionOpen"
+      ) {
         // As the composer's question card; only the question still waiting,
         // read as it is now since opening the session may have taken a while.
-        const live = sessionsRef.current.find((current) => current.id === session.id);
-        if (!live || live.worktreeRemoved) throw new Error("Session is no longer available");
+        const live = sessionsRef.current.find(
+          (current) => current.id === session.id,
+        );
+        if (!live || live.worktreeRemoved)
+          throw new Error("Session is no longer available");
         const question = live.pendingQuestion;
         if (!question || question.requestId !== params.requestId)
           throw new Error("This question was already answered");
@@ -9334,7 +9460,8 @@ function Workspace({
         onQuestionReply(live.id, question.requestId, reply);
         return { sessionId: live.id };
       }
-      if (method !== "conversation.send") throw new Error("Unsupported mobile command");
+      if (method !== "conversation.send")
+        throw new Error("Unsupported mobile command");
       if (
         session.blocks.some((block) => block.appRequestId === commandId) ||
         session.queuedMessages?.some((message) => message.id === commandId)
@@ -9342,9 +9469,19 @@ function Workspace({
         return { sessionId: session.id };
       const attachments = await mobileAttachments(params.attachments);
       // Mid-turn it steers or queues, as a message typed in the composer would.
-      if (!submitSessionRef.current(session.id, text, attachments, { appRequestId: commandId, followsUp: true }))
-        throw new Error("Desktop could not accept the message. Wait for the current turn to finish and try again.");
-      await upsertSession(sessionsRef.current.find(current => current.id === session.id) ?? session);
+      if (
+        !submitSessionRef.current(session.id, text, attachments, {
+          appRequestId: commandId,
+          followsUp: true,
+        })
+      )
+        throw new Error(
+          "Desktop could not accept the message. Wait for the current turn to finish and try again.",
+        );
+      await upsertSession(
+        sessionsRef.current.find((current) => current.id === session.id) ??
+          session,
+      );
       return { sessionId: session.id };
     },
   });
@@ -9813,29 +9950,45 @@ function Workspace({
 
   const onUsageLimitResume = useCallback(
     async (sessionId: string): Promise<boolean> => {
-      const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
       if (!session?.usageLimit || session.busy) return false;
       if (isMonoSession(sessionId)) {
         updateSessionState(sessionsRef, setSessions, (prev) =>
-          prev.map((entry) => entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry),
+          prev.map((entry) =>
+            entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry,
+          ),
         );
         return true;
       }
       onUsageLimitDismiss(sessionId);
       try {
         if (await submitSession(sessionId, CONTINUE_PROMPT)) return true;
-      } catch { /* The submission path reports its desktop error. */ }
+      } catch {
+        /* The submission path reports its desktop error. */
+      }
       // A rejected continuation previously cleared the limit entirely. Keep
       // that one-attempt scheduler behavior, but retain a manual retry notice.
-      updateSessionState(sessionsRef, setSessions, (prev) => prev.map((entry) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
+        prev.map((entry) =>
         entry.id === sessionId && !entry.busy && !entry.usageLimit
-          ? { ...entry, usageLimit: { ...session.usageLimit!, resumeAtReset: false } } : entry));
+            ? {
+                ...entry,
+                usageLimit: { ...session.usageLimit!, resumeAtReset: false },
+              }
+            : entry,
+        ),
+      );
       return false;
     },
     [submitSession, onUsageLimitDismiss],
   );
 
-  mobileUsageActions.current = { resume: onUsageLimitResume, automatic: onUsageLimitResumeAtReset };
+  mobileUsageActions.current = {
+    resume: onUsageLimitResume,
+    automatic: onUsageLimitResumeAtReset,
+  };
 
   const usageLimitSwitching = useRef(new Set<string>());
   const onUsageLimitAccountChange = useCallback(
@@ -9858,8 +10011,7 @@ function Workspace({
       let carried = false;
       if (
         session.providerSessionId &&
-        (session.harness === "claude" ||
-          (session.harness === "codex" && !mono))
+        (session.harness === "claude" || (session.harness === "codex" && !mono))
       ) {
         usageLimitSwitching.current.add(sessionId);
         try {
@@ -13460,9 +13612,7 @@ function Workspace({
     [onProjectTerminalSize],
   );
   const dockWasOpen = useRef<{ path: string; open: boolean } | null>(null);
-  const dockAnimation = useRef<{ key: string; stop: () => void } | null>(
-    null,
-  );
+  const dockAnimation = useRef<{ key: string; stop: () => void } | null>(null);
   // The project whose dock stays rendered while it slides shut.
   const [dockClosing, setDockClosing] = useState<string | null>(null);
   const dockClosingShown =
@@ -13496,14 +13646,7 @@ function Workspace({
       insetLayout && !reduceMotion && typeof el.animate === "function";
     // Render the dock once more so it can slide out; the grid keeps its
     // track until then.
-    if (
-      animates &&
-      inPlace &&
-      previous.open &&
-      !open &&
-      dock &&
-      !monoCovers
-    ) {
+    if (animates && inPlace && previous.open && !open && dock && !monoCovers) {
       setDockClosing(projectCwd);
       return;
     }
@@ -13908,7 +14051,8 @@ function Workspace({
     settingsMono &&
     settingsSession &&
     settingsSnapshot.current?.mono.id === monoSettingsFor
-  ) settingsSnapshot.current = { mono: settingsMono, session: settingsSession };
+  )
+    settingsSnapshot.current = { mono: settingsMono, session: settingsSession };
   const settings =
     settingsSnapshot.current?.mono.id === monoSettingsFor
       ? settingsSnapshot.current
@@ -13939,6 +14083,10 @@ function Workspace({
         leaveRef={saveSettingsSoul}
         frozen={soulFrozen || settingsSwitching}
         onClose={() => closeMonoSettings(settingsDialogVersion)}
+      onRecoverClose={(path) => {
+        setSoulRecoveryPaths((paths) => [...paths, path]);
+        closeMonoSettings(settingsDialogVersion, true);
+      }}
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -14045,7 +14193,9 @@ function Workspace({
       "(prefers-reduced-motion: reduce)",
     ).matches;
     const animate =
-      insetRightPanelShown && typeof pane.animate === "function" && !reduceMotion;
+      insetRightPanelShown &&
+      typeof pane.animate === "function" &&
+      !reduceMotion;
     const current = pane.getBoundingClientRect().width;
     const from = rightPanelAnimation.current || !rightPanelOpen ? current : 0;
     rightPanelAnimation.current?.cancel();
@@ -14162,9 +14312,7 @@ function Workspace({
       compactRail={!insetLayout && compactTitleNavigation}
       inset={insetLayout}
       rightPanelOpen={rightPanelOpen}
-      onToggleRightPanel={
-        showRightPanelToggle ? onToggleRightPanel : undefined
-      }
+      onToggleRightPanel={showRightPanelToggle ? onToggleRightPanel : undefined}
       rightPanelDot={(rightPanelChanges?.files ?? 0) > 0}
       rightPanelUnavailable={!!activeAppView}
       canGoBack={!!monoViewId || tabVisitNav.canBack}
@@ -14511,7 +14659,9 @@ function Workspace({
                                     onReorderTerminals={
                                       onReorderProjectTerminals
                                     }
-                                    onTerminalMetaChange={onTerminalMetaChange}
+                                      onTerminalMetaChange={
+                                        onTerminalMetaChange
+                                      }
                                   />
                                 </div>
                               );
@@ -14569,7 +14719,9 @@ function Workspace({
                                           !projectTerminalFocused &&
                                           !monoViewId
                                         }
-                                        composerFocusToken={composerFocusToken}
+                                          composerFocusToken={
+                                            composerFocusToken
+                                          }
                                         onSelectFile={onSelectFileSurface}
                                         onCloseFile={onCloseFile}
                                         onCloseOtherFiles={onCloseOtherFiles}
@@ -14581,7 +14733,12 @@ function Workspace({
                                         }
                                         transcriptPool={transcriptPool}
                                         onRatio={(splitId, index, ratio) =>
-                                          onRatio(tab.id, splitId, index, ratio)
+                                            onRatio(
+                                              tab.id,
+                                              splitId,
+                                              index,
+                                              ratio,
+                                            )
                                         }
                                         editorNavigation={editorNavigation}
                                         onUpdatePlan={onUpdatePlan}
@@ -14653,17 +14810,23 @@ function Workspace({
                                           }
                                           onOpenArtifact={onOpenMonoArtifact}
                                           onOpenDiff={onOpenMonoDiff}
-                                          onCommitChanges={onCommitMonoChanges}
+                                            onCommitChanges={
+                                              onCommitMonoChanges
+                                            }
                                           monoActivityTurnId={
                                             monoActivityShownTurnId
                                           }
-                                          onOpenMonoSession={onOpenMonoSession}
+                                            onOpenMonoSession={
+                                              onOpenMonoSession
+                                            }
                                           monoLaunchedSessions={
                                             visible
                                               ? monoLaunchedSessions
                                               : undefined
                                           }
-                                          openMonoSessionId={shownMonoSessionId}
+                                            openMonoSessionId={
+                                              shownMonoSessionId
+                                            }
                                           // The inset footer stays under a
                                           // Mono and shows its usage.
                                           monoComposerUsage={!insetLayout}
@@ -14715,7 +14878,9 @@ function Workspace({
                         cwd={gitCwd}
                         recents={recents}
                         history={projectHistory}
-                        sessions={sessions.filter((session) => !session.inboxAsk)}
+                          sessions={sessions.filter(
+                            (session) => !session.inboxAsk,
+                          )}
                         focusToken={searchViewFocusToken}
                         besideRail={
                           insetLayout || projectRailOpen || compactProjectRail
@@ -14786,7 +14951,9 @@ function Workspace({
                     </AppViewSurface>
                   ) : null}
                   {notesViewOpen ||
-                  (insetLayout && notesEnabled && openAppViews.includes("notes")) ? (
+                    (insetLayout &&
+                      notesEnabled &&
+                      openAppViews.includes("notes")) ? (
                     <AppViewSurface active={notesViewOpen}>
                       <NotesView
                         tabbed={insetLayout}
@@ -14829,7 +14996,9 @@ function Workspace({
                       section={settingsSection}
                       anchor={settingsAnchor}
                       notificationProjectPath={notificationProjectPath}
-                      notificationSettingsRequest={notificationSettingsRequest}
+                        notificationSettingsRequest={
+                          notificationSettingsRequest
+                        }
                       recents={recents}
                       cwd={sidebarCwd}
                       sessions={sidebarHistory}
@@ -14838,7 +15007,9 @@ function Workspace({
                       onCheckWorktreeRemoval={onCheckWorktreeRemoval}
                       onDeleteWorktreeSessions={onDeleteWorktreeSessions}
                       besideRail
-                      headerHost={insetLayout ? settingsHeaderHost : undefined}
+                        headerHost={
+                          insetLayout ? settingsHeaderHost : undefined
+                        }
                       onClose={onCloseSettings}
                       onSelectSection={onSelectSettingsSection}
                       onOpenSession={onOpenArchivedSession}
@@ -14893,12 +15064,13 @@ function Workspace({
                 ) : null}
               </div>
               {insetLayout
-                ? (usageFooter ??
+                  ? (usageFooter ?? (
                   // Settings has no footer, so the card runs down to the same
                   // gutter as its right edge.
                   <div
                     className={`${settingsOpen ? "h-1.5" : "h-[30px]"} shrink-0`}
-                  />)
+                      />
+                    ))
                 : null}
             </div>
           </div>
@@ -14994,6 +15166,22 @@ function Workspace({
             />
           ) : null}
         </div>
+          {soulRecoveryPaths.length ? (
+            <div
+              role="status"
+              className="fixed bottom-4 right-4 z-50 max-w-lg rounded-lg border border-stroke bg-background-base p-3 text-xs text-content shadow-lg"
+            >
+              <p>Recovery copies are kept at:</p>
+              {soulRecoveryPaths.map((path) => (
+                <p key={path} className="break-all">
+                  {path}
+                </p>
+              ))}
+              <button type="button" onClick={() => setSoulRecoveryPaths([])}>
+                Dismiss
+              </button>
+            </div>
+          ) : null}
         {monoSettingsDialog}
         {soulTarget ? (
           <MonoSoulDialog
@@ -15004,6 +15192,7 @@ function Workspace({
             saveRef={saveSoul}
             frozen={soulFrozen}
             onClose={closeSoul}
+              onRecoverClose={recoverCloseSoul}
           />
         ) : null}
         <TranscriptPoolOutlet pool={transcriptPool} />
