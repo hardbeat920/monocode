@@ -908,6 +908,40 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    id: "completion".into(),
+                    text: "completion".into(),
+                    internal: true,
+                    sent_at: None,
+                    error: Some("Long failure message. ".repeat(500)),
+                    attachments: Vec::new(),
+                });
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let composer = visual.debug_bounds("mono-composer").unwrap();
+    let viewport = s
+        .window
+        .update(visual, |_, w, _| w.viewport_size())
+        .unwrap();
+    assert!(
+        composer.bottom() <= viewport.height,
+        "composer {composer:?}, viewport {viewport:?}"
+    );
+}
+
+#[gpui::test]
 fn sidebar_hidden_launches_still_list_in_the_mono_panel_after_a_restart(cx: &mut TestAppContext) {
     let s = setup(cx);
     let started = call(
