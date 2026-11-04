@@ -18,7 +18,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub(crate) const WIDTH_MIN: f32 = 220.;
-pub(crate) const WIDTH_MAX: f32 = 640.;
+/// The widest a stored width may be; the window narrows what is drawn.
+pub(crate) const WIDTH_CEILING: f32 = 4000.;
+/// The share of the window the panel may take at most.
+const WIDTH_SHARE: f32 = 0.6;
+/// The widest panel a `viewport`-wide window can draw when its other columns
+/// take `beside`: the main area keeps `main_min`, the panel takes at most
+/// 60% of the window, and never less than `min`.
+pub(crate) fn max_width(viewport: f32, beside: f32, main_min: f32, min: f32) -> f32 {
+    (viewport - beside - main_min)
+        .min(viewport * WIDTH_SHARE)
+        .floor()
+        .max(min)
+}
 pub(crate) const WIDTH_DEFAULT: f32 = 288.;
 /// `count` 26px icon tabs, one unfolded label with 4px extra padding, and the gaps.
 pub(crate) fn tabs_width(count: usize) -> f32 {
@@ -647,5 +659,16 @@ mod tests {
         );
         assert_eq!(format_integer(1234567), "1,234,567");
         assert_eq!(format_integer(12), "12");
+    }
+    #[test]
+    fn max_width_scales_with_the_window_and_leaves_the_main_area_room() {
+        // Ultrawide: 60% of the window.
+        assert_eq!(max_width(3440., 270., 420., WIDTH_MIN), 2064.);
+        // Laptop with the sidebar: the main area keeps its minimum.
+        assert_eq!(max_width(1440., 270., 420., WIDTH_MIN), 750.);
+        assert_eq!(max_width(1280., 270., 420., WIDTH_MIN), 590.);
+        // Too small for both: the panel keeps its own minimum.
+        assert_eq!(max_width(820., 270., 420., WIDTH_MIN), WIDTH_MIN);
+        assert_eq!(max_width(820., 270., 420., 252.), 252.);
     }
 }

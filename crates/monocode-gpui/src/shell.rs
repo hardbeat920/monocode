@@ -647,6 +647,9 @@ pub(crate) struct Shell {
     /// The narrowest right panel whose header holds the corner's tools
     /// beside client-drawn window controls.
     right_panel_min: f32,
+    /// What the window's other columns took as of this render: the card's
+    /// inset, the project rail and the session sidebar.
+    right_panel_beside: f32,
     #[cfg(target_os = "linux")]
     client_decorations: bool,
     tabs_frame: Entity<Chrome>,
@@ -1037,6 +1040,7 @@ impl Shell {
             fullscreen: false,
             window_controls: 0.,
             right_panel_min: crate::right_panel::WIDTH_MIN,
+            right_panel_beside: 0.,
             #[cfg(target_os = "linux")]
             client_decorations: false,
             tabs_frame,
@@ -3912,8 +3916,7 @@ impl Shell {
                 (self.workspace.sidebar_width, 200., max, 1.)
             }
             ResizeTarget::RightPanel => {
-                let (min, max) = (self.right_panel_min, crate::right_panel::WIDTH_MAX);
-                let max = max.min((self.viewport_width * 0.5).floor()).max(min);
+                let (min, max) = (self.right_panel_min, self.right_panel_max());
                 (self.right_panel_width(), min, max, 1.)
             }
             ResizeTarget::Dock(project) => {
@@ -4863,8 +4866,22 @@ impl Shell {
     /// The panel's width as drawn: the user's width, widened while Windows'
     /// controls need room beside the corner's tools. The stored width stays
     /// as the user set it, so closing a Mono gives it back.
+    /// It also narrows to what the window has room for, so the main area
+    /// keeps `MIN_CHAT_WIDTH`; widening the window gives the width back.
     pub(super) fn right_panel_width(&self) -> f32 {
-        self.workspace.right_panel_width.max(self.right_panel_min)
+        self.workspace
+            .right_panel_width
+            .min(self.right_panel_max())
+            .max(self.right_panel_min)
+    }
+    /// The widest the panel may be in this window.
+    fn right_panel_max(&self) -> f32 {
+        crate::right_panel::max_width(
+            self.viewport_width,
+            self.right_panel_beside,
+            MIN_CHAT_WIDTH,
+            self.right_panel_min,
+        )
     }
     fn titlebar_controls_space(&self, bar: AnyElement, window: &Window) -> AnyElement {
         let room = client_controls_width(window) - corner_controls_width(window);
@@ -8597,6 +8614,15 @@ impl Render for Shell {
         }
         self.viewport_width = window.viewport_size().width.as_f32();
         self.viewport_height = window.viewport_size().height.as_f32();
+        // The card's inset and border, as `narrowest_chat` counts them, and
+        // the sidebar at its settled width so its slide never resizes the
+        // panel frame by frame.
+        let sidebar = if self.workspace.sidebar_visible && self.session_sidebar_available(cx) {
+            self.workspace.sidebar_width
+        } else {
+            0.
+        };
+        self.right_panel_beside = 10. + self.project_rail_drawn_width() + sidebar;
         self.refit_sidebar_to_room(window, cx);
         self.ensure_right_panel(window, cx);
         let full = self.right_panel_width();
@@ -10543,6 +10569,110 @@ mod tests {
     }
 
     #[gpui::test]
+    fn right_panel_grows_with_a_wide_window_and_narrows_when_it_shrinks(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        cx.simulate_window_resize(window.into(), gpui::size(px(3440.), px(1440.)));
+        window
+            .update(cx, |shell, w, cx| {
+                shell.focus_active(w, cx);
+                shell.toggle_right_panel(w, cx);
+            })
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let main_min = |cx: &mut gpui::VisualTestContext| {
+            window
+                .update(cx, |shell, _, _| {
+                    shell.viewport_width - shell.right_panel_beside - shell.right_panel_width()
+                })
+                .unwrap()
+        };
+        // Dragging the edge far left stops well past the old 640px cap, at
+        // 60% of an ultrawide window.
+        let start = cx
+            .debug_bounds("titlebar-right-panel-resize")
+            .unwrap()
+            .center();
+        let end = gpui::point(px(10.), start.y);
+        cx.simulate_event(MouseDownEvent {
+            position: start,
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+            modifiers: Default::default(),
+        });
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Default::default());
+        cx.simulate_event(gpui::MouseUpEvent {
+            position: end,
+            button: MouseButton::Left,
+            click_count: 1,
+            modifiers: Default::default(),
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.workspace.right_panel_width, (3440. * 0.6_f32).floor());
+                assert!(shell.right_resize.is_none());
+            })
+            .unwrap();
+        assert_eq!(
+            cx.debug_bounds("right-panel-frame").unwrap().size.width,
+            px((3440. * 0.6_f32).floor())
+        );
+        assert!(main_min(cx) >= MIN_CHAT_WIDTH);
+        // A smaller window draws it narrower, keeping the chat's room, and
+        // the stored width comes back when the window widens again.
+        for viewport in [1440., 1100., 3440.] {
+            cx.simulate_resize(gpui::size(px(viewport), px(900.)));
+            cx.run_until_parked();
+            let (stored, drawn) = window
+                .update(cx, |shell, _, _| {
+                    (shell.workspace.right_panel_width, shell.right_panel_width())
+                })
+                .unwrap();
+            assert_eq!(stored, (3440. * 0.6_f32).floor());
+            assert_eq!(
+                cx.debug_bounds("right-panel-frame").unwrap().size.width,
+                px(drawn)
+            );
+            assert!(main_min(cx) >= MIN_CHAT_WIDTH, "{viewport}: {drawn}");
+            if viewport < 3440. {
+                assert!(drawn < stored);
+            } else {
+                assert_eq!(drawn, stored);
+            }
+        }
+        // Double-clicking the edge still resets to the default width.
+        let handle = cx
+            .debug_bounds("titlebar-right-panel-resize")
+            .unwrap()
+            .center();
+        cx.simulate_event(MouseDownEvent {
+            position: handle,
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+            modifiers: Default::default(),
+        });
+        cx.simulate_event(gpui::MouseUpEvent {
+            position: handle,
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: Default::default(),
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(
+                    shell.workspace.right_panel_width,
+                    crate::right_panel::WIDTH_DEFAULT
+                )
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn panel_tab_switches_and_animated_reversals_keep_shortcuts_live(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);
         cx.update(|cx| {
@@ -11231,11 +11361,7 @@ mod tests {
         assert!(main_open.right() < main.right());
         // Open, the tools start at the panel's left edge as it is resized;
         // the toggle stays at the window's right edge.
-        for width in [
-            crate::right_panel::WIDTH_MIN,
-            420.,
-            crate::right_panel::WIDTH_MAX,
-        ] {
+        for width in [crate::right_panel::WIDTH_MIN, 420., 640.] {
             window
                 .update(cx, |shell, _, cx| {
                     shell.workspace.right_panel_width = width;
