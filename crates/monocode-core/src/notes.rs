@@ -1,6 +1,9 @@
 //! Notes share their identities, slugs and storage format with the desktop app.
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 pub const MAX_TITLE: usize = 200;
 pub const MAX_BODY: usize = 1_000_000;
 pub const MAX_TAGS: usize = 20;
@@ -51,6 +54,7 @@ impl Note {
         }
     }
 
+    /// The same filter as the notes view's `visible` memo: `NotesView.tsx`.
     pub fn matches(&self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         query.is_empty()
@@ -60,7 +64,7 @@ impl Note {
             || self
                 .tags
                 .iter()
-                .any(|tag| tag.contains(query.trim_start_matches('#')))
+                .any(|tag| tag.contains(query.strip_prefix('#').unwrap_or(&query)))
             || self
                 .project_name()
                 .is_some_and(|name| name.to_lowercase().contains(&query))
@@ -85,12 +89,16 @@ impl Note {
         let mut parts = Vec::new();
         let mut fence = false;
         for line in self.body.lines() {
+            // `notePreview` matches its heading pattern against the raw line, so a
+            // heading indented past three spaces is not a heading and stays in the
+            // preview. Trimming first would hide it.
+            let is_heading = heading(line).is_some();
             let line = line.trim();
             if line.starts_with("```") {
                 fence = !fence;
                 continue;
             }
-            if fence || heading(line).is_some() || line.is_empty() || line == "---" {
+            if fence || is_heading || line.is_empty() || line == "---" {
                 continue;
             }
             let text = unwrap_markdown(
@@ -275,11 +283,27 @@ pub struct NoteImageAsset {
 }
 
 pub fn image_markdown(asset: &NoteImageAsset) -> String {
-    let alt = asset
-        .name
-        .replace(['\r', '\n'], " ")
+    let alt = single_line(&asset.name)
         .replace('\\', "\\\\")
         .replace('[', "\\[")
         .replace(']', "\\]");
     format!("![{alt}]({})", asset.markdown_path)
+}
+
+/// A run of line breaks becomes one space, matching `noteImageMarkdown`.
+fn single_line(name: &str) -> String {
+    let mut result = String::with_capacity(name.len());
+    let mut in_break = false;
+    for ch in name.chars() {
+        if matches!(ch, '\r' | '\n') {
+            if !in_break {
+                result.push(' ');
+                in_break = true;
+            }
+            continue;
+        }
+        in_break = false;
+        result.push(ch);
+    }
+    result
 }
