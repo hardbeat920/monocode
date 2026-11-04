@@ -18,8 +18,13 @@ export {
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const LOGIN_CLEANUP_WAIT_MS = 5_000;
 const LOGIN_CHILD_PREFIX = "monocode-provider-login-";
+export type LoginMode = "terminate" | "detach" | "unsupported";
 
-function loginChildId(harness: HarnessId, accountId?: string): string {
+function loginChildId(
+  harness: HarnessId,
+  accountId?: string,
+  mode?: LoginMode,
+): string {
   let windowLabel = "main";
   try {
     windowLabel = getCurrentWindow().label || windowLabel;
@@ -27,7 +32,7 @@ function loginChildId(harness: HarnessId, accountId?: string): string {
     // Keep the login helper usable in browser previews and isolated tests.
   }
   const safeWindowLabel = windowLabel.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const legacyId = `${LOGIN_CHILD_PREFIX}${safeWindowLabel}-${harness}`;
+  const legacyId = `${LOGIN_CHILD_PREFIX}${mode === "detach" ? "" : `${safeWindowLabel}-`}${harness}`;
   if (!accountId || accountId === "default") return legacyId;
   const safeAccount = accountId.replace(/[^a-zA-Z0-9_-]/g, "-");
   return `${legacyId}-${safeAccount}`;
@@ -56,6 +61,10 @@ type LoginRun = {
   signals: Set<AbortSignal>;
   retryStop?: () => void;
   stopError?: Error;
+  mode?: LoginMode;
+  modeListeners: Set<(mode: LoginMode) => void>;
+  spawned: boolean;
+  childId?: string;
 };
 const inflight = new Map<string, LoginRun>();
 
@@ -105,7 +114,11 @@ function waitForLoginCleanup(
 export function loginHarness(
   harness: HarnessId,
   accountId?: string,
-  options?: { signal?: AbortSignal; onUrl?: (url: string) => void },
+  options?: {
+    signal?: AbortSignal;
+    onUrl?: (url: string) => void;
+    onMode?: (mode: LoginMode) => void;
+  },
 ): Promise<void> {
   if (options?.signal?.aborted)
     return Promise.reject(new Error("Sign-in cancelled."));
@@ -124,6 +137,8 @@ export function loginHarness(
       owners: 0,
       listeners: new Set(),
       signals: new Set(),
+      modeListeners: new Set(),
+      spawned: false,
     };
     next.promise = runHarnessLogin(harness, accountId, next).finally(() => {
       if (inflight.get(key) === next) inflight.delete(key);
@@ -136,6 +151,10 @@ export function loginHarness(
     run.listeners.add(options.onUrl);
     if (run.url) options.onUrl(run.url);
   }
+  if (options?.onMode) {
+    run.modeListeners.add(options.onMode);
+    if (run.mode) options.onMode(run.mode);
+  }
   if (!options?.signal) return run.promise;
 
   const owned = run;
@@ -145,16 +164,25 @@ export function loginHarness(
       options.signal?.removeEventListener("abort", abort);
       if (options.signal) owned.signals.delete(options.signal);
       if (options.onUrl) owned.listeners.delete(options.onUrl);
+      if (options.onMode) owned.modeListeners.delete(options.onMode);
     };
     const abort = () => {
       detach();
-      if (--owned.owners === 0) owned.controller.abort();
+      if (--owned.owners === 0 && (owned.mode !== "detach" || !owned.spawned))
+        owned.controller.abort();
       if (owned.controller.signal.aborted) {
         void waitForLoginCleanup(owned).then(
           () => reject(new Error("Sign-in cancelled.")),
           reject,
         );
-      } else reject(new Error("Sign-in cancelled."));
+      } else
+        reject(
+          new Error(
+            owned.mode === "detach"
+              ? "Sign-in view closed; the provider sign-in is still running."
+              : "Sign-in cancelled.",
+          ),
+        );
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     owned.promise.then(
@@ -170,6 +198,38 @@ export function loginHarness(
   });
 }
 
+export function hasResumableHarnessLogin(
+  harness: HarnessId,
+  accountId?: string,
+): boolean {
+  const run = inflight.get(loginKey(harness, accountId));
+  return !!run && run.mode === "detach" && run.spawned;
+}
+
+export function onHarnessLoginEnd(
+  harness: HarnessId,
+  accountId: string | undefined,
+  listener: () => void,
+): () => void {
+  const run = inflight.get(loginKey(harness, accountId));
+  if (!run) {
+    listener();
+    return () => {};
+  }
+  let active = true;
+  void run.promise.then(
+    () => {
+      if (active) listener();
+    },
+    () => {
+      if (active) listener();
+    },
+  );
+  return () => {
+    active = false;
+  };
+}
+
 export function submitHarnessLoginCode(
   harness: HarnessId,
   code: string,
@@ -180,7 +240,9 @@ export function submitHarnessLoginCode(
   if (!run || owner.aborted || !run.signals.has(owner) || !code.trim()) {
     return Promise.reject(new Error("This sign-in is no longer active."));
   }
-  return child.writeChild(loginChildId(harness, accountId), code.trim());
+  if (!run.childId)
+    return Promise.reject(new Error("This sign-in is still starting."));
+  return child.writeChild(run.childId, code.trim());
 }
 
 async function runHarnessLogin(
@@ -204,13 +266,28 @@ async function runHarnessLogin(
     run.controller.signal.addEventListener("abort", abort, { once: true });
     if (run.controller.signal.aborted) abort();
   });
-  const [{ path }, cwd] = await Promise.race([
-    Promise.all([resolve(), homeDir()]),
+  const [{ path }, cwd, mode] = await Promise.race([
+    Promise.all([
+      resolve(),
+      homeDir(),
+      child.loginMode().catch(() => {
+        throw new Error(
+          "Could not determine sign-in process support. Update the host or try again.",
+        );
+      }),
+    ]),
     cancelled,
   ]).finally(stopWaiting);
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
-  const childId = loginChildId(harness, accountId);
-  await child.stopChild(childId);
+  run.mode = mode;
+  run.modeListeners.forEach((listener) => listener(mode));
+  if (mode === "unsupported")
+    throw new Error(
+      "Interactive sign-in is unavailable on Windows hosts. Sign in with the provider CLI in a terminal on the host.",
+    );
+  const childId = loginChildId(harness, accountId, mode);
+  run.childId = childId;
+  if (mode === "terminate") await child.stopChild(childId);
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
 
   return new Promise<void>((resolve, reject) => {
@@ -305,16 +382,18 @@ async function runHarnessLogin(
     );
     if (settled) return;
 
-    timer = setTimeout(() => {
-      if (run.controller.signal.aborted) return;
-      stopReason = `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`;
-      run.controller.abort();
-    }, LOGIN_TIMEOUT_MS);
+    if (mode === "terminate")
+      timer = setTimeout(() => {
+        if (run.controller.signal.aborted) return;
+        stopReason = `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`;
+        run.controller.abort();
+      }, LOGIN_TIMEOUT_MS);
 
     const account =
       accountId && accountId !== "default" && supportsAccountProfiles(harness)
         ? { provider: harness, id: accountId }
         : undefined;
+    run.spawned = true;
     spawn = account
       ? child.spawnChild(childId, path, [...args], cwd, account, harness)
       : child.spawnChild(childId, path, [...args], cwd, undefined, harness);

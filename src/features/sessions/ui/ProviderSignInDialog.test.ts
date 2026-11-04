@@ -5,19 +5,32 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const auth = vi.hoisted(() => ({
-  loginHarness:
-    vi.fn<
-      (
-        _harness: string,
-        _account?: string,
-        _options?: { signal?: AbortSignal; onUrl?: (url: string) => void },
-      ) => Promise<void>
-    >(),
+  loginHarness: vi.fn<
+    (
+      _harness: string,
+      _account?: string,
+      _options?: {
+        signal?: AbortSignal;
+        onUrl?: (url: string) => void;
+        onMode?: (mode: "terminate" | "detach" | "unsupported") => void;
+      },
+    ) => Promise<void>
+  >(),
+  hasResumableHarnessLogin: vi.fn(() => false),
+  onHarnessLoginEnd: vi.fn<
+    (
+      _harness: string,
+      _account: string | undefined,
+      _ended: () => void,
+    ) => () => void
+  >(() => () => undefined),
   submitHarnessLoginCode: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../integrations/harness/core/auth", () => ({
   loginHarness: auth.loginHarness,
+  hasResumableHarnessLogin: auth.hasResumableHarnessLogin,
+  onHarnessLoginEnd: auth.onHarnessLoginEnd,
   submitHarnessLoginCode: auth.submitHarnessLoginCode,
 }));
 const clipboard = vi.hoisted(() => ({
@@ -36,6 +49,8 @@ let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   auth.loginHarness.mockReset();
+  auth.hasResumableHarnessLogin.mockReset().mockReturnValue(false);
+  auth.onHarnessLoginEnd.mockReset().mockReturnValue(() => undefined);
   auth.submitHarnessLoginCode.mockReset();
   auth.submitHarnessLoginCode.mockResolvedValue();
   clipboard.copyText.mockReset();
@@ -165,6 +180,53 @@ describe("ProviderSignInDialog", () => {
     await act(async () => button("Close").click());
     expect(close).toHaveBeenCalledOnce();
     expect(auth.loginHarness.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
+  });
+
+  it("labels Windows detachment and resumes the same sign-in link", async () => {
+    const url = "https://claude.ai/oauth/authorize?state=continue";
+    auth.hasResumableHarnessLogin.mockReturnValue(true);
+    auth.loginHarness.mockImplementation((_harness, _account, options) => {
+      options?.onMode?.("detach");
+      options?.onUrl?.(url);
+      return new Promise<void>((_resolve, reject) =>
+        options?.signal?.addEventListener("abort", () =>
+          reject(
+            new Error(
+              "Sign-in view closed; provider sign-in is still running.",
+            ),
+          ),
+        ),
+      );
+    });
+    act(() =>
+      root.render(
+        createElement(ProviderSignInDialog, {
+          harness: "claude",
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    expect(button("Continue sign-in")).toBeDefined();
+    act(() => button("Continue sign-in").click());
+    expect(button("Leave sign-in running")).toBeDefined();
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Copy sign-in link",
+    );
+    await act(async () => button("Leave sign-in running").click());
+    expect(button("Continue sign-in")).toBeDefined();
+    act(() => button("Continue sign-in").click());
+    expect(auth.loginHarness).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Copy sign-in link",
+    );
+    await act(async () => button("Leave sign-in running").click());
+    auth.hasResumableHarnessLogin.mockReturnValue(false);
+    await act(async () => {
+      const ended = auth.onHarnessLoginEnd.mock.calls.at(-1)?.[2] as
+        (() => void) | undefined;
+      ended?.();
+    });
+    expect(button("Sign in to Claude Code")).toBeDefined();
   });
 
   it("offers Claude's printed link for another browser and accepts its code", async () => {

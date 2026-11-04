@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  hasResumableHarnessLogin,
   loginHarness,
+  onHarnessLoginEnd,
   submitHarnessLoginCode,
+  type LoginMode,
 } from "../../../integrations/harness/core/auth";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { HARNESS_TITLE, type HarnessId } from "../model/session";
@@ -25,14 +28,27 @@ export function ProviderSignInDialog({
   const [state, setState] = useState<ProviderSignInState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [mode, setMode] = useState<LoginMode | null>(null);
+  const [resumable, setResumable] = useState(() =>
+    hasResumableHarnessLogin(harness, providerAccountId),
+  );
   const attempt = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setState("idle");
     setError(null);
     setLoginUrl(null);
+    setMode(null);
+    setResumable(hasResumableHarnessLogin(harness, providerAccountId));
     return () => attempt.current?.abort();
   }, [harness, providerAccountId]);
+
+  useEffect(() => {
+    if (!resumable) return;
+    return onHarnessLoginEnd(harness, providerAccountId, () =>
+      setResumable(false),
+    );
+  }, [harness, providerAccountId, resumable]);
 
   const signIn = useCallback(() => {
     const controller = new AbortController();
@@ -40,14 +56,18 @@ export function ProviderSignInDialog({
     setState("running");
     setError(null);
     setLoginUrl(null);
+    setMode(null);
+    setResumable(false);
     void loginHarness(harness, providerAccountId, {
       signal: controller.signal,
       onUrl: setLoginUrl,
+      onMode: setMode,
     }).then(
       () => {
         if (attempt.current === controller) {
           attempt.current = null;
           setError(null);
+          setResumable(false);
           setState("complete");
         }
       },
@@ -56,9 +76,11 @@ export function ProviderSignInDialog({
         if (controller.signal.aborted) {
           setState("idle");
           setLoginUrl(null);
+          setResumable(hasResumableHarnessLogin(harness, providerAccountId));
           return;
         }
         attempt.current = null;
+        setResumable(false);
         setState("error");
         setError(
           reason instanceof Error
@@ -95,6 +117,8 @@ export function ProviderSignInDialog({
         onSignIn={signIn}
         onComplete={close}
         onCancel={state === "running" ? cancel : undefined}
+        cancelLabel={mode === "detach" ? "Leave sign-in running" : undefined}
+        resumable={resumable}
         loginUrl={loginUrl}
         onCopyUrl={
           loginUrl

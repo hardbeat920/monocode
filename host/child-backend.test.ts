@@ -1,11 +1,5 @@
 import { expect, it, vi } from "vitest";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { readFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -280,136 +274,44 @@ setInterval(() => {}, 1000);
   }
 }, 15_000);
 
-it("fails closed on Windows login cancellation without a PID tree lookup", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "monocode-windows-stop-test-"));
-  const file = join(directory, "provider.cjs");
-  writeFileSync(file, "setInterval(() => {}, 1000);");
-  let attempts = 0;
-  const backend = new HostChildBackend({}, true, async () => {
-    attempts++;
-    throw new Error("taskkill failed");
-  });
-  const loginId = "monocode-provider-login-windows-claude";
+it("refuses Windows host login before spawning or reserving an account", async () => {
+  const backend = new HostChildBackend({}, true);
+  const directory = mkdtempSync(join(tmpdir(), "monocode-windows-login-"));
+  const marker = join(directory, "spawned");
+  const provider = join(directory, "provider.cjs");
+  writeFileSync(
+    provider,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes');`,
+  );
+  const args = {
+    sessionId: "monocode-provider-login-windows-claude",
+    command: provider,
+    args: [],
+    cwd: directory,
+  };
   try {
-    await backend.invoke("harness_spawn", {
-      sessionId: loginId,
-      command: file,
-      args: [],
-      cwd: directory,
-    });
-    await expect(
-      backend.invoke("harness_stop", {
-        sessionId: loginId,
-        requireExisting: true,
-      }),
-    ).rejects.toThrow("tree exit could not be confirmed");
-    await expect(
-      backend.invoke("harness_spawn", {
-        sessionId: loginId,
-        command: file,
-        args: [],
-        cwd: directory,
-      }),
-    ).rejects.toThrow("has not exited");
-    await expect(
-      backend.invoke("harness_stop", {
-        sessionId: loginId,
-        requireExisting: true,
-      }),
-    ).rejects.toThrow("tree exit could not be confirmed");
-    expect(attempts).toBe(0);
+    expect(await backend.invoke("harness_login_mode")).toBe("unsupported");
+    await expect(backend.invoke("harness_spawn", args)).rejects.toThrow(
+      "Sign in with the provider CLI in a terminal",
+    );
+    await expect(backend.invoke("harness_spawn", args)).rejects.toThrow(
+      "Sign in with the provider CLI in a terminal",
+    );
+    expect(existsSync(marker)).toBe(false);
   } finally {
     await backend.close();
     rmSync(directory, { recursive: true, force: true });
   }
-}, 15_000);
-
-it("keeps Windows stop reserved after the leader exits without signaling its PID", async () => {
-  const directory = mkdtempSync(
-    join(tmpdir(), "monocode-windows-leader-test-"),
-  );
-  const file = join(directory, "provider.cjs");
-  writeFileSync(file, "console.log(process.pid); setInterval(() => {}, 1000);");
-  let attempts = 0;
-  const backend = new HostChildBackend({}, true, async () => {
-    attempts++;
-    throw new Error("taskkill failed");
-  });
-  const loginId = "monocode-provider-login-windows-codex";
-  let providerPid: number | undefined;
-  let guardPid: number | undefined;
-  const unlisten = await backend.listen<{ line: string }>(
-    "harness-stdout",
-    ({ payload }) => {
-      providerPid = Number(payload.line);
-    },
-  );
-  try {
-    guardPid = await backend.invoke<number>("harness_spawn", {
-      sessionId: loginId,
-      command: file,
-      args: [],
-      cwd: directory,
-    });
-    await vi.waitFor(() => expect(providerPid).toBeTruthy());
-    await expect(
-      backend.invoke("harness_stop", {
-        sessionId: loginId,
-        requireExisting: true,
-      }),
-    ).rejects.toThrow("tree exit could not be confirmed");
-    await vi.waitFor(() => expect(() => process.kill(guardPid!, 0)).toThrow());
-    await expect(
-      backend.invoke("harness_stop", {
-        sessionId: loginId,
-        requireExisting: true,
-      }),
-    ).rejects.toThrow("tree exit could not be confirmed");
-    expect(attempts).toBe(0);
-    await expect(
-      backend.invoke("harness_spawn", {
-        sessionId: loginId,
-        command: file,
-        args: [],
-        cwd: directory,
-      }),
-    ).rejects.toThrow("has not exited");
-  } finally {
-    unlisten();
-    if (providerPid) {
-      try {
-        process.kill(-providerPid, "SIGKILL");
-      } catch {
-        /* gone */
-      }
-    }
-    await backend.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-}, 15_000);
-
-it("fails closed when a Windows login leader disappears before stop arrives", async () => {
-  const backend = new HostChildBackend({}, true, async () => undefined);
-  const sessionId = "monocode-provider-login-late-claude";
-  await expect(
-    backend.invoke("harness_stop", { sessionId, requireExisting: true }),
-  ).rejects.toThrow("could not be confirmed");
-  await expect(backend.invoke("harness_spawn", { sessionId })).rejects.toThrow(
-    "could not be confirmed",
-  );
-  await backend.close();
 });
 
-it("finishes a normally closed Windows guard when taskkill would fail", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "monocode-guard-close-"));
-  const system32 = join(directory, "System32");
-  mkdirSync(system32);
-  const killer = join(system32, "taskkill.exe");
-  const marker = join(directory, "taskkill-called");
-  writeFileSync(killer, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
-  chmodSync(killer, 0o755);
+it("the Windows guard refuses login before launching its provider", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-guard-reject-"));
+  const marker = join(directory, "provider-started");
   const provider = join(directory, "provider.cjs");
-  writeFileSync(provider, "process.exit(0);");
+  writeFileSync(
+    provider,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes');`,
+  );
   const guard = spawn(
     process.execPath,
     [
@@ -421,30 +323,23 @@ it("finishes a normally closed Windows guard when taskkill would fail", async ()
     ],
     {
       cwd: directory,
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        SystemRoot: directory,
-        MONOCODE_CONFIRM_EXIT: "1",
-      },
+      stdio: ["pipe", "ignore", "pipe", "pipe"],
+      env: { ...process.env, MONOCODE_CONFIRM_EXIT: "1" },
     },
   );
   let stderr = "";
   guard.stderr.on("data", (chunk) => {
     stderr += chunk.toString();
   });
-  guard.stdout.resume();
   try {
     const code = await Promise.race([
-      new Promise<number | null>((resolve) => guard.once("close", resolve)),
+      new Promise<number | null>((resolve) => guard.once("exit", resolve)),
       new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`guard did not close: ${stderr}`)),
-          3_000,
-        ),
+        setTimeout(() => reject(new Error("guard did not exit")), 3_000),
       ),
     ]);
-    expect(code).toBe(0);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("unavailable on Windows hosts");
     expect(existsSync(marker)).toBe(false);
   } finally {
     guard.kill("SIGKILL");

@@ -111,7 +111,6 @@ export class HostChildBackend implements ChildBackend {
   private events = new EventEmitter();
   private children = new Map<string, ChildProcessWithoutNullStreams>();
   private stopping = new Map<string, ChildProcessWithoutNullStreams>();
-  private uncertain = new Set<string>();
   private stopPromises = new Map<string, Promise<void>>();
   private closed = new WeakSet<ChildProcessWithoutNullStreams>();
   private streams = new Map<string, AbortController>();
@@ -173,6 +172,8 @@ export class HostChildBackend implements ChildBackend {
       } as T;
     }
     switch (command) {
+      case "harness_login_mode":
+        return (this.windowsStop ? "unsupported" : "terminate") as T;
       case "harness_exec": {
         const provider = args.binaryProvider;
         if (!isRemoteProvider(provider))
@@ -352,10 +353,12 @@ export class HostChildBackend implements ChildBackend {
     args: Record<string, unknown>,
   ): Promise<number> {
     if (this.closing) throw new Error("Host is stopping");
+    if (this.windowsStop && id.startsWith("monocode-provider-login-"))
+      throw new Error(
+        "Interactive sign-in is unavailable on Windows hosts. Sign in with the provider CLI in a terminal on the host.",
+      );
     if (this.stopping.has(id))
       throw new Error("Previous harness process has not exited");
-    if (this.uncertain.has(id))
-      throw new Error("Previous harness process exit could not be confirmed");
     if (id.startsWith("monocode-provider-login-") && this.children.has(id))
       throw new Error("Previous harness process has not exited");
     await this.kill(id);
@@ -464,34 +467,13 @@ export class HostChildBackend implements ChildBackend {
     if (pending) return pending;
     const child = this.stopping.get(id) ?? this.children.get(id);
     if (!child) {
-      if (this.windowsStop && requireExisting) {
-        this.uncertain.add(id);
-        return Promise.reject(
-          new Error("Previous login process exit could not be confirmed"),
-        );
-      }
+      if (this.windowsStop && requireExisting)
+        return Promise.reject(new Error("Windows host sign-in is unavailable"));
       return Promise.resolve();
     }
     this.stopping.set(id, child);
     const stop = (async () => {
       if (this.windowsStop) {
-        if (id.startsWith("monocode-provider-login-")) {
-          if (
-            this.closed.has(child) ||
-            child.exitCode !== null ||
-            child.signalCode !== null
-          )
-            throw new Error(
-              "Windows login process tree exit could not be confirmed",
-            );
-          child.stdin.destroy();
-          await new Promise<void>((resolve) =>
-            child.once("close", () => resolve()),
-          );
-          throw new Error(
-            "Windows login process tree exit could not be confirmed",
-          );
-        }
         if (!child.pid) throw new Error("Login process ID is unavailable");
         await this.taskkillTree(child.pid);
         if (!this.closed.has(child)) {
@@ -527,17 +509,6 @@ export class HostChildBackend implements ChildBackend {
   }
 
   async kill(id: string): Promise<void> {
-    if (this.windowsStop && id.startsWith("monocode-provider-login-")) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        this.stopConfirmed(id, false).catch(() => undefined),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, 1_000);
-        }),
-      ]);
-      clearTimeout(timer);
-      return;
-    }
     const child = this.children.get(id);
     if (!child) return;
     this.children.delete(id);

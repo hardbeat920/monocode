@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const child = vi.hoisted(() => ({
   killChild: vi.fn(async () => undefined),
   stopChild: vi.fn(async () => undefined),
+  loginMode: vi.fn(async () => "terminate"),
   spawnChild: vi.fn(async () => undefined),
   writeChild: vi.fn(async () => undefined),
   unwatchChild: vi.fn(),
@@ -24,9 +25,11 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   harnessLoginArgs,
+  hasResumableHarnessLogin,
   isHarnessAuthError,
   latestTurnNeedsHarnessLogin,
   loginHarness,
+  onHarnessLoginEnd,
   submitHarnessLoginCode,
   resetHarnessLoginState,
   supportsHarnessLogin,
@@ -37,6 +40,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   child.killChild.mockReset().mockResolvedValue(undefined);
   child.stopChild.mockReset();
+  child.loginMode.mockReset().mockResolvedValue("terminate");
   child.stopChild.mockImplementation(async (id: string) => {
     queueMicrotask(() => {
       const call = [...child.watchChild.mock.calls]
@@ -151,6 +155,91 @@ describe("harness login", () => {
     await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
     (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
     await expect(second).resolves.toBeUndefined();
+  });
+
+  it("detaches a Windows login and reconnects a new caller to its URL and result", async () => {
+    child.loginMode.mockResolvedValue("detach");
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    const stdout = child.watchChild.mock.calls[0]?.[1] as (
+      line: string,
+    ) => void;
+    stdout(
+      "If the browser didn't open, visit: https://claude.ai/oauth/authorize?test=1",
+    );
+    controller.abort();
+    await expect(first).rejects.toThrow("still running");
+    expect(hasResumableHarnessLogin("claude")).toBe(true);
+    expect(child.stopChild).not.toHaveBeenCalled();
+    const ended = vi.fn();
+    const unsubscribe = onHarnessLoginEnd("claude", undefined, ended);
+
+    const resumed = new AbortController();
+    const onUrl = vi.fn();
+    const second = loginHarness("claude", undefined, {
+      signal: resumed.signal,
+      onUrl,
+    });
+    expect(onUrl).toHaveBeenCalledWith(
+      "https://claude.ai/oauth/authorize?test=1",
+    );
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    await submitHarnessLoginCode("claude", "fresh-code", resumed.signal);
+    expect(child.writeChild).toHaveBeenCalledWith(
+      "monocode-provider-login-claude",
+      "fresh-code",
+    );
+    (child.watchChild.mock.calls[0]?.[2] as (code: number) => void)(0);
+    await expect(second).resolves.toBeUndefined();
+    expect(ended).toHaveBeenCalledOnce();
+    unsubscribe();
+    expect(hasResumableHarnessLogin("claude")).toBe(false);
+    const fresh = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await expect(fresh).resolves.toBeUndefined();
+  });
+
+  it("reconnects during a pending Windows spawn without starting or stopping a second child", async () => {
+    child.loginMode.mockResolvedValue("detach");
+    let finishSpawn!: () => void;
+    child.spawnChild.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSpawn = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(first).rejects.toThrow("still running");
+    const resumed = loginHarness("claude");
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    finishSpawn();
+    (child.watchChild.mock.calls[0]?.[2] as (code: number) => void)(0);
+    await expect(resumed).resolves.toBeUndefined();
+    expect(child.stopChild).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a detached Windows login into an unconfirmable timeout stop", async () => {
+    child.loginMode.mockResolvedValue("detach");
+    const login = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(child.stopChild).not.toHaveBeenCalled();
+      (child.watchChild.mock.calls[0]?.[2] as (code: number) => void)(0);
+      await expect(login).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not kill another caller's shared login when the dialog cancels", async () => {

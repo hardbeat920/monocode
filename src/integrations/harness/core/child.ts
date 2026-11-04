@@ -404,6 +404,10 @@ export function stopChild(
   return invoke("harness_stop", { sessionId, requireExisting });
 }
 
+export function loginMode(): Promise<"terminate" | "detach" | "unsupported"> {
+  return invoke("harness_login_mode");
+}
+
 export function killAllChildren(): Promise<void> {
   lineHandlers.clear();
   exitHandlers.clear();

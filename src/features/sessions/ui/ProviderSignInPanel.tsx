@@ -15,6 +15,8 @@ export function ProviderSignInPanel({
   completeActionLabel,
   autoFocus = false,
   onCancel,
+  cancelLabel,
+  resumable = false,
   loginUrl,
   onCopyUrl,
   onSubmitCode,
@@ -27,6 +29,8 @@ export function ProviderSignInPanel({
   completeActionLabel?: string;
   autoFocus?: boolean;
   onCancel?: () => void;
+  cancelLabel?: string;
+  resumable?: boolean;
   loginUrl?: string | null;
   onCopyUrl?: () => void;
   onSubmitCode?: (code: string) => void;
@@ -48,7 +52,9 @@ export function ProviderSignInPanel({
       <p className="mt-1 max-w-56 text-[11px] leading-4 text-content/45">
         {complete
           ? "You can retry your last message now."
-          : `Sign in to continue using ${title}.`}
+          : resumable
+            ? "Your provider sign-in is still running. Continue it to use the same link."
+            : `Sign in to continue using ${title}.`}
       </p>
       <button
         type="button"
@@ -72,7 +78,9 @@ export function ProviderSignInPanel({
             ? "Waiting for browser…"
             : complete
               ? (completeActionLabel ?? "Signed in")
-              : `Sign in to ${title}`}
+              : resumable
+                ? "Continue sign-in"
+                : `Sign in to ${title}`}
       </button>
       {state === "running" && onCancel ? (
         <button
@@ -80,7 +88,7 @@ export function ProviderSignInPanel({
           className="mt-3 text-xs text-content/65 underline"
           onClick={onCancel}
         >
-          Cancel sign-in
+          {cancelLabel ?? "Cancel sign-in"}
         </button>
       ) : null}
       {state === "running" && loginUrl ? (

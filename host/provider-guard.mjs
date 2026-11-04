@@ -15,6 +15,8 @@ parent.resume();
 const [command, ...args] = process.argv.slice(2);
 const confirmExit = process.env.MONOCODE_CONFIRM_EXIT === "1";
 if (!command) throw new Error("Missing provider command");
+if (windows && confirmExit)
+  throw new Error("Interactive sign-in is unavailable on Windows hosts");
 const child = spawn(command, args, {
   cwd: process.cwd(),
   env: process.env,
@@ -64,12 +66,6 @@ function stopTree() {
     return;
   }
   if (windows) {
-    if (confirmExit) {
-      // The host cannot confirm descendant exit on Windows. Stop the owned
-      // provider handle, without looking up a PID that may have been reused.
-      if (!child.kill()) finish();
-      return;
-    }
     const killer = spawn(
       join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
       ["/PID", String(child.pid), "/T", "/F"],
@@ -107,9 +103,6 @@ function stopTree() {
 }
 parent.on("end", stopTree);
 parent.on("error", stopTree);
-process.stdin.on("end", () => {
-  if (confirmExit) stopTree();
-});
 process.on("SIGTERM", stopTree);
 process.on("SIGINT", stopTree);
 child.on("error", (error) => {
