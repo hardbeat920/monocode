@@ -397,7 +397,8 @@ pub(super) fn settle_cancelled(mut wire: Wire, mut protocol: Protocol) {
                             && thread.is_none_or(|id| {
                                 Some(id) == protocol.request.provider_id.as_deref()
                             });
-                        let claude_terminal = kind == Kind::Claude && value["type"] == "result";
+                        let claude_terminal =
+                            kind == Kind::Claude && super::claude_turn_result(&value);
                         if codex_terminal || claude_terminal {
                             // Discard already-buffered trailing frames too.
                             while wire.rx.try_recv().is_ok() {}

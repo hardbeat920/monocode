@@ -237,6 +237,13 @@ fn executable(path: &Path) -> bool {
     }
 }
 
+/// On resume, Claude Code replays a background-task notification from the
+/// earlier session and answers it with an empty result before the real turn.
+fn claude_turn_result(value: &Value) -> bool {
+    value["type"] == "result"
+        && !(value["origin"]["kind"] == "task-notification" && value["num_turns"] == 0)
+}
+
 fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
     let mut frame = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
     frame.push(b'\n');
@@ -904,7 +911,7 @@ impl Protocol {
                             }
                         }
                     }
-                    "result" => {
+                    "result" if claude_turn_result(&v) => {
                         if self.compact && !self.compact_confirmed && v["is_error"] != true {
                             return Err("Claude Code did not confirm context compaction".into());
                         }
@@ -968,6 +975,8 @@ impl Protocol {
                             events.push(Event::Status("Waiting for background tasks…".into()));
                         }
                     }
+                    // A limit reported for the replay must not carry over to the real turn.
+                    "result" => self.claude_usage_limit = None,
                     "control_request" => {
                         let request = &v["request"];
                         if request["subtype"] == "can_use_tool" {
@@ -1732,7 +1741,7 @@ fn run_operation(
                             && (reply_id.is_some() && reply_id == protocol.interrupt_id.as_deref()
                                 || terminal);
                         let claude_end =
-                            protocol.request.kind == Kind::Claude && value["type"] == "result";
+                            protocol.request.kind == Kind::Claude && claude_turn_result(&value);
                         if codex_ack || claude_end {
                             stop_confirmed = value.get("error").is_none_or(Value::is_null);
                             if terminal || claude_end {
@@ -1970,6 +1979,31 @@ mod tests {
             used: Some(2050),
             window: Some(200000)
         }));
+    }
+    #[test]
+    fn claude_replayed_task_notification_result_does_not_end_the_turn() {
+        let mut claude = protocol(Kind::Claude);
+        let replayed = json!({"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"","origin":{"kind":"task-notification"}});
+        assert!(!claude_turn_result(&replayed));
+        let events = claude.frame(replayed, &mut Vec::new()).unwrap();
+        assert!(!events.contains(&Event::Done));
+        assert!(!claude.done);
+        // A task that finishes during the session wakes a real turn, which ends.
+        let woken = json!({"type":"result","num_turns":1,"result":"Done.","origin":{"kind":"task-notification"}});
+        assert!(claude
+            .frame(woken, &mut Vec::new())
+            .unwrap()
+            .contains(&Event::Done));
+    }
+    #[test]
+    fn claude_replayed_task_notification_result_drops_its_usage_limit() {
+        let mut claude = protocol(Kind::Claude);
+        claude.frame(json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1}}), &mut Vec::new()).unwrap();
+        assert!(claude.claude_usage_limit.is_some());
+        claude.frame(json!({"type":"result","num_turns":0,"result":"","origin":{"kind":"task-notification"}}), &mut Vec::new()).unwrap();
+        assert!(claude.claude_usage_limit.is_none());
+        let error = claude.frame(json!({"type":"result","is_error":true,"num_turns":1,"result":"Something else went wrong"}), &mut Vec::new()).unwrap_err();
+        assert_eq!(error, "Something else went wrong");
     }
     #[test]
     fn codex_handshake_stream_snapshot_and_resume() {
