@@ -473,7 +473,7 @@ export function FileField({
         if (attempt !== generation.current) return false;
         id =
           file === "soul"
-            ? await recoveryCommand<string>("mono_register_soul_save", {})
+            ? await recoveryCommand<string>("mono_register_soul_save", { mono: monoId })
             : crypto.randomUUID();
         if (attempt !== generation.current) return false;
         if (file === "soul") unconfirmed.current.add(id);

@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,17 +50,35 @@ static FILES_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Default)]
 struct SoulWrites {
     active: HashMap<String, String>,
-    epoch: u64,
+    permits: HashMap<(String, String), Instant>,
 }
 
 static SOUL_WRITES: LazyLock<Mutex<SoulWrites>> =
     LazyLock::new(|| Mutex::new(SoulWrites::default()));
 
 impl SoulWrites {
+    fn register(&mut self, mono: &str) -> Result<String, String> {
+        self.permits.retain(|_, expires| *expires > Instant::now());
+        if self.permits.len() >= 1024 {
+            return Err("Too many pending Soul saves; retry shortly".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        self.permits.insert(
+            (mono.to_ascii_lowercase(), id.clone()),
+            Instant::now() + Duration::from_secs(60),
+        );
+        Ok(id)
+    }
+
     fn begin(&mut self, mono: &str, id: &str, registered: bool) -> Result<(), String> {
         let mono = mono.to_ascii_lowercase();
-        if registered && id != self.epoch.to_string() {
-            return Err("Soul save cancelled; retry".into());
+        if registered
+            && !self
+                .permits
+                .remove(&(mono.clone(), id.to_string()))
+                .is_some_and(|expires| expires > Instant::now())
+        {
+            return Err("Soul save permit expired or cancelled; retry".into());
         }
         if self.active.contains_key(&mono) {
             return Err("A previous Soul save is still in progress".into());
@@ -68,14 +87,9 @@ impl SoulWrites {
         Ok(())
     }
 
-    fn cancel(&mut self, id: &str) -> Result<(), String> {
-        if id == self.epoch.to_string() {
-            self.epoch = self
-                .epoch
-                .checked_add(1)
-                .ok_or("Soul save generation exhausted")?;
-        }
-        Ok(())
+    fn cancel(&mut self, mono: &str, id: &str) {
+        self.permits
+            .remove(&(mono.to_ascii_lowercase(), id.to_string()));
     }
 
     fn finish(&mut self, mono: &str, id: &str) {
@@ -416,14 +430,16 @@ pub async fn mono_save(
     .map_err(|e| e.to_string())?
 }
 
-/// Epochs fence delayed editor requests across all windows.
+/// Unused permits expire by becoming invalid, so late requests cannot write.
 #[tauri::command]
-pub fn mono_register_soul_save() -> Result<String, String> {
-    Ok(SOUL_WRITES
+pub fn mono_register_soul_save(mono: String) -> Result<String, String> {
+    if !valid_id(&mono) {
+        return Err("Invalid Soul save request".into());
+    }
+    SOUL_WRITES
         .lock()
         .map_err(|e| e.to_string())?
-        .epoch
-        .to_string())
+        .register(&mono)
 }
 
 #[tauri::command]
@@ -431,13 +447,14 @@ pub fn mono_cancel_soul_save(mono: String, request_id: String) -> Result<(), Str
     if !valid_id(&mono) {
         return Err("Invalid Soul save request".into());
     }
-    request_id
-        .parse::<u64>()
-        .map_err(|_| "Invalid Soul save request")?;
+    let request_id = uuid::Uuid::parse_str(&request_id)
+        .map_err(|_| "Invalid Soul save request")?
+        .to_string();
     SOUL_WRITES
         .lock()
         .map_err(|e| e.to_string())?
-        .cancel(&request_id)
+        .cancel(&mono, &request_id);
+    Ok(())
 }
 
 /// Recovery copies never touch the Mono file lock or overwrite an existing file.
@@ -514,26 +531,49 @@ mod tests {
     }
 
     #[test]
-    fn soul_epochs_are_bounded_and_fence_out_of_order_requests() {
+    fn soul_permits_isolate_windows_and_reject_late_requests() {
         let mut writes = SoulWrites::default();
-        let old = writes.epoch.to_string();
-        writes.begin("mono", &old, true).unwrap();
-        writes.cancel(&old).unwrap();
-        assert!(writes.begin("other-window-mono", &old, true).is_err());
-        let next = writes.epoch.to_string();
-        assert!(writes.begin("MONO", &next, true).is_err());
-        writes.finish("mono", &old);
-        assert!(writes.begin("mono", &old, true).is_err());
-        writes.begin("mono", &next, true).unwrap();
-        writes.finish("mono", &next);
+        let a = writes.register("a").unwrap();
+        let b = writes.register("b").unwrap();
+        writes.cancel("a", &a);
+        assert!(writes.begin("a", &a, true).is_err());
+        assert!(writes.begin("a", &b, true).is_err());
+        writes.begin("b", &b, true).unwrap();
+        writes.finish("b", &b);
+        assert!(writes.begin("b", &b, true).is_err());
+
+        let cancelled = writes.register("a").unwrap();
+        let unaffected = writes.register("a").unwrap();
+        writes.cancel("a", &cancelled);
+        writes.cancel("a", &cancelled);
+        writes.begin("a", &unaffected, true).unwrap();
+        writes.finish("a", &unaffected);
+
+        let first = writes.register("a").unwrap();
+        let second = writes.register("A").unwrap();
+        writes.begin("a", &first, true).unwrap();
+        writes.cancel("a", &first);
+        assert!(writes.begin("A", &second, true).is_err());
+        writes.finish("a", &first);
+        assert!(writes.begin("a", &first, true).is_err());
+        assert!(writes.begin("a", &second, true).is_err());
         for _ in 0..1100 {
-            writes.cancel(&writes.epoch.to_string()).unwrap();
+            let id = writes.register("a").unwrap();
+            writes.cancel("a", &id);
+            assert!(writes.begin("a", &id, true).is_err());
         }
-        let current = writes.epoch;
-        writes.cancel(&old).unwrap();
-        assert_eq!(writes.epoch, current);
-        assert!(writes.begin("mono", &old, true).is_err());
-        assert!(writes.begin("mono", &current.to_string(), true).is_ok());
+        for _ in 0..1024 {
+            writes.register("a").unwrap();
+        }
+        assert!(writes.register("a").is_err());
+        let expired = writes.permits.keys().next().unwrap().1.clone();
+        for until in writes.permits.values_mut() {
+            *until = Instant::now();
+        }
+        let fresh = writes.register("a").unwrap();
+        assert_eq!(writes.permits.len(), 1);
+        assert!(writes.begin("a", &expired, true).is_err());
+        assert!(writes.begin("a", &fresh, true).is_ok());
     }
 
     #[test]
