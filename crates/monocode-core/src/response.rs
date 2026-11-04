@@ -82,6 +82,33 @@ pub fn final_prose(rows: &[Row]) -> String {
         .unwrap_or(rows.len());
     prose(&rows[start..])
 }
+/// Keeps the end of `text`, where a session's answer is, within `count` chars.
+pub fn limit_tail(text: &str, count: usize, marker: &str) -> String {
+    let total = text.chars().count();
+    if total <= count {
+        return text.into();
+    }
+    let keep = count.saturating_sub(marker.chars().count() + 2);
+    let tail: String = text.chars().skip(total - keep).collect();
+    format!("{marker}\n\n{tail}")
+}
+/// A delegated session's completion report: the final assistant message of its
+/// latest turn only. Interim progress messages and earlier turns' reports, which
+/// the Mono has already received, are left out. Over budget, the end is kept.
+pub fn completion_report(session: i64, rows: &[Row], count: usize) -> String {
+    let turn = rows.iter().rposition(Row::is_prompt).map_or(0, |i| i + 1);
+    let text = final_prose(&rows[turn..]);
+    if text.is_empty() {
+        return "(no written reply on its latest turn)".into();
+    }
+    limit_tail(
+        &text,
+        count,
+        &format!(
+            "[earlier text truncated; read the full message with sessions.read {{\"sessionId\":{session},\"limit\":1,\"maxChars\":6000}} and pass nextCharOffset as charOffset for the rest]"
+        ),
+    )
+}
 pub fn request(rows: &[Row]) -> String {
     rows.iter()
         .take_while(|r| r.role == "user")
@@ -271,6 +298,59 @@ mod tests {
         );
         transcript.begin("assistant");
         assert_eq!(final_prose(&transcript.rows), "");
+    }
+
+    fn row(role: &str, text: &str) -> Row {
+        Row {
+            role: role.into(),
+            text: text.into(),
+            first: true,
+            sent_at: None,
+        }
+    }
+
+    #[test]
+    fn completion_report_is_the_latest_turns_final_message() {
+        let mut rows = vec![
+            row("user", "Investigate the crash"),
+            row("assistant", "Now reading main.rs..."),
+            row("tool", "{}"),
+            row("assistant", "Now checking the logs..."),
+            row("assistant", "First answer: the crash is a null deref."),
+        ];
+        assert_eq!(
+            completion_report(7, &rows, 12000),
+            "First answer: the crash is a null deref."
+        );
+        rows.push(row("user", "Now fix it"));
+        rows.push(row("assistant", "Editing main.rs..."));
+        rows.push(row("assistant", "Fixed: added a guard."));
+        let report = completion_report(7, &rows, 12000);
+        assert_eq!(report, "Fixed: added a guard.");
+        assert!(
+            !report.contains("First answer"),
+            "follow-up must not repeat the first turn"
+        );
+        rows.push(row("user", "Anything else?"));
+        rows.push(row("tool", "{}"));
+        assert_eq!(
+            completion_report(7, &rows, 12000),
+            "(no written reply on its latest turn)",
+            "an earlier turn's answer must not stand in for a silent turn"
+        );
+    }
+
+    #[test]
+    fn completion_report_keeps_the_end_when_over_budget() {
+        let answer = format!("{}THE CONCLUSION", "detail ".repeat(3000));
+        let rows = vec![row("user", "Go"), row("assistant", &answer)];
+        let report = completion_report(42, &rows, 12000);
+        assert!(report.chars().count() <= 12000);
+        assert!(report.ends_with("THE CONCLUSION"));
+        assert!(report.starts_with(
+            "[earlier text truncated; read the full message with sessions.read {\"sessionId\":42,"
+        ));
+        assert!(report.contains("nextCharOffset"));
     }
 
     #[test]

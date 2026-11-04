@@ -851,14 +851,11 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                 children
                     .into_iter()
                     .map(|(id, title)| {
-                        let rows = locked(&store)
+                        let report = locked(&store)
                             .and_then(|db| db.load(id))
-                            .map(|t| monocode_core::response::prose(&t.rows))
+                            .map(|t| monocode_core::response::completion_report(id, &t.rows, 12000))
                             .unwrap_or_else(|_| "Session was removed".into());
-                        format!(
-                            "Session {id}: {title}\n{}",
-                            monocode_core::response::limit(&rows, 12000)
-                        )
+                        format!("Session {id}: {title}\n{report}")
                     })
                     .collect::<Vec<_>>()
                     .join("\n\n")
