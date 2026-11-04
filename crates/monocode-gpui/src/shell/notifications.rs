@@ -472,6 +472,11 @@ impl Shell {
                 .into_iter()
                 .any(|pane| {
                     (self.workspace.session_for_pane(pane) == id
+                        && self
+                            .workspace
+                            .reviews
+                            .get(&pane)
+                            .is_none_or(|review| !review.chat_hidden)
                         || self.mono_pane_chat_id(pane, cx) == Some(id))
                         && !self.workspace.is_detached_pane(pane)
                 })
@@ -533,6 +538,13 @@ impl Shell {
             }
             directories.insert(id.to_string(), chat.summary.cwd.clone());
             let mono_visible = self.mono_active(cx) && visible;
+            // A Mono split pane keeps its pane id in `active`, not the chat id.
+            let focused = self.workspace.active == Some(id)
+                || self
+                    .workspace
+                    .active
+                    .and_then(|pane| self.mono_pane_chat_id(pane, cx))
+                    == Some(id);
             snapshots.push(SessionInputs {
                 session_id: id.to_string(),
                 title: chat.display_title().to_owned(),
@@ -542,7 +554,7 @@ impl Shell {
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
                 conversation_focused: self.window_active
-                    && (self.workspace.active == Some(id) || mono_visible)
+                    && (focused || mono_visible)
                     && visible
                     && chat.composer_focused(window, cx),
             });
