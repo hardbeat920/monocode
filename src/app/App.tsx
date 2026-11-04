@@ -14134,9 +14134,11 @@ function Workspace({
         project={usageSource?.cwd ?? projectCwd}
         onSelectAccount={onSelectProviderAccount}
         onManageAccounts={() => openSettings("providers", "provider-accounts")}
-        onOpenSignIn={activeProviderSignInRequest && !providerSignInRequest
-          ? () => setProviderSignInRequest(activeProviderSignInRequest)
-          : undefined}
+        onOpenSignIn={
+          activeProviderSignInRequest && !providerSignInRequest
+            ? () => setProviderSignInRequest(activeProviderSignInRequest)
+            : undefined
+        }
         // A Mono in full view has no terminal of its own.
         terminals={monoCovers ? undefined : runningTerminals}
         terminalOpen={!monoCovers && runningTerminalOpen}
