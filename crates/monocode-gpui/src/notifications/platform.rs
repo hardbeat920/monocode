@@ -42,7 +42,9 @@ pub fn drain_clicks() -> Vec<Target> {
     Vec::new()
 }
 #[cfg(not(target_os = "macos"))]
-pub fn request_badge_authorization() {}
+pub fn request_badge_authorization() -> Option<Receiver<Permission>> {
+    None
+}
 #[cfg(not(target_os = "macos"))]
 pub fn set_dock_badge(_: usize) {}
 #[cfg(not(target_os = "macos"))]

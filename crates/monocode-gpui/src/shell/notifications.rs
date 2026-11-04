@@ -37,10 +37,12 @@ pub(super) struct State {
     pub(super) whats_new: Option<(Entity<WhatsNew>, Subscription, FocusHandle)>,
     permission: Permission,
     permission_probe: Option<Receiver<Permission>>,
+    /// Badge-only authorization request, polled to repaint an early badge.
+    badge_probe: Option<Receiver<Permission>>,
     announcements: approvals::InputAnnouncements,
     responding: HashSet<i64>,
     /// Sessions whose last turn finished and the user has not looked at yet.
-    finished: HashSet<i64>,
+    pub(super) finished: HashSet<i64>,
     sequence: u64,
     badge: usize,
     sounds_enabled: bool,
@@ -80,6 +82,7 @@ impl State {
             whats_new: None,
             permission: Permission::Unsupported,
             permission_probe: None,
+            badge_probe: None,
             announcements: Default::default(),
             responding: HashSet::new(),
             finished: HashSet::new(),
@@ -328,7 +331,7 @@ impl Shell {
         platform::set_dock_badge(0);
         // macOS 12+ ignores Dock badges until the app has been granted the
         // badge option, which the Notifications toggle may never have asked for.
-        platform::request_badge_authorization();
+        self.notification_state.badge_probe = platform::request_badge_authorization();
         if platform::initialize() {
             self.notification_state.permission = Permission::Prompt;
             // A stored toggle means the user opted in; macOS stays undecided
@@ -352,6 +355,17 @@ impl Shell {
                             .permission_probe
                             .as_ref()
                             .and_then(|rx| rx.try_recv().ok());
+                        let badge_granted = this
+                            .notification_state
+                            .badge_probe
+                            .as_ref()
+                            .and_then(|rx| rx.try_recv().ok());
+                        if let Some(permission) = badge_granted {
+                            this.notification_state.badge_probe = None;
+                            if permission == Permission::Granted {
+                                platform::set_dock_badge(this.notification_state.badge);
+                            }
+                        }
                         if let Some(permission) = permission {
                             this.notification_state.permission = permission;
                             this.notification_state.permission_probe = None;

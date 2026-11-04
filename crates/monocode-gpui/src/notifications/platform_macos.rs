@@ -217,21 +217,30 @@ pub fn set_dock_badge(count: usize) {
 /// Since macOS 12, `NSDockTile` badge updates are ignored until the app holds
 /// the badge authorization. Only re-request once the user already answered the
 /// prompt: the one-time dialog stays reserved for the Notifications toggle.
-pub fn request_badge_authorization() {
-    if MainThreadMarker::new().is_none() {
-        return;
-    }
-    let Some(center) = center() else {
-        return;
-    };
-    let handler = RcBlock::new(|settings: NonNull<UNNotificationSettings>| {
+/// Returns the settings after the request, so the caller can repaint the badge
+/// it drew while the grant was still missing.
+pub fn request_badge_authorization() -> Option<Receiver<Permission>> {
+    MainThreadMarker::new()?;
+    let center = center()?;
+    let (sender, receiver) = mpsc::channel();
+    let handler = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
         if unsafe { settings.as_ref() }.authorizationStatus()
             == UNAuthorizationStatus::NotDetermined
-            || self::center().is_none()
         {
+            let _ = sender.send(Permission::Prompt);
             return;
         }
-        let done = RcBlock::new(|_granted: Bool, _error: *mut NSError| {});
+        let sender = sender.clone();
+        let done = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
+            let Some(center) = self::center() else {
+                return;
+            };
+            let sender = sender.clone();
+            let query = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+                let _ = sender.send(map_settings(unsafe { settings.as_ref() }));
+            });
+            center.getNotificationSettingsWithCompletionHandler(&query);
+        });
         if let Some(center) = self::center() {
             center.requestAuthorizationWithOptions_completionHandler(
                 UNAuthorizationOptions::Badge,
@@ -240,6 +249,7 @@ pub fn request_badge_authorization() {
         }
     });
     center.getNotificationSettingsWithCompletionHandler(&handler);
+    Some(receiver)
 }
 
 pub fn dismiss(tag: &str) {
