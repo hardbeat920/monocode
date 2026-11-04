@@ -768,10 +768,20 @@ fn bump_generation(indexes: &Path, key: &str, generation: u64) -> Result<u64, St
         .checked_add(1)
         .ok_or("Checkpoint index generation overflow")?;
     let path = indexes.join(format!("{key}.gen"));
-    // Published atomically, so a reader never sees half a number.
+    // Published atomically, so a reader never sees half a number, and synced
+    // so a machine that loses power right after the rename does not read back
+    // an empty file and fail every later capture.
     let staged = indexes.join(format!("{key}.gen.tmp"));
-    std::fs::write(&staged, next.to_string()).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(&staged).map_err(|e| e.to_string())?;
+    file.write_all(next.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
     std::fs::rename(&staged, &path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    std::fs::File::open(indexes)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|e| e.to_string())?;
     Ok(next)
 }
 
