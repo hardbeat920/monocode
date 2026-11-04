@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+#[cfg(windows)]
+use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -159,6 +161,8 @@ struct LiveChild {
     pid: u32,
     identity: Option<String>,
     account: Option<HarnessAccount>,
+    #[cfg(windows)]
+    process_handle: Option<OwnedHandle>,
 }
 
 struct LiveSse {
@@ -224,7 +228,7 @@ impl HarnessHost {
         &self,
         session_id: &str,
         require_existing: bool,
-        stop: impl FnOnce(u32) -> Result<(), String>,
+        stop: impl FnOnce(&LiveChild) -> Result<(), String>,
     ) -> Result<(), String> {
         let live = {
             let mut inner = self.lock_inner();
@@ -242,7 +246,7 @@ impl HarnessHost {
             live
         };
         if let Some(live) = live {
-            stop(live.pid)?;
+            stop(&live)?;
             let mut inner = self.lock_inner();
             if inner
                 .stopping
@@ -356,24 +360,30 @@ impl HarnessHost {
         for (session_id, _) in &children {
             self.stop_sse(session_id);
         }
-        let pids: Vec<u32> = children.iter().map(|(_, child)| child.pid).collect();
-        drop(children);
-        terminate_all(&pids);
+        #[cfg(windows)]
+        self.lock_inner().uncertain.extend(
+            children
+                .iter()
+                .filter_map(|(id, _)| id.starts_with(LOGIN_CHILD_PREFIX).then_some(id.clone())),
+        );
+        terminate_removed_children(children);
     }
 
     pub(crate) fn kill_all(&self) {
-        let kids: Vec<Arc<LiveChild>> = {
-            let mut inner = self.lock_inner();
-            self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
-            let mut kids: Vec<_> = inner.children.drain().map(|(_, child)| child).collect();
-            kids.extend(inner.stopping.drain().map(|(_, child)| child));
-            kids
-        };
+        let kids: Vec<(String, Arc<LiveChild>)> =
+            {
+                let mut inner = self.lock_inner();
+                self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
+                let mut kids: Vec<_> = inner.children.drain().collect();
+                kids.extend(inner.stopping.drain());
+                #[cfg(windows)]
+                inner.uncertain.extend(kids.iter().filter_map(|(id, _)| {
+                    id.starts_with(LOGIN_CHILD_PREFIX).then_some(id.clone())
+                }));
+                kids
+            };
         self.stop_all_sse();
-        let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
-        // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
-        drop(kids);
-        terminate_all(&pids);
+        terminate_removed_children(kids);
     }
 
     fn insert_sse(&self, session_id: String, live: Arc<LiveSse>) -> Option<Arc<LiveSse>> {
@@ -403,6 +413,23 @@ impl HarnessHost {
             live.stop.store(true, Ordering::SeqCst);
         }
     }
+}
+
+fn terminate_removed_children(children: Vec<(String, Arc<LiveChild>)>) {
+    #[cfg(windows)]
+    for (id, live) in &children {
+        if id.starts_with(LOGIN_CHILD_PREFIX) {
+            let _ = stop_login_tree_windows(live);
+        }
+    }
+    let pids: Vec<u32> = children
+        .iter()
+        .filter(|(id, _)| !cfg!(windows) || !id.starts_with(LOGIN_CHILD_PREFIX))
+        .map(|(_, live)| live.pid)
+        .collect();
+    // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
+    drop(children);
+    terminate_all(&pids);
 }
 
 impl Drop for HarnessHost {
@@ -1030,17 +1057,29 @@ pub fn harness_spawn(
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
+    #[cfg(windows)]
+    let process_handle = if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        match child.as_handle().try_clone_to_owned() {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                reap_rejected_spawn(&host, &session_id, child, pid);
+                return Err(format!("Failed to retain login process handle: {error}"));
+            }
+        }
+    } else {
+        None
+    };
 
     let Some(stdin) = child.stdin.take() else {
-        reap_rejected_spawn(child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid);
         return Err("Failed to open harness stdin".into());
     };
     let Some(stdout) = child.stdout.take() else {
-        reap_rejected_spawn(child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid);
         return Err("Failed to open harness stdout".into());
     };
     let Some(stderr) = child.stderr.take() else {
-        reap_rejected_spawn(child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid);
         return Err("Failed to open harness stderr".into());
     };
 
@@ -1050,13 +1089,15 @@ pub fn harness_spawn(
         pid,
         identity: crate::resources::identity(pid),
         account,
+        #[cfg(windows)]
+        process_handle,
     });
     if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live) {
         // A kill, or a newer spawn, won the race while this one was forking.
         // Returning `Ok` here would hand the caller a dead pid to store as the
         // session's live child, and this child's stdout would be parsed as the
         // stream that replaced it. Reap it without emitting anything.
-        reap_rejected_spawn(child, rejected.pid);
+        reap_rejected_spawn(&host, &session_id, child, rejected.pid);
         return Err(SPAWN_CANCELLED.to_string());
     }
 
@@ -1282,6 +1323,10 @@ pub async fn harness_write(
 #[tauri::command(async)]
 pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
+    #[cfg(windows)]
+    if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        return host.stop_session_with(&session_id, true, stop_login_tree_windows);
+    }
     if let Some(live) = host.kill_session(&session_id) {
         terminate(live.pid);
     }
@@ -1299,7 +1344,16 @@ pub fn harness_stop(
     host.stop_session_with(
         &session_id,
         require_existing.unwrap_or(false) && cfg!(windows),
-        stop_login_tree,
+        |live| {
+            #[cfg(windows)]
+            {
+                stop_login_tree_windows(live)
+            }
+            #[cfg(not(windows))]
+            {
+                stop_login_tree(live.pid)
+            }
+        },
     )
 }
 
@@ -1316,12 +1370,30 @@ fn stop_login_tree(pid: u32) -> Result<(), String> {
             unsafe { libc::kill(group, libc::SIGKILL) };
         }
     }
-    #[cfg(windows)]
-    taskkill_checked(pid)?;
     #[cfg(not(any(unix, windows)))]
     terminate_all(&[pid]);
     wait_for_login_tree_exit(pid);
     Ok(())
+}
+
+#[cfg(windows)]
+fn stop_login_tree_windows(live: &LiveChild) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    // The retained handle prevents PID reuse while taskkill looks up the
+    // leader, but taskkill success does not confirm descendant exit.
+    let Some(handle) = &live.process_handle else {
+        return Err("Login process handle is unavailable".into());
+    };
+    match unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } {
+        WAIT_OBJECT_0 => {
+            return Err("Windows login leader exited; descendant exit cannot be confirmed".into());
+        }
+        WAIT_TIMEOUT => {}
+        _ => return Err("Windows login leader state could not be confirmed".into()),
+    }
+    taskkill_checked(live.pid)?;
+    Err("Windows login process tree exit cannot be confirmed after taskkill".into())
 }
 
 #[cfg(windows)]
@@ -1342,15 +1414,42 @@ fn taskkill_checked(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn reap_rejected_spawn(mut child: Child, pid: u32) {
+fn reap_rejected_spawn(host: &HarnessHost, session_id: &str, child: Child, pid: u32) {
     #[cfg(windows)]
-    while taskkill_checked(pid).is_err() {
-        thread::sleep(Duration::from_millis(200));
+    {
+        reap_rejected_spawn_windows(host, session_id, child, pid, taskkill_checked);
     }
     #[cfg(not(windows))]
-    terminate_all(&[pid]);
-    let _ = child.wait();
-    wait_for_login_tree_exit(pid);
+    {
+        let _ = (host, session_id);
+        let mut child = child;
+        terminate_all(&[pid]);
+        let _ = child.wait();
+        wait_for_login_tree_exit(pid);
+    }
+}
+
+#[cfg(any(windows, test))]
+fn reap_rejected_spawn_windows(
+    host: &HarnessHost,
+    session_id: &str,
+    mut child: Child,
+    pid: u32,
+    stop: impl FnOnce(u32) -> Result<(), String>,
+) {
+    // A rejected fork has no event watcher or proof about its descendants.
+    if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        host.lock_inner().uncertain.insert(session_id.to_owned());
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return; // The leader already exited; never look up its PID again.
+    }
+    let _ = stop(pid);
+    let _ = child.kill(); // Child owns the process handle even if taskkill fails.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn wait_for_login_tree_exit(pid: u32) {
@@ -3573,7 +3672,7 @@ mod tests {
             let mut child = child;
             let _ = child.wait();
         });
-        host.stop_session_with("login", true, stop_login_tree)
+        host.stop_session_with("login", true, |live| stop_login_tree(live.pid))
             .unwrap();
         assert!(host.begin_spawn("login").is_ok());
         let _ = waiter.join();
@@ -3592,8 +3691,34 @@ mod tests {
     fn rejected_spawn_is_reaped_before_reporting_failure() {
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
-        reap_rejected_spawn(child, pid);
+        reap_rejected_spawn(&HarnessHost::new(), "login", child, pid);
         assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn rejected_windows_spawn_does_not_signal_an_exited_pid() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-exited";
+        let mut child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        reap_rejected_spawn_windows(&host, id, child, pid, |_| {
+            panic!("PID was reused after exit")
+        });
+        assert!(host.begin_spawn(id).is_err());
+    }
+
+    #[test]
+    fn rejected_windows_spawn_returns_after_failed_tree_stop() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-failed";
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+        reap_rejected_spawn_windows(&host, id, child, pid, |_| Err("taskkill failed".into()));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_ne!(unsafe { libc::kill(pid as i32, 0) }, 0);
+        assert!(host.begin_spawn(id).is_err());
     }
 
     #[test]

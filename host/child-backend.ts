@@ -475,6 +475,23 @@ export class HostChildBackend implements ChildBackend {
     this.stopping.set(id, child);
     const stop = (async () => {
       if (this.windowsStop) {
+        if (id.startsWith("monocode-provider-login-")) {
+          if (
+            this.closed.has(child) ||
+            child.exitCode !== null ||
+            child.signalCode !== null
+          )
+            throw new Error(
+              "Windows login process tree exit could not be confirmed",
+            );
+          child.stdin.destroy();
+          await new Promise<void>((resolve) =>
+            child.once("close", () => resolve()),
+          );
+          throw new Error(
+            "Windows login process tree exit could not be confirmed",
+          );
+        }
         if (!child.pid) throw new Error("Login process ID is unavailable");
         await this.taskkillTree(child.pid);
         if (!this.closed.has(child)) {
@@ -510,6 +527,17 @@ export class HostChildBackend implements ChildBackend {
   }
 
   async kill(id: string): Promise<void> {
+    if (this.windowsStop && id.startsWith("monocode-provider-login-")) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.stopConfirmed(id, false).catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 1_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      return;
+    }
     const child = this.children.get(id);
     if (!child) return;
     this.children.delete(id);

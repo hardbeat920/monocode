@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { readFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -274,14 +280,14 @@ setInterval(() => {}, 1000);
   }
 }, 15_000);
 
-it("retries a failed Windows tree kill without releasing the login ID", async () => {
+it("fails closed on Windows login cancellation without a PID tree lookup", async () => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-windows-stop-test-"));
   const file = join(directory, "provider.cjs");
   writeFileSync(file, "setInterval(() => {}, 1000);");
   let attempts = 0;
-  const backend = new HostChildBackend({}, true, async (pid) => {
-    if (++attempts === 1) throw new Error("taskkill failed");
-    process.kill(-pid, "SIGTERM");
+  const backend = new HostChildBackend({}, true, async () => {
+    attempts++;
+    throw new Error("taskkill failed");
   });
   const loginId = "monocode-provider-login-windows-claude";
   try {
@@ -296,7 +302,7 @@ it("retries a failed Windows tree kill without releasing the login ID", async ()
         sessionId: loginId,
         requireExisting: true,
       }),
-    ).rejects.toThrow("taskkill failed");
+    ).rejects.toThrow("tree exit could not be confirmed");
     await expect(
       backend.invoke("harness_spawn", {
         sessionId: loginId,
@@ -305,24 +311,28 @@ it("retries a failed Windows tree kill without releasing the login ID", async ()
         cwd: directory,
       }),
     ).rejects.toThrow("has not exited");
-    await backend.invoke("harness_stop", {
-      sessionId: loginId,
-      requireExisting: true,
-    });
-    expect(attempts).toBe(2);
+    await expect(
+      backend.invoke("harness_stop", {
+        sessionId: loginId,
+        requireExisting: true,
+      }),
+    ).rejects.toThrow("tree exit could not be confirmed");
+    expect(attempts).toBe(0);
   } finally {
     await backend.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }, 15_000);
 
-it("keeps a failed Windows stop reserved after the leader exits", async () => {
+it("keeps Windows stop reserved after the leader exits without signaling its PID", async () => {
   const directory = mkdtempSync(
     join(tmpdir(), "monocode-windows-leader-test-"),
   );
   const file = join(directory, "provider.cjs");
   writeFileSync(file, "console.log(process.pid); setInterval(() => {}, 1000);");
+  let attempts = 0;
   const backend = new HostChildBackend({}, true, async () => {
+    attempts++;
     throw new Error("taskkill failed");
   });
   const loginId = "monocode-provider-login-windows-codex";
@@ -347,15 +357,15 @@ it("keeps a failed Windows stop reserved after the leader exits", async () => {
         sessionId: loginId,
         requireExisting: true,
       }),
-    ).rejects.toThrow("taskkill failed");
-    process.kill(guardPid, "SIGKILL");
+    ).rejects.toThrow("tree exit could not be confirmed");
     await vi.waitFor(() => expect(() => process.kill(guardPid!, 0)).toThrow());
     await expect(
       backend.invoke("harness_stop", {
         sessionId: loginId,
         requireExisting: true,
       }),
-    ).rejects.toThrow("taskkill failed");
+    ).rejects.toThrow("tree exit could not be confirmed");
+    expect(attempts).toBe(0);
     await expect(
       backend.invoke("harness_spawn", {
         sessionId: loginId,
@@ -388,6 +398,58 @@ it("fails closed when a Windows login leader disappears before stop arrives", as
     "could not be confirmed",
   );
   await backend.close();
+});
+
+it("finishes a normally closed Windows guard when taskkill would fail", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-guard-close-"));
+  const system32 = join(directory, "System32");
+  mkdirSync(system32);
+  const killer = join(system32, "taskkill.exe");
+  const marker = join(directory, "taskkill-called");
+  writeFileSync(killer, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+  chmodSync(killer, 0o755);
+  const provider = join(directory, "provider.cjs");
+  writeFileSync(provider, "process.exit(0);");
+  const guard = spawn(
+    process.execPath,
+    [
+      "-e",
+      "Object.defineProperty(process, 'platform', { value: 'win32' }); const fs = require('node:fs'); const net = require('node:net'); fs.createReadStream = (_, options) => new net.Socket({ fd: options.fd, readable: true, writable: false }); require('node:module').syncBuiltinESMExports(); import(process.argv[1]);",
+      resolve("build/host/provider-guard.mjs"),
+      process.execPath,
+      provider,
+    ],
+    {
+      cwd: directory,
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        SystemRoot: directory,
+        MONOCODE_CONFIRM_EXIT: "1",
+      },
+    },
+  );
+  let stderr = "";
+  guard.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  guard.stdout.resume();
+  try {
+    const code = await Promise.race([
+      new Promise<number | null>((resolve) => guard.once("close", resolve)),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`guard did not close: ${stderr}`)),
+          3_000,
+        ),
+      ),
+    ]);
+    expect(code).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    guard.kill("SIGKILL");
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("stops a provider tree when its host pipe closes unexpectedly", async () => {

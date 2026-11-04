@@ -75,7 +75,7 @@ function waitForLoginCleanup(
         finish(
           run.stopError ??
             new Error(
-              "Sign-in exit is not confirmed. Wait for the provider process to exit, then retry.",
+              "Sign-in exit is not confirmed; another sign-in for this account cannot start while the previous process may still exist.",
             ),
         ),
       LOGIN_CLEANUP_WAIT_MS,
@@ -241,7 +241,7 @@ async function runHarnessLogin(
         (error: unknown) => {
           stopPending = false;
           run.stopError = new Error(
-            `Could not confirm sign-in exit: ${error instanceof Error ? error.message : String(error)}. Retry to request another stop.`,
+            `Could not confirm sign-in exit: ${error instanceof Error ? error.message : String(error)}.`,
           );
         },
       );

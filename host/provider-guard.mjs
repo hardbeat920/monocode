@@ -3,13 +3,14 @@ import { Socket } from "node:net";
 import { createReadStream } from "node:fs";
 import { join } from "node:path";
 
+const windows = process.platform === "win32";
+
 // fd 3 belongs only to the host. EOF means it exited, even after a hard crash.
 // Unix stdio pipes are sockets: destroying one cancels its pending read.
 // A filesystem read can otherwise keep a worker blocked during guard exit.
-const parent =
-  process.platform === "win32"
-    ? createReadStream("/dev/null", { fd: 3, autoClose: false })
-    : new Socket({ fd: 3, readable: true, writable: false });
+const parent = windows
+  ? createReadStream("/dev/null", { fd: 3, autoClose: false })
+  : new Socket({ fd: 3, readable: true, writable: false });
 parent.resume();
 const [command, ...args] = process.argv.slice(2);
 const confirmExit = process.env.MONOCODE_CONFIRM_EXIT === "1";
@@ -18,7 +19,7 @@ const child = spawn(command, args, {
   cwd: process.cwd(),
   env: process.env,
   stdio: "pipe",
-  detached: process.platform !== "win32",
+  detached: !windows,
   windowsHide: true,
 });
 process.stdin.pipe(child.stdin);
@@ -32,7 +33,7 @@ let escalation;
 let finished = false;
 function finish() {
   if (finished) return;
-  if (confirmExit && stopping && process.platform !== "win32" && child.pid) {
+  if (confirmExit && stopping && !windows && child.pid) {
     try {
       process.kill(-child.pid, 0);
       setTimeout(finish, 20);
@@ -50,7 +51,9 @@ function finish() {
   // The watchdog/stdin pipes can remain open after the provider exits.
   // Ownership is finished; do not make the host kill an otherwise idle guard.
   process.stdout.write("", () => {
-    process.stderr.write("", () => process.exit(exitCode));
+    process.stderr.write("", () => {
+      process.exit(exitCode);
+    });
   });
 }
 function stopTree() {
@@ -60,7 +63,13 @@ function stopTree() {
     finish();
     return;
   }
-  if (process.platform === "win32") {
+  if (windows) {
+    if (confirmExit) {
+      // The host cannot confirm descendant exit on Windows. Stop the owned
+      // provider handle, without looking up a PID that may have been reused.
+      if (!child.kill()) finish();
+      return;
+    }
     const killer = spawn(
       join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
       ["/PID", String(child.pid), "/T", "/F"],
@@ -98,6 +107,9 @@ function stopTree() {
 }
 parent.on("end", stopTree);
 parent.on("error", stopTree);
+process.stdin.on("end", () => {
+  if (confirmExit) stopTree();
+});
 process.on("SIGTERM", stopTree);
 process.on("SIGINT", stopTree);
 child.on("error", (error) => {
@@ -106,7 +118,11 @@ child.on("error", (error) => {
 });
 child.on("close", (code) => {
   exitCode = code ?? 1;
-  if (stopping && process.platform !== "win32") {
+  if (windows) {
+    finish();
+    return;
+  }
+  if (stopping && !windows) {
     try {
       process.kill(-child.pid, 0);
     } catch (error) {
