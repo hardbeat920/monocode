@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { Pencil, Plus, StickyNote, Trash2 } from "../../../shared/ui/icons";
@@ -58,11 +58,13 @@ export function SoulPage({
   agent,
   files,
   onBack,
+  saveRef,
 }: {
   monoId: string;
   agent: MonoLook;
   files: MonoFiles | undefined;
   onBack?: () => void;
+  saveRef?: Ref<() => Promise<boolean>>;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-soul>
@@ -70,6 +72,7 @@ export function SoulPage({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         {files ? (
           <FileField
+            saveRef={saveRef}
             key={`${monoId}:soul`}
             monoId={monoId}
             file="soul"

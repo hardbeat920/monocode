@@ -1,8 +1,10 @@
 import {
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
+  type Ref,
   type TextareaHTMLAttributes,
 } from "react";
 import { ChevronLeft, type IconComponent } from "../../../shared/ui/icons";
@@ -22,6 +24,7 @@ import {
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
   memoryWithinBudget,
+  loadMonoFiles,
   MonoFileConflict,
   saveMonoFile,
   type MonoFile,
@@ -343,6 +346,7 @@ export function FileField({
   author,
   placeholder,
   autoFocus = false,
+  saveRef,
 }: {
   monoId: string;
   file: MonoFile;
@@ -353,31 +357,63 @@ export function FileField({
   author: string;
   placeholder: string;
   autoFocus?: boolean;
+  saveRef?: Ref<() => Promise<boolean>>;
 }) {
   const [draft, setDraft] = useState(value);
   const [conflict, setConflict] = useState(false);
   // The version the draft started from; a newer one replaces a clean draft.
   const base = useRef({ value, hash });
-  if (base.current.hash !== hash && draft === base.current.value) {
+  const seenHash = useRef(hash);
+  if (seenHash.current !== hash && draft === base.current.value) {
+    seenHash.current = hash;
     base.current = { value, hash };
     setDraft(value);
   }
-  const save = async (overwrite = false) => {
-    const text = draft;
-    try {
-      const next = await saveMonoFile(
-        monoId,
-        file,
-        text,
-        overwrite ? undefined : base.current.hash,
-      );
-      base.current = { value: text, hash: next };
-      setConflict(false);
-    } catch (error) {
-      if (error instanceof MonoFileConflict) setConflict(true);
-      else console.warn(`Could not save ${label}`, error);
-    }
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const pending = useRef<Promise<boolean> | null>(null);
+  const blocked = useRef(false);
+  const [error, setError] = useState(false);
+  const save = (overwrite = false): Promise<boolean> => {
+    if (pending.current) return pending.current;
+    if (blocked.current && !overwrite) return Promise.resolve(false);
+    if (draftRef.current === base.current.value) return Promise.resolve(true);
+    const text = draftRef.current;
+    const request = (async () => {
+      try {
+        const next = await saveMonoFile(
+          monoId,
+          file,
+          text,
+          overwrite ? undefined : base.current.hash,
+        );
+        base.current = { value: text, hash: next };
+        blocked.current = false;
+        setConflict(false);
+        setError(false);
+        return true;
+      } catch (error) {
+        blocked.current = true;
+        if (error instanceof MonoFileConflict) setConflict(true);
+        else {
+          setError(true);
+          console.warn(`Could not save ${label}`, error);
+        }
+        return false;
+      }
+    })();
+    pending.current = request;
+    void request.then(() => {
+      pending.current = null;
+    });
+    return request;
   };
+  useImperativeHandle(saveRef, () => async () => {
+    do {
+      if (!(await save())) return false;
+    } while (draftRef.current !== base.current.value);
+    return true;
+  });
   return (
     <>
       <MarkdownSourceEditor
@@ -389,9 +425,23 @@ export function FileField({
         placeholder={placeholder}
         onChange={setDraft}
         onBlur={() => {
-          if (draft !== base.current.value) void save();
+          if (draftRef.current !== base.current.value) void save();
         }}
       />
+      {error ? (
+        <div role="alert" className="px-2 text-xs text-red-400">
+          Could not save.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              blocked.current = false;
+              void save();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
       {conflict ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[11px] leading-4 text-content/60">
           <span className="min-w-0 flex-1">
@@ -400,9 +450,25 @@ export function FileField({
           <button
             type="button"
             onClick={() => {
-              setConflict(false);
-              setDraft(value);
-              base.current = { value, hash };
+              const original = draftRef.current;
+              void loadMonoFiles(monoId)
+                .then((files) => {
+                  if (draftRef.current !== original) return;
+                  const latest = {
+                    value: files[file],
+                    hash: files[`${file}Hash`],
+                  };
+                  seenHash.current = hash;
+                  base.current = latest;
+                  draftRef.current = latest.value;
+                  setDraft(latest.value);
+                  blocked.current = false;
+                  setConflict(false);
+                })
+                .catch((error) => {
+                  setError(true);
+                  console.warn(`Could not reload ${label}`, error);
+                });
             }}
             className="rounded px-1.5 py-0.5 text-content/70 hover:bg-content/8 hover:text-content"
           >

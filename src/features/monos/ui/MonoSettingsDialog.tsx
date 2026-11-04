@@ -76,13 +76,21 @@ export function MonoSettingsDialog({
 }: Props) {
   const [section, setSection] = useState(initialSection);
   const files = useMonoFiles(monoId, status);
+  const saveSoul = useRef<() => Promise<boolean>>(null);
+  const leaveSoul = (action: () => void) => {
+    if (section !== "soul" || !saveSoul.current) action();
+    else
+      void saveSoul.current().then((saved) => {
+        if (saved) action();
+      });
+  };
   return (
     <Modal
       title={`${agent.name} settings`}
       size="lg"
       minimalHeader
       fitViewport
-      onClose={onClose}
+      onClose={() => leaveSoul(onClose)}
       // Centre the close button in the section header's 40px row.
       className="h-[min(680px,calc(100dvh-32px))] [&>.modal-panel>header]:top-1.5"
     >
@@ -104,7 +112,7 @@ export function MonoSettingsDialog({
               key={id}
               type="button"
               aria-current={section === id ? "page" : undefined}
-              onClick={() => setSection(id)}
+              onClick={() => leaveSoul(() => setSection(id))}
               className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] ${
                 section === id
                   ? "bg-content/8 text-content"
@@ -120,7 +128,12 @@ export function MonoSettingsDialog({
           {section === "general" ? (
             <GeneralSection monoId={monoId} agent={agent} {...general} />
           ) : section === "soul" ? (
-            <SoulPage monoId={monoId} agent={agent} files={files} />
+            <SoulPage
+              monoId={monoId}
+              agent={agent}
+              files={files}
+              saveRef={saveSoul}
+            />
           ) : (
             <MemoryPage monoId={monoId} files={files} />
           )}

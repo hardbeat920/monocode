@@ -14,19 +14,25 @@ vi.mock("../../sessions/ui/ModelPicker", () => ({
   ModelSettingRows: () => null,
 }));
 
+const saveFile = vi.hoisted(() => vi.fn());
+const loadFiles = vi.hoisted(() => vi.fn());
+
 vi.mock("../model/monoFiles", async (original) => ({
   ...(await original<object>()),
-  loadMonoFiles: async () => ({
-    id: "mono-1",
-    dir: "/data/mono-1",
-    soul: "# Soul",
-    soulHash: "soul",
-    memory: "",
-    memoryHash: "memory",
-    memoryPath: "/data/mono-1/MEMORY.md",
-    topics: [],
-  }),
+  saveMonoFile: saveFile,
+  loadMonoFiles: loadFiles,
 }));
+
+const loadedFiles = {
+  id: "mono-1",
+  dir: "/data/mono-1",
+  soul: "# Soul",
+  soulHash: "soul",
+  memory: "",
+  memoryHash: "memory",
+  memoryPath: "/data/mono-1/MEMORY.md",
+  topics: [],
+};
 
 let container: HTMLDivElement;
 let root: Root;
@@ -35,6 +41,7 @@ const onClose = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  loadFiles.mockResolvedValue(loadedFiles);
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => stored.get(key) ?? null,
@@ -118,7 +125,7 @@ it("opens on General and moves between its sections", async () => {
     ["General", "Soul", "Memory"],
   );
   expect(button("General", nav).getAttribute("aria-current")).toBe("page");
-  expect(dialog().querySelector("input[aria-label=\"Name\"]")).not.toBeNull();
+  expect(dialog().querySelector('input[aria-label="Name"]')).not.toBeNull();
   expect(dialog().textContent).toContain("Permissions");
   await act(async () => button("Memory", nav).click());
   expect(button("Memory", nav).getAttribute("aria-current")).toBe("page");
@@ -199,4 +206,68 @@ it("explains when permissions take effect while the Mono is working", async () =
   expect(document.querySelector("[data-access-picker]")?.textContent).toContain(
     "Access changes apply to the next turn. Stop and resend to apply them now.",
   );
+});
+
+it("keeps a conflicting soul draft open when closing", async () => {
+  const { MonoFileConflict } = await import("../model/monoFiles");
+  saveFile.mockRejectedValueOnce(new MonoFileConflict());
+  await render();
+  await act(async () => button("Soul", dialog()).click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Broski soul"]',
+  )!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(editor, "# Changed soul");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+  );
+  expect(saveFile).toHaveBeenCalledWith(
+    "mono-1",
+    "soul",
+    "# Changed soul",
+    "soul",
+  );
+  expect(onClose).not.toHaveBeenCalled();
+  expect(editor.value).toBe("# Changed soul");
+  expect(dialog().textContent).toContain("changed this while you were editing");
+});
+
+it("preserves edits made while loading the conflicting version", async () => {
+  const { MonoFileConflict } = await import("../model/monoFiles");
+  saveFile.mockRejectedValueOnce(new MonoFileConflict());
+  await render();
+  await act(async () => button("Soul", dialog()).click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Broski soul"]',
+  )!;
+  const edit = (value: string) => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, value);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => edit("first draft"));
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+  );
+  let resolve!: (value: typeof loadedFiles) => void;
+  loadFiles.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  act(() => button("Use theirs").click());
+  await act(async () => edit("newer draft"));
+  await act(async () =>
+    resolve({ ...loadedFiles, soul: "theirs", soulHash: "new" }),
+  );
+  expect(editor.value).toBe("newer draft");
+  expect(dialog().textContent).toContain("changed this while you were editing");
 });

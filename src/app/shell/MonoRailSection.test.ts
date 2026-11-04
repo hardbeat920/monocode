@@ -35,6 +35,7 @@ function render(props: Partial<Parameters<typeof MonoRailSection>[0]> = {}) {
         onOpen: () => {},
         onCreate,
         onDelete: () => {},
+        onEditSoul: () => {},
         ...props,
       }),
     ),
@@ -84,4 +85,18 @@ it("counts a mono's unread replies, except the one open", () => {
 
   render({ activeId: mono.id, unseenCounts: new Map([[mono.id, 3]]) });
   expect(badge()).toBeNull();
+});
+
+it("opens the selected Mono's soul from its context menu", () => {
+  const first = createMono();
+  const second = createMono();
+  const onEditSoul = vi.fn();
+  render({ onEditSoul });
+  const rows = container.querySelectorAll("[data-mono-status]");
+  act(() =>
+    rows[1].dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })),
+  );
+  act(() => button("Edit soul…").click());
+  expect(onEditSoul).toHaveBeenCalledWith(second.id);
+  expect(onEditSoul).not.toHaveBeenCalledWith(first.id);
 });

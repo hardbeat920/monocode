@@ -1180,6 +1180,7 @@ function Workspace({
   monoOverviewTabRef.current = monoOverviewTab;
   // The Mono whose settings dialog is open; another Mono's view closes it.
   const [monoSettingsFor, setMonoSettingsFor] = useState<string | null>(null);
+  const [monoSettingsSection, setMonoSettingsSection] = useState<"general" | "soul">("general");
   // A document opened from the chat shows on the overview's Documents tab,
   // the same page the tab opens it on.
   const onOpenMonoArtifact = useCallback((_sessionId: string, id: string) => {
@@ -5132,6 +5133,7 @@ function Workspace({
   /** A new Mono opens straight away, ready to be told what it works on. */
   const onCreateMono = useCallback((projects?: readonly string[]) => {
     const monoId = createMono(projects).id;
+    setMonoSettingsSection("general");
     setMonoSettingsFor(monoId);
     void onOpenMono(monoId);
   }, [onOpenMono]);
@@ -13733,32 +13735,34 @@ function Workspace({
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
+  const settingsMono = monoSettingsFor ? findMono(monoSettingsFor) : undefined;
+  const settingsSession = settingsMono?.sessionId
+    ? sessions.find((session) => session.id === settingsMono.sessionId)
+    : undefined;
   const monoSettingsDialog =
-    monoCovers &&
-    monoViewMono &&
-    monoViewSession &&
-    monoSettingsFor === monoViewMono.id ? (
+    settingsMono && settingsSession ? (
       <MonoSettingsDialog
-        key={monoViewMono.id}
-        monoId={monoViewMono.id}
-        agent={monoLook(monoViewMono)}
-        status={monoState(monoViewSession).status}
-        cwd={monoViewSession.cwd}
-        harness={monoViewSession.harness}
-        model={monoViewSession.model}
-        modelSettings={monoViewSession.modelSettings}
-        runtimeMode={monoViewSession.runtimeMode}
-        busy={!!monoViewSession.busy}
+        key={settingsMono.id}
+        monoId={settingsMono.id}
+        initialSection={monoSettingsSection}
+        agent={monoLook(settingsMono)}
+        status={monoState(settingsSession).status}
+        cwd={settingsSession.cwd}
+        harness={settingsSession.harness}
+        model={settingsSession.model}
+        modelSettings={settingsSession.modelSettings}
+        runtimeMode={settingsSession.runtimeMode}
+        busy={!!settingsSession.busy}
         onModelChange={(harness, model) =>
-          onModelChange(monoViewSession.id, harness, model)
+          onModelChange(settingsSession.id, harness, model)
         }
         onModelSettingsChange={(settings) =>
-          onModelSettingsChange(monoViewSession.id, settings)
+          onModelSettingsChange(settingsSession.id, settings)
         }
         onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(monoViewSession.id, mode)
+          onRuntimeModeChange(settingsSession.id, mode)
         }
-        onReset={() => onResetMono(monoViewSession.id)}
+        onReset={() => onResetMono(settingsSession.id)}
         onClose={() => setMonoSettingsFor(null)}
       />
     ) : null;
@@ -13788,6 +13792,14 @@ function Workspace({
     (monoId: string) => void onOpenMono(monoId),
     [onOpenMono],
   );
+  const onEditRailMonoSoul = useCallback(
+    (monoId: string) => {
+      setMonoSettingsSection("soul");
+      setMonoSettingsFor(monoId);
+      void onOpenMono(monoId);
+    },
+    [onOpenMono],
+  );
   const onDeleteRailMono = useCallback(
     (monoId: string) => void onDeleteMono(monoId),
     [onDeleteMono],
@@ -13803,6 +13815,7 @@ function Workspace({
             onOpen: onOpenRailMono,
             onCreate: onCreateMono,
             onDelete: onDeleteRailMono,
+            onEditSoul: onEditRailMonoSoul,
           }
         : undefined,
     [
@@ -13812,6 +13825,7 @@ function Workspace({
       onOpenRailMono,
       onCreateMono,
       onDeleteRailMono,
+      onEditRailMonoSoul,
     ],
   );
   const onDismissUpdate = useCallback(() => setUpdateNotice(null), []);
@@ -13919,7 +13933,10 @@ function Workspace({
   );
   const onToggleMonoOverview = () => setMonoOverviewOpen(!monoOverviewOpen);
   const onOpenMonoViewSettings = monoViewMono
-    ? () => setMonoSettingsFor(monoViewMono.id)
+    ? () => {
+        setMonoSettingsSection("general");
+        setMonoSettingsFor(monoViewMono.id);
+      }
     : undefined;
   // A new session takes over from a Mono in view.
   const onNewFromTitleBar = () => {
