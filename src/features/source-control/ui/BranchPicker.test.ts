@@ -41,6 +41,29 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("opens the branch search when the focused session is asked", async () => {
+  act(() =>
+    root.render(
+      createElement(BranchPicker, {
+        cwd: "/repo",
+        branch: "main",
+        hotkeys: true,
+      }),
+    ),
+  );
+  await act(async () => {});
+  expect(
+    document.querySelector('input[aria-label="Search or create a branch"]'),
+  ).toBeNull();
+
+  act(() => window.dispatchEvent(new Event("open_branch_picker")));
+  await act(async () => {});
+
+  expect(
+    document.querySelector('input[aria-label="Search or create a branch"]'),
+  ).not.toBeNull();
+});
+
 it("autofocuses the branch search input only once the popover frame is visible", async () => {
   const seenVisibility: (string | undefined)[] = [];
   const nativeFocus = HTMLInputElement.prototype.focus;

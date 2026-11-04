@@ -27,6 +27,8 @@ type Props = {
   cwd: string;
   branch?: string;
   enabled?: boolean;
+  /** Opens this picker when the command palette asks the focused session. */
+  hotkeys?: boolean;
   worktree?: boolean;
   initialOpen?: boolean;
   onDismiss?: () => void;
@@ -53,6 +55,7 @@ export function BranchPicker({
   cwd,
   branch,
   enabled = true,
+  hotkeys = false,
   worktree = false,
   initialOpen = false,
   onDismiss,
@@ -290,6 +293,16 @@ export function BranchPicker({
       ? "No git repository"
       : label;
   const interactive = enabled && !awaitingBranch && !missingGit;
+
+  useEffect(() => {
+    if (!hotkeys) return;
+    const onOpen = () => {
+      if (!interactive) return;
+      setOpen(true);
+    };
+    window.addEventListener("open_branch_picker", onOpen);
+    return () => window.removeEventListener("open_branch_picker", onOpen);
+  }, [hotkeys, interactive]);
 
   return (
     <div ref={root} className="relative flex min-w-0 shrink">
