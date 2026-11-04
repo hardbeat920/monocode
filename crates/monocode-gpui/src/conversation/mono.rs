@@ -5,6 +5,8 @@ use std::path::PathBuf;
 #[derive(Default)]
 pub(super) struct ChatState {
     pub(super) pending: Vec<Message>,
+    queue_scroll: gpui::ScrollHandle,
+    queue_focus: std::collections::HashMap<String, ([gpui::FocusHandle; 2], [Subscription; 2])>,
     pub(super) emoji: bool,
     pub(super) delivered: std::collections::HashSet<String>,
     pub(super) sending: Option<String>,
@@ -26,6 +28,11 @@ pub(crate) struct QueueChanged {
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
 impl Conversation {
+    #[cfg(test)]
+    pub(crate) fn queue_test_focus(&self, id: &str, index: usize) -> gpui::FocusHandle {
+        self.mono_ui.queue_focus[id].0[index].clone()
+    }
+
     /// App launches are saved before installing a view. Reuse the normal durable
     /// draft/queue path instead of submitting an unrecorded seed prompt.
     pub(crate) fn install_app_launch(
@@ -542,6 +549,47 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let failed_ids: Vec<_> = self
+            .mono_ui
+            .pending
+            .iter()
+            .filter(|m| m.internal && m.error.is_some())
+            .map(|m| m.id.clone())
+            .collect();
+        self.mono_ui
+            .queue_focus
+            .retain(|id, _| failed_ids.contains(id));
+        for id in &failed_ids {
+            if !self.mono_ui.queue_focus.contains_key(id) {
+                let handles = [
+                    cx.focus_handle().tab_stop(true),
+                    cx.focus_handle().tab_stop(true),
+                ];
+                let subscribe =
+                    |handle: &gpui::FocusHandle, cx: &mut Context<Self>, window: &mut Window| {
+                        let id = id.clone();
+                        cx.on_focus(handle, window, move |this, _, cx| {
+                            if let Some(index) = this
+                                .mono_ui
+                                .pending
+                                .iter()
+                                .filter(|m| m.internal && m.error.is_some())
+                                .position(|m| m.id == id)
+                            {
+                                this.mono_ui.queue_scroll.scroll_to_top_of_item(index);
+                                cx.notify();
+                            }
+                        })
+                    };
+                let subscriptions = [
+                    subscribe(&handles[0], cx, window),
+                    subscribe(&handles[1], cx, window),
+                ];
+                self.mono_ui
+                    .queue_focus
+                    .insert(id.clone(), (handles, subscriptions));
+            }
+        }
         let mono = self.settings.mono.as_ref().unwrap().mono.clone();
         let status = self.mono_status();
         let name = mono.label();
@@ -600,9 +648,28 @@ impl Conversation {
                     .pb_1p5()
                     .flex()
                     .flex_col()
-                    .child(
+                    .when(!failed_ids.is_empty(), |d| d.child(
                         div()
                             .id("mono-internal-queue-list")
+                            .debug_selector(|| "mono-internal-queue-list".into())
+                            .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                            .focusable()
+                            .tab_index(0)
+                            .track_scroll(&self.mono_ui.queue_scroll)
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                let scroll = &this.mono_ui.queue_scroll;
+                                let delta = match event.keystroke.key.as_str() {
+                                    "up" => px(40.),
+                                    "down" => px(-40.),
+                                    "pageup" => px(160.),
+                                    "pagedown" => px(-160.),
+                                    _ => return,
+                                };
+                                let y = (scroll.offset().y + delta).max(-scroll.max_offset().y).min(px(0.));
+                                scroll.set_offset(gpui::point(scroll.offset().x, y));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
                             .max_h(px(180.))
                             .overflow_y_scroll()
                             .children(
@@ -613,6 +680,7 @@ impl Conversation {
                                     .map(|message| {
                                         let retry = message.id.clone();
                                         let remove = retry.clone();
+                                        let focus = &self.mono_ui.queue_focus[&message.id].0;
                                         div()
                                             .id(SharedString::from(format!(
                                                 "mono-queued-{}",
@@ -638,19 +706,6 @@ impl Conversation {
                                                     } else {
                                                         message.text.clone()
                                                     })
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(11.))
-                                                            .text_color(content(0.4))
-                                                            .child(
-                                                                message
-                                                                    .error
-                                                                    .clone()
-                                                                    .unwrap_or_else(|| {
-                                                                        "Pending".into()
-                                                                    }),
-                                                            ),
-                                                    )
                                                     .when(message.error.is_some(), |d| {
                                                         d.child(
                                                             div()
@@ -662,6 +717,9 @@ impl Conversation {
                                                                         "Retry queued message",
                                                                         "refresh-cw",
                                                                     )
+                                                                    .track_focus(&focus[0]).tab_index(0)
+                                                                    .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                                                                    .debug_selector({ let id = message.id.clone(); move || format!("mono-queue-retry-{id}") })
                                                                     .on_click(cx.listener(
                                                                         move |_, _, _, cx| {
                                                                             cx.emit(QueueChanged {
@@ -677,6 +735,9 @@ impl Conversation {
                                                                         "Discard queued message",
                                                                         "close",
                                                                     )
+                                                                    .track_focus(&focus[1]).tab_index(0)
+                                                                    .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                                                                    .debug_selector({ let id = message.id.clone(); move || format!("mono-queue-discard-{id}") })
                                                                     .on_click(cx.listener(
                                                                         move |_, _, _, cx| {
                                                                             cx.emit(QueueChanged {
@@ -687,11 +748,27 @@ impl Conversation {
                                                                     )),
                                                                 ),
                                                         )
-                                                    }),
+                                                    })
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.))
+                                                            .text_color(content(0.4))
+                                                            .child(
+                                                                message
+                                                                    .error
+                                                                    .clone()
+                                                                    .unwrap_or_else(|| {
+                                                                        "Pending".into()
+                                                                    }),
+                                                            ),
+                                                    ),
                                             )
                                     }),
                             ),
-                    )
+                    ))
+                    .when(!failed_ids.is_empty(), |d| {
+                        d.child(div().text_size(px(11.)).text_color(content(0.5)).child("Scroll for completion updates"))
+                    })
                     .children(self.usage_notice(true, cx))
                     .children(self.auth_notice(cx))
                     .child(self.approval_shelf(window, cx))
