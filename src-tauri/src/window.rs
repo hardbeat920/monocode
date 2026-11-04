@@ -353,6 +353,16 @@ fn record_ready(slot: &mut Option<QuitRun>, id: u32, label: &str) -> Next {
     }
 }
 
+fn abort_commit(slot: &mut Option<QuitRun>, id: u32, label: &str) -> bool {
+    if !slot.as_ref().is_some_and(|run| {
+        run.id == id && run.stage == Stage::Committing && run.pending.contains(label)
+    }) {
+        return false;
+    }
+    *slot = None;
+    true
+}
+
 fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
     let Some(run) = slot.as_mut() else {
         return Next::Wait;
@@ -451,8 +461,9 @@ pub fn quit_ready(app: AppHandle, window: WebviewWindow, id: u32, persisted: boo
     // failed persist did before the handshake existed. The windows that did
     // save are staying too, so take them back out of quitting.
     if !persisted {
-        clear_run(id);
-        let _ = app.emit(QUIT_ABORTED, ());
+        if abort_commit(&mut QUIT_RUN.lock().unwrap(), id, window.label()) {
+            let _ = app.emit(QUIT_ABORTED, id);
+        }
         return;
     }
     let next = record_ready(&mut QUIT_RUN.lock().unwrap(), id, window.label());
@@ -739,6 +750,17 @@ mod tests {
         assert!(open_commit(&mut slot, 1, labels));
         assert_eq!(record_ready(&mut slot, 1, "main"), Next::Wait);
         assert_eq!(record_ready(&mut slot, 1, "window-2"), Next::Exit);
+    }
+
+    #[test]
+    fn stale_or_unknown_failed_quit_cannot_abort_current_commit() {
+        let mut slot = polling(&["main"]);
+        assert!(open_commit(&mut slot, 1, vec!["main".to_string()]));
+        assert!(!abort_commit(&mut slot, 2, "main"));
+        assert!(!abort_commit(&mut slot, 1, "other"));
+        assert_eq!(slot.as_ref().map(|run| run.id), Some(1));
+        assert!(abort_commit(&mut slot, 1, "main"));
+        assert!(slot.is_none());
     }
 
     #[test]

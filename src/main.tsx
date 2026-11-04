@@ -87,8 +87,8 @@ void getCurrentWebviewWindow().listen<{ id: number; inFlight: number }>(
 void listen<number>("quit_commit", (event) => {
   void commitQuit(event.payload);
 });
-void listen("quit_aborted", () => {
-  abortQuit();
+void listen<number>("quit_aborted", (event) => {
+  abortQuit(event.payload);
 });
 
 void Promise.all([

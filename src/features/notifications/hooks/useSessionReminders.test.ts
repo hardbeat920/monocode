@@ -340,3 +340,13 @@ describe("saved session reminders", () => {
     root = createRoot(container);
   });
 });
+
+it("keeps a reminder when opening its session is cancelled", async () => {
+  onOpen.mockRejectedValueOnce(new Error("Opening was cancelled"));
+  await mount();
+  await act(async () => api.open(reminder));
+  expect(stored).toEqual([reminder]);
+  expect(
+    invoke.mock.calls.some(([command]) => command === "reminder_clear"),
+  ).toBe(false);
+});

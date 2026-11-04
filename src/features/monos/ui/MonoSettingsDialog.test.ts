@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, useState } from "react";
-import { useMonoSettingsNavigation } from "../../../app/hooks/useMonoSettingsNavigation";
+import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -273,250 +272,38 @@ it("preserves edits made while loading the conflicting version", async () => {
   expect(dialog().textContent).toContain("changed this while you were editing");
 });
 
-function NavigationHarness({
-  load,
-}: {
-  load: (id: string) => Promise<string | undefined>;
-}) {
-  const [view, setView] = useState("mono-1");
-  const {
-    monoSettingsFor,
-    closeMonoSettings,
-    monoSettingsSection,
-    leaveMonoSettings,
-    monoViewRequest,
-    openMono,
-    leaveMonoForAction,
-  } = useMonoSettingsNavigation();
-  const target = monoSettingsFor ?? "mono-1";
-  return createElement(
-    "div",
-    null,
-    createElement("span", { "data-view": view }),
-    createElement(
-      "button",
-      {
-        onClick: () =>
-          void openMono("mono-2", "soul", () => load("mono-2"), setView),
-      },
-      "Open other",
-    ),
-    createElement(
-      "button",
-      {
-        onClick: () => {
-          monoViewRequest.current++;
-          setView("workspace");
-        },
-      },
-      "Cancel navigation",
-    ),
-    createElement(
-      "button",
-      { onClick: () => leaveMonoForAction(() => setView("workspace")) },
-      "Open workspace",
-    ),
-    createElement(MonoSettingsDialog, {
-      key: target,
-      monoId: target,
-      agent: { name: target, mascot: "cat", color: "#9c9", projects: [] },
-      status: "idle",
-      cwd: "/home",
-      harness: "codex",
-      model: "codex:gpt-5.4",
-      modelSettings: {},
-      runtimeMode: "auto",
-      initialSection: monoSettingsFor ? monoSettingsSection : "soul",
-      leaveRef: leaveMonoSettings,
-      onModelChange: vi.fn(),
-      onModelSettingsChange: vi.fn(),
-      onRuntimeModeChange: vi.fn(),
-      onClose: closeMonoSettings,
-    }),
-  );
-}
-
-function editSoul(value: string) {
-  const editor = document.querySelector<HTMLTextAreaElement>(
-    '[aria-label="mono-1 soul"]',
-  )!;
-  Object.getOwnPropertyDescriptor(
-    HTMLTextAreaElement.prototype,
-    "value",
-  )!.set!.call(editor, value);
-  editor.dispatchEvent(new Event("input", { bubbles: true }));
-  return editor;
-}
-
-it("does not open settings after Mono navigation is cancelled or fails", async () => {
-  let resolve!: (value: string | undefined) => void;
-  const load = vi.fn(
-    () =>
-      new Promise<string | undefined>((done) => {
-        resolve = done;
-      }),
-  );
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  await act(async () => button("Open other").click());
-  act(() => button("Cancel navigation").click());
-  await act(async () => resolve("mono-2"));
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("workspace");
-  expect(document.querySelector('[aria-label="mono-1 soul"]')).not.toBeNull();
-  await act(async () => button("Open other").click());
-  await act(async () => resolve(undefined));
-  expect(document.querySelector('[aria-label="mono-1 soul"]')).not.toBeNull();
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("workspace");
-});
-
-it("waits for the old soul save before replacing settings, preserving further edits", async () => {
-  let resolve!: (hash: string) => void;
+it("keeps a conflicting draft if the file changes again when keeping mine", async () => {
+  const { MonoFileConflict } = await import("../model/monoFiles");
   saveFile
-    .mockReturnValueOnce(
-      new Promise<string>((done) => {
-        resolve = done;
-      }),
-    )
-    .mockResolvedValueOnce("second-hash");
-  const load = vi.fn(async (id: string) => id);
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  act(() => editSoul("first draft"));
-  await act(async () => button("Open other").click());
-  expect(load).not.toHaveBeenCalled();
-  act(() => editSoul("newer draft"));
-  await act(async () => resolve("first-hash"));
-  expect(saveFile).toHaveBeenNthCalledWith(
-    2,
-    "mono-1",
-    "soul",
-    "newer draft",
-    "first-hash",
-  );
-  expect(load).toHaveBeenCalledWith("mono-2");
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("mono-2");
-  expect(document.querySelector('[aria-label="mono-2 soul"]')).not.toBeNull();
-});
-
-it("keeps the old editor when its save fails, and allows leaving after reverting", async () => {
-  saveFile.mockRejectedValueOnce(new Error("disk error"));
-  const load = vi.fn(async (id: string) => id);
-  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  act(() => editSoul("draft"));
-  await act(async () => button("Open other").click());
-  expect(load).not.toHaveBeenCalled();
-  expect(
-    document.querySelector<HTMLTextAreaElement>('[aria-label="mono-1 soul"]')
-      ?.value,
-  ).toBe("draft");
-  act(() => editSoul("# Soul"));
-  await act(async () => button("Open other").click());
-  expect(load).toHaveBeenCalledWith("mono-2");
-  expect(document.querySelector('[aria-label="mono-2 soul"]')).not.toBeNull();
-  warning.mockRestore();
-});
-
-it("continues navigation if a pending failed save was reverted", async () => {
-  let reject!: (error: Error) => void;
-  saveFile.mockReturnValueOnce(
-    new Promise((_resolve, fail) => {
-      reject = fail;
-    }),
-  );
-  const load = vi.fn(async (id: string) => id);
-  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  act(() => editSoul("draft"));
-  await act(async () => button("Open other").click());
-  act(() => editSoul("# Soul"));
-  await act(async () => reject(new Error("disk error")));
-  expect(load).toHaveBeenCalledWith("mono-2");
-  expect(document.querySelector('[aria-label="mono-2 soul"]')).not.toBeNull();
-  warning.mockRestore();
-});
-
-it("waits before workspace navigation and keeps the view on save failure", async () => {
-  let reject!: (error: Error) => void;
-  saveFile.mockReturnValueOnce(
-    new Promise((_resolve, fail) => {
-      reject = fail;
-    }),
-  );
-  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load: async (id) => id })),
-  );
-  act(() => editSoul("draft"));
-  await act(async () => button("Open workspace").click());
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("mono-1");
-  await act(async () => reject(new Error("disk error")));
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("mono-1");
-  expect(
-    document.querySelector<HTMLTextAreaElement>('[aria-label="mono-1 soul"]')
-      ?.value,
-  ).toBe("draft");
-  warning.mockRestore();
-});
-
-it("saves edits made while the next Mono session loads before replacing the editor", async () => {
-  let resolve!: (value: string) => void;
-  const load = vi.fn(
-    () =>
-      new Promise<string>((done) => {
-        resolve = done;
-      }),
-  );
-  saveFile.mockResolvedValueOnce("updated-hash");
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  await act(async () => button("Open other").click());
-  act(() => editSoul("edit during load"));
-  await act(async () => resolve("mono-2"));
-  expect(saveFile).toHaveBeenCalledWith(
-    "mono-1",
-    "soul",
-    "edit during load",
-    "soul",
-  );
-  expect(document.querySelector('[aria-label="mono-2 soul"]')).not.toBeNull();
-});
-
-it("cancels a pending Mono navigation when settings are closed", async () => {
-  let resolve!: (value: string) => void;
-  const load = vi.fn(
-    () =>
-      new Promise<string>((done) => {
-        resolve = done;
-      }),
-  );
-  await act(async () =>
-    root.render(createElement(NavigationHarness, { load })),
-  );
-  await act(async () => button("Open other").click());
+    .mockRejectedValueOnce(new MonoFileConflict())
+    .mockRejectedValueOnce(new MonoFileConflict());
+  await render();
+  await act(async () => button("Soul", dialog()).click());
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Broski soul"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Draft");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await act(async () =>
     document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
   );
-  await act(async () => resolve("mono-2"));
-  expect(
-    container.querySelector("[data-view]")?.getAttribute("data-view"),
-  ).toBe("mono-1");
-  expect(document.querySelector('[aria-label="mono-2 soul"]')).toBeNull();
+  loadFiles.mockResolvedValueOnce({
+    ...loadedFiles,
+    soul: "# Their update",
+    soulHash: "fresh",
+  });
+  await act(async () => button("Keep mine", dialog()).click());
+  expect(saveFile).toHaveBeenLastCalledWith(
+    "mono-1",
+    "soul",
+    "# Draft",
+    "fresh",
+  );
+  expect(editor.value).toBe("# Draft");
+  expect(dialog().textContent).toContain("changed this while you were editing");
 });

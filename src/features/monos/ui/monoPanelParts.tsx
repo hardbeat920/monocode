@@ -381,12 +381,10 @@ export function FileField({
     const text = draftRef.current;
     const request = (async () => {
       try {
-        const next = await saveMonoFile(
-          monoId,
-          file,
-          text,
-          overwrite ? undefined : base.current.hash,
-        );
+        const expectedHash = overwrite
+          ? (await loadMonoFiles(monoId))[`${file}Hash`]
+          : base.current.hash;
+        const next = await saveMonoFile(monoId, file, text, expectedHash);
         base.current = { value: text, hash: next };
         blocked.current = false;
         setConflict(false);

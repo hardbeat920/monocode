@@ -1,4 +1,3 @@
-import { useMonoSettingsNavigation } from "./hooks/useMonoSettingsNavigation";
 import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { useMobileWorkspace } from "../features/mobile/hooks/useMobileWorkspace";
@@ -135,6 +134,7 @@ import {
   type MonoOverviewTab,
 } from "../features/monos/ui/MonoOverview";
 import { MonoSettingsDialog } from "../features/monos/ui/MonoSettingsDialog";
+import { MonoSoulDialog } from "../features/monos/ui/MonoSoulDialog";
 import { MonoActivityView } from "../features/monos/ui/MonoActivityView";
 import {
   launchedSessionState,
@@ -1180,7 +1180,72 @@ function Workspace({
   const monoOverviewTabRef = useRef(monoOverviewTab);
   monoOverviewTabRef.current = monoOverviewTab;
   // The Mono whose settings dialog is open; another Mono's view closes it.
-  const { monoSettingsFor, setMonoSettingsFor, closeMonoSettings, monoSettingsSection, leaveMonoSettings, monoViewRequest, openMono, leaveMonoForAction } = useMonoSettingsNavigation();
+  const [monoSettingsFor, setMonoSettingsFor] = useState<string | null>(null);
+  const [soulTarget, setSoulTarget] = useState<{
+    id: string;
+    agent: ReturnType<typeof monoLook>;
+  }>();
+  const saveSoul = useRef<() => Promise<boolean>>(null);
+  const soulRequest = useRef(0);
+  const soulExitCount = useRef(0);
+  const [soulFrozen, setSoulFrozen] = useState(false);
+  const beginSoulExit = useCallback(async (): Promise<(() => void) | null> => {
+    soulExitCount.current++;
+    soulRequest.current++;
+    flushSync(() => setSoulFrozen(true));
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      soulExitCount.current--;
+      if (!soulExitCount.current) setSoulFrozen(false);
+    };
+    try {
+      if (saveSoul.current && !(await saveSoul.current())) {
+        release();
+        return null;
+      }
+      return release;
+    } catch (error) {
+      release();
+      console.warn("Could not save the Mono's soul", error);
+      return null;
+    }
+  }, []);
+  const quitSoulRelease = useRef<(() => void) | null>(null);
+  const quitSoulRequest = useRef(0);
+  const quitSoulId = useRef<number | null>(null);
+  const beforeSoulQuit = useCallback(async (id: number) => {
+    const request = ++quitSoulRequest.current;
+    quitSoulId.current = id;
+    const pending = beginSoulExit();
+    quitSoulRelease.current?.();
+    quitSoulRelease.current = null;
+    const release = await pending;
+    if (!release) return false;
+    if (request !== quitSoulRequest.current) {
+      release();
+      return false;
+    }
+    quitSoulRelease.current = release;
+    return true;
+  }, [beginSoulExit]);
+  const abortSoulQuit = useCallback((id: number) => {
+    if (quitSoulId.current !== null && quitSoulId.current !== id) return;
+    quitSoulRequest.current++;
+    quitSoulRelease.current?.();
+    quitSoulRelease.current = null;
+    quitSoulId.current = null;
+  }, []);
+  const closeSoul = useCallback(() => {
+    if (soulExitCount.current) return;
+    const request = ++soulRequest.current;
+    void (async () => {
+      if (saveSoul.current && !(await saveSoul.current())) return;
+      if (!soulExitCount.current && request === soulRequest.current)
+        setSoulTarget(undefined);
+    })();
+  }, []);
   // A document opened from the chat shows on the overview's Documents tab,
   // the same page the tab opens it on.
   const onOpenMonoArtifact = useCallback((_sessionId: string, id: string) => {
@@ -1253,6 +1318,7 @@ function Workspace({
   );
   const monoViewIdRef = useRef(monoViewId);
   monoViewIdRef.current = monoViewId;
+  const monoViewRequest = useRef(0);
   const closeMonoView = useCallback(() => {
     monoViewRequest.current += 1;
     monoViewIdRef.current = null;
@@ -2495,46 +2561,52 @@ function Workspace({
       flushHarnessEvents,
       () => lastDockSideRef.current,
       keepWorkspaceTab,
+      beforeSoulQuit,
+      abortSoulQuit,
     );
     void getCurrentWindow()
       .onCloseRequested(async (event) => {
         // Listening here makes close our job. Letting the default path run
         // calls JS `window.destroy`, which Tauri denies without a permission.
         event.preventDefault();
-        if (
-          IS_MAC &&
-          (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
-        ) {
-          flushHarnessEvents();
-          void persistLiveTranscripts(sessionsRef.current);
-          void hideCurrentWindow();
-          return;
-        }
-        const toTray = loadCloseToTray();
-        if (hasInFlightSessions(sessionsRef.current)) {
-          flushHarnessEvents();
-          if (!toTray && !IS_MAC) {
-            void closeBusyWindow();
+        const releaseSoul = await beginSoulExit();
+        if (!releaseSoul) return;
+        try {
+          if (
+            IS_MAC &&
+            (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
+          ) {
+            flushHarnessEvents();
+            void persistLiveTranscripts(sessionsRef.current);
+            await hideCurrentWindow();
             return;
           }
-          // Not `persistQuitState`: that marks the live turns interrupted.
-          void persistLiveTranscripts(sessionsRef.current);
-          void hideCurrentWindow();
-          return;
+          const toTray = loadCloseToTray();
+          if (hasInFlightSessions(sessionsRef.current)) {
+            flushHarnessEvents();
+            if (!toTray && !IS_MAC) {
+              await closeBusyWindow();
+              return;
+            }
+            // Not `persistQuitState`: that marks the live turns interrupted.
+            void persistLiveTranscripts(sessionsRef.current);
+            await hideCurrentWindow();
+            return;
+          }
+          await persistQuitState(
+            sessionsRef.current,
+            tabsRef.current,
+            activeTabIdRef.current,
+            projectCwdRef.current,
+            readProjectReturnMemory(),
+            "unload",
+            projectTerminalsRef.current,
+            lastDockSideRef.current ?? undefined,
+            keepWorkspaceTab,
+          ).finally(() => (toTray ? hideCurrentWindow() : closeCurrentWindow()));
+        } finally {
+          releaseSoul();
         }
-        void persistQuitState(
-          sessionsRef.current,
-          tabsRef.current,
-          activeTabIdRef.current,
-          projectCwdRef.current,
-          readProjectReturnMemory(),
-          "unload",
-          projectTerminalsRef.current,
-          lastDockSideRef.current ?? undefined,
-          keepWorkspaceTab,
-        ).finally(() => {
-          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
-        });
       })
       .then((fn) => {
         unlistenClose = fn;
@@ -5060,53 +5132,47 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
-    async (monoId: string, section?: "general" | "soul") => {
-      return openMono(
-        monoId,
-        section,
-        () => {
-          workspaceNavigation.cancel();
-          lastMonoIdRef.current = monoId;
-          return ensureMonoSession(monoId, {
-            home: homeDir,
-            load: ensureOpenSession,
-            create: (path) => newDefaultSession(path),
-            add: (created) => {
-              sessionsRef.current = [...sessionsRef.current, created];
-              setSessions(sessionsRef.current);
-            },
-          });
+    async (monoId: string) => {
+      setMonoActivity(null);
+      workspaceNavigation.cancel();
+      const request = ++monoViewRequest.current;
+      lastMonoIdRef.current = monoId;
+      const session = await ensureMonoSession(monoId, {
+        home: homeDir,
+        load: ensureOpenSession,
+        create: (path) => newDefaultSession(path),
+        add: (created) => {
+          sessionsRef.current = [...sessionsRef.current, created];
+          setSessions(sessionsRef.current);
         },
-        (session) => {
-          setMonoActivity(null);
-          // What the last Mono had open over its overview is its own; another
-          // Mono opens on its list.
-          if (monoViewIdRef.current !== session.id) {
-            setMonoShownSession(null);
-            setMonoShownSessionFocused(false);
-            setMonoOverviewDocument(null);
-          }
-          monoViewIdRef.current = session.id;
-          saveOpenMono(monoId);
-          // App views close with the Mono's arrival, not before the await, so
-          // the workspace tab never shows between them.
-          setSearchViewOpen(false);
-          setInboxViewOpen(false);
-          setNotesViewOpen(false);
-          setAutomationsViewOpen(false);
-          setMonoViewId(session.id);
-          if (insetLayoutRef.current) {
-            setOpenMonoTabs((current) =>
-              current.includes(monoId) ? current : [...current, monoId],
-            );
-          }
-          setProjectTerminalFocused(false);
-          setComposerFocused(true);
-          setComposerFocusToken((token) => token + 1);
-        },
-      );
+      });
+      if (!session || request !== monoViewRequest.current) return;
+      // What the last Mono had open over its overview is its own; another
+      // Mono opens on its list.
+      if (monoViewIdRef.current !== session.id) {
+        setMonoShownSession(null);
+        setMonoShownSessionFocused(false);
+        setMonoOverviewDocument(null);
+      }
+      monoViewIdRef.current = session.id;
+      saveOpenMono(monoId);
+      // App views close with the Mono's arrival, not before the await, so
+      // the workspace tab never shows between them.
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      setMonoViewId(session.id);
+      if (insetLayoutRef.current) {
+        setOpenMonoTabs((current) =>
+          current.includes(monoId) ? current : [...current, monoId],
+        );
+      }
+      setProjectTerminalFocused(false);
+      setComposerFocused(true);
+      setComposerFocusToken((token) => token + 1);
     },
-    [ensureOpenSession, openMono, workspaceNavigation.cancel],
+    [ensureOpenSession, workspaceNavigation.cancel],
   );
 
   // A Mono open when the app last closed opens again; a moved window keeps
@@ -5137,11 +5203,10 @@ function Workspace({
 
   /** A new Mono opens straight away, ready to be told what it works on. */
   const onCreateMono = useCallback((projects?: readonly string[]) => {
-    leaveMonoForAction(() => {
-      const monoId = createMono(projects).id;
-      void onOpenMono(monoId, "general");
-    });
-  }, [leaveMonoForAction, onOpenMono]);
+    const monoId = createMono(projects).id;
+    setMonoSettingsFor(monoId);
+    void onOpenMono(monoId);
+  }, [onOpenMono]);
 
   const onResetMono = useCallback(
     async (sessionId: string): Promise<void> => {
@@ -6085,12 +6150,6 @@ function Workspace({
         { title: "MonoCode", kind: "warning" },
       );
       if (!confirmed) return;
-      const request = ++monoViewRequest.current;
-      if (
-        !(await (leaveMonoSettings.current?.() ?? Promise.resolve(true))) ||
-        request !== monoViewRequest.current
-      ) return;
-      setMonoSettingsFor(null);
       if (mono.sessionId) {
         if (monoViewIdRef.current === mono.sessionId) closeMonoView();
         if (
@@ -12178,7 +12237,14 @@ function Workspace({
   const onReload = useCallback(() => {
     void (async () => {
       if (!(await confirmReload(dirtyFilesRef.current.size > 0))) return;
-      window.location.reload();
+      const releaseSoul = await beginSoulExit();
+      if (!releaseSoul) return;
+      try {
+        window.location.reload();
+      } catch (error) {
+        releaseSoul();
+        throw error;
+      }
     })();
   }, []);
 
@@ -12646,29 +12712,26 @@ function Workspace({
         void onOpenMono(monoId);
         return;
       }
-      leaveMonoForAction(() => {
-        const view = appViewForTab(id);
-        if (view) {
-          const open = {
-            search: onOpenSearch,
-            inbox: onOpenInbox,
-            notes: onOpenNotes,
-            automations: onOpenAutomations,
-          };
-          open[view]();
-          return;
-        }
-        setSearchViewOpen(false);
-        setSettingsOpen(false);
-        setInboxViewOpen(false);
-        setNotesViewOpen(false);
-        setAutomationsViewOpen(false);
-        activateTab(id);
-      });
+      const view = appViewForTab(id);
+      if (view) {
+        const open = {
+          search: onOpenSearch,
+          inbox: onOpenInbox,
+          notes: onOpenNotes,
+          automations: onOpenAutomations,
+        };
+        open[view]();
+        return;
+      }
+      setSearchViewOpen(false);
+      setSettingsOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      activateTab(id);
     },
     [
       activateTab,
-      leaveMonoForAction,
       onOpenMono,
       onOpenSearch,
       onOpenInbox,
@@ -12954,11 +13017,8 @@ function Workspace({
     if (name === debounce.current.name && now - debounce.current.at < 80)
       return;
     debounce.current = { name, at: now };
-    if (
-      ["toggle_sidebar", "toggle_session_sidebar", "new_window"].includes(name)
-    ) fn();
-    else leaveMonoForAction(fn);
-  }, [leaveMonoForAction]);
+    fn();
+  }, []);
 
   useEffect(() => {
     if (!IS_MAC) return;
@@ -13234,23 +13294,25 @@ function Workspace({
       listen("toggle_session_sidebar", () =>
         run("toggle_session_sidebar", actions.current.onToggleSessionSidebar),
       ),
-      listen("open_project", () => run("open_project", () => void actions.current.pickProject())),
+      listen("open_project", () => {
+        void actions.current.pickProject();
+      }),
       listen("go_to_file", () => run("go_to_file", actions.current.onGoToFile)),
       listen("open_command_palette", () =>
         run("open_command_palette", actions.current.onOpenCommandPalette),
       ),
       listen("reload", () => run("reload", actions.current.onReload)),
-      listen("open_search", () => run("open_search", actions.current.onOpenSearch)),
-      listen("open_inbox", () => run("open_inbox", actions.current.onOpenInbox)),
-      listen("open_notes", () => run("open_notes", actions.current.onOpenNotes)),
-      listen("open_settings", () => run("open_settings", () => actions.current.openSettings())),
+      listen("open_search", () => actions.current.onOpenSearch()),
+      listen("open_inbox", () => actions.current.onOpenInbox()),
+      listen("open_notes", () => actions.current.onOpenNotes()),
+      listen("open_settings", () => actions.current.openSettings()),
       listen("check_for_updates", () => {
         void runUpdateFlow(true);
       }),
-      listen("sidebar_opacity", () =>
-        run("open_settings", () => actions.current.openSettings("appearance")),
-      ),
-      listen("find_in_project", () => run("find_in_project", actions.current.onFindInProject)),
+      listen("sidebar_opacity", () => {
+        actions.current.openSettings("appearance");
+      }),
+      listen("find_in_project", () => actions.current.onFindInProject()),
       listen("find", () => {
         openFindInActiveEditor();
       }),
@@ -13266,7 +13328,7 @@ function Workspace({
           .unminimize()
           .then(() => win.setFocus())
           .catch(() => {});
-        run("open_approval", () => actions.current.onOpenApprovalSession(sessionId));
+        actions.current.onOpenApprovalSession(sessionId);
       }),
       listen("zoom_in", () => {
         const next = zoomInUiScale(loadUiScale());
@@ -13482,11 +13544,9 @@ function Workspace({
     approval: onApproval,
     question: onQuestionReply,
     questionInteraction: onQuestionInteraction,
-    reveal: async (monoId) => {
-      await onOpenMono(monoId);
-    },
+    reveal: onOpenMono,
     openArtifact: async (monoId, id) => {
-      if (!(await onOpenMono(monoId))) return;
+      await onOpenMono(monoId);
       const sessionId = findMono(monoId)?.sessionId;
       if (sessionId) onOpenMonoArtifact(sessionId, id);
     },
@@ -13752,36 +13812,33 @@ function Workspace({
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
-  const settingsMono = monoSettingsFor ? findMono(monoSettingsFor) : undefined;
-  const settingsSession = settingsMono?.sessionId
-    ? sessions.find((session) => session.id === settingsMono.sessionId)
-    : undefined;
   const monoSettingsDialog =
-    settingsMono && settingsSession ? (
+    monoCovers &&
+    monoViewMono &&
+    monoViewSession &&
+    monoSettingsFor === monoViewMono.id ? (
       <MonoSettingsDialog
-        key={settingsMono.id}
-        monoId={settingsMono.id}
-        initialSection={monoSettingsSection}
-        leaveRef={leaveMonoSettings}
-        agent={monoLook(settingsMono)}
-        status={monoState(settingsSession).status}
-        cwd={settingsSession.cwd}
-        harness={settingsSession.harness}
-        model={settingsSession.model}
-        modelSettings={settingsSession.modelSettings}
-        runtimeMode={settingsSession.runtimeMode}
-        busy={!!settingsSession.busy}
+        key={monoViewMono.id}
+        monoId={monoViewMono.id}
+        agent={monoLook(monoViewMono)}
+        status={monoState(monoViewSession).status}
+        cwd={monoViewSession.cwd}
+        harness={monoViewSession.harness}
+        model={monoViewSession.model}
+        modelSettings={monoViewSession.modelSettings}
+        runtimeMode={monoViewSession.runtimeMode}
+        busy={!!monoViewSession.busy}
         onModelChange={(harness, model) =>
-          onModelChange(settingsSession.id, harness, model)
+          onModelChange(monoViewSession.id, harness, model)
         }
         onModelSettingsChange={(settings) =>
-          onModelSettingsChange(settingsSession.id, settings)
+          onModelSettingsChange(monoViewSession.id, settings)
         }
         onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(settingsSession.id, mode)
+          onRuntimeModeChange(monoViewSession.id, mode)
         }
-        onReset={() => onResetMono(settingsSession.id)}
-        onClose={closeMonoSettings}
+        onReset={() => onResetMono(monoViewSession.id)}
+        onClose={() => setMonoSettingsFor(null)}
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -13810,12 +13867,18 @@ function Workspace({
     (monoId: string) => void onOpenMono(monoId),
     [onOpenMono],
   );
-  const onEditRailMonoSoul = useCallback(
-    (monoId: string) => {
-      void onOpenMono(monoId, "soul");
-    },
-    [onOpenMono],
-  );
+  const onEditRailMonoSoul = useCallback((monoId: string) => {
+    if (soulExitCount.current) return;
+    const mono = findMono(monoId);
+    if (!mono) return;
+    const target = { id: monoId, agent: monoLook(mono) };
+    const request = ++soulRequest.current;
+    void (async () => {
+      if (saveSoul.current && !(await saveSoul.current())) return;
+      if (!soulExitCount.current && request === soulRequest.current)
+        setSoulTarget(target);
+    })();
+  }, []);
   const onDeleteRailMono = useCallback(
     (monoId: string) => void onDeleteMono(monoId),
     [onDeleteMono],
@@ -13949,9 +14012,7 @@ function Workspace({
   );
   const onToggleMonoOverview = () => setMonoOverviewOpen(!monoOverviewOpen);
   const onOpenMonoViewSettings = monoViewMono
-    ? () => {
-        void onOpenMono(monoViewMono.id, "general");
-      }
+    ? () => setMonoSettingsFor(monoViewMono.id)
     : undefined;
   // A new session takes over from a Mono in view.
   const onNewFromTitleBar = () => {
@@ -14752,7 +14813,7 @@ function Workspace({
               initialQuery={filePickerInitialQuery}
               onOpenFile={onOpenFile}
               onRunAction={(id) => {
-                if (id === "reload") run("reload", actions.current.onReload);
+                if (id === "reload") actions.current.onReload();
               }}
               onClose={() => setFilePickerOpen(false)}
             />
@@ -14834,6 +14895,17 @@ function Workspace({
             />
           ) : null}
         </div>
+        {soulTarget ? (
+          <MonoSoulDialog
+            key={soulTarget.id}
+            monoId={soulTarget.id}
+            agent={soulTarget.agent}
+            status={monoRail.states.get(soulTarget.id)?.status ?? "idle"}
+            saveRef={saveSoul}
+            frozen={soulFrozen}
+            onClose={closeSoul}
+          />
+        ) : null}
         <TranscriptPoolOutlet pool={transcriptPool} />
       </OrchestrationWorkers.Provider>
     </OrchestrationActions.Provider>

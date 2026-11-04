@@ -401,6 +401,7 @@ function FactEditor({
 export function useMonoFiles(
   monoId: string,
   status: MonoState["status"],
+  onLoadError?: (failed: boolean) => void,
 ): MonoFiles | undefined {
   const [files, setFiles] = useState<MonoFiles>();
   const working = status === "working";
@@ -409,11 +410,15 @@ export function useMonoFiles(
     const refresh = () => {
       void loadMonoFiles(monoId)
         .then((next) => {
-          if (live) setFiles(next);
+          if (live) {
+            setFiles(next);
+            onLoadError?.(false);
+          }
         })
-        .catch((error) =>
-          console.warn("Could not load the Mono's files", error),
-        );
+        .catch((error) => {
+          if (live) onLoadError?.(true);
+          console.warn("Could not load the Mono's files", error);
+        });
     };
     refresh();
     const stop = subscribeMonoFiles(refresh);
@@ -424,6 +429,6 @@ export function useMonoFiles(
       window.removeEventListener("focus", refresh);
     };
     // A turn ending is when the agent may have written to its memory.
-  }, [monoId, working]);
+  }, [monoId, working, onLoadError]);
   return files;
 }

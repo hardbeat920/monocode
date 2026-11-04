@@ -61,6 +61,7 @@ let resumedPromise: Promise<ResumedWorkspace | null> | null = null;
 let bootPromise: Promise<BootWorkspace> | null = null;
 let quitting = false;
 let quitDialogOpen = false;
+let activeQuitId: number | undefined;
 let bootingResumed: ResumedWorkspace | null = null;
 let liveWorkspace: {
   sessions: () => Session[];
@@ -72,6 +73,8 @@ let liveWorkspace: {
   lastDockSide: () => DockSide | null;
   keepTab?: (tab: WorkspaceTab) => boolean;
   flush: () => void;
+  beforeQuit?: (id: number) => Promise<boolean>;
+  abortQuit?: (id: number) => void;
 } | null = null;
 
 export function isAppQuitting(): boolean {
@@ -88,6 +91,8 @@ export function setQuitWorkspace(
   flush: () => void,
   lastDockSide: () => DockSide | null = () => null,
   keepTab?: (tab: WorkspaceTab) => boolean,
+  beforeQuit?: (id: number) => Promise<boolean>,
+  abortQuit?: (id: number) => void,
 ): () => void {
   liveWorkspace = {
     sessions,
@@ -99,6 +104,8 @@ export function setQuitWorkspace(
     lastDockSide,
     keepTab,
     flush,
+    beforeQuit,
+    abortQuit,
   };
   bootingResumed = null;
   return () => {
@@ -110,11 +117,14 @@ export function setQuitWorkspace(
  * Persist this window for a quit the coordinator has already confirmed.
  * Exiting is `confirm_quit`'s job, once every window has reported ready.
  */
-export async function handleQuitRequested(): Promise<boolean> {
+export async function handleQuitRequested(id = 0): Promise<boolean> {
+  activeQuitId = id;
   if (liveWorkspace) {
-    liveWorkspace.flush();
-    quitting = true;
     try {
+      if (liveWorkspace.beforeQuit && !(await liveWorkspace.beforeQuit(id))) return false;
+      if (activeQuitId !== id) return false;
+      liveWorkspace.flush();
+      quitting = true;
       await persistQuitState(
         liveWorkspace.sessions(),
         liveWorkspace.tabs(),
@@ -126,21 +136,25 @@ export async function handleQuitRequested(): Promise<boolean> {
         liveWorkspace.lastDockSide() ?? undefined,
         liveWorkspace.keepTab,
       );
-      return true;
+      return activeQuitId === id;
     } catch {
-      quitting = false;
+      if (activeQuitId === id) {
+        quitting = false;
+        liveWorkspace?.abortQuit?.(id);
+      }
       return false;
     }
   }
   const { resumed } = await loadBootWorkspace();
+  if (activeQuitId !== id) return false;
   const pending = resumed ?? bootingResumed;
   quitting = true;
   if (!pending) return true;
   try {
     await persistBootingResume(pending);
-    return true;
+    return activeQuitId === id;
   } catch {
-    quitting = false;
+    if (activeQuitId === id) quitting = false;
     return false;
   }
 }
@@ -181,7 +195,7 @@ export async function askQuitConfirmation(
 }
 
 export async function commitQuit(id: number): Promise<void> {
-  const persisted = await handleQuitRequested();
+  const persisted = await handleQuitRequested(id);
   await invoke("quit_ready", { id, persisted }).catch(() => undefined);
 }
 
@@ -189,8 +203,11 @@ export async function commitQuit(id: number): Promise<void> {
  * A quit that stopped part-way because another window could not save. This
  * window is staying open, so it must go back to persisting on unload.
  */
-export function abortQuit(): void {
+export function abortQuit(id = activeQuitId): void {
+  if (id === undefined || id !== activeQuitId) return;
+  activeQuitId = undefined;
   quitting = false;
+  liveWorkspace?.abortQuit?.(id);
 }
 
 /** Confirm and stop this window's work without terminating other windows. */
