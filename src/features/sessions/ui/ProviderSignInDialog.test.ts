@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // Keep this as .ts because the project test glob intentionally excludes .test.tsx.
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,6 +26,9 @@ const clipboard = vi.hoisted(() => ({
 vi.mock("../../../platform/tauri/clipboard", () => clipboard);
 
 import { ProviderSignInDialog } from "./ProviderSignInDialog";
+import { useProviderSignInRequestGuard } from "../../../app/hooks/useProviderSignInRequestGuard";
+import { newSession } from "../model/session";
+import { withUsageLimitAccount } from "../model/usageLimit";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -59,6 +62,49 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("ProviderSignInDialog", () => {
+  it("closes and cancels the old dialog when a usage-limit account switch keeps the session", async () => {
+    let switchAccount!: () => void;
+    auth.loginHarness.mockImplementation(
+      (_harness, _account, options) =>
+        new Promise<void>((_resolve, reject) =>
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("Sign-in cancelled.")),
+          ),
+        ),
+    );
+    function Workspace() {
+      const [active, setActive] = useState(() => ({
+        ...newSession("claude", "/repo"),
+        id: "active-session",
+        providerAccountId: "account-old",
+        usageLimit: {},
+      }));
+      const [request, setRequest] = useState({
+        sessionId: active.id,
+        providerAccountId: active.providerAccountId,
+      } as { sessionId: string; providerAccountId?: string } | null);
+      useProviderSignInRequestGuard(active, request, setRequest);
+      switchAccount = () =>
+        setActive((current) =>
+          withUsageLimitAccount(current, "account-new", true),
+        );
+      return request
+        ? createElement(ProviderSignInDialog, {
+            harness: "claude",
+            providerAccountId: request.providerAccountId,
+            onClose: () => setRequest(null),
+          })
+        : null;
+    }
+    act(() => root.render(createElement(Workspace)));
+    act(() => button("Sign in to Claude Code").click());
+    const signal = auth.loginHarness.mock.calls[0]?.[2]?.signal;
+    expect(signal?.aborted).toBe(false);
+    await act(async () => switchAccount());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("launches provider login and offers a clear continuation state", async () => {
     const close = vi.fn();
     auth.loginHarness.mockResolvedValue();

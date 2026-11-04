@@ -74,6 +74,20 @@ export function loginHarness(
     return Promise.reject(new Error("Sign-in cancelled."));
   const key = loginKey(harness, accountId);
   let run = inflight.get(key);
+  if (run?.controller.signal.aborted) {
+    const cleanup = run.promise.catch(() => undefined);
+    if (!options?.signal)
+      return cleanup.then(() => loginHarness(harness, accountId, options));
+    const signal = options.signal;
+    return new Promise<void>((resolve, reject) => {
+      const abort = () => reject(new Error("Sign-in cancelled."));
+      signal.addEventListener("abort", abort, { once: true });
+      void cleanup.then(() => {
+        signal.removeEventListener("abort", abort);
+        if (!signal.aborted) resolve(loginHarness(harness, accountId, options));
+      });
+    });
+  }
   if (!run) {
     const next: LoginRun = {
       promise: Promise.resolve(),

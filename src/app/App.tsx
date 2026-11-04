@@ -28,6 +28,7 @@ import {
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
+import { useProviderSignInRequestGuard } from "./hooks/useProviderSignInRequestGuard";
 import { HarnessEventQueue } from "./model/harnessFlush";
 import { noteStreamApplied } from "../features/sessions/model/streamingPerformance";
 import { updateSessionState } from "./model/sessionState";
@@ -2292,18 +2293,7 @@ function Workspace({
     seenProviderSignInRequests.add(activeProviderSignInRequest.key);
     setProviderSignInRequest(activeProviderSignInRequest);
   }, [activeProviderSignInRequest, seenProviderSignInRequests]);
-  useEffect(() => {
-    if (
-      providerSignInRequest &&
-      (active?.id !== providerSignInRequest.sessionId ||
-        !sameProviderAccountId(
-          active?.providerAccountId,
-          providerSignInRequest.providerAccountId,
-        ))
-    ) {
-      setProviderSignInRequest(null);
-    }
-  }, [active?.id, providerSignInRequest]);
+  useProviderSignInRequestGuard(active, providerSignInRequest, setProviderSignInRequest);
   const runningTerminals = useMemo(() => {
     const files: FilePaneTab[] = [];
     const dock = findProjectTerminal(projectTerminals, projectCwd);
