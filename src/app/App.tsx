@@ -2293,7 +2293,11 @@ function Workspace({
     seenProviderSignInRequests.add(activeProviderSignInRequest.key);
     setProviderSignInRequest(activeProviderSignInRequest);
   }, [activeProviderSignInRequest, seenProviderSignInRequests]);
-  useProviderSignInRequestGuard(active, providerSignInRequest, setProviderSignInRequest);
+  useProviderSignInRequestGuard(
+    active,
+    providerSignInRequest,
+    setProviderSignInRequest,
+  );
   const runningTerminals = useMemo(() => {
     const files: FilePaneTab[] = [];
     const dock = findProjectTerminal(projectTerminals, projectCwd);
