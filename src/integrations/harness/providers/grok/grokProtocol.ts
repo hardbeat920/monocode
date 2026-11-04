@@ -3,6 +3,7 @@ import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../f
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
 import { acpAgentInfo } from "../../core/acpSubagents";
+import { aggregateModelCalls, withLiveContext } from "../../core/contextLevel";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 import type { UserQuestion, UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
 import { questionsFromUnknown, selectedAnswerLabels } from "../../../../features/sessions/model/userQuestion";
@@ -300,6 +301,10 @@ export function planFromExitPlan(params: unknown): string {
 
 export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
   const rec = asRecord(params);
+  return withLiveContext(rec, mapAcpUpdate(rec));
+}
+
+function mapAcpUpdate(rec: Record<string, unknown> | null): HarnessEvent[] {
   const update = asRecord(rec?.update) ?? rec;
   if (!update) return [];
   const kind = String(
@@ -694,17 +699,21 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
     asRecord(update.token_usage) ??
     (hasUsageFields(update) ? update : null);
   if (!usage) return [];
-  const used =
-    numberField(usage, "totalTokens") ??
-    numberField(usage, "used") ??
-    numberField(usage, "usedTokens") ??
-    numberField(usage, "used_tokens") ??
-    sumNumbers(usage, [
-      "inputTokens",
-      "outputTokens",
-      "input_tokens",
-      "output_tokens",
-    ]);
+  // Several model calls in one turn sum to more than the window. The live
+  // envelope level is the occupancy; this object is only the turn's spend.
+  const aggregate = aggregateModelCalls(usage);
+  const used = aggregate
+    ? undefined
+    : numberField(usage, "totalTokens") ??
+      numberField(usage, "used") ??
+      numberField(usage, "usedTokens") ??
+      numberField(usage, "used_tokens") ??
+      sumNumbers(usage, [
+        "inputTokens",
+        "outputTokens",
+        "input_tokens",
+        "output_tokens",
+      ]);
   const window =
     numberField(usage, "window") ??
     numberField(usage, "size") ??
@@ -713,7 +722,7 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
     numberField(usage, "maxTokens") ??
     numberField(usage, "max_tokens");
   const events: HarnessEvent[] = [];
-  if (used != null || window != null) {
+  if (!aggregate && (used != null || window != null)) {
     events.push({
       type: "context",
       ...(used != null ? { used } : {}),
