@@ -890,3 +890,348 @@ fn checkpoints_scope_nested_workspaces_and_repositories_without_head() {
     f.store.undo("unborn", cwd, None).unwrap();
     assert!(!unborn.join("new.txt").exists());
 }
+
+fn private_index(f: &Fixture) -> PathBuf {
+    let repo = std::fs::canonicalize(&f.repo).unwrap();
+    f.store.index_path(&repo).unwrap()
+}
+
+fn git_in_index(repo: &Path, index: &Path, args: &[&str]) -> Vec<u8> {
+    let output = git_command(repo, args)
+        .env("GIT_INDEX_FILE", index)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+fn index_paths(repo: &Path, index: &Path) -> Vec<String> {
+    git_in_index(repo, index, &["ls-files", "-z", "--full-name"])
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).unwrap())
+        .collect()
+}
+
+fn set_past_mtime(path: &Path) {
+    let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(4 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+}
+
+#[cfg(unix)]
+fn count_clean_filter(repo: &Path, counter: &Path) {
+    let clean = format!("sh -c 'echo tick >> {}; cat'", counter.display());
+    run_git(repo, &["config", "filter.count.clean", &clean]).unwrap();
+    run_git(repo, &["config", "filter.count.required", "true"]).unwrap();
+    std::fs::write(repo.join(".gitattributes"), "*.big filter=count\n").unwrap();
+}
+
+#[cfg(unix)]
+fn ticks(counter: &Path) -> usize {
+    std::fs::read_to_string(counter)
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+#[test]
+fn reuses_one_private_index_and_its_stat_cache_across_turns() {
+    let f = Fixture::new();
+    let counter = f.dir.join("clean-count");
+    count_clean_filter(&f.repo, &counter);
+    f.write("big.big", &"a".repeat(200_000));
+    set_past_mtime(&f.repo.join("big.big"));
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let index = private_index(&f);
+    assert!(index.exists());
+    assert_eq!(ticks(&counter), 1);
+
+    // The same store and a reopened store both reuse the index, so an
+    // unchanged file is never hashed again.
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert_eq!(private_index(&f), index);
+    assert!(index.exists());
+    assert_eq!(ticks(&counter), 1);
+    let reopened = Store::new(f.dir.join("checkpoints"));
+    reopened.begin_turn("session", f.cwd(), "third").unwrap();
+    reopened.finish_turn("session", f.cwd(), "third").unwrap();
+    assert_eq!(ticks(&counter), 1);
+
+    // A modified file must be hashed again, and the result must stay exact.
+    reopened.begin_turn("session", f.cwd(), "fourth").unwrap();
+    f.write("big.big", &"b".repeat(200_001));
+    reopened.finish_turn("session", f.cwd(), "fourth").unwrap();
+    assert!(ticks(&counter) > 1);
+    assert_eq!(
+        reopened
+            .file_diff("session", f.cwd(), "big.big")
+            .unwrap()
+            .current,
+        "b".repeat(200_001)
+    );
+}
+
+#[test]
+fn records_committed_files_that_the_ignore_rules_match() {
+    let f = Fixture::new();
+    f.write(".gitignore", "*.log\n");
+    run_git(&f.repo, &["add", ".gitignore"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "ignore logs"]).unwrap();
+    f.write("debug.log", "first\n");
+    // The private index is built while the file is untracked, so it starts
+    // without the entry Git will later track through a forced commit.
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
+
+    run_git(&f.repo, &["add", "-f", "debug.log"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "track the log"]).unwrap();
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("debug.log", "first\nsecond\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(status.files.len(), 1);
+    assert_eq!(status.files[0].relative, "debug.log");
+    assert_eq!(
+        (status.files[0].additions, status.files[0].deletions),
+        (1, 0)
+    );
+    let diff = f.store.file_diff("session", f.cwd(), "debug.log").unwrap();
+    assert_eq!(diff.original, "first\n");
+    assert_eq!(diff.current, "first\nsecond\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn head_advances_and_branch_switches_reuse_the_index() {
+    let f = Fixture::new();
+    let counter = f.dir.join("clean-count");
+    count_clean_filter(&f.repo, &counter);
+    f.write("first.big", &"s".repeat(1000));
+    f.write("second.big", &"t".repeat(1000));
+    set_past_mtime(&f.repo.join("first.big"));
+    set_past_mtime(&f.repo.join("second.big"));
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert_eq!(ticks(&counter), 2);
+
+    // HEAD advances. A rebuilt index would hash the untouched files again.
+    f.write("a.txt", "committed on main\n");
+    run_git(&f.repo, &["add", "a.txt"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "commit one file"]).unwrap();
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("a.txt", "committed on main\nsecond\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert_eq!(ticks(&counter), 2);
+    let diff = f.store.file_diff("session", f.cwd(), "a.txt").unwrap();
+    assert_eq!(diff.original, "committed on main\n");
+    assert_eq!(diff.current, "committed on main\nsecond\n");
+
+    // A branch switch moves HEAD without invalidating the cached entries.
+    run_git(&f.repo, &["checkout", "-b", "side"]).unwrap();
+    f.store.begin_turn("session", f.cwd(), "third").unwrap();
+    f.write("a.txt", "on the side branch\n");
+    f.store.finish_turn("session", f.cwd(), "third").unwrap();
+    assert_eq!(ticks(&counter), 2);
+    let diff = f.store.file_diff("session", f.cwd(), "a.txt").unwrap();
+    // The new baseline carries the previous turn's pending file, so it starts
+    // from how it looked before the session changed it.
+    assert_eq!(diff.original, "committed on main\n");
+    assert_eq!(diff.current, "on the side branch\n");
+}
+
+#[test]
+fn drops_entries_that_become_ignored_before_recording() {
+    let f = Fixture::new();
+    f.write("debris/log.txt", "first\n");
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert!(index_paths(&f.repo, &private_index(&f)).contains(&"debris/log.txt".to_string()));
+    let previous = private_index(&f);
+
+    // The sensitive bytes go into the file the index already captured. A new
+    // path would be ignored by `add` either way, so it could not tell a prune
+    // that runs before the add from one that runs after it.
+    let secret = "SENSITIVE-4b0f8f0e\n";
+    f.write(".gitignore", "debris/\n");
+    f.write("debris/log.txt", secret);
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    // Counted before `private_index`: that helper cleans stale files itself, so
+    // asking it first cannot prove the capture rotated the old file away.
+    let left = std::fs::read_dir(f.store.root.join("indexes"))
+        .unwrap()
+        .flatten()
+        .count();
+    assert_eq!(left, 1, "{previous:?} should have been rotated away");
+    // The rule set rotates the index instead of inheriting entries it excludes.
+    assert_ne!(private_index(&f), previous);
+    let rotated = private_index(&f);
+    let paths = index_paths(&f.repo, &private_index(&f));
+    assert!(!paths.contains(&"debris/log.txt".to_string()));
+    // Rewriting the same rule bytes keeps the cache; only content rotates it.
+    f.write(".gitignore", "debris/\n");
+    f.store.begin_turn("session", f.cwd(), "third").unwrap();
+    f.store.finish_turn("session", f.cwd(), "third").unwrap();
+    assert_eq!(private_index(&f), rotated);
+    // Neither the captured-then-ignored file's new bytes nor anything else the
+    // rules now exclude reaches the object database.
+    let oid = String::from_utf8(
+        run_git(
+            &f.repo,
+            &["hash-object", "--no-filters", "--", "debris/log.txt"],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("debris/log.txt")).unwrap(),
+        secret
+    );
+    assert!(run_git(&f.repo, &["cat-file", "-e", oid.trim()]).is_err());
+}
+
+#[test]
+fn untracked_nested_ignore_rules_also_rotate_the_index() {
+    let f = Fixture::new();
+    // A rule file that is itself ignored still applies. Written before the
+    // baseline so the only thing that changes later is the nested rule, which
+    // an `--exclude-standard` listing would hide.
+    f.write(".gitignore", ".gitignore\n");
+    f.write("nested/secret.txt", "visible\n");
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert!(index_paths(&f.repo, &private_index(&f)).contains(&"nested/secret.txt".to_string()));
+    let previous = private_index(&f);
+
+    f.write("nested/.gitignore", "secret.txt\n");
+    let secret = "SENSITIVE-9c31ab77\n";
+    f.write("nested/secret.txt", secret);
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert_ne!(private_index(&f), previous);
+    assert!(!index_paths(&f.repo, &private_index(&f)).contains(&"nested/secret.txt".to_string()));
+    let oid = String::from_utf8(
+        run_git(
+            &f.repo,
+            &["hash-object", "--no-filters", "--", "nested/secret.txt"],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(run_git(&f.repo, &["cat-file", "-e", oid.trim()]).is_err());
+}
+
+#[test]
+fn rebuilds_a_missing_or_truncated_private_index_once() {
+    let f = Fixture::new();
+    let head = run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap();
+    let real_index = std::fs::read(f.repo.join(".git/index")).unwrap();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("new.txt", "one\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let index = private_index(&f);
+
+    std::fs::remove_file(&index).unwrap();
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("new.txt", "one\ntwo\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    assert_eq!(
+        f.store
+            .file_diff("session", f.cwd(), "new.txt")
+            .unwrap()
+            .current,
+        "one\ntwo\n"
+    );
+
+    std::fs::write(&index, b"DIRC").unwrap();
+    f.store.begin_turn("session", f.cwd(), "third").unwrap();
+    f.write("new.txt", "one\ntwo\nthree\n");
+    f.store.finish_turn("session", f.cwd(), "third").unwrap();
+    let diff = f.store.file_diff("session", f.cwd(), "new.txt").unwrap();
+    // Carried into the baseline as absent: the session created this file.
+    assert_eq!(diff.original, "");
+    assert_eq!(diff.current, "one\ntwo\nthree\n");
+
+    assert_eq!(
+        std::fs::read(f.repo.join(".git/index")).unwrap(),
+        real_index
+    );
+    assert_eq!(run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap(), head);
+}
+
+#[cfg(unix)]
+#[test]
+fn records_nested_unusual_paths_and_symlinks_with_a_persistent_index() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let f = Fixture::new();
+    run_git(&f.repo, &["config", "core.fileMode", "true"]).unwrap();
+    let nested = f.repo.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    f.write("nested/normal.txt", "baseline\n");
+    f.write("nested/mode.sh", "#!/bin/sh\n");
+    run_git(&f.repo, &["add", "nested"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "nested baseline"]).unwrap();
+    let cwd = nested.to_str().unwrap();
+    let unusual = "tab\tand 中文 name.txt";
+    f.store.begin_turn("session", cwd, "first").unwrap();
+    f.write(&format!("nested/{unusual}"), "new\n");
+    std::fs::remove_file(nested.join("normal.txt")).unwrap();
+    std::fs::set_permissions(
+        nested.join("mode.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    symlink("mode.sh", nested.join("link.txt")).unwrap();
+    f.store.finish_turn("session", cwd, "first").unwrap();
+    let status = f.store.status("session", cwd).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .map(|file| file.relative.as_str())
+            .collect::<Vec<_>>(),
+        ["link.txt", "mode.sh", "normal.txt", unusual]
+    );
+    assert_eq!(
+        f.store.file_diff("session", cwd, unusual).unwrap().current,
+        "new\n"
+    );
+    assert!(
+        status
+            .files
+            .iter()
+            .find(|file| file.relative == "link.txt")
+            .unwrap()
+            .exact
+    );
+}
+
+#[test]
+fn keeps_a_lock_another_capture_is_using() {
+    let f = Fixture::new();
+    let index = private_index(&f);
+    let name = index.file_name().unwrap().to_string_lossy().into_owned();
+    let digest = &name[..name.len() - name.rsplit_once('-').unwrap().1.len() - 1];
+    // Git takes `<index>.lock` while it writes, and the Tauri app shares this
+    // directory, so that file can belong to a capture running right now.
+    let lock = index.with_file_name(format!("{name}.lock"));
+    std::fs::write(&lock, b"").unwrap();
+    let stale = index.with_file_name(format!("{digest}-superseded.index"));
+    std::fs::write(&stale, b"").unwrap();
+
+    assert_eq!(private_index(&f), index);
+    assert!(lock.exists(), "a live lock must survive the cleanup");
+    assert!(!stale.exists(), "a superseded index should be removed");
+}
