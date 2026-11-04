@@ -860,7 +860,11 @@ impl Conversation {
             .flex_col()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
+                // Keep a focus-tracking ancestor from taking focus back.
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                    window.prevent_default();
+                }),
             )
             .child(self.composer_anchor.probe())
             .child(composer_surface(radius))
@@ -868,7 +872,7 @@ impl Conversation {
             .child(
                 div()
                     .px_3()
-                    .pt(px(14.))
+                    .pt(px(10.))
                     .pb(px(14.))
                     .child(self.input.clone()),
             )

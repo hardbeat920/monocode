@@ -1249,7 +1249,9 @@ impl Monos {
                 icon_button("new-mono", "New mono", "plus")
                     .debug_selector(|| "sidebar-mono-button".into())
                     .size(px(20.))
-                    .when(!original, |d| d.mr(px(-2.)))
+                    // Centred on the sidebar's trailing column, with the
+                    // session filter and the navigation hints and counts.
+                    .when(!original, |d| d.mr(px(-3.)))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.create(add_project.clone().into_iter().collect(), w, cx)
                     })),

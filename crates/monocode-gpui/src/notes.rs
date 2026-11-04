@@ -189,6 +189,11 @@ impl Notes {
         cx.notify();
     }
 
+    /// How many notes the list holds, once it has loaded.
+    pub(crate) fn count(&self) -> Option<usize> {
+        (!self.loading).then_some(self.notes.len())
+    }
+
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.flush(cx);
         if self.dirty {

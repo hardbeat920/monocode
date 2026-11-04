@@ -6,6 +6,10 @@ pub(crate) const TEXT: u32 = 0xebebeb;
 pub(crate) const MUTED: u32 = 0x969696;
 pub(crate) const ACCENT: u32 = 0x4da3f5;
 pub(crate) const COLUMN: f32 = 832.;
+/// The transcript's side padding inside `COLUMN`: the docked composer's
+/// 10px inset, 1px border and 12px text padding, so prose lines up with the
+/// composer's text as it scrolls past.
+pub(crate) const COLUMN_PAD: f32 = 23.;
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.;
 pub(crate) const TITLE_TAB_TEXT_SIZE: f32 = 13.;
 pub(crate) const TITLE_TAB_MAX_WIDTH: f32 = 224.;

@@ -705,6 +705,8 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    /// The sidebar's Notes count; `None` until the store has answered.
+    note_count: Option<usize>,
     inbox: Option<Entity<crate::inbox::Inbox>>,
     automations: Option<Entity<crate::automations::Automations>>,
     active_app_view: Option<app_views::AppView>,
@@ -1089,6 +1091,7 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            note_count: None,
             inbox: None,
             automations: None,
             active_app_view: None,
@@ -1202,6 +1205,7 @@ impl Shell {
             this.scan_external_editors(cx);
         }
         this.observe_accounts(cx);
+        this.load_note_count(cx);
         this.observe_picker_preferences(cx);
         let mono_owner = cx.weak_entity();
         let mono_active =
@@ -4460,7 +4464,7 @@ impl Shell {
         })
         .detach();
     }
-    fn new_chat(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn new_chat(&mut self, cx: &mut Context<Self>) {
         self.create_session(self.default_choice(), false, cx);
     }
     fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
@@ -6818,6 +6822,20 @@ impl Shell {
                                             })),
                                     ),
                                 )
+                                .when(self.workspace.sidebar_search_visible, |d| {
+                                    d.child(
+                                        icon_button("sidebar-search", "Search", "search")
+                                            .debug_selector(|| "sidebar-search-button".into())
+                                            .when(self.app_search.is_some(), |d| d.bg(content(0.1)))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                if this.app_search.is_some() {
+                                                    this.close_app_search(window, cx)
+                                                } else {
+                                                    this.focus_search(window, cx)
+                                                }
+                                            })),
+                                    )
+                                })
                                 .child(
                                     icon_button(
                                         "sidebar-options",
@@ -11769,13 +11787,13 @@ mod tests {
             root.read_with(cx, |s, cx| s.sessions[&active].read(cx).transcript.clone());
         let before = transcript.read_with(cx, |t, _| t.render_passes);
         cx.update_window(window.into(), |_, w, cx| {
-            w.simulate_mouse_move(gpui::point(px(40.), px(136.)), cx)
+            w.simulate_mouse_move(gpui::point(px(40.), px(133.)), cx)
         })
         .unwrap();
         cx.run_until_parked();
         assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("Inbox"));
         cx.update_window(window.into(), |_, w, cx| {
-            w.simulate_mouse_move(gpui::point(px(40.), px(169.)), cx)
+            w.simulate_mouse_move(gpui::point(px(40.), px(166.)), cx)
         })
         .unwrap();
         cx.run_until_parked();

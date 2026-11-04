@@ -475,7 +475,7 @@ impl Conversation {
     }
 
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(input::Input::new);
+        let input = cx.new(input::Input::session_composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
@@ -2909,8 +2909,10 @@ impl Conversation {
                     .flex_col()
                     .on_mouse_down(
                         MouseButton::Left,
+                        // Keep a focus-tracking ancestor from taking focus back.
                         cx.listener(|this, _, window, cx| {
-                            window.focus(&this.input.focus_handle(cx), cx)
+                            window.focus(&this.input.focus_handle(cx), cx);
+                            window.prevent_default();
                         }),
                     )
                     .child(self.completion.read(cx).composer_probe())
@@ -2920,7 +2922,7 @@ impl Conversation {
                     .child(
                         div()
                             .px_3()
-                            .pt(px(14.))
+                            .pt(px(10.))
                             .pb(px(14.))
                             .child(self.completion.clone()),
                     )
@@ -3615,7 +3617,7 @@ mod composer_motion_tests {
                     } else {
                         composer.top() + px(1.)
                     };
-                    assert_eq!(field.top() - top, px(14.));
+                    assert_eq!(field.top() - top, px(10.));
                     assert_eq!(toolbar.top() - field.bottom(), px(14.));
                     assert_eq!(field.size.height, px(66.));
                     window

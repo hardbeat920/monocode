@@ -1039,6 +1039,30 @@ fn chat_composer_matches_the_session_box_and_opens_the_model_list(cx: &mut TestA
     let send = visual.debug_bounds("mono-send").unwrap();
     let attach = visual.debug_bounds("mono-attach").unwrap();
     let model = visual.debug_bounds("mono-model").unwrap();
+    // A click anywhere in the box, toolbar included, focuses the field.
+    let toolbar = visual.debug_bounds("mono-composer-toolbar").unwrap();
+    for point in [
+        gpui::point(toolbar.center().x, toolbar.top() + px(13.)),
+        gpui::point(send.left() - px(4.), toolbar.top() + px(13.)),
+    ] {
+        handle.update(visual, |_, w, cx| w.blur(cx)).unwrap();
+        visual.simulate_click(point, Default::default());
+        visual.run_until_parked();
+        let chat = visual.update(|_, cx| s.manager.read(cx).chat().unwrap());
+        assert!(
+            handle
+                .update(visual, |_, w, cx| chat
+                    .read(cx)
+                    .input
+                    .focus_handle(cx)
+                    .is_focused(w))
+                .unwrap(),
+            "a click at {point:?} focuses the composer"
+        );
+    }
+    // One line: the session composer's 84px box; send sits 10px above the border.
+    assert_eq!(field.size.height, px(84.));
+    assert_eq!(field.bottom() - send.bottom(), px(11.));
     // The session composer's box: the model picker and send inside it,
     // attach underneath on the left.
     assert!(field.contains(&send.center()));
