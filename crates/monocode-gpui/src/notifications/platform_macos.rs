@@ -104,6 +104,14 @@ pub fn initialize() -> bool {
     true
 }
 
+/// The badge has its own switch: alerts can be off while badges are allowed.
+fn map_badge_settings(settings: &UNNotificationSettings) -> Permission {
+    match settings.badgeSetting() {
+        UNNotificationSetting::Enabled | UNNotificationSetting::NotSupported => Permission::Granted,
+        _ => Permission::Denied,
+    }
+}
+
 fn map_settings(settings: &UNNotificationSettings) -> Permission {
     match settings.authorizationStatus() {
         UNAuthorizationStatus::NotDetermined => Permission::Prompt,
@@ -237,7 +245,7 @@ pub fn request_badge_authorization() -> Option<Receiver<Permission>> {
             };
             let sender = sender.clone();
             let query = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
-                let _ = sender.send(map_settings(unsafe { settings.as_ref() }));
+                let _ = sender.send(map_badge_settings(unsafe { settings.as_ref() }));
             });
             center.getNotificationSettingsWithCompletionHandler(&query);
         });

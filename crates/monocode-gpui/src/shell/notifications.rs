@@ -476,7 +476,7 @@ impl Shell {
             return self.monos.as_ref().is_some_and(|monos| {
                 let monos = monos.read(cx);
                 monos.active_notification_session(cx) == Some(id)
-                    || monos.routed_session() == Some(id)
+                    || (self.workspace.right_panel_open && monos.routed_session() == Some(id))
             });
         }
         self.workspace.active_tab().is_some_and(|tab| {
