@@ -3510,6 +3510,11 @@ impl Shell {
             .active
             .and_then(|id| self.sessions.get(&id))
             .map_or(Kind::Codex, |s| Kind::from_id(&s.read(cx).summary.provider));
+        let defaults = session_loading::NewSessionDefaults::read(
+            self.explicit_choice(kind),
+            &self.workspace.project,
+            cx,
+        );
         let navigation_revision = self.navigation_revision;
         let target = self.workspace.active;
         let store = self.store.clone();
@@ -3524,26 +3529,18 @@ impl Shell {
             )
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            let summary = store.create(kind.id(), &cwd)?;
-            if worktree_cwd.is_some() {
-                store.save_agent_settings(
-                    summary.id,
-                    &monocode_core::agent::Settings {
-                        worktree_cwd,
-                        ..Default::default()
-                    },
-                )?;
-            }
-            Ok::<_, String>(summary)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { defaults.create(&*locked(&store)?, &cwd, worktree_cwd) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(summary) => {
+                Ok((summary, settings)) => {
                     let id = summary.id;
                     this.add(summary, cx);
+                    if let Some(view) = this.sessions.get(&id) {
+                        view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
+                    }
                     this.seed_worktree(id, worktree.as_ref(), cx);
                     this.order.retain(|s| *s != id);
                     this.order.insert(0, id);
@@ -4501,48 +4498,12 @@ impl Shell {
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
-        let new_chat_choice::NewChatChoice { kind, model } = choice;
         let navigation_revision = self.navigation_revision;
-        let account = crate::accounts::get(cx)
-            .map(|center| center.read(cx).selected(kind, &cwd))
-            .unwrap_or_default();
-        let access = crate::conversation::default_access(cx);
-        let effort = crate::conversation::preferred_effort(kind.id(), cx);
+        let defaults = session_loading::NewSessionDefaults::read(choice, &cwd, cx);
         let work = cx.background_executor().spawn({
             let cwd = cwd.clone();
             let worktree_cwd = copy.as_ref().map(|f| f.path.clone());
-            async move {
-                let store = locked(&store)?;
-                let summary = store.create(kind.id(), &cwd)?;
-                let mut settings = session_loading::new_session_settings(
-                    store
-                        .desktop_preferences()
-                        .and_then(|preferences| preferences.session_defaults(kind.id(), &cwd)),
-                    model,
-                );
-                settings.access = access;
-                if let Some(effort) = effort {
-                    settings.model_settings.retain(|key, _| {
-                        !matches!(
-                            key.as_str(),
-                            "effort" | "reasoning" | "reasoningEffort" | "reasoning_effort"
-                        )
-                    });
-                    settings.effort = Some(effort);
-                }
-                settings.account = account;
-                settings.worktree_cwd = worktree_cwd;
-                if settings.model.is_some()
-                    || settings.effort.is_some()
-                    || !settings.model_settings.is_empty()
-                    || settings.worktree_cwd.is_some()
-                    || settings.account.id != monocode_core::accounts::DEFAULT
-                    || access != Default::default()
-                {
-                    store.save_agent_settings(summary.id, &settings)?;
-                }
-                Ok::<_, String>((summary, settings))
-            }
+            async move { defaults.create(&*locked(&store)?, &cwd, worktree_cwd) }
         });
         let previous = self.new_tab_task.take();
         self.new_tab_task = Some(cx.spawn(async move |this, cx| {
@@ -12850,6 +12811,45 @@ mod tests {
         window
             .update(cx, |shell, _, _| assert!(!shell.workspace.sidebar_visible))
             .unwrap();
+    }
+    #[gpui::test]
+    fn a_split_session_starts_with_the_default_access(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| {
+            bind_keys(cx);
+            cx.set_reduce_motion(true);
+            cx.set_global(crate::settings::Preferences::default());
+            crate::conversation::remember_access(
+                monocode_core::agent::AccessMode::from_id("auto"),
+                cx,
+            );
+        });
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(b, w, cx);
+                shell.focus_active(w, cx);
+            })
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        for keys in ["cmd-d", "cmd-shift-d"] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            window
+                .update(cx, |shell, _, cx| {
+                    let new = shell.workspace.active.unwrap();
+                    assert_ne!(new, b, "{keys} opens a new pane");
+                    let saved = locked(&shell.store)
+                        .unwrap()
+                        .agent_settings(new)
+                        .unwrap()
+                        .expect("the split session saves its settings");
+                    assert_eq!(saved.access.id(), "auto", "{keys} keeps the default access");
+                    let live = shell.sessions[&new].read(cx).settings.access;
+                    assert_eq!(live.id(), "auto", "{keys} shows the default access");
+                })
+                .unwrap();
+        }
     }
     #[gpui::test]
     fn the_sidebar_follows_the_room_however_it_changes(cx: &mut TestAppContext) {
