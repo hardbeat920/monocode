@@ -842,7 +842,11 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
-        let controls = if beside { self.model_controls(cx) } else { Vec::new() };
+        let controls = if beside {
+            self.model_controls(cx)
+        } else {
+            Vec::new()
+        };
         let models_open = self.menu_is(ComposerMenu::Model)
             || self.menu_is(ComposerMenu::Recent)
             || self.mono_ui.models.is_some();
@@ -853,9 +857,13 @@ impl Conversation {
             .relative()
             .rounded(px(radius))
             .border_1()
-            .border_color(composer_border(self.input.focus_handle(cx).is_focused(window)))
+            .border_color(composer_border(
+                self.input.focus_handle(cx).is_focused(window),
+            ))
             .shadow(composer_shadow())
-            .when(self.file_drag, |d| d.border_color(accent_color().opacity(0.6)))
+            .when(self.file_drag, |d| {
+                d.border_color(accent_color().opacity(0.6))
+            })
             .flex()
             .flex_col()
             .on_mouse_down(
