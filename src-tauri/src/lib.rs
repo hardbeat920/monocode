@@ -510,6 +510,7 @@ pub fn run() {
             provider_session_transfer::provider_session_transfer,
             harness::harness_write,
             harness::harness_kill,
+            harness::harness_stop,
             harness::harness_kill_all,
             harness::harness_http,
             harness::harness_sse_open,

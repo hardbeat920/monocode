@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -18,6 +18,7 @@ use crate::passwd_identity;
 const STDOUT_EVENT: &str = "harness-stdout";
 const STDERR_EVENT: &str = "harness-stderr";
 const EXIT_EVENT: &str = "harness-exit";
+const LOGIN_CHILD_PREFIX: &str = "monocode-provider-login-";
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
 
@@ -166,6 +167,7 @@ struct LiveSse {
 
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
+    stopping: HashMap<String, Arc<LiveChild>>,
     epochs: HashMap<String, u64>,
 }
 
@@ -199,6 +201,7 @@ impl HarnessHost {
         Self {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
+                stopping: HashMap::new(),
                 epochs: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
@@ -229,14 +232,20 @@ impl HarnessHost {
     }
 
     /// Stamp this spawn and drop any child already registered under the id.
-    fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
+    fn begin_spawn(&self, session_id: &str) -> Result<(u64, u64, Option<Arc<LiveChild>>), String> {
         let mut inner = self.lock_inner();
+        if inner.stopping.contains_key(session_id) {
+            return Err("Previous harness process has not exited".into());
+        }
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) && inner.children.contains_key(session_id) {
+            return Err("Previous harness process has not exited".into());
+        }
         let kill_all = self.kill_all_gen.load(Ordering::SeqCst);
         let epoch = inner.epochs.entry(session_id.to_string()).or_insert(0);
         *epoch += 1;
         let epoch = *epoch;
         let prev = inner.children.remove(session_id);
-        (epoch, kill_all, prev)
+        Ok((epoch, kill_all, prev))
     }
 
     #[cfg(all(test, unix))]
@@ -316,7 +325,9 @@ impl HarnessHost {
         let kids: Vec<Arc<LiveChild>> = {
             let mut inner = self.lock_inner();
             self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
-            inner.children.drain().map(|(_, child)| child).collect()
+            let mut kids: Vec<_> = inner.children.drain().map(|(_, child)| child).collect();
+            kids.extend(inner.stopping.drain().map(|(_, child)| child));
+            kids
         };
         self.stop_all_sse();
         let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
@@ -938,7 +949,7 @@ pub fn harness_spawn(
     };
 
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
+    let (epoch, kill_all, prev) = host.begin_spawn(&session_id)?;
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
@@ -980,18 +991,18 @@ pub fn harness_spawn(
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
 
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to open harness stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open harness stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open harness stderr".to_string())?;
+    let Some(stdin) = child.stdin.take() else {
+        reap_rejected_spawn(child, pid);
+        return Err("Failed to open harness stdin".into());
+    };
+    let Some(stdout) = child.stdout.take() else {
+        reap_rejected_spawn(child, pid);
+        return Err("Failed to open harness stdout".into());
+    };
+    let Some(stderr) = child.stderr.take() else {
+        reap_rejected_spawn(child, pid);
+        return Err("Failed to open harness stderr".into());
+    };
 
     let live = Arc::new(LiveChild {
         cwd: workdir.clone(),
@@ -1005,10 +1016,7 @@ pub fn harness_spawn(
         // Returning `Ok` here would hand the caller a dead pid to store as the
         // session's live child, and this child's stdout would be parsed as the
         // stream that replaced it. Reap it without emitting anything.
-        terminate(rejected.pid);
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
+        reap_rejected_spawn(child, rejected.pid);
         return Err(SPAWN_CANCELLED.to_string());
     }
 
@@ -1062,6 +1070,9 @@ pub fn harness_spawn(
     let wait_pid = pid;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        if wait_id.starts_with(LOGIN_CHILD_PREFIX) {
+            wait_for_login_tree_exit(wait_pid);
+        }
         // Deliver the final batched lines before the exit that follows them.
         let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
         if let Some(store) = wait_store {
@@ -1235,6 +1246,69 @@ pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<
         terminate(live.pid);
     }
     Ok(())
+}
+
+/// Login cancellation keeps the child registered until its exit event. The
+/// ordinary kill command deliberately removes it and cannot confirm exit.
+#[tauri::command(async)]
+pub fn harness_stop(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
+    let live = {
+        let mut inner = host.lock_inner();
+        let live = inner
+            .stopping
+            .get(&session_id)
+            .or_else(|| inner.children.get(&session_id))
+            .cloned();
+        if let Some(live) = &live {
+            inner.stopping.insert(session_id.clone(), live.clone());
+        }
+        live
+    };
+    if let Some(live) = live {
+        stop_login_tree(live.pid);
+        let mut inner = host.lock_inner();
+        if inner
+            .stopping
+            .get(&session_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &live))
+        {
+            inner.stopping.remove(&session_id);
+        }
+    }
+    Ok(())
+}
+
+fn stop_login_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        let group = -(pid as i32);
+        unsafe { libc::kill(group, libc::SIGTERM) };
+        let deadline = Instant::now() + KILL_ALL_GRACE;
+        while unsafe { libc::kill(group, 0) == 0 } && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if unsafe { libc::kill(group, 0) == 0 } {
+            unsafe { libc::kill(group, libc::SIGKILL) };
+        }
+    }
+    #[cfg(not(unix))]
+    terminate_all(&[pid]);
+    wait_for_login_tree_exit(pid);
+}
+
+fn reap_rejected_spawn(mut child: Child, pid: u32) {
+    terminate_all(&[pid]);
+    let _ = child.wait();
+    wait_for_login_tree_exit(pid);
+}
+
+fn wait_for_login_tree_exit(pid: u32) {
+    #[cfg(unix)]
+    while unsafe { libc::kill(-(pid as i32), 0) == 0 } {
+        thread::sleep(Duration::from_millis(20));
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
 }
 
 /// Off the main thread: `kill_all` waits for the children to die before it
@@ -3216,7 +3290,7 @@ mod tests {
     #[test]
     fn install_spawn_keeps_a_child_nothing_cancelled() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         let (live, child) = live_child();
         let pid = live.pid;
         assert!(host
@@ -3229,7 +3303,7 @@ mod tests {
     #[test]
     fn install_spawn_rejects_a_child_killed_mid_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         host.kill_session("s1");
         let (live, child) = live_child();
         assert!(host
@@ -3242,7 +3316,7 @@ mod tests {
     #[test]
     fn install_spawn_rejects_a_child_after_kill_all() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         host.kill_all();
         let (live, child) = live_child();
         assert!(host
@@ -3255,7 +3329,7 @@ mod tests {
     #[test]
     fn kill_during_spawn_invalidates_the_stamp() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, prev) = host.begin_spawn("s1");
+        let (epoch, kill_all, prev) = host.begin_spawn("s1").unwrap();
         assert!(prev.is_none());
         assert!(host.spawn_stamp_current("s1", epoch, kill_all));
         host.kill_session("s1");
@@ -3265,8 +3339,8 @@ mod tests {
     #[test]
     fn overlapping_spawn_invalidates_the_earlier_one() {
         let host = HarnessHost::new();
-        let first = host.begin_spawn("s1");
-        let second = host.begin_spawn("s1");
+        let first = host.begin_spawn("s1").unwrap();
+        let second = host.begin_spawn("s1").unwrap();
         assert!(!host.spawn_stamp_current("s1", first.0, first.1));
         assert!(host.spawn_stamp_current("s1", second.0, second.1));
     }
@@ -3274,7 +3348,7 @@ mod tests {
     #[test]
     fn kill_all_rejects_an_in_flight_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         host.kill_all();
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
     }
@@ -3373,7 +3447,7 @@ mod tests {
     #[test]
     fn kill_all_reaps_term_ignoring_children_before_return() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
         // `harness_spawn` always leaves a thread owning the `Child`. Without one
@@ -3393,6 +3467,50 @@ mod tests {
             !alive,
             "kill_all returned while the harness tree was still alive"
         );
+    }
+
+    #[test]
+    fn login_stop_confirms_exit_after_term_is_ignored() {
+        let (live, child) = live_group(
+            "trap 'exit 0' TERM; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait",
+        );
+        let pid = live.pid;
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        stop_login_tree(pid);
+        let _ = waiter.join();
+        assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn stopping_login_blocks_id_reuse_until_exit() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = host.begin_spawn("login").unwrap();
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("login".into(), epoch, kill_all, live.clone())
+            .is_none());
+        host.lock_inner().stopping.insert("login".into(), live);
+        assert!(host.begin_spawn("login").is_err());
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        stop_login_tree(pid);
+        host.lock_inner().stopping.remove("login");
+        assert!(host.begin_spawn("login").is_ok());
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn rejected_spawn_is_reaped_before_reporting_failure() {
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        reap_rejected_spawn(child, pid);
+        assert!(!tree_alive(pid));
     }
 
     #[test]

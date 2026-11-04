@@ -171,48 +171,105 @@ it("runs the resolved Claude version fallback in headless mode", async () => {
   }
 });
 
-it.each([false, true])("stops a provider tree (ignores SIGTERM: %s)", async (stubborn) => {
-  const directory = mkdtempSync(join(tmpdir(), "monocode-provider-tree-"));
-  const file = join(directory, "provider.cjs");
-  writeFileSync(
-    file,
-    `const { spawn } = require('node:child_process');
+it.each([false, true])(
+  "stops a provider tree (ignores SIGTERM: %s)",
+  async (stubborn) => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-provider-tree-"));
+    const file = join(directory, "provider.cjs");
+    writeFileSync(
+      file,
+      `const { spawn } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', ${JSON.stringify(`${stubborn ? "process.on('SIGTERM', () => {});" : ""} console.log('ready'); setInterval(() => {}, 1000)`)}], { stdio: ['ignore', 'pipe', 'ignore'] });
 child.stdout.once('data', () => console.log(JSON.stringify({ child: child.pid })));
 setInterval(() => {}, 1000);
 `,
+    );
+    const backend = new HostChildBackend();
+    let descendant: number | undefined;
+    const stopListening = await backend.listen<{ line: string }>(
+      "harness-stdout",
+      ({ payload }) => {
+        descendant = JSON.parse(payload.line).child;
+      },
+    );
+    try {
+      await backend.invoke("harness_spawn", {
+        sessionId: "tree",
+        command: file,
+        args: [],
+        cwd: directory,
+      });
+      await vi.waitFor(() => expect(descendant).toBeTruthy());
+      await backend.kill("tree");
+      await vi.waitFor(
+        () => expect(() => process.kill(descendant!, 0)).toThrow(),
+        { timeout: 5000 },
+      );
+    } finally {
+      stopListening();
+      await backend.close();
+      if (descendant) {
+        try {
+          process.kill(descendant, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+      }
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);
+
+it("confirms a login stop only after the host emits process exit", async () => {
+  const loginId = "monocode-provider-login-test-claude";
+  const directory = mkdtempSync(join(tmpdir(), "monocode-login-stop-test-"));
+  const file = join(directory, "provider.cjs");
+  writeFileSync(
+    file,
+    `const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
+child.stdout.once('data', () => console.log(child.pid));
+setInterval(() => {}, 1000);
+`,
   );
   const backend = new HostChildBackend();
+  let exited = false;
   let descendant: number | undefined;
-  const stopListening = await backend.listen<{ line: string }>(
+  const unlisten = await backend.listen("harness-exit", () => {
+    exited = true;
+  });
+  const unlistenOutput = await backend.listen<{ line: string }>(
     "harness-stdout",
     ({ payload }) => {
-      descendant = JSON.parse(payload.line).child;
+      descendant = Number(payload.line);
     },
   );
   try {
-    await backend.invoke("harness_spawn", {
-      sessionId: "tree",
+    const pid = await backend.invoke<number>("harness_spawn", {
+      sessionId: loginId,
       command: file,
       args: [],
       cwd: directory,
     });
     await vi.waitFor(() => expect(descendant).toBeTruthy());
-    await backend.kill("tree");
-    await vi.waitFor(
-      () => expect(() => process.kill(descendant!, 0)).toThrow(),
-      { timeout: 5000 },
-    );
+    const stopping = backend.invoke("harness_stop", { sessionId: loginId });
+    await expect(
+      backend.invoke("harness_spawn", {
+        sessionId: loginId,
+        command: file,
+        args: [],
+        cwd: directory,
+      }),
+    ).rejects.toThrow("has not exited");
+    await stopping;
+    expect(exited).toBe(true);
+    expect(() => process.kill(pid, 0)).toThrow();
+    expect(() => process.kill(descendant!, 0)).toThrow();
   } finally {
-    stopListening();
+    unlisten();
+    unlistenOutput();
     await backend.close();
-    if (descendant) {
-      try {
-        process.kill(descendant, "SIGKILL");
-      } catch {
-        /* gone */
-      }
-    }
     rmSync(directory, { recursive: true, force: true });
   }
 }, 15_000);

@@ -6,11 +6,13 @@ import { join } from "node:path";
 // fd 3 belongs only to the host. EOF means it exited, even after a hard crash.
 // Unix stdio pipes are sockets: destroying one cancels its pending read.
 // A filesystem read can otherwise keep a worker blocked during guard exit.
-const parent = process.platform === "win32"
-  ? createReadStream("/dev/null", { fd: 3, autoClose: false })
-  : new Socket({ fd: 3, readable: true, writable: false });
+const parent =
+  process.platform === "win32"
+    ? createReadStream("/dev/null", { fd: 3, autoClose: false })
+    : new Socket({ fd: 3, readable: true, writable: false });
 parent.resume();
 const [command, ...args] = process.argv.slice(2);
+const confirmExit = process.env.MONOCODE_CONFIRM_EXIT === "1";
 if (!command) throw new Error("Missing provider command");
 const child = spawn(command, args, {
   cwd: process.cwd(),
@@ -30,6 +32,18 @@ let escalation;
 let finished = false;
 function finish() {
   if (finished) return;
+  if (confirmExit && stopping && process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, 0);
+      setTimeout(finish, 20);
+      return;
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        setTimeout(finish, 20);
+        return;
+      }
+    }
+  }
   finished = true;
   clearTimeout(escalation);
   parent.destroy();
@@ -42,6 +56,10 @@ function finish() {
 function stopTree() {
   if (stopping) return;
   stopping = true;
+  if (!child.pid) {
+    finish();
+    return;
+  }
   if (process.platform === "win32") {
     const killer = spawn(
       join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
@@ -52,7 +70,9 @@ function stopTree() {
       },
     );
     killer.on("error", () => child.kill());
-    killer.on("close", finish);
+    killer.on("close", (code) => {
+      if (!confirmExit || code === 0) finish();
+    });
   } else {
     // The provider leads its own process group, so the guard survives long
     // enough to escalate if one of its descendants ignores SIGTERM.
@@ -83,8 +103,9 @@ child.on("error", (error) => {
 child.on("close", (code) => {
   exitCode = code ?? 1;
   if (stopping && process.platform !== "win32") {
-    try { process.kill(-child.pid, 0); }
-    catch (error) {
+    try {
+      process.kill(-child.pid, 0);
+    } catch (error) {
       if (error.code === "ESRCH") finish();
     }
   }

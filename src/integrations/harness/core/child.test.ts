@@ -147,6 +147,31 @@ describe("child bridge", () => {
     release();
   });
 
+  it("stops without discarding the PID-matched exit watcher", async () => {
+    installResolvedListeners();
+    mocks.invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "harness_spawn" ? 42 : undefined),
+    );
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const onExit = vi.fn();
+    child.watchChild("login", vi.fn(), onExit);
+    await child.spawnChild("login", "claude", ["auth", "login"], "/repo");
+    await child.stopChild("login");
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_stop", {
+      sessionId: "login",
+    });
+    mocks.handlers.get("harness-exit")?.({
+      payload: { sessionId: "login", code: null, pid: 41 } as never,
+    });
+    expect(onExit).not.toHaveBeenCalled();
+    mocks.handlers.get("harness-exit")?.({
+      payload: { sessionId: "login", code: null, pid: 42 } as never,
+    });
+    expect(onExit).toHaveBeenCalledOnce();
+    release();
+  });
+
   it("passes stored overrides through resolution and command validation", async () => {
     vi.stubGlobal("localStorage", {
       getItem: (key: string) =>

@@ -396,6 +396,11 @@ export function killChild(sessionId: string): Promise<void> {
   return invoke("harness_kill", { sessionId });
 }
 
+/** Stop a login child while retaining its PID-matched exit watcher. */
+export function stopChild(sessionId: string): Promise<void> {
+  return invoke("harness_stop", { sessionId });
+}
+
 export function killAllChildren(): Promise<void> {
   lineHandlers.clear();
   exitHandlers.clear();

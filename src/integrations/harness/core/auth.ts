@@ -54,6 +54,8 @@ type LoginRun = {
   url?: string;
   listeners: Set<(url: string) => void>;
   signals: Set<AbortSignal>;
+  retryStop?: () => void;
+  stopError?: Error;
 };
 const inflight = new Map<string, LoginRun>();
 
@@ -70,7 +72,12 @@ function waitForLoginCleanup(
     const abort = () => finish(new Error("Sign-in cancelled."));
     const timer = setTimeout(
       () =>
-        finish(new Error("Sign-in is still stopping. Please retry shortly.")),
+        finish(
+          run.stopError ??
+            new Error(
+              "Sign-in exit is not confirmed. Wait for the provider process to exit, then retry.",
+            ),
+        ),
       LOGIN_CLEANUP_WAIT_MS,
     );
     const finish = (error?: Error) => {
@@ -105,6 +112,7 @@ export function loginHarness(
   const key = loginKey(harness, accountId);
   let run = inflight.get(key);
   if (run?.controller.signal.aborted) {
+    run.retryStop?.();
     return waitForLoginCleanup(run, options?.signal).then(() =>
       loginHarness(harness, accountId, options),
     );
@@ -202,7 +210,7 @@ async function runHarnessLogin(
   ]).finally(stopWaiting);
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
   const childId = loginChildId(harness, accountId);
-  await child.killChild(childId).catch(() => undefined);
+  await child.stopChild(childId);
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
 
   return new Promise<void>((resolve, reject) => {
@@ -211,6 +219,33 @@ async function runHarnessLogin(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let spawn: Promise<void>;
     let abort = () => undefined;
+    let exited = false;
+    let stopPending = false;
+    let stopComplete = false;
+    let stopReason = "Sign-in cancelled.";
+
+    const maybeFinishStop = () => {
+      if (exited && stopComplete) finish(new Error(stopReason));
+    };
+    const requestStop = () => {
+      if (settled || stopPending || stopComplete) return;
+      stopPending = true;
+      run.stopError = undefined;
+      void child.stopChild(childId).then(
+        () => {
+          stopPending = false;
+          stopComplete = true;
+          run.stopError = undefined;
+          maybeFinishStop();
+        },
+        (error: unknown) => {
+          stopPending = false;
+          run.stopError = new Error(
+            `Could not confirm sign-in exit: ${error instanceof Error ? error.message : String(error)}. Retry to request another stop.`,
+          );
+        },
+      );
+    };
 
     const finish = (error?: Error) => {
       if (settled) return;
@@ -247,7 +282,11 @@ async function runHarnessLogin(
         }
       },
       (code) => {
-        if (run.controller.signal.aborted) return;
+        if (run.controller.signal.aborted) {
+          exited = true;
+          maybeFinishStop();
+          return;
+        }
         if (code === 0) {
           finish();
           return;
@@ -268,19 +307,8 @@ async function runHarnessLogin(
 
     timer = setTimeout(() => {
       if (run.controller.signal.aborted) return;
-      // Keep the run in `inflight` until the old child is gone. Otherwise a
-      // quick retry can be spawned under the same id and then killed by this
-      // timeout's late cleanup.
-      void child
-        .killChild(childId)
-        .catch(() => undefined)
-        .finally(() => {
-          finish(
-            new Error(
-              `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`,
-            ),
-          );
-        });
+      stopReason = `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`;
+      run.controller.abort();
     }, LOGIN_TIMEOUT_MS);
 
     const account =
@@ -293,14 +321,11 @@ async function runHarnessLogin(
     abort = () => {
       if (timer) clearTimeout(timer);
       void spawn
-        .catch(() => undefined)
-        .then(() => child.killChild(childId))
-        .then(
-          () => finish(new Error("Sign-in cancelled.")),
-          () => {
-            // A failed kill leaves child ownership uncertain; keep the ID reserved.
-          },
-        );
+        .then(() => {
+          run.retryStop = requestStop;
+          requestStop();
+        })
+        .then(undefined, () => finish(new Error("Sign-in cancelled.")));
     };
     run.controller.signal.addEventListener("abort", abort, { once: true });
     if (run.controller.signal.aborted) abort();
