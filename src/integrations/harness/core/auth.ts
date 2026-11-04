@@ -16,6 +16,7 @@ export {
 } from "./authSupport";
 
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const LOGIN_CLEANUP_WAIT_MS = 5_000;
 const LOGIN_CHILD_PREFIX = "monocode-provider-login-";
 
 function loginChildId(harness: HarnessId, accountId?: string): string {
@@ -60,6 +61,35 @@ function loginKey(harness: HarnessId, accountId?: string): string {
   return `${harness}:${accountId ?? "default"}`;
 }
 
+function waitForLoginCleanup(
+  run: LoginRun,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const abort = () => finish(new Error("Sign-in cancelled."));
+    const timer = setTimeout(
+      () =>
+        finish(new Error("Sign-in is still stopping. Please retry shortly.")),
+      LOGIN_CLEANUP_WAIT_MS,
+    );
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (error) reject(error);
+      else resolve();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    void run.promise.then(
+      () => finish(),
+      () => finish(),
+    );
+  });
+}
+
 /**
  * Launch the provider's own login flow. The child owns browser opening and
  * credential storage; MonoCode only supervises its exit status. Duplicate
@@ -75,18 +105,9 @@ export function loginHarness(
   const key = loginKey(harness, accountId);
   let run = inflight.get(key);
   if (run?.controller.signal.aborted) {
-    const cleanup = run.promise.catch(() => undefined);
-    if (!options?.signal)
-      return cleanup.then(() => loginHarness(harness, accountId, options));
-    const signal = options.signal;
-    return new Promise<void>((resolve, reject) => {
-      const abort = () => reject(new Error("Sign-in cancelled."));
-      signal.addEventListener("abort", abort, { once: true });
-      void cleanup.then(() => {
-        signal.removeEventListener("abort", abort);
-        if (!signal.aborted) resolve(loginHarness(harness, accountId, options));
-      });
-    });
+    return waitForLoginCleanup(run, options?.signal).then(() =>
+      loginHarness(harness, accountId, options),
+    );
   }
   if (!run) {
     const next: LoginRun = {
@@ -120,12 +141,12 @@ export function loginHarness(
     const abort = () => {
       detach();
       if (--owned.owners === 0) owned.controller.abort();
-      // A retry must wait for the old child to be gone and its watcher removed.
-      void (
-        owned.controller.signal.aborted
-          ? owned.promise.catch(() => undefined)
-          : Promise.resolve()
-      ).then(() => reject(new Error("Sign-in cancelled.")));
+      if (owned.controller.signal.aborted) {
+        void waitForLoginCleanup(owned).then(
+          () => reject(new Error("Sign-in cancelled.")),
+          reject,
+        );
+      } else reject(new Error("Sign-in cancelled."));
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     owned.promise.then(
@@ -270,10 +291,16 @@ async function runHarnessLogin(
       ? child.spawnChild(childId, path, [...args], cwd, account, harness)
       : child.spawnChild(childId, path, [...args], cwd, undefined, harness);
     abort = () => {
+      if (timer) clearTimeout(timer);
       void spawn
         .catch(() => undefined)
-        .then(() => child.killChild(childId).catch(() => undefined))
-        .then(() => finish(new Error("Sign-in cancelled.")));
+        .then(() => child.killChild(childId))
+        .then(
+          () => finish(new Error("Sign-in cancelled.")),
+          () => {
+            // A failed kill leaves child ownership uncertain; keep the ID reserved.
+          },
+        );
     };
     run.controller.signal.addEventListener("abort", abort, { once: true });
     if (run.controller.signal.aborted) abort();

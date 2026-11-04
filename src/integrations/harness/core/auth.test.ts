@@ -227,6 +227,98 @@ describe("harness login", () => {
     await second;
   });
 
+  it("bounds callers while spawn is unresolved and retries only after late spawn cleanup", async () => {
+    let finishSpawn!: () => void;
+    let finishKill!: () => void;
+    child.spawnChild.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSpawn = resolve;
+        }),
+    );
+    child.killChild.mockResolvedValueOnce(undefined).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishKill = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    const firstOutcome = vi.fn();
+    const footerOutcome = vi.fn();
+    void first.then(
+      () => firstOutcome("ok"),
+      (error: Error) => firstOutcome(error.message),
+    );
+    vi.useFakeTimers();
+    controller.abort();
+    const footer = loginHarness("claude");
+    void footer.then(
+      () => footerOutcome("ok"),
+      (error: Error) => footerOutcome(error.message),
+    );
+    await vi.advanceTimersByTimeAsync(5_001);
+    const ownerBounded = firstOutcome.mock.calls[0]?.[0];
+    const footerBounded = footerOutcome.mock.calls[0]?.[0];
+    vi.useRealTimers();
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    finishSpawn();
+    await vi.waitFor(() => expect(child.killChild).toHaveBeenCalledTimes(2));
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    finishKill();
+    const retry = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await retry;
+    expect(ownerBounded).toMatch(/still stopping/);
+    expect(footerBounded).toMatch(/still stopping/);
+  });
+
+  it("keeps the child ID locked when cancellation kill fails", async () => {
+    child.killChild
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("kill failed"));
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    const firstOutcome = vi.fn();
+    const footerOutcome = vi.fn();
+    void first.then(
+      () => firstOutcome("ok"),
+      (error: Error) => firstOutcome(error.message),
+    );
+    vi.useFakeTimers();
+    controller.abort();
+    const footer = loginHarness("claude");
+    void footer.then(
+      () => footerOutcome("ok"),
+      (error: Error) => footerOutcome(error.message),
+    );
+    await vi.advanceTimersByTimeAsync(5_001);
+    const ownerBounded = firstOutcome.mock.calls[0]?.[0];
+    const footerBounded = footerOutcome.mock.calls[0]?.[0];
+    vi.useRealTimers();
+    expect(ownerBounded).toMatch(/still stopping/);
+    expect(footerBounded).toMatch(/still stopping/);
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    expect(child.killChild).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    const retryOutcome = vi.fn();
+    void loginHarness("claude").then(
+      () => retryOutcome("ok"),
+      (error: Error) => retryOutcome(error.message),
+    );
+    await vi.advanceTimersByTimeAsync(5_001);
+    vi.useRealTimers();
+    expect(retryOutcome.mock.calls[0]?.[0]).toMatch(/still stopping/);
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+  });
+
   it("starts one fresh login for callers arriving during cancelled child cleanup", async () => {
     let finishKill!: () => void;
     child.killChild.mockResolvedValueOnce(undefined).mockImplementationOnce(
