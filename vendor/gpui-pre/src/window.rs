@@ -1825,7 +1825,7 @@ impl Window {
                 // branch is unreachable there in practice: only Windows pumps
                 // platform events (and thus requests frames) mid-draw.
                 if draw_in_progress() {
-                    log::debug!("deferring re-entrant window draw request");
+                    log::warn!("deferring re-entrant window draw request");
                     deferred_force_render |= request_frame_options.force_render;
                     #[cfg(feature = "profiler")]
                     profiler::journal::record_reentrant_frame_skipped(window_id, Instant::now());

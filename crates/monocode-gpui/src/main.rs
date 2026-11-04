@@ -5,6 +5,7 @@
 
 mod accounts;
 mod activity;
+mod app_log;
 mod app_menu;
 mod arcade;
 mod assets;
@@ -412,6 +413,8 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
+    #[cfg(not(test))]
+    app_log::init();
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
