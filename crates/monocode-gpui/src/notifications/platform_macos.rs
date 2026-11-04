@@ -206,10 +206,39 @@ pub fn set_dock_badge(count: usize) {
     let Some(main) = MainThreadMarker::new() else {
         return;
     };
+    let tile = NSApplication::sharedApplication(main).dockTile();
+    tile.setShowsApplicationBadge(count > 0);
     let label = (count > 0).then(|| NSString::from_str(&count.to_string()));
-    NSApplication::sharedApplication(main)
-        .dockTile()
-        .setBadgeLabel(label.as_deref());
+    tile.setBadgeLabel(label.as_deref());
+    tile.display();
+}
+
+/// Since macOS 12, `NSDockTile` badge updates are ignored until the app holds
+/// the badge authorization. Only re-request once the user already answered the
+/// prompt: the one-time dialog stays reserved for the Notifications toggle.
+pub fn request_badge_authorization() {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Some(center) = center() else {
+        return;
+    };
+    let handler = RcBlock::new(|settings: NonNull<UNNotificationSettings>| {
+        if unsafe { settings.as_ref() }.authorizationStatus()
+            == UNAuthorizationStatus::NotDetermined
+            || self::center().is_none()
+        {
+            return;
+        }
+        let done = RcBlock::new(|_granted: Bool, _error: *mut NSError| {});
+        if let Some(center) = self::center() {
+            center.requestAuthorizationWithOptions_completionHandler(
+                UNAuthorizationOptions::Badge,
+                &done,
+            );
+        }
+    });
+    center.getNotificationSettingsWithCompletionHandler(&handler);
 }
 
 pub fn dismiss(tag: &str) {
