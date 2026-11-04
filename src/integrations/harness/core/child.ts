@@ -408,6 +408,7 @@ export function acknowledgeLoginExit(
   sessionId: string,
   pid: number,
 ): Promise<void> {
+  if (backend) return Promise.resolve();
   return invoke("harness_ack_login_exit", { sessionId, pid });
 }
 

@@ -277,8 +277,6 @@ export class HostChildBackend implements ChildBackend {
       case "harness_stop":
         await this.stopConfirmed(id, args.requireExisting === true);
         return { completed: false, code: null, pid: null } as T;
-      case "harness_ack_login_exit":
-        return undefined as T;
       case "harness_kill_all":
         await this.close();
         return undefined as T;

@@ -64,6 +64,15 @@ describe("isCurrentChildExit", () => {
 });
 
 describe("child bridge", () => {
+  it("does not require a native exit acknowledgment from a headless host", async () => {
+    const child = await loadChild();
+    const invoke = vi.fn(async () => undefined);
+    child.configureChildBackend({ invoke, listen: vi.fn() });
+    await child.acknowledgeLoginExit("login", 42);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
   it("replays a matching exit that arrives while another window attaches to a login", async () => {
     installResolvedListeners();
     const snapshot = deferred<{ pid: number; line: string }>();
