@@ -45,7 +45,10 @@ export function ProviderSignInDialog({
       onUrl: setLoginUrl,
     }).then(
       () => {
-        if (attempt.current === controller) setState("complete");
+        if (attempt.current === controller) {
+          attempt.current = null;
+          setState("complete");
+        }
       },
       (reason: unknown) => {
         if (attempt.current !== controller) return;
@@ -54,6 +57,7 @@ export function ProviderSignInDialog({
           setLoginUrl(null);
           return;
         }
+        attempt.current = null;
         setState("error");
         setError(
           reason instanceof Error
@@ -93,22 +97,36 @@ export function ProviderSignInDialog({
         loginUrl={loginUrl}
         onCopyUrl={
           loginUrl
-            ? () =>
-                void copyText(loginUrl).catch(() =>
-                  setError("Could not copy sign-in link."),
-                )
+            ? () => {
+                const controller = attempt.current;
+                if (!controller || controller.signal.aborted) return;
+                void copyText(loginUrl).catch(() => {
+                  if (
+                    attempt.current === controller &&
+                    !controller.signal.aborted
+                  )
+                    setError("Could not copy sign-in link.");
+                });
+              }
             : undefined
         }
         onSubmitCode={
           loginUrl
             ? (code) => {
-                if (attempt.current)
-                  void submitHarnessLoginCode(
-                    harness,
-                    code,
-                    attempt.current.signal,
-                    providerAccountId,
-                  ).catch(() => setError("Could not submit sign-in code."));
+                const controller = attempt.current;
+                if (!controller || controller.signal.aborted) return;
+                void submitHarnessLoginCode(
+                  harness,
+                  code,
+                  controller.signal,
+                  providerAccountId,
+                ).catch(() => {
+                  if (
+                    attempt.current === controller &&
+                    !controller.signal.aborted
+                  )
+                    setError("Could not submit sign-in code.");
+                });
               }
             : undefined
         }
