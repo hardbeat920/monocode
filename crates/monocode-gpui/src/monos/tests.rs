@@ -1020,8 +1020,34 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
         retry.top() >= list.top() && retry.bottom() <= list.bottom(),
         "{retry:?} outside {list:?}"
     );
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "third".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("new failure".into()),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list_focus = chat.read_with(visual, |c, _| c.queue_test_list_focus());
     s.window
-        .update(visual, |_, w, cx| w.focus_next(cx))
+        .update(visual, |_, w, _| {
+            assert!(list_focus.is_focused(w), "focus follows the reset list")
+        })
+        .unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let first = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "third", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus(&second_discard, cx))
         .unwrap();
     s.window
         .update(visual, |_, w, _| assert!(second_discard.is_focused(w)))
@@ -1050,6 +1076,13 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
             .iter()
             .any(|m| m.id == "second")
     }));
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "remaining action {retry:?} outside {list:?}"
+    );
     chat.update(visual, |c, _| c.busy = true);
     s.window
         .update(visual, |_, w, cx| w.focus(&first_retry, cx))
@@ -1084,6 +1117,59 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
             .iter()
             .any(|m| m.id == "first" && m.error.is_none())
     }));
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Long failure. ".repeat(500));
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let first_retry = chat.read_with(visual, |c, _| c.queue_test_focus("first", 0));
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("pagedown");
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() < list.top(),
+        "test must scroll before clearing the queue"
+    );
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "first", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("mono-internal-queue-list").is_none());
+    let input_focus = chat.read_with(visual, |c, cx| c.input.focus_handle(cx));
+    s.window
+        .update(visual, |_, w, _| assert!(input_focus.is_focused(w)))
+        .unwrap();
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "new".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("Long failure. ".repeat(500)),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-new").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "new action {retry:?} outside {list:?}"
+    );
 }
 
 #[gpui::test]

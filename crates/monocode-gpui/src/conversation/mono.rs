@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub(super) struct ChatState {
     pub(super) pending: Vec<Message>,
     queue_scroll: gpui::ScrollHandle,
+    queue_ids: Vec<String>,
+    queue_list_focus: Option<gpui::FocusHandle>,
     queue_focus: std::collections::HashMap<String, ([gpui::FocusHandle; 2], [Subscription; 2])>,
     pub(super) emoji: bool,
     pub(super) delivered: std::collections::HashSet<String>,
@@ -31,6 +33,11 @@ impl Conversation {
     #[cfg(test)]
     pub(crate) fn queue_test_focus(&self, id: &str, index: usize) -> gpui::FocusHandle {
         self.mono_ui.queue_focus[id].0[index].clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_test_list_focus(&self) -> gpui::FocusHandle {
+        self.mono_ui.queue_list_focus.as_ref().unwrap().clone()
     }
 
     /// App launches are saved before installing a view. Reuse the normal durable
@@ -556,6 +563,29 @@ impl Conversation {
             .filter(|m| m.internal && m.error.is_some())
             .map(|m| m.id.clone())
             .collect();
+        let list_focus = self
+            .mono_ui
+            .queue_list_focus
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        if self.mono_ui.queue_ids != failed_ids {
+            let queue_focused = list_focus.is_focused(window)
+                || self
+                    .mono_ui
+                    .queue_focus
+                    .values()
+                    .any(|(handles, _)| handles.iter().any(|handle| handle.is_focused(window)));
+            if queue_focused {
+                let focus = if failed_ids.is_empty() {
+                    self.input.focus_handle(cx)
+                } else {
+                    list_focus.clone()
+                };
+                window.focus(&focus, cx);
+            }
+            self.mono_ui.queue_scroll = gpui::ScrollHandle::new();
+            self.mono_ui.queue_ids.clone_from(&failed_ids);
+        }
         self.mono_ui
             .queue_focus
             .retain(|id, _| failed_ids.contains(id));
@@ -653,7 +683,7 @@ impl Conversation {
                             .id("mono-internal-queue-list")
                             .debug_selector(|| "mono-internal-queue-list".into())
                             .focus_visible(|s| s.border_2().border_color(content(0.8)))
-                            .focusable()
+                            .track_focus(&list_focus)
                             .tab_index(0)
                             .track_scroll(&self.mono_ui.queue_scroll)
                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
