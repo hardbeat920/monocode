@@ -306,6 +306,13 @@ mod tests {
         let started = Instant::now();
         retire_pid(pid, || {});
         assert!(started.elapsed() >= EXIT_GRACE + TERM_GRACE - Duration::from_millis(100));
+        // The group is sent SIGKILL as `retire_pid` returns; its other members
+        // (the loop's `sleep`) can take a moment to exit and be reaped, longer
+        // on a loaded CI runner.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while unsafe { libc::kill(-(pid as i32), 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(unsafe { libc::kill(-(pid as i32), 0) }, -1);
     }
     #[test]
