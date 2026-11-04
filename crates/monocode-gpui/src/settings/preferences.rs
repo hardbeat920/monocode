@@ -10,6 +10,10 @@ pub(crate) struct Preferences {
     // General
     pub sounds: bool,
     pub notifications: bool,
+    /// Notices to paired phones wait until this Mac has sat idle, or locked.
+    pub phone_alerts_when_away: bool,
+    /// How long the Mac sits idle before it counts as away, in minutes.
+    pub phone_away_minutes: u32,
     pub project_notifications: serde_json::Value,
     pub notification_projects: serde_json::Value,
     pub file_tabs: String,
@@ -116,6 +120,8 @@ impl Default for Preferences {
         Self {
             sounds: true,
             notifications: false,
+            phone_alerts_when_away: true,
+            phone_away_minutes: 3,
             project_notifications: serde_json::json!({}),
             notification_projects: serde_json::json!([]),
             file_tabs: "pane".into(),

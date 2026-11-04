@@ -68,6 +68,9 @@ raw-window-handle = "0.6"
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle"] }
 objc2-user-notifications = "0.3"
+# The Mac's idle time and lock state, for holding phone notices until the user is away.
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEventSource", "CGEventTypes", "CGSession"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
 # libmalloc keeps freed large spans dirty, so startup and image churn stayed
 # resident. mimalloc 3 retains churn the same way; the v2 feature pins 2.x.
 mimalloc = { version = "0.1", default-features = false, features = ["v2"] }

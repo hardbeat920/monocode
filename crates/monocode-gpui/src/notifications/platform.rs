@@ -44,6 +44,14 @@ pub fn drain_clicks() -> Vec<Target> {
 #[cfg(not(target_os = "macos"))]
 pub fn set_dock_badge(_: usize) {}
 #[cfg(not(target_os = "macos"))]
+pub fn idle_seconds() -> Option<f64> {
+    None
+}
+#[cfg(not(target_os = "macos"))]
+pub fn screen_locked() -> bool {
+    false
+}
+#[cfg(not(target_os = "macos"))]
 pub fn dismiss(_: &str) {}
 #[cfg(not(target_os = "macos"))]
 pub fn open_settings() -> Result<(), String> {

@@ -346,6 +346,7 @@ impl Shell {
                         }
                         this.poll_reminders(cx);
                         this.poll_linked_activity(cx);
+                        this.poll_presence(cx);
                         // Scheduled mutes expire without a preference change;
                         // redraw when one does, not on every tick.
                         let passed = this
@@ -372,7 +373,7 @@ impl Shell {
         }));
     }
 
-    fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
+    pub(super) fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
         let mut views: Vec<_> = self.sessions.values().cloned().collect();
         if let Some(monos) = &self.monos {
             views.extend(monos.read(cx).all_notification_chats(cx));
