@@ -111,10 +111,13 @@ describe("grok live turn sequence", () => {
     });
     await handshake();
     await waitFor(
-      () => parse().some((m) => m.method === "session/set_mode"),
-      "set_mode",
+      () => parse().some((m) => m.method === "session/set_config_option"),
+      "set_config_option",
     );
-    reply(parse().find((m) => m.method === "session/set_mode")!.id, {});
+    reply(
+      parse().find((m) => m.method === "session/set_config_option")!.id,
+      { configOptions: [] },
+    );
     await waitFor(
       () => parse().some((m) => m.method === "session/prompt"),
       "prompt",
@@ -228,6 +231,64 @@ describe("grok live turn sequence", () => {
     expect(turn2Events.some((e) => e.type === "session.ended")).toBe(true);
     expect(turn1Events.some((e) => e.type === "session.ended")).toBe(false);
     await stopGrokSession("t3");
+  });
+
+  it("applies the selected reasoning effort as a session config option on every turn", async () => {
+    const base = {
+      sessionId: "t5",
+      cwd: "/repo",
+      model: "grok:grok-4.6",
+      runtimeMode: "supervised" as const,
+      attachments: [],
+      onEvent: () => undefined,
+    };
+    const effortRequest = () =>
+      parse().find((m) => m.method === "session/set_config_option");
+    const finishTurn = async (label: string) => {
+      await waitFor(
+        () => parse().some((m) => m.method === "session/prompt"),
+        label,
+      );
+      reply(parse().find((m) => m.method === "session/prompt")!.id, {
+        stopReason: "end_turn",
+      });
+    };
+
+    // `session/set_mode` is a no-op for effort in Grok Build; only the
+    // `reasoning_effort` config option changes it on a live session.
+    const turn1 = sendGrokTurn({
+      ...base,
+      modelSettings: { effort: "xhigh" },
+      text: "hey",
+    });
+    await handshake();
+    await waitFor(() => effortRequest() != null, "set_config_option t1");
+    expect(effortRequest()!.params).toEqual({
+      sessionId: "S1",
+      configId: "reasoning_effort",
+      value: "xhigh",
+    });
+    reply(effortRequest()!.id, { configOptions: [] });
+    await finishTurn("prompt t1");
+    await turn1;
+    expect(parse().some((m) => m.method === "session/set_mode")).toBe(false);
+
+    sent.length = 0;
+    const turn2 = sendGrokTurn({
+      ...base,
+      modelSettings: { effort: "low" },
+      text: "again",
+    });
+    await waitFor(() => effortRequest() != null, "set_config_option t2");
+    expect(effortRequest()!.params).toEqual({
+      sessionId: "S1",
+      configId: "reasoning_effort",
+      value: "low",
+    });
+    reply(effortRequest()!.id, { configOptions: [] });
+    await finishTurn("prompt t2");
+    await turn2;
+    await stopGrokSession("t5");
   });
 
   it("compacts with Grok's ACP extension instead of a slash-command prompt", async () => {
