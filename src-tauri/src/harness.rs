@@ -551,6 +551,54 @@ impl HarnessHost {
     }
 
     pub(crate) fn kill_all(&self) {
+        #[cfg(not(windows))]
+        self.kill_all_with(signal_login_tree);
+        #[cfg(windows)]
+        self.kill_all_windows();
+    }
+
+    #[cfg(not(windows))]
+    fn kill_all_with(&self, stop_login: impl Fn(u32) -> Result<(), String>) {
+        let (kids, logins) = {
+            let mut inner = self.lock_inner();
+            self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
+            let mut kids = Vec::new();
+            inner.children.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.clone());
+                    false
+                }
+            });
+            inner.stopping.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.clone());
+                    false
+                }
+            });
+            let logins: HashSet<_> = inner
+                .children
+                .keys()
+                .chain(inner.stopping.keys())
+                .cloned()
+                .collect();
+            inner.login_lines.retain(|id, _| logins.contains(id));
+            (kids, logins)
+        };
+        self.stop_all_sse();
+        let pids: Vec<_> = kids.iter().map(|live| live.pid).collect();
+        drop(kids);
+        terminate_all(&pids);
+        for id in logins {
+            let _ = self.stop_session_with(&id, false, &stop_login);
+        }
+    }
+
+    #[cfg(windows)]
+    fn kill_all_windows(&self) {
         let kids: Vec<(String, Arc<LiveChild>)> =
             {
                 let mut inner = self.lock_inner();
@@ -4084,6 +4132,57 @@ mod tests {
         assert!(!stopper.join().unwrap().unwrap().completed);
         assert_eq!(waiter.join().unwrap(), Some(0));
         assert!(still_owned && not_reaped);
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn kill_all_keeps_login_identity_and_reservation_until_group_signal() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("sleep 30 & read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (signal_tx, signal_rx) = mpsc::channel();
+        let cleanup_host = host.clone();
+        let cleanup = thread::spawn(move || {
+            cleanup_host.kill_all_with(|selected_pid| {
+                selected_tx.send(selected_pid).unwrap();
+                signal_rx.recv().unwrap();
+                signal_login_tree(selected_pid)
+            });
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        assert!(host.get(id).is_some());
+        assert!(host.begin_spawn(id).is_err());
+        assert!(host.begin_spawn("monocode-provider-login-codex").is_ok());
+        signal_tx.send(()).unwrap();
+        cleanup.join().unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(!tree_alive(pid));
         host.acknowledge_login_exit(id, pid).unwrap();
         assert!(host.begin_spawn(id).is_ok());
     }
