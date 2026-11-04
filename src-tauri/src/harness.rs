@@ -350,6 +350,22 @@ impl HarnessHost {
         inner.children.remove(session_id)
     }
 
+    fn publish_exit(&self, session_id: &str, pid: u32, emit: impl FnOnce()) {
+        #[cfg(not(windows))]
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+            // A concurrent cancel must still find the login child until exit is published.
+            emit();
+            if self.remove_if_pid(session_id, pid).is_some() {
+                self.stop_sse(session_id);
+            }
+            return;
+        }
+        if self.remove_if_pid(session_id, pid).is_some() {
+            self.stop_sse(session_id);
+        }
+        emit();
+    }
+
     #[cfg(any(windows, test))]
     fn login_snapshot(&self, session_id: &str) -> Option<LoginSnapshot> {
         if !session_id.starts_with(LOGIN_CHILD_PREFIX) {
@@ -1250,19 +1266,19 @@ pub fn harness_spawn(
         if let Some(store) = wait_store {
             store.sync_auth();
         }
+        let exit = HarnessExit {
+            session_id: wait_id.clone(),
+            code,
+            pid: wait_pid,
+        };
+        let emit = || {
+            let _ = wait_app.emit(EXIT_EVENT, exit);
+        };
         if let Some(host) = wait_app.try_state::<HarnessHost>() {
-            if host.remove_if_pid(&wait_id, wait_pid).is_some() {
-                host.stop_sse(&wait_id);
-            }
+            host.publish_exit(&wait_id, wait_pid, emit);
+        } else {
+            emit();
         }
-        let _ = wait_app.emit(
-            EXIT_EVENT,
-            HarnessExit {
-                session_id: wait_id,
-                code,
-                pid: wait_pid,
-            },
-        );
     });
 
     Ok(pid)
@@ -3821,6 +3837,38 @@ mod tests {
             "successful login waited for its browser child"
         );
         assert!(descendant_alive, "test did not retain a browser descendant");
+    }
+
+    #[test]
+    fn cancel_during_exit_publication_stops_descendant_before_retry() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let reservation = LoginSpawnReservation {
+            host: &host,
+            session_id: id,
+        };
+        let (live, child) = live_group("sleep 30 & exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_none());
+        drop(reservation);
+        assert_eq!(wait_for_child_exit(child), Some(0));
+        assert!(tree_alive(pid));
+        let mut descendant_alive_after_cancel = false;
+        let mut retry_blocked_during_exit = false;
+        host.publish_exit(id, pid, || {
+            host.stop_session_with(id, false, stop_login_tree).unwrap();
+            descendant_alive_after_cancel = tree_alive(pid);
+            retry_blocked_during_exit = host.begin_spawn(id).is_err();
+        });
+        if descendant_alive_after_cancel {
+            stop_login_tree(pid).unwrap();
+        }
+        assert!(!descendant_alive_after_cancel);
+        assert!(retry_blocked_during_exit);
+        assert!(host.begin_spawn(id).is_ok());
     }
 
     #[test]
