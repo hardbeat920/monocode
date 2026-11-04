@@ -714,6 +714,7 @@ impl Monos {
             .count();
         let lines = div()
             .flex()
+            .flex_wrap()
             .items_end()
             .gap_1p5()
             .text_size(px(20.))
