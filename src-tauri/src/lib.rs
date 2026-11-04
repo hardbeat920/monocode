@@ -513,6 +513,7 @@ pub fn run() {
             harness::harness_login_mode,
             harness::harness_login_snapshot,
             harness::harness_stop,
+            harness::harness_ack_login_exit,
             harness::harness_kill_all,
             harness::harness_http,
             harness::harness_sse_open,

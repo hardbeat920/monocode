@@ -86,7 +86,7 @@ describe("child bridge", () => {
     });
     snapshot.resolve({ pid: 42, line: "link" });
     await expect(attaching).resolves.toBe("link");
-    expect(onExit).toHaveBeenCalledWith(0);
+    expect(onExit).toHaveBeenCalledWith(0, 42);
     release();
   });
   it("waits until every listener is installed", async () => {
@@ -168,7 +168,7 @@ describe("child bridge", () => {
 
     spawned.resolve(42);
     await spawning;
-    expect(onExit).toHaveBeenCalledWith(1);
+    expect(onExit).toHaveBeenCalledWith(1, 42);
     release();
   });
 
@@ -195,6 +195,12 @@ describe("child bridge", () => {
       payload: { sessionId: "login", code: null, pid: 42 } as never,
     });
     expect(onExit).toHaveBeenCalledOnce();
+    expect(onExit).toHaveBeenCalledWith(null, 42);
+    await child.acknowledgeLoginExit("login", 42);
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_ack_login_exit", {
+      sessionId: "login",
+      pid: 42,
+    });
     release();
   });
 

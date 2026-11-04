@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const child = vi.hoisted(() => ({
   killChild: vi.fn(async () => undefined),
   stopChild: vi.fn(async () => undefined),
+  acknowledgeLoginExit: vi.fn(async () => undefined),
   attachLogin: vi.fn<(_id: string) => Promise<string | null | undefined>>(
     async () => undefined,
   ),
@@ -43,6 +44,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   child.killChild.mockReset().mockResolvedValue(undefined);
   child.stopChild.mockReset();
+  child.acknowledgeLoginExit.mockReset().mockResolvedValue(undefined);
   child.attachLogin.mockReset().mockResolvedValue(undefined);
   child.loginMode.mockReset().mockResolvedValue("terminate");
   child.stopChild.mockImplementation(async (id: string) => {
@@ -159,6 +161,74 @@ describe("harness login", () => {
     await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
     (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
     await expect(second).resolves.toBeUndefined();
+  });
+
+  it("waits for completion acknowledgment when cancel races delayed exit delivery", async () => {
+    let acknowledge!: () => void;
+    child.acknowledgeLoginExit.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (acknowledge = resolve)),
+    );
+    child.stopChild
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ completed: true, code: 0, pid: 42 } as never);
+    const controller = new AbortController();
+    const first = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    await vi.waitFor(() =>
+      expect(child.acknowledgeLoginExit).toHaveBeenCalledWith(
+        "monocode-provider-login-test-window-claude",
+        42,
+      ),
+    );
+    const queued = loginHarness("claude");
+    expect(child.spawnChild).toHaveBeenCalledOnce();
+    acknowledge();
+    await expect(first).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await queued;
+  });
+
+  it("retries a failed exit acknowledgment before starting another login", async () => {
+    child.acknowledgeLoginExit.mockRejectedValueOnce(new Error("IPC failed"));
+    const first = loginHarness("claude");
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    (
+      child.watchChild.mock.calls[0]?.[2] as (code: number, pid: number) => void
+    )(0, 42);
+    await expect(first).rejects.toThrow("Could not acknowledge sign-in exit");
+    child.stopChild.mockResolvedValueOnce({
+      completed: true,
+      code: 0,
+      pid: 42,
+    } as never);
+    const second = loginHarness("claude");
+    await vi.waitFor(() =>
+      expect(child.acknowledgeLoginExit).toHaveBeenCalledTimes(2),
+    );
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
+    (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);
+    await expect(second).resolves.toBeUndefined();
+  });
+
+  it("preserves a failed exit when cancel races delayed delivery", async () => {
+    child.stopChild
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ completed: true, code: 7, pid: 42 } as never);
+    const controller = new AbortController();
+    const login = loginHarness("claude", undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(login).rejects.toThrow("exited with code 7");
+    expect(child.acknowledgeLoginExit).toHaveBeenCalledWith(
+      "monocode-provider-login-test-window-claude",
+      42,
+    );
   });
 
   it("detaches a Windows login and reconnects a new caller to its URL and result", async () => {

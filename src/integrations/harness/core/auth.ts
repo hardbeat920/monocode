@@ -172,7 +172,7 @@ export function loginHarness(
         owned.controller.abort();
       if (owned.controller.signal.aborted) {
         void waitForLoginCleanup(owned).then(
-          () => reject(new Error("Sign-in cancelled.")),
+          () => void owned.promise.then(resolve, reject),
           reject,
         );
       } else
@@ -287,7 +287,11 @@ async function runHarnessLogin(
     );
   const childId = loginChildId(harness, accountId, mode);
   run.childId = childId;
-  if (mode === "terminate") await child.stopChild(childId);
+  if (mode === "terminate") {
+    const previous = await child.stopChild(childId);
+    if (previous?.completed && previous.pid != null)
+      await child.acknowledgeLoginExit(childId, previous.pid);
+  }
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
 
   return new Promise<void>((resolve, reject) => {
@@ -297,23 +301,26 @@ async function runHarnessLogin(
     let spawn: Promise<void>;
     let abort = () => undefined;
     let exited = false;
+    let exitPid: number | undefined;
     let stopPending = false;
     let stopComplete = false;
     let stopReason = "Sign-in cancelled.";
 
     const maybeFinishStop = () => {
-      if (exited && stopComplete) finish(new Error(stopReason));
+      if (exited && stopComplete) finish(new Error(stopReason), exitPid);
     };
     const requestStop = () => {
       if (settled || stopPending || stopComplete) return;
       stopPending = true;
       run.stopError = undefined;
       void child.stopChild(childId, true).then(
-        () => {
+        (result) => {
           stopPending = false;
           stopComplete = true;
           run.stopError = undefined;
-          maybeFinishStop();
+          if (result?.completed)
+            completeExit(result.code, result.pid ?? undefined);
+          else maybeFinishStop();
         },
         (error: unknown) => {
           stopPending = false;
@@ -324,14 +331,42 @@ async function runHarnessLogin(
       );
     };
 
-    const finish = (error?: Error) => {
+    const finish = (error?: Error, acknowledgePid?: number) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       run.controller.signal.removeEventListener("abort", abort);
       child.unwatchChild(childId);
-      if (error) reject(error);
-      else resolve();
+      const settle = (reason?: Error) => {
+        if (reason) reject(reason);
+        else resolve();
+      };
+      if (mode === "terminate" && acknowledgePid != null)
+        void child.acknowledgeLoginExit(childId, acknowledgePid).then(
+          () => settle(error),
+          (reason: unknown) =>
+            settle(
+              new Error(
+                `Could not acknowledge sign-in exit: ${reason instanceof Error ? reason.message : String(reason)}`,
+              ),
+            ),
+        );
+      else settle(error);
+    };
+
+    const completeExit = (code: number | null, pid?: number) => {
+      if (code === 0) {
+        finish(undefined, pid);
+        return;
+      }
+      const detail = safeLoginDetail(lastError);
+      finish(
+        new Error(
+          detail ||
+            `${HARNESS_TITLE[harness]} sign-in exited${code == null ? " unexpectedly" : ` with code ${code}`}.`,
+        ),
+        pid,
+      );
     };
 
     const handleLine = (line: string) => {
@@ -359,23 +394,14 @@ async function runHarnessLogin(
     child.watchChild(
       childId,
       handleLine,
-      (code) => {
+      (code, pid) => {
+        exited = true;
+        exitPid = pid;
         if (run.controller.signal.aborted) {
-          exited = true;
           maybeFinishStop();
           return;
         }
-        if (code === 0) {
-          finish();
-          return;
-        }
-        const detail = safeLoginDetail(lastError);
-        finish(
-          new Error(
-            detail ||
-              `${HARNESS_TITLE[harness]} sign-in exited${code == null ? " unexpectedly" : ` with code ${code}`}.`,
-          ),
-        );
+        completeExit(code, pid);
       },
       (line) => {
         if (line.trim()) lastError = line.trim();

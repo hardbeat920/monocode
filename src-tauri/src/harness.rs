@@ -168,6 +168,7 @@ struct LiveSse {
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     stopping: HashMap<String, Arc<LiveChild>>,
+    completed_logins: HashMap<String, (u32, Option<i32>)>,
     spawning: HashSet<String>,
     uncertain: HashSet<String>,
     login_lines: HashMap<String, String>,
@@ -205,6 +206,7 @@ impl HarnessHost {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
                 stopping: HashMap::new(),
+                completed_logins: HashMap::new(),
                 spawning: HashSet::new(),
                 uncertain: HashSet::new(),
                 login_lines: HashMap::new(),
@@ -230,9 +232,16 @@ impl HarnessHost {
         session_id: &str,
         require_existing: bool,
         stop: impl FnOnce(u32) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<LoginStopResult, String> {
         let live = {
             let mut inner = self.lock_inner();
+            if let Some(&(pid, code)) = inner.completed_logins.get(session_id) {
+                return Ok(LoginStopResult {
+                    completed: true,
+                    code,
+                    pid: Some(pid),
+                });
+            }
             let live = inner
                 .stopping
                 .get(session_id)
@@ -257,7 +266,11 @@ impl HarnessHost {
                 inner.stopping.remove(session_id);
             }
         }
-        Ok(())
+        Ok(LoginStopResult {
+            completed: false,
+            code: None,
+            pid: None,
+        })
     }
 
     pub(crate) fn process_roots(&self) -> Vec<crate::resources::ProcessRoot> {
@@ -278,6 +291,9 @@ impl HarnessHost {
         let mut inner = self.lock_inner();
         if inner.stopping.contains_key(session_id) {
             return Err("Previous harness process has not exited".into());
+        }
+        if inner.completed_logins.contains_key(session_id) {
+            return Err("Previous login exit has not been acknowledged".into());
         }
         if inner.uncertain.contains(session_id) {
             return Err(if cfg!(windows) {
@@ -350,14 +366,51 @@ impl HarnessHost {
         inner.children.remove(session_id)
     }
 
+    #[cfg(not(windows))]
+    fn wait_for_login_exit(&self, session_id: &str, pid: u32, child: &mut Child) -> Option<i32> {
+        loop {
+            let mut inner = self.lock_inner();
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // A stop arriving after reaping sees completion, never a reusable PID.
+                    let code = status.code();
+                    if inner.children.get(session_id).map(|live| live.pid) == Some(pid) {
+                        inner.children.remove(session_id);
+                        inner.login_lines.remove(session_id);
+                        inner
+                            .completed_logins
+                            .insert(session_id.to_owned(), (pid, code));
+                    }
+                    return code;
+                }
+                Ok(None) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    inner.uncertain.insert(session_id.to_owned());
+                    return None;
+                }
+            }
+            drop(inner);
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn acknowledge_login_exit(&self, session_id: &str, pid: u32) -> Result<(), String> {
+        let mut inner = self.lock_inner();
+        match inner.completed_logins.get(session_id) {
+            Some((current, _)) if *current == pid => {
+                inner.completed_logins.remove(session_id);
+            }
+            Some(_) => return Err("Sign-in exit belongs to a different process".into()),
+            None => {}
+        }
+        Ok(())
+    }
+
     fn publish_exit(&self, session_id: &str, pid: u32, emit: impl FnOnce()) {
         #[cfg(not(windows))]
         if session_id.starts_with(LOGIN_CHILD_PREFIX) {
-            // A concurrent cancel must still find the login child until exit is published.
             emit();
-            if self.remove_if_pid(session_id, pid).is_some() {
-                self.stop_sse(session_id);
-            }
             return;
         }
         if self.remove_if_pid(session_id, pid).is_some() {
@@ -457,6 +510,7 @@ impl HarnessHost {
                 self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
                 let mut kids: Vec<_> = inner.children.drain().collect();
                 kids.extend(inner.stopping.drain());
+                inner.completed_logins.clear();
                 inner.login_lines.clear();
                 #[cfg(windows)]
                 inner.uncertain.extend(kids.iter().filter_map(|(id, _)| {
@@ -1260,6 +1314,18 @@ pub fn harness_spawn(
     let wait_id = session_id.clone();
     let wait_pid = pid;
     thread::spawn(move || {
+        #[cfg(not(windows))]
+        let code = if wait_id.starts_with(LOGIN_CHILD_PREFIX) {
+            let mut child = child;
+            if let Some(host) = wait_app.try_state::<HarnessHost>() {
+                host.wait_for_login_exit(&wait_id, wait_pid, &mut child)
+            } else {
+                wait_for_child_exit(child)
+            }
+        } else {
+            wait_for_child_exit(child)
+        };
+        #[cfg(windows)]
         let code = wait_for_child_exit(child);
         // Deliver the final batched lines before the exit that follows them.
         let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
@@ -1464,6 +1530,14 @@ pub struct LoginSnapshot {
     line: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginStopResult {
+    completed: bool,
+    code: Option<i32>,
+    pid: Option<u32>,
+}
+
 #[tauri::command]
 pub fn harness_login_snapshot(
     host: State<'_, HarnessHost>,
@@ -1485,7 +1559,7 @@ pub fn harness_stop(
     host: State<'_, HarnessHost>,
     session_id: String,
     require_existing: Option<bool>,
-) -> Result<(), String> {
+) -> Result<LoginStopResult, String> {
     #[cfg(windows)]
     {
         let _ = (host, session_id, require_existing);
@@ -1496,6 +1570,15 @@ pub fn harness_stop(
         let _ = require_existing;
         host.stop_session_with(&session_id, false, stop_login_tree)
     }
+}
+
+#[tauri::command]
+pub fn harness_ack_login_exit(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+    pid: u32,
+) -> Result<(), String> {
+    host.acknowledge_login_exit(&session_id, pid)
 }
 
 #[cfg(not(windows))]
@@ -3840,7 +3923,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_during_exit_publication_stops_descendant_before_retry() {
+    fn completed_login_waits_for_frontend_ack_before_retry() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-claude";
         let (epoch, generation, _) = host.begin_spawn(id).unwrap();
@@ -3848,26 +3931,52 @@ mod tests {
             host: &host,
             session_id: id,
         };
-        let (live, child) = live_group("sleep 30 & exit 0");
+        let (live, mut child) = live_group("sleep 30 & exit 0");
         let pid = live.pid;
         assert!(host
             .install_spawn(id.into(), epoch, generation, live)
             .is_none());
         drop(reservation);
-        assert_eq!(wait_for_child_exit(child), Some(0));
+        assert_eq!(host.wait_for_login_exit(id, pid, &mut child), Some(0));
         assert!(tree_alive(pid));
-        let mut descendant_alive_after_cancel = false;
-        let mut retry_blocked_during_exit = false;
+        let mut completed = None;
         host.publish_exit(id, pid, || {
-            host.stop_session_with(id, false, stop_login_tree).unwrap();
-            descendant_alive_after_cancel = tree_alive(pid);
-            retry_blocked_during_exit = host.begin_spawn(id).is_err();
+            completed = Some(host.stop_session_with(id, false, stop_login_tree).unwrap());
+            assert!(host.begin_spawn(id).is_err());
         });
-        if descendant_alive_after_cancel {
-            stop_login_tree(pid).unwrap();
-        }
-        assert!(!descendant_alive_after_cancel);
-        assert!(retry_blocked_during_exit);
+        let completed = completed.unwrap();
+        assert!(completed.completed);
+        assert_eq!(completed.code, Some(0));
+        assert_eq!(completed.pid, Some(pid));
+        assert!(tree_alive(pid));
+        assert!(host.begin_spawn(id).is_err());
+        assert!(host.acknowledge_login_exit(id, pid + 1).is_err());
+        assert!(host.begin_spawn(id).is_err());
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+        stop_login_tree(pid).unwrap();
+    }
+
+    #[test]
+    fn active_login_stop_waits_for_tree_cleanup_before_ack_and_retry() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        thread::sleep(Duration::from_millis(100));
+        let stopped = host.stop_session_with(id, true, stop_login_tree).unwrap();
+        assert!(!stopped.completed);
+        assert_eq!(waiter.join().unwrap(), None);
+        assert!(!tree_alive(pid));
+        assert!(host.begin_spawn(id).is_err());
+        host.acknowledge_login_exit(id, pid).unwrap();
         assert!(host.begin_spawn(id).is_ok());
     }
 
