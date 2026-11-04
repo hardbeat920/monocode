@@ -78,6 +78,9 @@ export function loadRateLimits(
   force = false,
 ): Promise<ProviderRateLimits> {
   const key = keyFor(provider, accountId);
+  if (force) {
+    cancelRateLimitsAutoRefresh(provider, accountId);
+  }
   const running = pending.get(key);
   if (running) {
     if (!force) return running;
@@ -122,11 +125,62 @@ export function loadRateLimits(
   return run;
 }
 
+const autoRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export const AUTO_REFRESH_DEBOUNCE_MS = 1500;
+
+/** Debounces rate-limit refresh per provider:account to combine closely spaced completions. */
+export function scheduleRateLimitsAutoRefresh(
+  provider: RateLimitProvider,
+  accountId = "default",
+  debounceMs = AUTO_REFRESH_DEBOUNCE_MS,
+): () => void {
+  const key = keyFor(provider, accountId);
+  const existing = autoRefreshTimers.get(key);
+  if (existing) clearTimeout(existing);
+
+  const scheduledAt = Date.now();
+  const timer = setTimeout(() => {
+    autoRefreshTimers.delete(key);
+    const cached = snapshots.get(key);
+    if (cached && cached.updatedAt > scheduledAt) {
+      return;
+    }
+    void loadRateLimits(provider, accountId, true);
+  }, debounceMs);
+
+  autoRefreshTimers.set(key, timer);
+  return () => {
+    if (autoRefreshTimers.get(key) === timer) {
+      clearTimeout(timer);
+      autoRefreshTimers.delete(key);
+    }
+  };
+}
+
+export function cancelRateLimitsAutoRefresh(
+  provider?: RateLimitProvider,
+  accountId?: string,
+): void {
+  if (provider && accountId) {
+    const key = keyFor(provider, accountId);
+    const existing = autoRefreshTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      autoRefreshTimers.delete(key);
+    }
+  } else {
+    for (const timer of autoRefreshTimers.values()) clearTimeout(timer);
+    autoRefreshTimers.clear();
+  }
+}
+
 /** Also used when an account is removed and by tests that need a clean cache. */
 export function clearCachedRateLimits(
   provider?: RateLimitProvider,
   accountId?: string,
 ): void {
+  cancelRateLimitsAutoRefresh(provider, accountId);
   if (provider && accountId) {
     const key = keyFor(provider, accountId);
     snapshots.delete(key);
@@ -138,3 +192,4 @@ export function clearCachedRateLimits(
   }
   for (const listener of listeners) listener();
 }
+
