@@ -129,6 +129,7 @@ actions!(
         FocusPaneDown,
         ToggleTerminal,
         NewTerminal,
+        SplitTerminal,
         ToggleLayout,
         ToggleWorkspaceStyle,
         OpenSettings,
@@ -250,6 +251,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-shift-b"), ToggleRightPanel, context),
         KeyBinding::new(&format!("{modifier}-d"), SplitRight, context),
         KeyBinding::new(&format!("{modifier}-j"), ToggleTerminal, context),
+        KeyBinding::new(&format!("{modifier}-shift-j"), SplitTerminal, context),
         KeyBinding::new(&format!("{modifier}-`"), NewTerminal, context),
         // Switch between the original two-sidebar layout and the new layout.
         KeyBinding::new(&format!("{modifier}-shift-l"), ToggleLayout, context),
@@ -7999,6 +8001,15 @@ impl Shell {
                     .tab_drag
                     .as_ref()
                     .is_some_and(|d| d.id == TitleTab::Session(id) && d.active);
+                // Any chat in the tab with a saved draft dashes its plate, as
+                // the sidebar card does.
+                let draft = self
+                    .workspace
+                    .layout(id)
+                    .leaf_ids()
+                    .into_iter()
+                    .filter(|pane| self.session_summaries.contains_key(pane))
+                    .any(|pane| self.session_metadata(pane, cx).has_saved_draft());
                 let tab = div()
                     .id(("tab", id as usize))
                     .debug_selector(move || format!("title-tab-{id}"))
@@ -8033,6 +8044,21 @@ impl Shell {
                             })
                             .gap(px(TAB_TILE_GAP))
                             .group_hover("title-tab", |s| s.bg(title_tab_fill(active, true)))
+                            // Overlaid so the dashes take no room from the content.
+                            .when(draft, |d| {
+                                d.relative().child(
+                                    div()
+                                        .debug_selector(move || format!("title-tab-draft-{id}"))
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_dashed()
+                                        .border_color(content(if active { 0.3 } else { 0.25 })),
+                                )
+                            })
                             .child(self.pane_tile_stack(&copy, leaving, shuffle))
                             .child(self.pane_headline(
                                 &copy,
@@ -9036,6 +9062,15 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &SplitTerminal, window, cx| {
+                // Title bar terminals split beside the focused pane; the dock
+                // and panel placements have no pane to split, so add a tab.
+                if this.terminal_in_title() {
+                    this.split_title_terminal(window, cx)
+                } else {
+                    this.new_terminal(window, cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| this.toggle_layout(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleWorkspaceStyle, _, cx| {
