@@ -174,6 +174,8 @@ struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     stopping: HashMap<String, Arc<LiveChild>>,
     login_accounts: HashMap<String, String>,
+    #[cfg(not(windows))]
+    rejected: HashMap<String, RejectedChild>,
     failed_stops: HashSet<String>,
     completed_logins: HashMap<String, (u32, Option<i32>)>,
     spawning: HashSet<String>,
@@ -188,6 +190,12 @@ pub struct HarnessHost {
     runtime_binary_paths: Mutex<Option<HashMap<String, String>>>,
     /// Bumped by `kill_all` so a spawn that started before quit cannot reinsert.
     kill_all_gen: AtomicU64,
+}
+
+#[cfg(not(windows))]
+struct RejectedChild {
+    pid: u32,
+    child: Option<Child>,
 }
 
 impl HarnessHost {
@@ -215,6 +223,8 @@ impl HarnessHost {
                 children: HashMap::new(),
                 stopping: HashMap::new(),
                 login_accounts: HashMap::new(),
+                #[cfg(not(windows))]
+                rejected: HashMap::new(),
                 failed_stops: HashSet::new(),
                 completed_logins: HashMap::new(),
                 spawning: HashSet::new(),
@@ -445,6 +455,43 @@ impl HarnessHost {
         Ok(())
     }
 
+    #[cfg(not(windows))]
+    fn recover_rejected(&self, session_id: &str) -> Result<(), String> {
+        let Some(mut rejected) = self.lock_inner().rejected.remove(session_id) else {
+            return Ok(());
+        };
+        let result = cleanup_rejected_child(&mut rejected, signal_login_tree);
+        let mut inner = self.lock_inner();
+        if let Err(error) = result {
+            inner.rejected.insert(session_id.to_owned(), rejected);
+            return Err(format!(
+                "Rejected harness process cleanup is unconfirmed: {error}"
+            ));
+        }
+        inner.uncertain.remove(session_id);
+        inner.login_accounts.remove(session_id);
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn recover_rejected_account(&self, account: &str, new_id: &str) -> Result<(), String> {
+        let ids: Vec<String> = {
+            let inner = self.lock_inner();
+            inner
+                .login_accounts
+                .iter()
+                .filter(|(id, key)| {
+                    *id != new_id && *key == account && inner.rejected.contains_key(*id)
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in ids {
+            self.recover_rejected(&id)?;
+        }
+        Ok(())
+    }
+
     #[cfg(all(test, unix))]
     fn spawn_stamp_current(&self, session_id: &str, epoch: u64, kill_all: u64) -> bool {
         let inner = self.lock_inner();
@@ -485,6 +532,9 @@ impl HarnessHost {
             return None;
         }
         inner.login_lines.remove(session_id);
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+            inner.login_accounts.remove(session_id);
+        }
         inner.children.remove(session_id)
     }
 
@@ -548,8 +598,17 @@ impl HarnessHost {
     }
 
     fn publish_exit(&self, session_id: &str, pid: u32, emit: impl FnOnce()) {
-        #[cfg(not(windows))]
-        if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        self.publish_exit_with_mode(session_id, pid, emit, cfg!(windows));
+    }
+
+    fn publish_exit_with_mode(
+        &self,
+        session_id: &str,
+        pid: u32,
+        emit: impl FnOnce(),
+        detached_login: bool,
+    ) {
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) && !detached_login {
             emit();
             return;
         }
@@ -658,7 +717,7 @@ impl HarnessHost {
 
     #[cfg(not(windows))]
     fn kill_all_with(&self, stop_login: impl Fn(u32) -> Result<(), String>) {
-        let (kids, logins) = {
+        let (kids, logins, rejected) = {
             let mut inner = self.lock_inner();
             inner.shutting_down = true;
             self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
@@ -685,8 +744,9 @@ impl HarnessHost {
                 .chain(inner.stopping.keys())
                 .cloned()
                 .collect();
+            let rejected: Vec<_> = inner.rejected.keys().cloned().collect();
             inner.login_lines.retain(|id, _| logins.contains(id));
-            (kids, logins)
+            (kids, logins, rejected)
         };
         self.stop_all_sse();
         let pids: Vec<_> = kids.iter().map(|live| live.pid).collect();
@@ -694,6 +754,9 @@ impl HarnessHost {
         terminate_all(&pids);
         for id in logins {
             let _ = self.stop_session_with(&id, false, &stop_login);
+        }
+        for id in rejected {
+            let _ = self.recover_rejected(&id);
         }
     }
 
@@ -777,6 +840,7 @@ impl HarnessHost {
                 .chain(inner.stopping.keys())
                 .chain(inner.spawning.iter())
                 .chain(inner.completed_logins.keys())
+                .chain(inner.rejected.keys())
                 .filter(|id| id.starts_with(&prefix))
                 .cloned()
                 .collect();
@@ -787,7 +851,13 @@ impl HarnessHost {
         };
         let mut first_error = None;
         for id in &ids {
-            if let Err(error) = self.stop_session_with(id, false, signal_login_tree) {
+            let result = if self.lock_inner().rejected.contains_key(id) {
+                self.recover_rejected(id)
+            } else {
+                self.stop_session_with(id, false, signal_login_tree)
+                    .map(|_| ())
+            };
+            if let Err(error) = result {
                 first_error.get_or_insert(error);
             }
         }
@@ -1457,8 +1527,11 @@ pub fn harness_spawn(
     };
     #[cfg(not(windows))]
     if let Some(key) = login_account.as_deref() {
+        host.recover_rejected_account(key, &session_id)?;
         host.recover_stopping_account(key, &session_id)?;
     }
+    #[cfg(not(windows))]
+    host.recover_rejected(&session_id)?;
     let (epoch, kill_all, prev) =
         host.begin_spawn_for_account(&session_id, login_account.as_deref())?;
     let _login_spawn = LoginSpawnReservation {
@@ -1507,15 +1580,15 @@ pub fn harness_spawn(
     let pid = child.id();
 
     let Some(stdin) = child.stdin.take() else {
-        reap_rejected_spawn(&host, &session_id, child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
         return Err("Failed to open harness stdin".into());
     };
     let Some(stdout) = child.stdout.take() else {
-        reap_rejected_spawn(&host, &session_id, child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
         return Err("Failed to open harness stdout".into());
     };
     let Some(stderr) = child.stderr.take() else {
-        reap_rejected_spawn(&host, &session_id, child, pid);
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
         return Err("Failed to open harness stderr".into());
     };
 
@@ -1533,7 +1606,7 @@ pub fn harness_spawn(
         // Returning `Ok` here would hand the caller a dead pid to store as the
         // session's live child, and this child's stdout would be parsed as the
         // stream that replaced it. Reap it without emitting anything.
-        reap_rejected_spawn(&host, &session_id, child, rejected.pid);
+        reap_rejected_spawn(&host, &session_id, child, rejected.pid)?;
         return Err(SPAWN_CANCELLED.to_string());
     }
 
@@ -1780,6 +1853,8 @@ pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<
     if session_id.starts_with(LOGIN_CHILD_PREFIX) {
         return Err("Use sign-in cancellation to stop a login process".into());
     }
+    #[cfg(not(windows))]
+    host.recover_rejected(&session_id)?;
     if let Some(live) = host.kill_session(&session_id) {
         terminate(live.pid);
     }
@@ -1933,20 +2008,85 @@ fn wait_for_child_exit(mut child: Child) -> Option<i32> {
     child.wait().ok().and_then(|status| status.code())
 }
 
-fn reap_rejected_spawn(host: &HarnessHost, session_id: &str, child: Child, pid: u32) {
+fn reap_rejected_spawn(
+    host: &HarnessHost,
+    session_id: &str,
+    child: Child,
+    pid: u32,
+) -> Result<(), String> {
     #[cfg(windows)]
     {
         let _ = pid;
         reap_rejected_windows(host, session_id, child);
+        Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = (host, session_id);
-        let mut child = child;
-        terminate_all(&[pid]);
-        let _ = child.wait();
-        let _ = wait_for_login_tree_exit(pid);
+        reap_rejected_spawn_with(host, session_id, child, pid, signal_login_tree)
     }
+}
+
+#[cfg(not(windows))]
+fn reap_rejected_spawn_with(
+    host: &HarnessHost,
+    session_id: &str,
+    child: Child,
+    pid: u32,
+    signal: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut rejected = RejectedChild {
+        pid,
+        child: Some(child),
+    };
+    if let Err(error) = cleanup_rejected_child(&mut rejected, signal) {
+        let mut inner = host.lock_inner();
+        inner.uncertain.insert(session_id.to_owned());
+        inner.rejected.insert(session_id.to_owned(), rejected);
+        return Err(format!(
+            "Rejected harness process cleanup is unconfirmed: {error}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn cleanup_rejected_child(
+    rejected: &mut RejectedChild,
+    signal: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<(), String> {
+    if let Some(child) = rejected.child.as_mut() {
+        let result = signal(rejected.pid);
+        #[cfg(unix)]
+        let leader_exited = result.is_err() && login_leader_exited(rejected.pid);
+        #[cfg(not(unix))]
+        let leader_exited = false;
+        if !leader_exited {
+            result?;
+        }
+        let deadline = Instant::now() + LOGIN_TREE_EXIT_WAIT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    rejected.child = None;
+                    break;
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => return Err("Rejected harness process did not exit in time".into()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    if Instant::now() >= deadline {
+                        return Err("Rejected harness process exit was interrupted".into());
+                    }
+                }
+                Err(error) => {
+                    rejected.child = None;
+                    return Err(format!("Could not confirm rejected process exit: {error}"));
+                }
+            }
+        }
+    }
+    wait_for_login_tree_exit(rejected.pid)
 }
 
 #[cfg(any(windows, test))]
@@ -4535,6 +4675,40 @@ mod tests {
     }
 
     #[test]
+    fn detached_login_exit_releases_only_its_matching_account_reservation() {
+        let host = HarnessHost::new();
+        let first = "monocode-provider-login-claude-named";
+        let second = "monocode-provider-login-workspace-2-claude-named";
+        let (epoch, generation, _) = host
+            .begin_spawn_for_account(first, Some("claude:named"))
+            .unwrap();
+        let (live, mut child) = live_group("exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(first.into(), epoch, generation, live)
+            .is_none());
+        host.lock_inner().spawning.remove(first);
+        assert!(child.wait().unwrap().success());
+        host.publish_exit_with_mode(first, pid + 1, || {}, true);
+        assert!(host.has_login_account("claude", "named"));
+        let mut emitted = false;
+        host.publish_exit_with_mode(
+            first,
+            pid,
+            || {
+                emitted = true;
+                assert!(!host.has_login_account("claude", "named"));
+            },
+            true,
+        );
+        assert!(emitted);
+        assert!(!host.has_login_account("claude", "named"));
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:named"))
+            .is_ok());
+    }
+
+    #[test]
     fn window_unload_invalidates_its_pending_login_without_releasing_account_early() {
         let host = HarnessHost::new();
         let id = "monocode-provider-login-main-claude";
@@ -4773,10 +4947,93 @@ mod tests {
 
     #[test]
     fn rejected_spawn_is_reaped_before_reporting_failure() {
-        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let (live, child) =
+            live_group("trap '' TERM; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait");
         let pid = live.pid;
-        reap_rejected_spawn(&HarnessHost::new(), "login", child, pid);
+        reap_rejected_spawn(&HarnessHost::new(), "login", child, pid).unwrap();
         assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn rejected_login_signal_failure_retains_child_and_account_for_retry() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let _ = host
+            .begin_spawn_for_account(id, Some("claude:default"))
+            .unwrap();
+        let reservation = LoginSpawnReservation {
+            host: &host,
+            session_id: id,
+        };
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| {
+            Err("signal failed".into())
+        })
+        .is_err());
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_some());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.recover_rejected_account("claude:default", next)
+            .unwrap();
+        assert!(!tree_alive(pid));
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn rejected_login_cleanup_times_out_and_recovers_without_overlapping() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let _ = host
+            .begin_spawn_for_account(id, Some("claude:default"))
+            .unwrap();
+        let reservation = LoginSpawnReservation {
+            host: &host,
+            session_id: id,
+        };
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        let started = Instant::now();
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| Ok(())).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_some());
+        drop(reservation);
+        assert!(host.begin_spawn(id).is_err());
+        host.recover_rejected(id).unwrap();
+        assert!(!tree_alive(pid));
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn rejected_forked_child_keeps_reservation_until_descendant_exits() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let _ = host
+            .begin_spawn_for_account(id, Some("claude:default"))
+            .unwrap();
+        let reservation = LoginSpawnReservation {
+            host: &host,
+            session_id: id,
+        };
+        let (live, child) = live_group("sleep 3 & exit 0");
+        let pid = live.pid;
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| Ok(())).is_err());
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_none());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.recover_rejected_account("claude:default", next)
+            .unwrap();
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
     }
 
     #[test]
@@ -4792,7 +5049,7 @@ mod tests {
         host.kill_session(id);
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
-        reap_rejected_spawn(&host, id, child, pid);
+        reap_rejected_spawn(&host, id, child, pid).unwrap();
         assert!(!tree_alive(pid));
         assert!(host.begin_spawn(id).is_err());
         drop(reservation);
