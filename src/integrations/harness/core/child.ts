@@ -397,8 +397,11 @@ export function killChild(sessionId: string): Promise<void> {
 }
 
 /** Stop a login child while retaining its PID-matched exit watcher. */
-export function stopChild(sessionId: string): Promise<void> {
-  return invoke("harness_stop", { sessionId });
+export function stopChild(
+  sessionId: string,
+  requireExisting = false,
+): Promise<void> {
+  return invoke("harness_stop", { sessionId, requireExisting });
 }
 
 export function killAllChildren(): Promise<void> {

@@ -160,6 +160,7 @@ describe("child bridge", () => {
     await child.stopChild("login");
     expect(mocks.invoke).toHaveBeenCalledWith("harness_stop", {
       sessionId: "login",
+      requireExisting: false,
     });
     mocks.handlers.get("harness-exit")?.({
       payload: { sessionId: "login", code: null, pid: 41 } as never,

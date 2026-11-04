@@ -111,6 +111,7 @@ export class HostChildBackend implements ChildBackend {
   private events = new EventEmitter();
   private children = new Map<string, ChildProcessWithoutNullStreams>();
   private stopping = new Map<string, ChildProcessWithoutNullStreams>();
+  private uncertain = new Set<string>();
   private stopPromises = new Map<string, Promise<void>>();
   private closed = new WeakSet<ChildProcessWithoutNullStreams>();
   private streams = new Map<string, AbortController>();
@@ -118,6 +119,20 @@ export class HostChildBackend implements ChildBackend {
 
   constructor(
     private readonly binaries: Partial<Record<RemoteProvider, string>> = {},
+    private readonly windowsStop = process.platform === "win32",
+    private readonly taskkillTree: (pid: number) => Promise<void> = async (
+      pid,
+    ) => {
+      await exec(
+        join(
+          process.env.SystemRoot ?? "C:\\Windows",
+          "System32",
+          "taskkill.exe",
+        ),
+        ["/PID", String(pid), "/T", "/F"],
+        { windowsHide: true, timeout: 10_000 },
+      );
+    },
   ) {
     this.events.setMaxListeners(0);
   }
@@ -259,7 +274,7 @@ export class HostChildBackend implements ChildBackend {
         await this.kill(id);
         return undefined as T;
       case "harness_stop":
-        await this.stopConfirmed(id);
+        await this.stopConfirmed(id, args.requireExisting === true);
         return undefined as T;
       case "harness_kill_all":
         await this.close();
@@ -339,6 +354,8 @@ export class HostChildBackend implements ChildBackend {
     if (this.closing) throw new Error("Host is stopping");
     if (this.stopping.has(id))
       throw new Error("Previous harness process has not exited");
+    if (this.uncertain.has(id))
+      throw new Error("Previous harness process exit could not be confirmed");
     if (id.startsWith("monocode-provider-login-") && this.children.has(id))
       throw new Error("Previous harness process has not exited");
     await this.kill(id);
@@ -442,14 +459,30 @@ export class HostChildBackend implements ChildBackend {
     }
   }
 
-  private stopConfirmed(id: string): Promise<void> {
+  private stopConfirmed(id: string, requireExisting: boolean): Promise<void> {
     const pending = this.stopPromises.get(id);
     if (pending) return pending;
     const child = this.stopping.get(id) ?? this.children.get(id);
-    if (!child) return Promise.resolve();
+    if (!child) {
+      if (this.windowsStop && requireExisting) {
+        this.uncertain.add(id);
+        return Promise.reject(
+          new Error("Previous login process exit could not be confirmed"),
+        );
+      }
+      return Promise.resolve();
+    }
     this.stopping.set(id, child);
     const stop = (async () => {
-      if (!this.closed.has(child)) {
+      if (this.windowsStop) {
+        if (!child.pid) throw new Error("Login process ID is unavailable");
+        await this.taskkillTree(child.pid);
+        if (!this.closed.has(child)) {
+          await new Promise<void>((resolve) =>
+            child.once("close", () => resolve()),
+          );
+        }
+      } else if (!this.closed.has(child)) {
         const closed = new Promise<void>((resolve) =>
           child.once("close", () => resolve()),
         );
@@ -457,7 +490,7 @@ export class HostChildBackend implements ChildBackend {
         this.signal(child, "SIGTERM");
         await closed;
       }
-      if (process.platform !== "win32" && child.pid) {
+      if (!this.windowsStop && child.pid) {
         while (true) {
           try {
             process.kill(-child.pid, 0);

@@ -231,7 +231,7 @@ async function runHarnessLogin(
       if (settled || stopPending || stopComplete) return;
       stopPending = true;
       run.stopError = undefined;
-      void child.stopChild(childId).then(
+      void child.stopChild(childId, true).then(
         () => {
           stopPending = false;
           stopComplete = true;

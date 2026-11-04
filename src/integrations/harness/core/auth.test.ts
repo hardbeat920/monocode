@@ -142,6 +142,11 @@ describe("harness login", () => {
     controller.abort();
     await expect(first).rejects.toThrow("cancelled");
     expect(child.stopChild).toHaveBeenCalledTimes(2);
+    expect(child.stopChild).toHaveBeenNthCalledWith(
+      2,
+      "monocode-provider-login-test-window-claude",
+      true,
+    );
     const second = loginHarness("claude");
     await vi.waitFor(() => expect(child.spawnChild).toHaveBeenCalledTimes(2));
     (child.watchChild.mock.calls[1]?.[2] as (code: number) => void)(0);

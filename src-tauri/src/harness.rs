@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -168,6 +168,7 @@ struct LiveSse {
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     stopping: HashMap<String, Arc<LiveChild>>,
+    uncertain: HashSet<String>,
     epochs: HashMap<String, u64>,
 }
 
@@ -202,6 +203,7 @@ impl HarnessHost {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
                 stopping: HashMap::new(),
+                uncertain: HashSet::new(),
                 epochs: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
@@ -216,6 +218,41 @@ impl HarnessHost {
 
     fn get(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         self.lock_inner().children.get(session_id).cloned()
+    }
+
+    fn stop_session_with(
+        &self,
+        session_id: &str,
+        require_existing: bool,
+        stop: impl FnOnce(u32) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let live = {
+            let mut inner = self.lock_inner();
+            let live = inner
+                .stopping
+                .get(session_id)
+                .or_else(|| inner.children.get(session_id))
+                .cloned();
+            if let Some(live) = &live {
+                inner.stopping.insert(session_id.to_owned(), live.clone());
+            } else if require_existing {
+                inner.uncertain.insert(session_id.to_owned());
+                return Err("Previous login process exit could not be confirmed".into());
+            }
+            live
+        };
+        if let Some(live) = live {
+            stop(live.pid)?;
+            let mut inner = self.lock_inner();
+            if inner
+                .stopping
+                .get(session_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &live))
+            {
+                inner.stopping.remove(session_id);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn process_roots(&self) -> Vec<crate::resources::ProcessRoot> {
@@ -236,6 +273,9 @@ impl HarnessHost {
         let mut inner = self.lock_inner();
         if inner.stopping.contains_key(session_id) {
             return Err("Previous harness process has not exited".into());
+        }
+        if inner.uncertain.contains(session_id) {
+            return Err("Previous harness process exit could not be confirmed".into());
         }
         if session_id.starts_with(LOGIN_CHILD_PREFIX) && inner.children.contains_key(session_id) {
             return Err("Previous harness process has not exited".into());
@@ -1251,34 +1291,19 @@ pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<
 /// Login cancellation keeps the child registered until its exit event. The
 /// ordinary kill command deliberately removes it and cannot confirm exit.
 #[tauri::command(async)]
-pub fn harness_stop(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
-    let live = {
-        let mut inner = host.lock_inner();
-        let live = inner
-            .stopping
-            .get(&session_id)
-            .or_else(|| inner.children.get(&session_id))
-            .cloned();
-        if let Some(live) = &live {
-            inner.stopping.insert(session_id.clone(), live.clone());
-        }
-        live
-    };
-    if let Some(live) = live {
-        stop_login_tree(live.pid);
-        let mut inner = host.lock_inner();
-        if inner
-            .stopping
-            .get(&session_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &live))
-        {
-            inner.stopping.remove(&session_id);
-        }
-    }
-    Ok(())
+pub fn harness_stop(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+    require_existing: Option<bool>,
+) -> Result<(), String> {
+    host.stop_session_with(
+        &session_id,
+        require_existing.unwrap_or(false) && cfg!(windows),
+        stop_login_tree,
+    )
 }
 
-fn stop_login_tree(pid: u32) {
+fn stop_login_tree(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
         let group = -(pid as i32);
@@ -1291,12 +1316,38 @@ fn stop_login_tree(pid: u32) {
             unsafe { libc::kill(group, libc::SIGKILL) };
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    taskkill_checked(pid)?;
+    #[cfg(not(any(unix, windows)))]
     terminate_all(&[pid]);
     wait_for_login_tree_exit(pid);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn taskkill_checked(pid: u32) -> Result<(), String> {
+    let mut cmd = Command::new("taskkill");
+    crate::hide_window_console(&mut cmd);
+    let status = cmd
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("Could not stop login process {pid}: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "Could not confirm login process tree {pid} stopped (taskkill {status})"
+        ));
+    }
+    Ok(())
 }
 
 fn reap_rejected_spawn(mut child: Child, pid: u32) {
+    #[cfg(windows)]
+    while taskkill_checked(pid).is_err() {
+        thread::sleep(Duration::from_millis(200));
+    }
+    #[cfg(not(windows))]
     terminate_all(&[pid]);
     let _ = child.wait();
     wait_for_login_tree_exit(pid);
@@ -3479,7 +3530,7 @@ mod tests {
             let mut child = child;
             let _ = child.wait();
         });
-        stop_login_tree(pid);
+        stop_login_tree(pid).unwrap();
         let _ = waiter.join();
         assert!(!tree_alive(pid));
     }
@@ -3499,10 +3550,42 @@ mod tests {
             let mut child = child;
             let _ = child.wait();
         });
-        stop_login_tree(pid);
+        stop_login_tree(pid).unwrap();
         host.lock_inner().stopping.remove("login");
         assert!(host.begin_spawn("login").is_ok());
         let _ = waiter.join();
+    }
+
+    #[test]
+    fn failed_login_stop_retries_after_leader_mapping_is_removed() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = host.begin_spawn("login").unwrap();
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        assert!(host
+            .install_spawn("login".into(), epoch, kill_all, live)
+            .is_none());
+        assert!(host
+            .stop_session_with("login", true, |_| Err("taskkill failed".into()))
+            .is_err());
+        host.lock_inner().children.remove("login");
+        assert!(host.begin_spawn("login").is_err());
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        host.stop_session_with("login", true, stop_login_tree)
+            .unwrap();
+        assert!(host.begin_spawn("login").is_ok());
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn missing_windows_login_leader_cannot_confirm_exit_or_reuse_id() {
+        let host = HarnessHost::new();
+        assert!(host
+            .stop_session_with("login", true, |_| panic!("no process to stop"))
+            .is_err());
+        assert!(host.begin_spawn("login").is_err());
     }
 
     #[test]

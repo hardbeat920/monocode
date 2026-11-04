@@ -69,9 +69,13 @@ function stopTree() {
         windowsHide: true,
       },
     );
-    killer.on("error", () => child.kill());
+    killer.on("error", () => {
+      child.kill();
+      if (confirmExit) stopping = false;
+    });
     killer.on("close", (code) => {
       if (!confirmExit || code === 0) finish();
+      else stopping = false;
     });
   } else {
     // The provider leads its own process group, so the guard survives long

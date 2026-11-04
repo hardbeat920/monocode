@@ -274,6 +274,122 @@ setInterval(() => {}, 1000);
   }
 }, 15_000);
 
+it("retries a failed Windows tree kill without releasing the login ID", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-windows-stop-test-"));
+  const file = join(directory, "provider.cjs");
+  writeFileSync(file, "setInterval(() => {}, 1000);");
+  let attempts = 0;
+  const backend = new HostChildBackend({}, true, async (pid) => {
+    if (++attempts === 1) throw new Error("taskkill failed");
+    process.kill(-pid, "SIGTERM");
+  });
+  const loginId = "monocode-provider-login-windows-claude";
+  try {
+    await backend.invoke("harness_spawn", {
+      sessionId: loginId,
+      command: file,
+      args: [],
+      cwd: directory,
+    });
+    await expect(
+      backend.invoke("harness_stop", {
+        sessionId: loginId,
+        requireExisting: true,
+      }),
+    ).rejects.toThrow("taskkill failed");
+    await expect(
+      backend.invoke("harness_spawn", {
+        sessionId: loginId,
+        command: file,
+        args: [],
+        cwd: directory,
+      }),
+    ).rejects.toThrow("has not exited");
+    await backend.invoke("harness_stop", {
+      sessionId: loginId,
+      requireExisting: true,
+    });
+    expect(attempts).toBe(2);
+  } finally {
+    await backend.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 15_000);
+
+it("keeps a failed Windows stop reserved after the leader exits", async () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), "monocode-windows-leader-test-"),
+  );
+  const file = join(directory, "provider.cjs");
+  writeFileSync(file, "console.log(process.pid); setInterval(() => {}, 1000);");
+  const backend = new HostChildBackend({}, true, async () => {
+    throw new Error("taskkill failed");
+  });
+  const loginId = "monocode-provider-login-windows-codex";
+  let providerPid: number | undefined;
+  let guardPid: number | undefined;
+  const unlisten = await backend.listen<{ line: string }>(
+    "harness-stdout",
+    ({ payload }) => {
+      providerPid = Number(payload.line);
+    },
+  );
+  try {
+    guardPid = await backend.invoke<number>("harness_spawn", {
+      sessionId: loginId,
+      command: file,
+      args: [],
+      cwd: directory,
+    });
+    await vi.waitFor(() => expect(providerPid).toBeTruthy());
+    await expect(
+      backend.invoke("harness_stop", {
+        sessionId: loginId,
+        requireExisting: true,
+      }),
+    ).rejects.toThrow("taskkill failed");
+    process.kill(guardPid, "SIGKILL");
+    await vi.waitFor(() => expect(() => process.kill(guardPid!, 0)).toThrow());
+    await expect(
+      backend.invoke("harness_stop", {
+        sessionId: loginId,
+        requireExisting: true,
+      }),
+    ).rejects.toThrow("taskkill failed");
+    await expect(
+      backend.invoke("harness_spawn", {
+        sessionId: loginId,
+        command: file,
+        args: [],
+        cwd: directory,
+      }),
+    ).rejects.toThrow("has not exited");
+  } finally {
+    unlisten();
+    if (providerPid) {
+      try {
+        process.kill(-providerPid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
+    await backend.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 15_000);
+
+it("fails closed when a Windows login leader disappears before stop arrives", async () => {
+  const backend = new HostChildBackend({}, true, async () => undefined);
+  const sessionId = "monocode-provider-login-late-claude";
+  await expect(
+    backend.invoke("harness_stop", { sessionId, requireExisting: true }),
+  ).rejects.toThrow("could not be confirmed");
+  await expect(backend.invoke("harness_spawn", { sessionId })).rejects.toThrow(
+    "could not be confirmed",
+  );
+  await backend.close();
+});
+
 it("stops a provider tree when its host pipe closes unexpectedly", async () => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-provider-crash-"));
   const treeFile = join(directory, "tree.json");
