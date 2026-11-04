@@ -409,9 +409,7 @@ export function FileField({
   }
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  const pending = useRef<{ id: string; promise: Promise<boolean> } | null>(
-    null,
-  );
+  const pending = useRef<{ promise: Promise<boolean> } | null>(null);
   const unconfirmed = useRef(new Set<string>());
   const generation = useRef(0);
   const cancelFlushes = useRef(new Set<() => void>());
@@ -459,22 +457,26 @@ export function FileField({
       return Promise.resolve(false);
     const text = draftRef.current;
     const attempt = generation.current;
-    const id = crypto.randomUUID();
     const previous = [...unconfirmed.current];
-    unconfirmed.current.add(id);
+    let id = "";
     const request = (async () => {
       let invoked = false;
       try {
         await fence(previous);
         if (attempt !== generation.current) return false;
         if (!uncertain.current && text === base.current.value) {
-          unconfirmed.current.delete(id);
           return true;
         }
         const expectedHash = overwrite
           ? (await loadMonoFiles(monoId))[`${file}Hash`]
           : base.current.hash;
         if (attempt !== generation.current) return false;
+        id =
+          file === "soul"
+            ? await recoveryCommand<string>("mono_register_soul_save", {})
+            : crypto.randomUUID();
+        if (attempt !== generation.current) return false;
+        if (file === "soul") unconfirmed.current.add(id);
         invoked = true;
         const next = await saveMonoFile(monoId, file, text, expectedHash, id);
         unconfirmed.current.delete(id);
@@ -503,7 +505,7 @@ export function FileField({
         return false;
       }
     })();
-    pending.current = { id, promise: request };
+    pending.current = { promise: request };
     const timer = window.setTimeout(() => setSlow(true), 5000);
     void request.then(() => {
       window.clearTimeout(timer);

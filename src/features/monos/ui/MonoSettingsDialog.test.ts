@@ -15,7 +15,7 @@ vi.mock("../../sessions/ui/ModelPicker", () => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
+  invoke: vi.fn().mockResolvedValue("0"),
 }));
 
 const saveFile = vi.hoisted(() => vi.fn());

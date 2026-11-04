@@ -17,7 +17,7 @@
 //! that was a project's Mono passes that project along until its old folder
 //! has moved under its id.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -49,17 +49,17 @@ static FILES_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Default)]
 struct SoulWrites {
     active: HashMap<String, String>,
-    cancelled: HashSet<(String, String)>,
+    epoch: u64,
 }
 
 static SOUL_WRITES: LazyLock<Mutex<SoulWrites>> =
     LazyLock::new(|| Mutex::new(SoulWrites::default()));
 
 impl SoulWrites {
-    fn begin(&mut self, mono: &str, id: &str) -> Result<(), String> {
+    fn begin(&mut self, mono: &str, id: &str, registered: bool) -> Result<(), String> {
         let mono = mono.to_ascii_lowercase();
-        if self.cancelled.contains(&(mono.clone(), id.to_string())) {
-            return Err("Soul save cancelled".into());
+        if registered && id != self.epoch.to_string() {
+            return Err("Soul save cancelled; retry".into());
         }
         if self.active.contains_key(&mono) {
             return Err("A previous Soul save is still in progress".into());
@@ -68,17 +68,13 @@ impl SoulWrites {
         Ok(())
     }
 
-    fn cancel(&mut self, mono: &str, id: &str) -> Result<(), String> {
-        let mono = mono.to_ascii_lowercase();
-        if self.cancelled.contains(&(mono.clone(), id.to_string())) {
-            return Ok(());
+    fn cancel(&mut self, id: &str) -> Result<(), String> {
+        if id == self.epoch.to_string() {
+            self.epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("Soul save generation exhausted")?;
         }
-        if self.cancelled.len() >= 1024 {
-            return Err(
-                "Too many unconfirmed Soul saves; restart before closing the editor".into(),
-            );
-        }
-        self.cancelled.insert((mono, id.to_string()));
         Ok(())
     }
 
@@ -392,16 +388,12 @@ pub async fn mono_save(
         if !valid_id(&mono) {
             return Err("Invalid Soul save request".into());
         }
-        let id = request_id
-            .map(|id| uuid::Uuid::parse_str(&id))
-            .transpose()
-            .map_err(|_| "Invalid Soul save request")?
-            .unwrap_or_else(uuid::Uuid::new_v4)
-            .to_string();
+        let registered = request_id.is_some();
+        let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         SOUL_WRITES
             .lock()
             .map_err(|e| e.to_string())?
-            .begin(&mono, &id)?;
+            .begin(&mono, &id, registered)?;
         Some(SoulWritePermit {
             mono: mono.clone(),
             id,
@@ -424,19 +416,28 @@ pub async fn mono_save(
     .map_err(|e| e.to_string())?
 }
 
-/// Cancel a save by ID even if its invocation has not reached the backend yet.
+/// Epochs fence delayed editor requests across all windows.
+#[tauri::command]
+pub fn mono_register_soul_save() -> Result<String, String> {
+    Ok(SOUL_WRITES
+        .lock()
+        .map_err(|e| e.to_string())?
+        .epoch
+        .to_string())
+}
+
 #[tauri::command]
 pub fn mono_cancel_soul_save(mono: String, request_id: String) -> Result<(), String> {
     if !valid_id(&mono) {
         return Err("Invalid Soul save request".into());
     }
-    let request_id = uuid::Uuid::parse_str(&request_id)
-        .map_err(|_| "Invalid Soul save request")?
-        .to_string();
+    request_id
+        .parse::<u64>()
+        .map_err(|_| "Invalid Soul save request")?;
     SOUL_WRITES
         .lock()
         .map_err(|e| e.to_string())?
-        .cancel(&mono, &request_id)
+        .cancel(&request_id)
 }
 
 /// Recovery copies never touch the Mono file lock or overwrite an existing file.
@@ -513,21 +514,26 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_soul_save_is_fenced_before_and_during_native_write() {
+    fn soul_epochs_are_bounded_and_fence_out_of_order_requests() {
         let mut writes = SoulWrites::default();
-        let old = uuid::Uuid::new_v4().to_string();
-        let next = uuid::Uuid::new_v4().to_string();
-        writes.cancel("mono", &old).unwrap();
-        assert!(writes.begin("mono", &old).is_err());
-        assert!(writes.begin("mono", &old).is_err());
-        writes.begin("mono", &next).unwrap();
-        writes.cancel("mono", &next).unwrap();
-        let newer = uuid::Uuid::new_v4().to_string();
-        assert!(writes.begin("MONO", &newer).is_err());
+        let old = writes.epoch.to_string();
+        writes.begin("mono", &old, true).unwrap();
+        writes.cancel(&old).unwrap();
+        assert!(writes.begin("other-window-mono", &old, true).is_err());
+        let next = writes.epoch.to_string();
+        assert!(writes.begin("MONO", &next, true).is_err());
+        writes.finish("mono", &old);
+        assert!(writes.begin("mono", &old, true).is_err());
+        writes.begin("mono", &next, true).unwrap();
         writes.finish("mono", &next);
-        assert!(writes.begin("mono", &next).is_err());
-        assert!(writes.begin("mono", &newer).is_ok());
-        writes.finish("mono", &newer);
+        for _ in 0..1100 {
+            writes.cancel(&writes.epoch.to_string()).unwrap();
+        }
+        let current = writes.epoch;
+        writes.cancel(&old).unwrap();
+        assert_eq!(writes.epoch, current);
+        assert!(writes.begin("mono", &old, true).is_err());
+        assert!(writes.begin("mono", &current.to_string(), true).is_ok());
     }
 
     #[test]

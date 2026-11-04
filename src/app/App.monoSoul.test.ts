@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   loadFiles: vi.fn(),
   recovery: vi.fn(),
   cancelSave: vi.fn(),
+  registerSave: vi.fn(async () => "0"),
   floating: null as any,
   onClose: null as
     null | ((event: { preventDefault: () => void }) => Promise<void>),
@@ -103,6 +104,7 @@ vi.mock("../features/mobile/hooks/useMobileWorkspace", () => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args?: unknown) => {
+    if (command === "mono_register_soul_save") return state.registerSave();
     if (command === "mono_save_soul_recovery") return state.recovery(args);
     if (command === "mono_cancel_soul_save") return state.cancelSave(args);
     if (command === "workspace_set_snapshot" && state.holdWrites)
@@ -1611,5 +1613,77 @@ it("does not silently close or overwrite after an ambiguous save and revert", as
     "old",
     expect.any(String),
   );
+  await act(async () => root.unmount());
+});
+
+it("does not send a save when generation registration finishes after recovery closes", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  localStorage.clear();
+  const mono = createMono();
+  state.loadFiles
+    .mockReset()
+    .mockResolvedValue({
+      id: mono.id,
+      dir: "/mono",
+      soul: "# Original",
+      soulHash: "old",
+      memory: "",
+      memoryHash: "m",
+      memoryPath: "/mono/MEMORY.md",
+      topics: [],
+    });
+  let finish!: (value: string) => void;
+  state.registerSave.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  state.save.mockReset();
+  state.cancelSave.mockReset().mockResolvedValue(undefined);
+  state.recovery.mockReset().mockResolvedValue("/private/recovery/copy.md");
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  await act(async () => root.render(createElement(App, {})));
+  await act(async () => state.sidebar.monos.onEditSoul(mono.id));
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    "[data-mono-soul] textarea",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(editor, "# Draft");
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  vi.useFakeTimers();
+  let close!: Promise<void>;
+  await act(async () => {
+    close = state.onClose!({ preventDefault() {} });
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(8001);
+    await close;
+  });
+  const button = (text: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (entry) => entry.textContent?.trim() === text,
+    )!;
+  await act(async () => button("Save recovery copy").click());
+  await act(async () => button("I have recorded the recovery path").click());
+  await act(async () => button("Close editor and keep recovery copy").click());
+  expect(document.querySelector("[data-mono-soul]")).toBeNull();
+  expect(state.cancelSave).not.toHaveBeenCalled();
+  await act(async () => finish("0"));
+  expect(state.save).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("/private/recovery/copy.md");
   await act(async () => root.unmount());
 });
