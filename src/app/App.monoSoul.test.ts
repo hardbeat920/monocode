@@ -20,7 +20,9 @@ const state = vi.hoisted(() => ({
   loadFiles: vi.fn(),
   recovery: vi.fn(),
   cancelSave: vi.fn(),
-  registerSave: vi.fn(async () => "0"),
+  registerSave: vi.fn(
+    async (_args?: unknown) => "a5ce04d2-611b-4e7d-9c70-c663bc91d07f",
+  ),
   floating: null as any,
   onClose: null as
     null | ((event: { preventDefault: () => void }) => Promise<void>),
@@ -104,7 +106,7 @@ vi.mock("../features/mobile/hooks/useMobileWorkspace", () => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args?: unknown) => {
-    if (command === "mono_register_soul_save") return state.registerSave();
+    if (command === "mono_register_soul_save") return state.registerSave(args);
     if (command === "mono_save_soul_recovery") return state.recovery(args);
     if (command === "mono_cancel_soul_save") return state.cancelSave(args);
     if (command === "workspace_set_snapshot" && state.holdWrites)
@@ -1344,6 +1346,10 @@ it("bounds a stalled window close and lets the user keep a durable copy before c
     close = state.onClose!({ preventDefault() {} });
   });
   expect(editor.closest("[inert]")).not.toBeNull();
+  expect(state.registerSave).toHaveBeenLastCalledWith({ mono: mono.id });
+  expect(state.save.mock.calls[0][4]).toBe(
+    "a5ce04d2-611b-4e7d-9c70-c663bc91d07f",
+  );
   await act(async () => {
     await vi.advanceTimersByTimeAsync(8001);
     await close;
@@ -1682,7 +1688,7 @@ it("does not send a save when generation registration finishes after recovery cl
   await act(async () => button("Close editor and keep recovery copy").click());
   expect(document.querySelector("[data-mono-soul]")).toBeNull();
   expect(state.cancelSave).not.toHaveBeenCalled();
-  await act(async () => finish("0"));
+  await act(async () => finish("a5ce04d2-611b-4e7d-9c70-c663bc91d07f"));
   expect(state.save).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("/private/recovery/copy.md");
   await act(async () => root.unmount());
