@@ -121,12 +121,9 @@ export function errorRateLimits(
       previous.monthly ||
       previous.resetCredits)
   ) {
-    return {
-      ...previous,
-      error,
-      status: "error",
-      updatedAt: Date.now(),
-    };
+    // The windows are the last good reading, so keep that reading's time;
+    // stamping now would label old numbers "Updated just now".
+    return { ...previous, error, status: "error" };
   }
   return {
     provider,
@@ -544,10 +541,44 @@ function mapCodexSnapshot(
   windowMinutes: number,
 ): RateLimitWindow | null {
   if (!raw) return null;
+  // A window that only fell into this slot by position keeps its real length
+  // so the label does not claim "5h" or "wk" for, say, a daily window.
+  const duration = raw.windowDurationMins;
+  const ownLength =
+    duration != null &&
+    duration > 0 &&
+    classifyWindowDuration(duration) === null
+      ? Math.round(duration)
+      : null;
   return {
     usedPercent: clampUsedPercent(raw.usedPercent),
-    windowMinutes,
+    windowMinutes: ownLength ?? windowMinutes,
     resetsAt: parseResetTimestamp(raw.resetsAt),
+  };
+}
+
+/**
+ * Fold a running session's `account/rateLimits/updated` windows into the
+ * cached snapshot. Windows the update leaves out keep their last reading.
+ * Returns null when the update carries nothing usable.
+ */
+export function mergeCodexRateLimitsUpdate(
+  previous: ProviderRateLimits,
+  update: Record<string, unknown>,
+  now = Date.now(),
+): ProviderRateLimits | null {
+  const parsed = parseCodexRateLimits(update);
+  if (!parsed.session && !parsed.weekly && !parsed.monthly) return null;
+  return {
+    ...previous,
+    provider: "codex",
+    session: parsed.session ?? previous.session,
+    weekly: parsed.weekly ?? previous.weekly,
+    monthly: parsed.monthly ?? previous.monthly,
+    resetCredits: parsed.resetCredits ?? previous.resetCredits,
+    updatedAt: now,
+    error: null,
+    status: "ok",
   };
 }
 

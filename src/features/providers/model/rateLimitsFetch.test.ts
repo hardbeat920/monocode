@@ -4,6 +4,7 @@ const child = vi.hoisted(() => ({
   live: 0,
   maxLive: 0,
   spawned: [] as string[],
+  codexResult: undefined as unknown,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -46,6 +47,7 @@ vi.mock("../../../integrations/harness/core/jsonRpc", () => ({
     async request(method: string) {
       if (method !== "account/rateLimits/read") return {};
       await new Promise((resolve) => setTimeout(resolve, 5));
+      if (child.codexResult !== undefined) return child.codexResult;
       return {
         rateLimits: {
           primary: { usedPercent: 10, windowDurationMins: 300 },
@@ -58,6 +60,8 @@ vi.mock("../../../integrations/harness/core/jsonRpc", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import {
   cachedDevinIdentity,
+  CLAUDE_STALE_TOKEN_MESSAGE,
+  fetchClaudeRateLimits,
   fetchCodexRateLimits,
   fetchDevinRateLimits,
 } from "./rateLimitsFetch";
@@ -99,6 +103,13 @@ describe("fetchCodexRateLimits", () => {
     child.live = 0;
     child.maxLive = 0;
     child.spawned = [];
+    child.codexResult = undefined;
+  });
+
+  it("reports a non-object response as an error, not an empty ok", async () => {
+    child.codexResult = "garbage";
+    const limits = await fetchCodexRateLimits("default");
+    expect(limits.status).toBe("error");
   });
 
   it("runs usage probes for different accounts one at a time", async () => {
@@ -117,5 +128,21 @@ describe("fetchCodexRateLimits", () => {
     expect(results.map((result) => result.session?.usedPercent)).toEqual([
       10, 10, 10,
     ]);
+  });
+});
+
+describe("fetchClaudeRateLimits", () => {
+  it("reports a lapsed stored token without asking to sign in again", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ status: "stale" });
+    const limits = await fetchClaudeRateLimits();
+    expect(limits.status).toBe("error");
+    expect(limits.error).toBe(CLAUDE_STALE_TOKEN_MESSAGE);
+    expect(limits.error).not.toMatch(/expired|sign-in|not signed in/i);
+  });
+
+  it("treats a 200 without usage windows as an error", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ status: "ok", body: "{}" });
+    const limits = await fetchClaudeRateLimits();
+    expect(limits.status).toBe("error");
   });
 });
