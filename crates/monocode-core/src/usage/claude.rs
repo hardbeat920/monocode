@@ -19,10 +19,9 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .as_i64()
         .or_else(|| oauth["expiresAt"].as_str()?.parse::<i64>().ok());
     // The CLI owns its rotating refresh token. Never refresh or write it here.
+    let expired = || expired_error(oauth);
     if expiry.is_some_and(|at| at <= now_ms()) {
-        return Err(FetchError::unavailable(
-            "Claude sign-in expired. Run claude auth login, then refresh.",
-        ));
+        return Err(expired());
     }
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
@@ -33,9 +32,7 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .set("User-Agent", "claude-code/2.1.0")
         .call()
         .map_err(|error| match error {
-            ureq::Error::Status(401, _) => FetchError::unavailable(
-                "Claude sign-in expired. Run claude auth login, then refresh.",
-            ),
+            ureq::Error::Status(401, _) => expired(),
             ureq::Error::Status(403, _) => {
                 FetchError::unavailable("Claude usage is unavailable for this account.")
             }
@@ -53,6 +50,20 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
     let value = serde_json::from_str(&body)
         .map_err(|_| FetchError::failed("Claude usage response was not JSON."))?;
     parse_claude(&value)
+}
+
+/// The access token lasts about 8 hours. While a refresh token is present the
+/// CLI renews it on its next run, so that is not a sign-out: a failed (not
+/// unavailable) result keeps the last usage and hides the sign-in panel.
+fn expired_error(oauth: &Value) -> FetchError {
+    if oauth["refreshToken"]
+        .as_str()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        FetchError::failed("Claude usage updates after your next Claude message.")
+    } else {
+        FetchError::unavailable("Claude sign-in expired. Run claude auth login, then refresh.")
+    }
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -182,6 +193,15 @@ fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_expired_access_token_with_a_refresh_token_is_not_a_sign_out() {
+        let renewable = serde_json::json!({"accessToken":"a","refreshToken":"r","expiresAt":1});
+        assert!(!expired_error(&renewable).unavailable);
+        // Claude Code blanks both tokens when a refresh fails.
+        let wiped = serde_json::json!({"accessToken":"","refreshToken":"","expiresAt":0});
+        assert!(expired_error(&wiped).unavailable);
+        assert!(expired_error(&serde_json::json!({"accessToken":"a"})).unavailable);
+    }
     #[test]
     fn accepts_nested_and_legacy_credentials_without_logging_secrets() {
         assert!(
