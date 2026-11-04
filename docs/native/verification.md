@@ -237,6 +237,38 @@ still need runtime checks. The executable was built without launching it or
 opening the installed database. Cross-platform CI and signed installers remain
 release-pipeline checks.
 
+## Preview 13 candidate — November 3, 2026
+
+Source revision `4550fded` passed the complete native check locally on macOS
+Apple Silicon with Rust 1.97.1:
+
+```sh
+npm run native:check
+```
+
+- Native development, dependency-guard, packaging, and release script tests: 29 passed.
+- Native workspace formatting: passed.
+- Strict Clippy for core and GPUI, all targets, `native-dev` profile: passed.
+- Native core tests: 666 passed, 2 ignored.
+- GPUI tests, run serially: 829 passed, 11 ignored.
+- Wheel-scroll integration tests: 3 passed.
+
+The first preflight reproduced the latest macOS CI failure: the changes-shelf
+fixture assigned `open` after constructing `ChangesShelf::default()`, triggering
+`clippy::field_reassign_with_default`. Revision `4550fded` initializes that field
+in the struct literal. This changes test setup only. The full successful check
+above includes that correction.
+
+The [candidate native workflow](https://github.com/hardbeat920/monocode/actions/runs/41643529160)
+checks the same source with Rust 1.99.1. Its core checks passed on macOS, Linux,
+and Windows, and the macOS desktop formatting and strict Clippy checks passed.
+
+These local results cover automated fixtures. Signed installers, notarization,
+package signatures, and update-feed publication are checked by the native
+release workflow. No live-provider requests, companion device tests, or manual
+packaged upgrade checks were performed in this preflight. Existing platform
+runtime limitations remain as recorded above and in [preview limitations](parity.md).
+
 ## Local checks
 
 Run the complete native check from the repository root:

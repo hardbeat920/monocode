@@ -162,8 +162,9 @@ impl Shell {
             }
     }
     pub(super) fn toggle_primary_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Settings stand in for the sidebar and can't be hidden.
-        if self.settings.is_some() {
+        // The classic layout's settings stand in for the project rail and
+        // can't be hidden.
+        if self.settings.is_some() && self.workspace.classic_layout {
             return;
         }
         if self.workspace.classic_layout && self.settings.is_none() {

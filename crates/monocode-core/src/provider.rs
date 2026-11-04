@@ -2241,6 +2241,53 @@ mod process_tests {
         }
     }
     #[test]
+    fn perf_replay_streams_a_whole_claude_turn() {
+        // scripts/perf/fake-claude-stream.py stands in for `claude` when
+        // profiling; it has to keep speaking the protocol this parser reads.
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/perf/fake-claude-stream.py");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut request = Request {
+            kind: Kind::Claude,
+            binary: script,
+            cwd: tmp.path().into(),
+            prompt: "stream".into(),
+            provider_id: None,
+            model: None,
+            settings: Default::default(),
+        };
+        request
+            .settings
+            .environment
+            .insert("REPLAY_SECONDS".into(), "0.4".into());
+        request
+            .settings
+            .environment
+            .insert("REPLAY_INTERVAL_MS".into(), "10".into());
+        let (mut text, mut done) = (String::new(), false);
+        run(request, Arc::new(AtomicBool::new(false)), |events| {
+            for event in events {
+                match event {
+                    Event::Text(t) => text.push_str(&t),
+                    Event::Done => done = true,
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(done, "the replay's result must end the turn");
+        assert_eq!(text.chars().count(), 40 * 16);
+        assert!(text.starts_with("## Step 1: tighten the frame loop"));
+    }
+    #[test]
     fn crash_preserves_coalesced_partial_text() {
         // Read initialization before exiting so startup cannot race a closed stdin.
         let (_tmp, request) = fixture(

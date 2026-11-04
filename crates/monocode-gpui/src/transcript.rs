@@ -154,10 +154,6 @@ enum Body {
     Pending(usize),
     /// LaunchedSessionCard for a session the run started.
     Launch(i64),
-    /// SessionReview, the latest settled turn's recorded changes.
-    Review {
-        turn: usize,
-    },
     /// A commit pill turn's status line, then its card.
     GitAction(Arc<git_turns::GitCard>),
     Tool {
@@ -765,10 +761,6 @@ pub(crate) struct TranscriptView {
     taken: Vec<TakenMessage>,
     pending_entrances: HashMap<String, Instant>,
     launches: HashMap<i64, LaunchView>,
-    /// The session's latestTurnAccessory card.
-    review: Option<gpui::AnyView>,
-    /// The card has changes or an error to show, so it takes a row.
-    review_shown: bool,
     /// A clock for the tool and task shimmers.
     started_at: Instant,
     /// One clock per frame for row motion. The list measures rows and the
@@ -1984,55 +1976,6 @@ impl TranscriptView {
         };
         (top, bottom)
     }
-    /// The session's review card, under the latest settled turn only.
-    pub(crate) fn set_review(&mut self, review: gpui::AnyView) {
-        self.review = Some(review);
-    }
-    /// The card gained or lost its content; the latest turn makes room for it.
-    pub(crate) fn set_review_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
-        if self.review_shown == shown {
-            return;
-        }
-        self.review_shown = shown;
-        if !self.messages.is_empty() {
-            let start = self
-                .source
-                .iter()
-                .rposition(|r| r.is_prompt())
-                .map_or(0, |i| i + 1);
-            self.rebuild(start, cx);
-        }
-        cx.notify();
-    }
-    fn review_row(&self, turn: usize) -> gpui::AnyElement {
-        let latest = self
-            .source
-            .iter()
-            .rposition(|r| r.is_prompt())
-            .map_or(0, |i| i + 1);
-        let Some(review) = self
-            .review
-            .clone()
-            .filter(|_| !self.streaming && turn == latest)
-        else {
-            return div().into_any_element();
-        };
-        div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .max_w(px(COLUMN))
-                    .px_4()
-                    .pt_1()
-                    .pb_2()
-                    .child(review),
-            )
-            .into_any_element()
-    }
     /// A queued message's bubble, as UserMessageBlock draws one, with its
     /// delivery line when it could not be sent.
     fn pending_row(&mut self, ix: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -2607,8 +2550,6 @@ impl TranscriptView {
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
             launches: HashMap::new(),
-            review: None,
-            review_shown: false,
             started_at: Instant::now(),
             frame_now: Instant::now(),
             measurements: Default::default(),
@@ -3861,7 +3802,14 @@ impl TranscriptView {
                 parser,
                 markdown_blocks,
                 user_link,
-                under_line: has_work && final_answer == Some(at),
+                // Only a settled turn folds its work under the receipt line.
+                // While it streams, the newest reply is the answer so far but
+                // still follows open tool rows, so it keeps prose's 12px gap
+                // instead of jumping when the next tool or the end arrives.
+                under_line: has_work
+                    && final_answer == Some(at)
+                    && self.fold_work
+                    && !(self.streaming && turn_end == self.source.len()),
                 turn: if self.mono {
                     self.mono_group_start(turn)
                 } else {
@@ -3936,22 +3884,6 @@ impl TranscriptView {
                 && end == turn_end
                 && !(self.mono && self.mono_next_run_continues(turn, turn_end))
             {
-                if !self.mono
-                    && self.review_shown
-                    && self.review.is_some()
-                    && turn_end == self.source.len()
-                {
-                    self.rows.push(UiRow {
-                        key: (at, usize::MAX - 2),
-                        body: Body::Review { turn },
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
                 self.rows.push(UiRow {
                     key: (at, usize::MAX - 1),
                     body: Body::Actions {
@@ -4296,7 +4228,6 @@ impl TranscriptView {
                     | Body::MonoDivider
                     | Body::Pending(_)
                     | Body::Launch(_)
-                    | Body::Review { .. }
                     | Body::SavedDraft
             ) {
                 return false;
@@ -4758,7 +4689,6 @@ impl TranscriptView {
             Body::SavedDraft => return self.saved_draft_row(cx),
             Body::Pending(i) => return self.pending_row(i, cx),
             Body::Launch(id) => return self.launch_row(ix, id, cx),
-            Body::Review { turn } => return self.review_row(turn),
             _ => {}
         }
         let group = self.motions.get(&self.rows[ix].key).and_then(|m| m.group);
@@ -5000,9 +4930,7 @@ impl TranscriptView {
                 crate::monos::cards::render(value, chosen.as_deref(), cx)
             }
             Body::MonoDivider => mono_divider::render(),
-            Body::Pending(_) | Body::Launch(_) | Body::Review { .. } | Body::SavedDraft => {
-                div().into_any_element()
-            }
+            Body::Pending(_) | Body::Launch(_) | Body::SavedDraft => div().into_any_element(),
             Body::Actions { turn, complete } => {
                 // Tighten only a visible Mono reply followed by a user bubble;
                 // stacked user messages keep their existing spacing.
