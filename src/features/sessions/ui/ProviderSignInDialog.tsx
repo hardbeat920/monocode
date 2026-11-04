@@ -13,10 +13,15 @@ import {
 
 type Props = {
   harness: HarnessId;
+  providerAccountId?: string;
   onClose: () => void;
 };
 
-export function ProviderSignInDialog({ harness, onClose }: Props) {
+export function ProviderSignInDialog({
+  harness,
+  providerAccountId,
+  onClose,
+}: Props) {
   const [state, setState] = useState<ProviderSignInState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
@@ -27,7 +32,7 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
     setError(null);
     setLoginUrl(null);
     return () => attempt.current?.abort();
-  }, [harness]);
+  }, [harness, providerAccountId]);
 
   const signIn = useCallback(() => {
     const controller = new AbortController();
@@ -35,7 +40,7 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
     setState("running");
     setError(null);
     setLoginUrl(null);
-    void loginHarness(harness, undefined, {
+    void loginHarness(harness, providerAccountId, {
       signal: controller.signal,
       onUrl: setLoginUrl,
     }).then(
@@ -57,7 +62,7 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
         );
       },
     );
-  }, [harness]);
+  }, [harness, providerAccountId]);
 
   const cancel = useCallback(() => {
     if (!attempt.current) return;
@@ -102,6 +107,7 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
                     harness,
                     code,
                     attempt.current.signal,
+                    providerAccountId,
                   ).catch(() => setError("Could not submit sign-in code."));
               }
             : undefined

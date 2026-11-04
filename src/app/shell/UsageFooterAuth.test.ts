@@ -170,6 +170,26 @@ describe("UsageFooter provider authentication", () => {
     expect(container.textContent).not.toContain("sign in");
   });
 
+  it("uses the session's named Claude account from its footer sign-in", async () => {
+    auth.loginHarness.mockResolvedValue();
+    act(() =>
+      root.render(
+        createElement(UsageFooter, {
+          providers: [],
+          session: {
+            id: "claude-session",
+            harness: "claude",
+            providerAccountId: "account-work",
+            authRequired: true,
+          },
+        }),
+      ),
+    );
+    act(() => button("Claude Code sign-in required").click());
+    await act(async () => button("Sign in to Claude Code").click());
+    expect(auth.loginHarness).toHaveBeenCalledWith("claude", "account-work");
+  });
+
   it("starts a waiting recovery after another provider login fails", async () => {
     let rejectClaude: ((error: Error) => void) | undefined;
     auth.loginHarness.mockImplementation((harness) => {

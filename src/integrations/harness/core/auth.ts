@@ -131,12 +131,13 @@ export function submitHarnessLoginCode(
   harness: HarnessId,
   code: string,
   owner: AbortSignal,
+  accountId?: string,
 ): Promise<void> {
-  const run = inflight.get(loginKey(harness));
+  const run = inflight.get(loginKey(harness, accountId));
   if (!run || owner.aborted || !run.signals.has(owner) || !code.trim()) {
     return Promise.reject(new Error("This sign-in is no longer active."));
   }
-  return child.writeChild(loginChildId(harness), code.trim());
+  return child.writeChild(loginChildId(harness, accountId), code.trim());
 }
 
 async function runHarnessLogin(
@@ -152,7 +153,18 @@ async function runHarnessLogin(
     );
   }
 
-  const [{ path }, cwd] = await Promise.all([resolve(), homeDir()]);
+  let stopWaiting: () => void = () => {};
+  const cancelled = new Promise<never>((_, reject) => {
+    const abort = () => reject(new Error("Sign-in cancelled."));
+    stopWaiting = () =>
+      run.controller.signal.removeEventListener("abort", abort);
+    run.controller.signal.addEventListener("abort", abort, { once: true });
+    if (run.controller.signal.aborted) abort();
+  });
+  const [{ path }, cwd] = await Promise.race([
+    Promise.all([resolve(), homeDir()]),
+    cancelled,
+  ]).finally(stopWaiting);
   if (run.controller.signal.aborted) throw new Error("Sign-in cancelled.");
   const childId = loginChildId(harness, accountId);
   await child.killChild(childId).catch(() => undefined);

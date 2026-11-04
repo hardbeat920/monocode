@@ -125,6 +125,7 @@ describe("ProviderSignInDialog", () => {
       root.render(
         createElement(ProviderSignInDialog, {
           harness: "claude",
+          providerAccountId: "account-work",
           onClose: vi.fn(),
         }),
       ),
@@ -156,7 +157,24 @@ describe("ProviderSignInDialog", () => {
       "claude",
       "sample-code",
       auth.loginHarness.mock.calls[0]?.[2]?.signal,
+      "account-work",
     );
+    expect(auth.loginHarness.mock.calls[0]?.[1]).toBe("account-work");
+  });
+
+  it("signs a named Codex session into its own account", async () => {
+    auth.loginHarness.mockResolvedValue();
+    act(() =>
+      root.render(
+        createElement(ProviderSignInDialog, {
+          harness: "codex",
+          providerAccountId: "account-codex",
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    await act(async () => button("Sign in to Codex").click());
+    expect(auth.loginHarness.mock.calls[0]?.[1]).toBe("account-codex");
   });
 
   it("keeps provider errors visible and allows a retry", async () => {

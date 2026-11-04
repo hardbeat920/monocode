@@ -1480,6 +1480,7 @@ function Workspace({
     key: string;
     sessionId: string;
     harness: HarnessId;
+    providerAccountId?: string;
   } | null>(null);
   const seenProviderSignInRequestsRef = useRef<Set<string> | null>(null);
   const seenProviderSignInRequests =
@@ -2280,6 +2281,7 @@ function Workspace({
       key: providerSignInRequestKey(active),
       sessionId: active.id,
       harness: active.harness,
+      providerAccountId: active.providerAccountId,
     };
   }, [active]);
   useEffect(() => {
@@ -2293,7 +2295,11 @@ function Workspace({
   useEffect(() => {
     if (
       providerSignInRequest &&
-      active?.id !== providerSignInRequest.sessionId
+      (active?.id !== providerSignInRequest.sessionId ||
+        !sameProviderAccountId(
+          active?.providerAccountId,
+          providerSignInRequest.providerAccountId,
+        ))
     ) {
       setProviderSignInRequest(null);
     }
@@ -14798,6 +14804,7 @@ function Workspace({
             <ProviderSignInDialog
               key={providerSignInRequest.key}
               harness={providerSignInRequest.harness}
+              providerAccountId={providerSignInRequest.providerAccountId}
               onClose={() => setProviderSignInRequest(null)}
             />
           ) : null}

@@ -579,7 +579,9 @@ function SessionChip({
     setLoginState("running");
     setLoginError(null);
     try {
-      await loginHarness(session.harness);
+      await (session.providerAccountId
+        ? loginHarness(session.harness, session.providerAccountId)
+        : loginHarness(session.harness));
       setOpen(false);
       setLoginState("complete");
     } catch (error) {
