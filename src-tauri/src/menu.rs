@@ -153,9 +153,10 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
-        // New Tab, Close Tab, Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target
-        // one window: a broadcast would make every window act on a single menu click. New Tab and
-        // Close Tab also open or close a dock terminal when that window's dock has focus.
+        // New Tab, Close Tab, Sidebar, Zoom, Reload, Reset Pane Sizes, Command Palette, and Close
+        // All Tabs target one window: a broadcast would make every window act on a single menu
+        // click. New Tab and Close Tab also open or close a dock terminal when that window's dock
+        // has focus.
         "new_tab"
         | "close_tab"
         | "toggle_sidebar"
@@ -164,6 +165,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "zoom_out"
         | "zoom_reset"
         | "reload"
+        | "reset_pane_sizes"
         | "open_command_palette"
         | "close_all_tabs" => emit_to_focused(app, id),
         _ => {}
@@ -387,6 +389,15 @@ fn build(
         overrides,
     )?;
 
+    let reset_pane_sizes = menu_item(
+        app,
+        "reset_pane_sizes",
+        "Reset Pane Sizes",
+        "CmdOrCtrl+Shift+E",
+        "Pane: Reset Sizes",
+        overrides,
+    )?;
+
     let toggle_sidebar = menu_item(
         app,
         "toggle_sidebar",
@@ -490,6 +501,7 @@ fn build(
         .item(&focus_right)
         .item(&focus_up)
         .item(&focus_down)
+        .item(&reset_pane_sizes)
         .separator()
         .item(&zoom_in)
         .item(&zoom_out)

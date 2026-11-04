@@ -271,6 +271,7 @@ import {
   resetTabToSession,
   replaceLeafId,
   setSplitRatio,
+  equalizeSplits,
   siblingLeafId,
   splitPane,
   surfacePanes,
@@ -6166,6 +6167,15 @@ function Workspace({
     },
     [],
   );
+
+  const onResetPaneSizes = useCallback(() => {
+    if (!activeTab) return;
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTab.id ? { ...t, layout: equalizeSplits(t.layout) } : t,
+      ),
+    );
+  }, [activeTab]);
 
   const onCwdChange = useCallback(
     (sessionId: string, cwd: string) => {
@@ -12880,6 +12890,7 @@ function Workspace({
     onActivate: onActivateVisibleTab,
     onSplit,
     onFocusDir,
+    onResetPaneSizes,
     onToggleSidebar,
     onToggleSessionSidebar: onToggleSessionSidebarShortcut,
     onToggleMono,
@@ -12912,6 +12923,7 @@ function Workspace({
     onActivate: onActivateVisibleTab,
     onSplit,
     onFocusDir,
+    onResetPaneSizes,
     onToggleSidebar,
     onToggleSessionSidebar: onToggleSessionSidebarShortcut,
     onToggleMono,
@@ -13148,6 +13160,8 @@ function Workspace({
         else if (shortcut === "App: Command Palette")
           run("open_command_palette", a.onOpenCommandPalette);
         else if (shortcut === "View: Reload") run("reload", a.onReload);
+        else if (shortcut === "Pane: Reset Sizes")
+          run("reset-pane-sizes", a.onResetPaneSizes);
         else if (shortcut === "App: Search") run("open_search", a.onOpenSearch);
         else if (shortcut === "App: Settings")
           run("open_settings", () => a.openSettings());
@@ -13208,6 +13222,9 @@ function Workspace({
       ),
       listen("focus_down", () =>
         run("focus-down", () => actions.current.onFocusDir("down")),
+      ),
+      listen("reset_pane_sizes", () =>
+        run("reset-pane-sizes", actions.current.onResetPaneSizes),
       ),
       listen("toggle_sidebar", () =>
         run("toggle_sidebar", actions.current.onToggleSidebar),

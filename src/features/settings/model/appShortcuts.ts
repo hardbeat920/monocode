@@ -19,6 +19,7 @@ const APP_SHORTCUTS: [string, string, boolean][] = [
   ["App: Go to File", "p", false],
   ["App: Command Palette", "p", true],
   ["View: Reload", "r", true],
+  ["Pane: Reset Sizes", "e", true],
   ["App: Search", "k", false],
   ["App: Settings", ",", false],
   ["App: Find in Files", "f", true],

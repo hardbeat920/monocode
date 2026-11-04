@@ -52,6 +52,29 @@ describe("resolveAppShortcut", () => {
     ).toBe("App: Toggle Session Sidebar");
   });
 
+  it("resets pane sizes with Mod+Shift+E and keeps Mod+Shift+R on reload", () => {
+    expect(
+      resolveAppShortcut(key({ key: "E", metaKey: true, shiftKey: true })),
+    ).toBe("Pane: Reset Sizes");
+    expect(
+      resolveAppShortcut(key({ key: "R", metaKey: true, shiftKey: true })),
+    ).toBe("View: Reload");
+  });
+
+  it("lets the reset pane sizes chord be rebound", () => {
+    saveKeybindingOverride("Pane: Reset Sizes", {
+      shortcut: "Command+Shift+KeyY",
+    });
+    expect(
+      resolveAppShortcut(
+        key({ key: "Y", code: "KeyY", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe("Pane: Reset Sizes");
+    expect(
+      resolveAppShortcut(key({ key: "E", metaKey: true, shiftKey: true })),
+    ).toBeNull();
+  });
+
   it("ignores a chord while an IME is composing", () => {
     // The maintainer's blocker: these used to fire mid-composition.
     for (const chord of [
