@@ -10,6 +10,7 @@ use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
 
@@ -607,7 +608,6 @@ fn clear_run(id: u32) {
 /// Persist already happened in JS. Show windows so window-state doesn't save hidden.
 pub fn confirm_quit(app: AppHandle) {
     *QUIT_RUN.lock().unwrap() = None;
-    ALLOW_EXIT.store(true, Ordering::SeqCst);
     for window in workspace_windows(&app) {
         let _ = window.show();
     }
@@ -615,11 +615,22 @@ pub fn confirm_quit(app: AppHandle) {
     // process is gone, but a macOS terminate that skips the run loop would not
     // reach it — and `kill_all`'s SIGKILL wait only works while we're alive.
     if let Some(host) = app.try_state::<crate::harness::HarnessHost>() {
-        host.kill_all();
+        if let Err(error) = host.kill_all() {
+            ALLOW_EXIT.store(false, Ordering::SeqCst);
+            let _ = app.emit(QUIT_ABORTED, ());
+            app.dialog()
+                .message(format!(
+                    "Could not confirm process cleanup. Retry Quit after it settles.\n\n{error}"
+                ))
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+            return;
+        }
     }
     if let Some(host) = app.try_state::<crate::pty::PtyHost>() {
         host.kill_all();
     }
+    ALLOW_EXIT.store(true, Ordering::SeqCst);
     app.exit(0);
 }
 
