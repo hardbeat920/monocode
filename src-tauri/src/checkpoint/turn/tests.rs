@@ -1118,6 +1118,11 @@ fn a_file_named_index_does_not_rebuild_the_index() {
     let file = f.repo.join("index.html");
     std::fs::write(&file, "<html>two\n").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&file).is_ok() {
+        // Root ignores file modes, so the failure cannot be provoked here.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        return;
+    }
     let error = f
         .store
         .begin_turn("session", f.cwd(), "second")
