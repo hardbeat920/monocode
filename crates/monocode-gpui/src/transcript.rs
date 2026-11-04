@@ -653,6 +653,56 @@ impl PhaseLayout {
     }
 }
 
+/// The runner observes only its hurdle, not unrelated transcript changes.
+#[derive(Default)]
+pub(crate) struct JumpGeometry {
+    bounds: Option<Bounds<Pixels>>,
+    last_notified: Option<Bounds<Pixels>>,
+    notify_pending: bool,
+    generation: u64,
+}
+
+impl JumpGeometry {
+    pub(crate) fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.bounds
+    }
+
+    fn set_bounds(&mut self, bounds: Option<Bounds<Pixels>>, cx: &mut Context<Self>) {
+        if self.bounds == bounds {
+            return;
+        }
+        // Prepaint readers see the latest measurement in this draw. Observers
+        // receive only the final value after pending layout/visibility updates.
+        self.bounds = bounds;
+        if !self.notify_pending {
+            self.notify_pending = true;
+            let weak = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = weak.update(cx, |geometry, cx| {
+                    geometry.notify_pending = false;
+                    if geometry.bounds != geometry.last_notified {
+                        geometry.last_notified = geometry.bounds;
+                        cx.notify();
+                    }
+                });
+            });
+        }
+    }
+
+    fn measure(&mut self, generation: u64, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if self.generation == generation {
+            self.set_bounds(Some(bounds), cx);
+        }
+    }
+
+    fn invalidate(&mut self, clear: bool, cx: &mut Context<Self>) {
+        self.generation = self.generation.wrapping_add(1);
+        if clear {
+            self.set_bounds(None, cx);
+        }
+    }
+}
+
 pub(crate) struct TranscriptView {
     selection: selection::Selection,
     selection_focus: Option<gpui::FocusHandle>,
@@ -784,7 +834,7 @@ pub(crate) struct TranscriptView {
     /// The conversation's git action pill holds the column's left end, so the
     /// jump button moves from the center to the right end.
     jump_beside_pill: bool,
-    jump_anchor: crate::popover::AnchorSlot,
+    jump_geometry: Option<Entity<JumpGeometry>>,
     scroll_bound: bool,
     fold_targets: HashMap<usize, Option<usize>>,
     step_queue: HashMap<usize, Instant>,
@@ -2560,7 +2610,7 @@ impl TranscriptView {
             commit_files: HashMap::new(),
             copied_commit: None,
             jump_beside_pill: false,
-            jump_anchor: Default::default(),
+            jump_geometry: None,
             scroll_bound: false,
             fold_targets: HashMap::new(),
             step_queue: HashMap::new(),
@@ -2682,7 +2732,7 @@ impl TranscriptView {
             // Otherwise the old spacer collapses for a frame before the new
             // prompt gets its own anchor and entrance.
             if self.mono {
-                self.show_jump = false;
+                self.set_show_jump(false, cx);
                 self.list.set_follow_mode(FollowMode::Tail);
             }
             self.started = Some(std::time::Instant::now());
@@ -2761,6 +2811,7 @@ impl TranscriptView {
         if self.visible == visible {
             return;
         }
+        self.invalidate_jump_geometry(true, cx);
         self.selection.clear();
         let now = Instant::now();
         // Settled tabs retain their parsed rows, measured heights and scroll
@@ -3001,7 +3052,7 @@ impl TranscriptView {
             // React's ordinary transcript introduces a sent prompt itself.
             // Start a fresh follow baseline instead of adding a second glide.
             self.follow = Follow::default();
-            self.show_jump = false;
+            self.set_show_jump(false, cx);
             self.list.set_follow_mode(FollowMode::Tail);
         }
         if let Some(prompt) = self.anchor_turn
@@ -5764,24 +5815,63 @@ impl TranscriptView {
         let show =
             !self.list.is_following_tail() && self.list.max_offset_for_scrollbar().y > px(1.);
         if self.show_jump != show {
-            self.show_jump = show;
+            self.set_show_jump(show, cx);
             cx.notify();
         }
+    }
+    fn set_show_jump(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_jump != show {
+            self.show_jump = show;
+            self.invalidate_jump_geometry(true, cx);
+        }
+    }
+    fn invalidate_jump_geometry(&self, clear: bool, cx: &mut Context<Self>) {
+        if let Some(geometry) = &self.jump_geometry {
+            geometry.update(cx, |geometry, cx| geometry.invalidate(clear, cx));
+        }
+    }
+    pub(crate) fn jump_geometry(&mut self, cx: &mut Context<Self>) -> Entity<JumpGeometry> {
+        if self.jump_geometry.is_none() {
+            self.jump_geometry = Some(cx.new(|_| JumpGeometry::default()));
+            // A cached button may predate the runner: measure it afresh.
+            if self.visible && self.show_jump {
+                cx.notify();
+            }
+        }
+        self.jump_geometry.as_ref().unwrap().clone()
     }
     pub(crate) fn set_jump_beside_pill(&mut self, beside: bool, cx: &mut Context<Self>) {
         if self.jump_beside_pill != beside {
             self.jump_beside_pill = beside;
+            self.invalidate_jump_geometry(false, cx);
             cx.notify();
         }
     }
-    pub(crate) fn jump_bounds(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
-        self.show_jump.then(|| self.jump_anchor.get()).flatten()
+    fn jump_probe(&self, cx: &Context<Self>) -> impl IntoElement {
+        let probe = self
+            .jump_geometry
+            .as_ref()
+            .filter(|_| self.visible && self.show_jump)
+            .map(|geometry| (geometry.downgrade(), geometry.read(cx).generation));
+        canvas(
+            move |bounds, _, cx| {
+                if let Some((geometry, generation)) = &probe {
+                    let _ = geometry
+                        .update(cx, |geometry, cx| geometry.measure(*generation, bounds, cx));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
     fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.follow = Follow::default();
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
-        self.show_jump = false;
+        self.set_show_jump(false, cx);
         cx.notify();
     }
     fn toggle(&mut self, start: usize, cx: &mut Context<Self>) {
@@ -6016,7 +6106,7 @@ impl Render for TranscriptView {
                                 .child(
                                     div()
                                         .id("jump-to-bottom")
-                                        .child(self.jump_anchor.probe())
+                                        .child(self.jump_probe(cx))
                                         .role(Role::Button)
                                         .aria_label("Scroll to bottom")
                                         .relative()
@@ -7454,6 +7544,7 @@ mod scroll_tests {
     fn sent_prompt_stays_at_the_top_then_long_replies_follow_until_scrolled_away(
         cx: &mut TestAppContext,
     ) {
+        cx.update(|cx| cx.set_reduce_motion(true));
         let window = cx.update(|cx| {
             cx.open_window(
                 WindowOptions {
@@ -7467,6 +7558,34 @@ mod scroll_tests {
             )
             .unwrap()
         });
+        // An unmounted runner isolates its observer from animation/cache redraws.
+        let transcript = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+        let runner = cx.new(|cx| crate::composer_runner::new(transcript.clone(), cx));
+        let geometry = transcript.update(cx, |view, cx| view.jump_geometry(cx));
+        let wakeups = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _watch = cx.update(|cx| {
+            let wakeups = wakeups.clone();
+            cx.observe(&runner, move |_, _| wakeups.set(wakeups.get() + 1))
+        });
+        cx.run_until_parked();
+        wakeups.set(0);
+        for _ in 0..20 {
+            transcript.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        println!(
+            "unchanged transcript notifications: 20; mascot wakeups: {}",
+            wakeups.get()
+        );
+        assert_eq!(
+            wakeups.get(),
+            0,
+            "unrelated chat updates must not wake the runner"
+        );
+        assert_eq!(
+            geometry.read_with(cx, |geometry, _| geometry.bounds()),
+            None
+        );
         window
             .update(cx, |view, _, cx| {
                 view.patch(
@@ -7532,10 +7651,10 @@ mod scroll_tests {
                     "prompt row must stay at the top, below the list's fade padding"
                 );
                 assert!(view.list.is_following_tail());
-                w.resize(size(px(700.), px(760.)));
                 cx.notify();
             })
             .unwrap();
+        cx.simulate_window_resize(window.into(), size(px(700.), px(760.)));
         cx.refresh().unwrap();
         cx.run_until_parked();
         window
@@ -7584,9 +7703,88 @@ mod scroll_tests {
                     view.list.logical_scroll_top().offset_in_item,
                     offset.offset_in_item
                 );
-                view.jump_to_bottom(cx);
-                assert!(!view.show_jump && view.list.is_following_tail());
             })
             .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let centered = geometry.read_with(cx, |geometry, _| geometry.bounds().unwrap());
+        wakeups.set(0);
+        window
+            .update(cx, |view, _, cx| view.set_jump_beside_pill(true, cx))
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let beside = geometry.read_with(cx, |geometry, _| geometry.bounds().unwrap());
+        assert_ne!(centered, beside);
+        assert!(
+            wakeups.get() > 0,
+            "real geometry changes must wake a stationary runner"
+        );
+        wakeups.set(0);
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        assert_eq!(wakeups.get(), 0, "unchanged measurements must not publish");
+
+        let old_generation = geometry.read_with(cx, |geometry, _| geometry.generation);
+        window
+            .update(cx, |view, _, cx| {
+                view.visible(false, cx);
+                assert_eq!(geometry.read(cx).bounds(), None);
+            })
+            .unwrap();
+        cx.simulate_window_resize(window.into(), size(px(600.), px(650.)));
+        window
+            .update(cx, |view, _, cx| {
+                view.visible(true, cx);
+                // A retained pre-hide probe must not restore stale coordinates.
+                geometry.update(cx, |geometry, cx| {
+                    geometry.measure(old_generation, beside, cx)
+                });
+                assert_eq!(geometry.read(cx).bounds(), None);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let resized = geometry.read_with(cx, |geometry, _| geometry.bounds().unwrap());
+        assert_ne!(resized, beside);
+
+        // Isolate publication from the window: fabricated button coordinates
+        // would legitimately be corrected by its next prepaint measurement.
+        let isolated = cx.new(|_| JumpGeometry::default());
+        let publications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _publication_watch = cx.update(|cx| {
+            let publications = publications.clone();
+            cx.observe(&isolated, move |_, _| {
+                publications.set(publications.get() + 1)
+            })
+        });
+        cx.run_until_parked();
+        isolated.update(cx, |geometry, cx| {
+            let mut moved = resized;
+            moved.origin.x += px(1.);
+            geometry.measure(geometry.generation, moved, cx);
+            moved.origin.x += px(1.);
+            geometry.measure(geometry.generation, moved, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            publications.get(),
+            1,
+            "measurements must coalesce into one publication"
+        );
+        window
+            .update(cx, |view, _, cx| {
+                view.jump_to_bottom(cx);
+                assert!(!view.show_jump && view.list.is_following_tail());
+                assert_eq!(geometry.read(cx).bounds(), None);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            geometry.read_with(cx, |geometry, _| geometry.bounds()),
+            None
+        );
     }
 }

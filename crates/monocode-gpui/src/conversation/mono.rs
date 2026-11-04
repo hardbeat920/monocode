@@ -834,7 +834,6 @@ impl Conversation {
     /// The form's box: the field and send, as `MonoComposer` lays them out
     /// when it has controls.
     fn mono_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let runner = self.composer_runner(cx);
         let focused = self.input.focus_handle(cx).contains_focused(window, cx);
         let ready = self.loaded
             && !self.attaching
@@ -880,7 +879,6 @@ impl Conversation {
                 .size_full(),
             )
             .child(self.composer_anchor.probe())
-            .children(runner)
             .children(self.attachment_chips(cx))
             .child(
                 // Even padding centres send beside one line, and keeps it at

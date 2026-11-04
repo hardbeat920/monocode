@@ -30,8 +30,8 @@
     "native:dev": "node scripts/dev-native.mjs",
     "native:test:dev": "node --test scripts/dev-native.test.mjs scripts/bundle-native-macos.test.mjs scripts/native-dependencies.test.mjs scripts/native-release.test.mjs scripts/package-native.test.mjs",
     "native:build": "node scripts/build-native.mjs",
-    "native:test": "cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --profile native-dev && cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --profile native-dev -- --test-threads=1",
-    "native:check": "npm run native:test:dev && cargo fmt --manifest-path crates/monocode-gpui/Cargo.toml --all --check && cargo clippy --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core -p monocode-gpui --all-targets --profile native-dev -- -D warnings && npm run native:test"
+    "native:test": "cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core -p monocode-mascots -p monocode-arcade --profile native-dev && cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui -p monocode-mascots -p monocode-arcade --profile native-dev -- --test-threads=1",
+    "native:check": "npm run native:test:dev && cargo fmt --manifest-path crates/monocode-gpui/Cargo.toml --all --check && cargo clippy --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core -p monocode-gpui -p monocode-mascots -p monocode-arcade --all-targets --profile native-dev -- -D warnings && npm run native:test"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

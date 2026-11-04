@@ -22,6 +22,26 @@ const TICK: Duration = Duration::from_millis(33);
 /// A hidden app's loops tick this many times slower.
 const BACKGROUND_STRIDE: u64 = 8;
 
+/// Narrow host adapter shared by extracted mascot and arcade views. It renews
+/// the current view's existing lease; the libraries never own this service.
+pub(crate) struct ComponentClock;
+impl monocode_mascots::gpui::AnimationClock for ComponentClock {
+    fn elapsed(&self, cx: &mut App) -> Duration {
+        elapsed(cx)
+    }
+
+    fn request(&self, interactive: bool, window: &mut Window, cx: &mut App) -> bool {
+        if request(Rate::Smooth, window, cx) {
+            return true;
+        }
+        // Preserve the existing controlled-game exception under reduced motion.
+        if interactive {
+            window.request_animation_frame();
+        }
+        interactive
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Rate {
     /// About 30fps: rotations and fades that must look continuous.
