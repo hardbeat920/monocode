@@ -74,17 +74,25 @@ export function MonoRailSection({
   onCreate,
   onDelete,
   project,
+  showAll,
 }: MonoRailProps & {
   /**
-   * Lists only the Monos working on this project, as the inset sidebar does;
-   * a Mono on several projects shows in each of them.
+   * The project the inset sidebar is showing: it styles the section and is
+   * the project a Mono created here starts working on. Unless `showAll` is
+   * set it also filters the list, so only the Monos working on this project
+   * show; a Mono on several projects shows in each of them.
    */
   project?: string;
+  /** Lists every Mono regardless of `project`, as the collapsed rail does. */
+  showAll?: boolean;
 }) {
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(
-    () => listMonos().filter((mono) => !project || monoWorksOn(mono, project)),
-    [snapshot, project],
+    () =>
+      listMonos().filter(
+        (mono) => showAll || !project || monoWorksOn(mono, project),
+      ),
+    [snapshot, project, showAll],
   );
   const ids = monos.map((mono) => mono.id);
   const sortable = useAnimatedReorder(ids, reorderMonos, "y");

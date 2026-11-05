@@ -85,3 +85,28 @@ it("counts a mono's unread replies, except the one open", () => {
   render({ activeId: mono.id, unseenCounts: new Map([[mono.id, 3]]) });
   expect(badge()).toBeNull();
 });
+
+it("lists every mono under an open project while showing all", () => {
+  createMono(["/code/app"]);
+  createMono(["/code/site"]);
+  createMono();
+  render({ project: "/code/app", showAll: true });
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(3);
+});
+
+it("still lists only a project's own monos while filtering", () => {
+  createMono(["/code/app"]);
+  createMono(["/code/site"]);
+  createMono();
+  render({ project: "/code/app" });
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
+});
+
+it("binds a new mono to the open project while showing all", () => {
+  createMono();
+  const onCreate = render({ project: "/code/app", showAll: true });
+  act(() =>
+    container.querySelector<HTMLElement>('[aria-label="New mono"]')!.click(),
+  );
+  expect(onCreate).toHaveBeenCalledWith(["/code/app"]);
+});
