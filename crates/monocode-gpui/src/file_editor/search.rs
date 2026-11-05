@@ -1,8 +1,6 @@
-//! FileEditor adapter for the pure `editor_search` engine: snapshot ownership,
-//! background scheduling, result validation, edits and the Find/Replace panel.
+//! Search scheduling, snapshot validation, and the Find/Replace panel.
 use super::*;
 use crate::editor_search::{self, SearchOptions, SearchResult};
-use std::time::Instant;
 
 #[cfg(test)]
 mod tests;
@@ -29,13 +27,6 @@ impl SearchSnapshot {
     fn run(&self) -> SearchResult {
         editor_search::search(&self.source, &self.query, &self.replacement, self.options)
     }
-}
-
-fn latency_started() -> Option<Instant> {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    ENABLED
-        .get_or_init(|| std::env::var_os("MONOCODE_SEARCH_LATENCY").is_some())
-        .then(Instant::now)
 }
 
 impl FileEditor {
@@ -84,7 +75,6 @@ impl FileEditor {
         if !self.search_open {
             return;
         }
-        let started = latency_started();
         let previous = self.matches.get(self.match_index).map_or(0, |m| m.from);
         self.search_generation = self.search_generation.wrapping_add(1);
         let snapshot = self.capture_search(cx);
@@ -101,17 +91,15 @@ impl FileEditor {
             return;
         }
         self.search_task = Some(cx.spawn(async move |this, cx| {
-            let (snapshot, result) = cx.background_executor().spawn(async move {
-                let result = snapshot.run();
-                (snapshot, result)
-            }).await;
+            let (snapshot, result) = cx
+                .background_executor()
+                .spawn(async move {
+                    let result = snapshot.run();
+                    (snapshot, result)
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
-                let applied = this.apply_search_result(snapshot, result, previous, cx);
-                if let Some(started) = started {
-                    eprintln!("search-latency: {:.2}ms applied={applied} matches={} invalid={} timed_out={}",
-                        started.elapsed().as_secs_f64() * 1000.0,
-                        this.matches.len(), this.search_invalid, this.search_timed_out);
-                }
+                this.apply_search_result(snapshot, result, previous, cx);
             });
         }));
         cx.notify();
