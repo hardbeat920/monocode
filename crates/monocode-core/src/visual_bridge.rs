@@ -21,6 +21,18 @@ const ENV_ENDPOINT: &str = "MONOCODE_VISUAL_ENDPOINT";
 const ENV_TOKEN: &str = "MONOCODE_VISUAL_TOKEN";
 const ENV_SESSION: &str = "MONOCODE_VISUAL_SESSION";
 const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
+/// What the server keeps from its environment: device tools reach the app
+/// over its bridge with the session's own capability.
+const SERVER_ENV: [&str; 8] = [
+    ENV_ENDPOINT,
+    ENV_TOKEN,
+    ENV_SESSION,
+    ENV_EXECUTABLE,
+    "MONOCODE_APP_ENDPOINT",
+    "MONOCODE_APP_TOKEN",
+    "MONOCODE_APP_SESSION",
+    crate::device::ENV,
+];
 
 /// Loaded through visual_docs or the CLI only when authoring a visual. Keep the
 /// SDK out of ordinary prompts, server instructions and tool descriptions; only
@@ -101,12 +113,23 @@ const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison 
 /// Code may defer MCP tools behind ToolSearch, so it is told how to load them.
 pub fn instructions(environment: &HashMap<String, String>, deferred: bool) -> Option<String> {
     configured(environment).then(|| {
-        if deferred {
-            format!("{USAGE} The monocode_visual tools may be deferred: load them with ToolSearch before you call them.")
-        } else {
-            USAGE.to_owned()
+        let mut text = USAGE.to_owned();
+        if devices_enabled(environment) {
+            text.push_str("\n\n");
+            text.push_str(DEVICE_INSTRUCTIONS);
         }
+        if deferred {
+            text.push_str(" The monocode_visual tools may be deferred: load them with ToolSearch before you call them.");
+        }
+        text
     })
+}
+
+const DEVICE_INSTRUCTIONS: &str = "To run or test an app on an iOS Simulator or Android Emulator, call device_open: the user watches the device in MonoCode while you drive it with the agent-device command it returns. Change a simulator's appearance, text size, accessibility settings or location with device_set.";
+fn devices_enabled(environment: &HashMap<String, String>) -> bool {
+    environment
+        .get(crate::device::ENV)
+        .is_some_and(|v| v == "1")
 }
 
 /// The explicit composer command requires a publication even when the ordinary
@@ -594,7 +617,7 @@ fn embed(document: &VisualDocument) -> String {
 }
 
 fn current_environment() -> HashMap<String, String> {
-    [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
+    SERVER_ENV
         .into_iter()
         .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
         .collect()
@@ -717,9 +740,13 @@ pub fn acp_servers(environment: &HashMap<String, String>) -> Value {
     // ACP's stdio server shape omits the transport discriminator.
     server.as_object_mut().unwrap().remove("type");
     server["name"] = "monocode_visual".into();
-    server["env"] = [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
+    server["env"] = SERVER_ENV
         .into_iter()
-        .map(|key| json!({"name":key,"value":environment[key]}))
+        .filter_map(|key| {
+            environment
+                .get(key)
+                .map(|value| json!({"name":key,"value":value}))
+        })
         .collect::<Vec<_>>()
         .into();
     json!([server])
@@ -732,10 +759,7 @@ pub fn configure_codex(command: &mut std::process::Command, environment: &HashMa
     for (key, value) in [
         ("command", json!(environment[ENV_EXECUTABLE])),
         ("args", json!(["visual-mcp"])),
-        (
-            "env_vars",
-            json!([ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]),
-        ),
+        ("env_vars", json!(SERVER_ENV)),
     ] {
         // JSON's strings and arrays are valid TOML literals for these values.
         command.args(["-c", &format!("mcp_servers.monocode_visual.{key}={value}")]);
@@ -755,6 +779,58 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+fn device_tool_definitions() -> Vec<Value> {
+    let device = json!({"type":"string","description":"A device id from device_list, or its name such as \"iPhone 17 Pro\" or \"Pixel 9\""});
+    let tool = |name: &str,
+                description: &str,
+                properties: Value,
+                required: Vec<&str>,
+                read_only: bool| {
+        json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":read_only,"destructiveHint":false,"openWorldHint":false}})
+    };
+    vec![
+        tool("device_list", "List the iOS Simulators and Android Emulators on this Mac, and Android phones connected over USB (physical: true), booted first.", json!({}), vec![], true),
+        tool("device_open", "Boot a simulator or emulator if needed and show it in the user's Device panel. Returns the agent-device command and the exact arguments that drive this device (tap, type, swipe, snapshot of the accessibility tree); run it from your shell.", json!({"device":device,"platform":{"enum":["ios","android"]}}), vec!["device"], false),
+        tool("device_screenshot", "Take a screenshot of a device, by default the one in the Device panel.", json!({"device":device}), vec![], true),
+        tool("device_close", "Shut a simulator or emulator down. Phones connected over USB can't be shut down.", json!({"device":device}), vec!["device"], false),
+        tool("device_set", "Change an iOS Simulator's setting or simulated location, by default on the one in the Device panel. The user sees the change listed under the phone, marked as yours, and can put it back; it lasts until reset, so set it back when you are done unless the user wants to keep it. Values: appearance light|dark; text-size extra-small … accessibility-extra-extra-extra-large, or XS, S, M, L (the default), XL, XXL, XXXL, AX1 … AX5; color-filter none|grayscale|red-green|green-red|blue-yellow; liquid-glass clear|tinted; reduce-motion, increase-contrast, reduce-transparency, voiceover and show-borders on|off; location \"latitude,longitude\" or clear.", json!({"device":device,"setting":{"enum":crate::device::SETTINGS},"value":{"type":"string"}}), vec!["setting", "value"], false),
+    ]
+}
+
+fn call_device_tool(
+    name: &str,
+    input: Value,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    if !devices_enabled(environment) {
+        return Err("Device tools are turned off in Settings › Devices".into());
+    }
+    let action = format!(
+        "devices.{}",
+        name.strip_prefix("device_").ok_or("Unknown device tool")?
+    );
+    crate::device::validate(&action, &input)?;
+    let response = crate::mono::bridge::call(&action, input, &crate::mono::new_id(), environment)?;
+    if response["ok"] != true {
+        return Err(response["error"]
+            .as_str()
+            .unwrap_or("Device request failed")
+            .to_owned());
+    }
+    let mut value = response["result"].clone();
+    if action == "devices.screenshot" {
+        // The app saves the picture; it comes back here as an image block
+        // rather than megabytes of base64 across the bridge.
+        let path = value["path"].as_str().ok_or("The app sent no screenshot")?;
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        use base64::Engine as _;
+        value["png"] = base64::engine::general_purpose::STANDARD
+            .encode(bytes)
+            .into();
+    }
+    Ok(value)
+}
+
 fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option<Value> {
     let id = request.get("id")?.clone();
     let result = match request["method"].as_str().unwrap_or("") {
@@ -762,7 +838,13 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
             json!({"protocolVersion":request["params"]["protocolVersion"].as_str().unwrap_or("2024-11-05"),"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"monocode_visual","version":env!("CARGO_PKG_VERSION")}}),
         ),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools":tool_definitions()})),
+        "tools/list" => {
+            let mut tools = tool_definitions();
+            if devices_enabled(environment) {
+                tools.extend(device_tool_definitions());
+            }
+            Ok(json!({"tools":tools}))
+        }
         "tools/call" => {
             let input = request["params"]["arguments"].clone();
             let result = match request["params"]["name"].as_str().unwrap_or("") {
@@ -772,9 +854,19 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                     .ok_or("source must be a JavaScript string".into())
                     .and_then(check),
                 "visual_show" => publish_with_environment(input, environment),
+                name if name.starts_with("device_") => call_device_tool(name, input, environment),
                 _ => Err("Unknown native visual tool".into()),
             };
             Ok(match result {
+                Ok(mut value) if value.get("png").is_some() => {
+                    // The picture is an image block; the text keeps the rest
+                    // without a megabyte of base64.
+                    let png = value.as_object_mut().unwrap().remove("png").unwrap();
+                    json!({"content":[
+                        {"type":"image","data":png,"mimeType":"image/png"},
+                        {"type":"text","text":value.to_string()}
+                    ],"isError":false})
+                }
                 Ok(value) => {
                     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
                 }
@@ -823,6 +915,48 @@ pub fn mcp_stdio() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_tools_are_only_listed_when_agents_may_drive_devices() {
+        let request = json!({"id":1,"method":"tools/list"});
+        let names = |env: &HashMap<String, String>| {
+            mcp_response(request.clone(), env).unwrap()["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        let mut env = HashMap::new();
+        assert!(!names(&env).iter().any(|n| n.starts_with("device_")));
+        let denied = mcp_response(
+            json!({"id":2,"method":"tools/call","params":{"name":"device_list","arguments":{}}}),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(denied["result"]["isError"], true);
+        env.insert(crate::device::ENV.into(), "1".into());
+        let listed: Vec<String> = names(&env)
+            .into_iter()
+            .filter(|n| n.starts_with("device_"))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "device_list",
+                "device_open",
+                "device_screenshot",
+                "device_close",
+                "device_set"
+            ]
+        );
+        for key in [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE] {
+            env.insert(key.into(), "x".into());
+        }
+        assert!(instructions(&env, false).unwrap().contains("device_open"));
+        env.remove(crate::device::ENV);
+        assert!(!instructions(&env, false).unwrap().contains("device_open"));
+    }
 
     fn input() -> Value {
         json!({"source":"return () => visual.text('Hello');","title":"Hello","requestId":"test-request","id":"hello"})
