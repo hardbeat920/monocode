@@ -88,32 +88,106 @@ fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
 }
 
 #[test]
-fn each_turn_has_a_fresh_baseline_and_noop_turns_clear_the_old_card() {
+fn pending_work_carries_into_later_turns_until_kept_undone_or_committed() {
     let f = Fixture::new();
     f.store.begin_turn("session", f.cwd(), "first").unwrap();
-    f.write("a.txt", "first turn\n");
+    f.write("a.txt", "original\nfirst turn\n");
+    f.write("new.txt", "created\n");
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
-    f.write("a.txt", "external edit between turns\n");
     f.store.begin_turn("session", f.cwd(), "second").unwrap();
-    f.write("a.txt", "external edit between turns\nsecond turn\n");
+    f.write("a.txt", "first turn\nsecond turn\n");
     f.store.finish_turn("session", f.cwd(), "second").unwrap();
-    let diff = f.store.file_diff("session", f.cwd(), "a.txt").unwrap();
-    assert_eq!(diff.original, "external edit between turns\n");
-    assert_eq!(diff.current, "external edit between turns\nsecond turn\n");
-    let status = f.store.status("session", f.cwd()).unwrap();
-    assert_eq!(
-        (status.files[0].additions, status.files[0].deletions),
-        (1, 0)
-    );
+    // A turn without edits still shows the session's work.
     f.store.begin_turn("session", f.cwd(), "third").unwrap();
     f.store.finish_turn("session", f.cwd(), "third").unwrap();
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .map(|file| (file.relative.as_str(), file.additions, file.deletions))
+            .collect::<Vec<_>>(),
+        [("a.txt", 2, 1), ("new.txt", 1, 0)]
+    );
+    let diff = f.store.file_diff("session", f.cwd(), "a.txt").unwrap();
+    assert_eq!(diff.original, "original\n");
+    assert_eq!(diff.current, "first turn\nsecond turn\n");
+    assert!(status.files.iter().all(|file| file.undoable));
+
+    // Undo reverts the whole session, including files from earlier turns.
+    f.store.undo("session", f.cwd(), None).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
+        "original\n"
+    );
+    assert!(!f.repo.join("new.txt").exists());
     assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
     assert!(f.dir.join("checkpoints/session/turns/first.json").exists());
-    assert!(run_git(
-        &f.repo,
-        &["rev-parse", &turn_ref("session", "first", "after")]
-    )
-    .is_ok());
+}
+
+#[test]
+fn files_discarded_outside_the_app_leave_the_review_for_good() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "agent\n");
+    f.write("new.txt", "created\n");
+    std::fs::remove_file(f.repo.join("delete.txt")).unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    assert_eq!(f.store.status("session", f.cwd()).unwrap().files.len(), 3);
+    // The Git panel's Discard: restore tracked files, remove the new one.
+    run_git(&f.repo, &["checkout", "--", "a.txt", "delete.txt"]).unwrap();
+    std::fs::remove_file(f.repo.join("new.txt")).unwrap();
+    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
+    // A later edit outside a turn does not bring the old diff back.
+    f.write("a.txt", "agent\n");
+    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
+}
+
+#[test]
+fn discarding_one_file_keeps_the_others_pending() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "agent\n");
+    f.write("b.txt", "agent b\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    run_git(&f.repo, &["checkout", "--", "a.txt"]).unwrap();
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .map(|f| f.relative.as_str())
+            .collect::<Vec<_>>(),
+        ["b.txt"]
+    );
+}
+
+#[test]
+fn kept_committed_and_untouched_files_start_each_turn_fresh() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "agent\n");
+    f.write("b.txt", "agent b\n");
+    f.write("c.txt", "agent c\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    f.store.keep("session", f.cwd(), Some("b.txt")).unwrap();
+    run_git(&f.repo, &["add", "c.txt"]).unwrap();
+    run_git(&f.repo, &["commit", "-m", "c"]).unwrap();
+    f.write("user.txt", "edited between turns\n");
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("b.txt", "agent b\nagain\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    let status = f.store.status("session", f.cwd()).unwrap();
+    assert_eq!(
+        status
+            .files
+            .iter()
+            .map(|file| (file.relative.as_str(), file.additions, file.deletions))
+            .collect::<Vec<_>>(),
+        // a.txt carries over; b.txt was kept, so only its new line counts;
+        // the commit took c.txt and nobody's turn wrote user.txt.
+        [("a.txt", 1, 1), ("b.txt", 1, 0)]
+    );
 }
 
 #[test]

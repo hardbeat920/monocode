@@ -5,15 +5,15 @@ import { StyleSheet, useColorScheme } from "react-native";
 export type Scheme = "light" | "dark";
 
 // The desktop dark theme in src/styles/index.css (neutral hue, blue accent), on a
-// darker base for mobile: hsl(0 0% 6%) rather than desktop's 9%. The drawer shares
+// darker base for mobile: hsl(0 0% 7.5%) rather than desktop's 9%. The drawer shares
 // the base, and the scene lightens as it slides aside to set itself apart; bottom
 // sheets sit a step above, like raised iOS sheets.
 const dark = {
-  background: "#0f0f0f",
-  drawer: "#0f0f0f",
-  sheet: "#141414",
-  surface: "#1c1c1c",
-  surfaceRaised: "#262626",
+  background: "#131313",
+  drawer: "#131313",
+  sheet: "#181818",
+  surface: "#202020",
+  surfaceRaised: "#2a2a2a",
   stroke: "rgba(235, 235, 235, 0.08)",
   selection: "rgba(235, 235, 235, 0.10)",
   content: "#ebebeb",
@@ -35,12 +35,12 @@ const dark = {
   /** Laid over the Monocode mark, which is drawn white. */
   mark: "#ffffff",
   /** A transcript's fold rails and connectors. */
-  rail: "#2e2e2e",
+  rail: "#323232",
   /** The user's message bubble. */
-  bubble: "#252525",
+  bubble: "#292929",
   /** The file list's card, and the lines between its rows. */
-  listCard: "#1a1a1a",
-  listDivider: "#2b2b2b",
+  listCard: "#1e1e1e",
+  listDivider: "#2f2f2f",
 };
 
 export type Palette = typeof dark;

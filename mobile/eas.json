@@ -6,7 +6,10 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development"
+      "channel": "development",
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
     },
     "development-simulator": {
       "extends": "development",
@@ -25,7 +28,10 @@
       "channel": "beta",
       "environment": "production",
       "node": "22.23.3",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
     }
   },
   "submit": {

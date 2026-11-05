@@ -1,7 +1,14 @@
-import { Redirect, router, useIsFocused, useLocalSearchParams } from "expo-router";
+import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
+import {
+  Redirect,
+  router,
+  Stack,
+  useIsFocused,
+  useLocalSearchParams,
+} from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert } from "react-native";
+import { Alert, Text } from "react-native";
 import { ConnectionNotice } from "@/features/connection/ConnectionNotice";
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
 
@@ -16,10 +23,19 @@ import { Composer } from "@/features/sessions/Composer";
 import { MonoChoose, MonoMessageActions } from "@/features/sessions/MonoCards";
 import { MonoMenu } from "@/features/sessions/MonoMenu";
 import { useMonoAccent } from "@/features/workspace/monoAccent";
-import { AccentOverride, ACCENTS, useScheme } from "@/ui/theme";
+import { AccentOverride, ACCENTS, mix, themedStyles, useAccent, useScheme } from "@/ui/theme";
+import { LiquidView } from "@/ui/LiquidView";
+import { useNativeHeaderHeight } from "@/ui/useNativeHeaderHeight";
+import type { Mono } from "@/features/workspace/types";
 import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
-import { SessionScreen } from "@/features/sessions/SessionScreen";
+import {
+  HEADER_HEIGHT,
+  SessionContent,
+  SessionFrame,
+  SessionScreen,
+} from "@/features/sessions/SessionScreen";
+import { useMonoOnlyLayout } from "@/features/settings/monoOnly";
 import { Transcript } from "@/features/sessions/Transcript";
 import { NativeTranscript } from "@/features/sessions/NativeTranscript";
 import type { TranscriptAgent } from "@/features/sessions/TranscriptTurn";
@@ -31,10 +47,28 @@ import {
 } from "@/features/workspace/WorkspaceProvider";
 
 // A mono has one long-lived conversation, so its screen is that conversation.
-export default function MonoScreen() {
+// Monos only, it is pushed over the list as a session is over its project:
+// under the stack's native header, with back on the left and its ⋯ on the
+// right as native items, and a frame of its own for its composer, so the
+// whole screen slides in and out with the push.
+export default function MonoRoute() {
+  const [monoOnly] = useMonoOnlyLayout();
+  return monoOnly ? <PushedMono /> : <MonoScreen monoOnly={false} />;
+}
+
+function PushedMono() {
+  const headerHeight = useNativeHeaderHeight();
+  return (
+    <SessionFrame nativeHeaderHeight={headerHeight}>
+      <MonoScreen monoOnly />
+    </SessionFrame>
+  );
+}
+
+function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
   const { monoId } = useLocalSearchParams<{ monoId: string }>();
   const { monos, sendMessage, stop } = useWorkspace();
-  useDrawerSwipe();
+  useDrawerSwipe(!monoOnly);
   const mono = monos.find((m) => m.id === monoId);
   const conversationId = mono ? monoConversationId(mono.id) : null;
   const conversation = useConversation(conversationId);
@@ -66,10 +100,12 @@ export default function MonoScreen() {
         if (!mono) return;
         keptUnread.current = true;
         markMonoUnread(desktop, mono);
-        drawer.open();
+        // Monos only, the list is the one back.
+        if (monoOnly) router.back();
+        else drawer.open();
       },
     }),
-    [desktop, mono, drawer],
+    [desktop, mono, drawer, monoOnly],
   );
   // Stable, so the memoized turns keep their rows across polls.
   const name = mono?.name ?? "";
@@ -80,7 +116,17 @@ export default function MonoScreen() {
   // The colour picked for this Mono's chat, over the app's accent.
   const monoAccent = useMonoAccent(mono?.id);
   const scheme = useScheme();
-  const chatAccent = monoAccent === "theme" ? null : ACCENTS[monoAccent][scheme];
+  // Monos only, a chat with no colour picked, here or for the app, is drawn
+  // in the Mono's own: as is in the dark, deepened in the light to hold its
+  // contrast on the pale background.
+  const appAccent = useAccent();
+  const ownAccent =
+    monoOnly && appAccent === "theme" && /^#[0-9a-f]{6}$/i.test(color)
+      ? scheme === "light"
+        ? mix(color, "#000000", 0.22)
+        : color
+      : null;
+  const chatAccent = monoAccent === "theme" ? ownAccent : ACCENTS[monoAccent][scheme];
   const choose = useCallback(
     (text: string) => (conversationId ? sendMessage(conversationId, text) : Promise.resolve()),
     [conversationId, sendMessage],
@@ -98,11 +144,52 @@ export default function MonoScreen() {
   };
   if (!mono || !conversationId) return <Redirect href="/" />;
 
+  const openDetails = () =>
+    router.push({ pathname: "/mono-profile/[monoId]", params: { monoId: mono.id } });
+  // Both clear what can't come back, so each asks first, as the desktop does.
+  const confirmReset = () =>
+    Alert.alert(
+      "Reset conversation?",
+      `The chat with ${mono.name} will be cleared. Its soul, memory and habits stay.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: () => void act(() => command("mono.reset", { monoId: mono.id })),
+        },
+      ],
+    );
+  const confirmDelete = () =>
+    Alert.alert(
+      `Delete ${mono.name}?`,
+      "Its scheduled habits stop. Sessions and notes it created stay saved.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => void act(() => command("mono.delete", { monoId: mono.id })),
+        },
+      ],
+    );
+  const transcript = (
+    <AccentOverride value={chatAccent}>
+      <MonoChoose value={choose}>
+        <MonoMessageActions value={messageActions}>
+          {hasNativeTranscript
+            ? <NativeTranscript key={mono.id} conversationId={conversationId} agent={agent} />
+            : <MonoTranscript key={mono.id} conversationId={conversationId} agent={agent} />}
+        </MonoMessageActions>
+      </MonoChoose>
+    </AccentOverride>
+  );
+
   return (
     <Timed id="mono screen">
     <SessionScreen
       pill={{
-        icon: <PixelMascot name={mono.mascot} color={mono.color} status={mono.status} size={28} />,
+        icon: <PixelMascot name={mono.mascot} color={mono.color} status={headerStatus(mono)} size={28} />,
         label: mono.name,
         // Its profile: the desktop's details, and its look to edit.
         onPress: tools
@@ -113,49 +200,22 @@ export default function MonoScreen() {
       action={tools ? undefined : { icon: "settings", label: "Settings", onPress: () => router.push("/settings") }}
       // Its details, a fresh start or deleting it, from ⋯ on the right.
       trailing={
-        tools ? <MonoMenu
-          onDetails={() =>
-            router.push({ pathname: "/mono-profile/[monoId]", params: { monoId: mono.id } })
-          }
-          // Both clear what can't come back, so each asks first, as the desktop does.
-          onReset={() =>
-            Alert.alert(
-              "Reset conversation?",
-              `The chat with ${mono.name} will be cleared. Its soul, memory and habits stay.`,
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Reset",
-                  style: "destructive",
-                  onPress: () => void act(() => command("mono.reset", { monoId: mono.id })),
-                },
-              ],
-            )
-          }
-          onDelete={() =>
-            Alert.alert(
-              `Delete ${mono.name}?`,
-              "Its scheduled habits stop. Sessions and notes it created stay saved.",
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Delete",
-                  style: "destructive",
-                  onPress: () => void act(() => command("mono.delete", { monoId: mono.id })),
-                },
-              ],
-            )
-          }
-        /> : undefined
+        tools ? (
+          <MonoMenu onDetails={openDetails} onReset={confirmReset} onDelete={confirmDelete} />
+        ) : undefined
       }
       composer={
         <AccentOverride value={chatAccent}>
           {conversation.question ? (
             <QuestionCard conversationId={conversationId} prompt={conversation.question} />
           ) : null}
+          {conversationId && conversation.usageLimit ? (
+            <UsageLimitCard key={`usage:${conversationId}`} conversationId={conversationId} state={conversation.usageLimit} />
+          ) : null}
           <Composer
             key={mono.id}
             // One line: the header names the Mono, and its model lives in settings.
+            active={focused}
             compact
             context=""
             branch=""
@@ -188,20 +248,96 @@ export default function MonoScreen() {
       }
     >
       <ConnectionNotice error={conversation.error} />
-      {/* A suggested reply it offers is sent as the user's message. */}
-      <AccentOverride value={chatAccent}>
-        <MonoChoose value={choose}>
-          <MonoMessageActions value={messageActions}>
-            {hasNativeTranscript
-              ? <NativeTranscript key={mono.id} conversationId={conversationId} agent={agent} />
-              : <MonoTranscript key={mono.id} conversationId={conversationId} agent={agent} />}
-          </MonoMessageActions>
-        </MonoChoose>
-      </AccentOverride>
+      {monoOnly ? (
+        <>
+          {/* The stack's native header: back from the stack, the Mono's
+              pill for a title, and its ⋯ as a native menu. */}
+          <Stack.Screen
+            options={{
+              headerTitle: () => (
+                <MonoTitle mono={mono} onPress={tools ? openDetails : undefined} />
+              ),
+            }}
+          />
+          <Stack.Toolbar placement="right">
+            {tools ? (
+              <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="More">
+                <Stack.Toolbar.MenuAction icon="info.circle" onPress={openDetails}>
+                  View details
+                </Stack.Toolbar.MenuAction>
+                <Stack.Toolbar.MenuAction icon="arrow.counterclockwise" onPress={confirmReset}>
+                  Reset conversation
+                </Stack.Toolbar.MenuAction>
+                <Stack.Toolbar.MenuAction icon="trash" destructive onPress={confirmDelete}>
+                  Delete Mono
+                </Stack.Toolbar.MenuAction>
+              </Stack.Toolbar.Menu>
+            ) : (
+              <Stack.Toolbar.Button
+                icon="gearshape"
+                accessibilityLabel="Settings"
+                onPress={() => router.push("/settings")}
+              />
+            )}
+          </Stack.Toolbar>
+          <SessionContent>{transcript}</SessionContent>
+        </>
+      ) : (
+        // A suggested reply it offers is sent as the user's message.
+        transcript
+      )}
     </SessionScreen>
     </Timed>
   );
 }
+
+/** A Mono's header mascot holds still while it works: its chat shows that,
+ *  beside the "Thinking…" line. The bulb still asks for you. */
+function headerStatus(mono: Mono) {
+  return mono.status === "working" ? "idle" : mono.status;
+}
+
+/** A pushed Mono's title: its mascot and name in a glass pill, which opens
+ *  its profile. */
+function MonoTitle({ mono, onPress }: { mono: Mono; onPress?: () => void }) {
+  const styles = useTitleStyles();
+  return (
+    <LiquidView
+      borderRadius={HEADER_HEIGHT / 2}
+      style={styles.frame}
+      innerStyle={styles.pill}
+      onPress={onPress}
+      accessibilityLabel={onPress ? mono.name : undefined}
+      pressedScale={onPress ? 1.04 : undefined}
+    >
+      <PixelMascot name={mono.mascot} color={mono.color} status={headerStatus(mono)} size={28} />
+      <Text style={styles.label} numberOfLines={1}>
+        {mono.name}
+      </Text>
+    </LiquidView>
+  );
+}
+
+const useTitleStyles = themedStyles((colors) => ({
+  // Kept narrow so a long name truncates rather than spanning the header.
+  frame: {
+    maxWidth: 220,
+  },
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    height: HEADER_HEIGHT,
+    paddingLeft: 12,
+    paddingRight: 18,
+  },
+  label: {
+    flexShrink: 1,
+    color: colors.content,
+    fontSize: 17,
+    fontWeight: "600",
+  },
+}));
 
 /** The mono's turns, read here so a streaming reply re-renders only the transcript. */
 function MonoTranscript({

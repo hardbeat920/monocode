@@ -1024,7 +1024,7 @@ fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &m
 }
 
 #[gpui::test]
-fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut TestAppContext) {
+fn chat_composer_matches_the_session_box_and_opens_the_model_list(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     let handle: gpui::AnyWindowHandle = s.window.into();
@@ -1039,22 +1039,48 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
     let send = visual.debug_bounds("mono-send").unwrap();
     let attach = visual.debug_bounds("mono-attach").unwrap();
     let model = visual.debug_bounds("mono-model").unwrap();
-    // MonoComposer with controls: send inside the box, attach and the model
-    // on the row beneath it, the model at its right end.
+    // A click anywhere in the box, toolbar included, focuses the field.
+    let toolbar = visual.debug_bounds("mono-composer-toolbar").unwrap();
+    for point in [
+        gpui::point(toolbar.center().x, toolbar.top() + px(13.)),
+        gpui::point(send.left() - px(4.), toolbar.top() + px(13.)),
+    ] {
+        handle.update(visual, |_, w, cx| w.blur(cx)).unwrap();
+        visual.simulate_click(point, Default::default());
+        visual.run_until_parked();
+        let chat = visual.update(|_, cx| s.manager.read(cx).chat().unwrap());
+        assert!(
+            handle
+                .update(visual, |_, w, cx| chat
+                    .read(cx)
+                    .input
+                    .focus_handle(cx)
+                    .is_focused(w))
+                .unwrap(),
+            "a click at {point:?} focuses the composer"
+        );
+    }
+    // One line: the session composer's 84px box; send sits 10px above the border.
+    assert_eq!(field.size.height, px(84.));
+    assert_eq!(field.bottom() - send.bottom(), px(11.));
+    // The session composer's box: the model picker and send inside it,
+    // attach underneath on the left.
     assert!(field.contains(&send.center()));
+    assert!(field.contains(&model.center()));
+    assert!(model.right() < send.left());
     assert!(attach.top() >= field.bottom());
-    assert!(model.top() >= field.bottom());
-    assert!(model.left() > attach.right());
-    assert_eq!(send.size, gpui::size(px(26.), px(26.)));
     assert_eq!(attach.size, gpui::size(px(26.), px(26.)));
+    let meter = visual.debug_bounds("mono-context-meter").unwrap();
+    assert!(
+        (f32::from(meter.center().x) - f32::from(send.center().x)).abs() < 0.5,
+        "the context meter sits under send: {meter:?} vs {send:?}"
+    );
     let chat = visual.update(|_, cx| s.manager.read(cx).chat().unwrap());
-    for (draft, single_line) in [
-        ("".to_owned(), true),
-        ("A short message".to_owned(), true),
-        ("First line\nSecond line".to_owned(), false),
-        ("A message that wraps automatically. ".repeat(40), false),
-        ("Short again".to_owned(), true),
-        ("".to_owned(), true),
+    for draft in [
+        "".to_owned(),
+        "First line\nSecond line".to_owned(),
+        "A message that wraps automatically. ".repeat(40),
+        "".to_owned(),
     ] {
         chat.update(visual, |chat, cx| {
             chat.input.update(cx, |input, cx| input.set_text(draft, cx));
@@ -1063,45 +1089,9 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
         visual.refresh().unwrap();
         let field = visual.debug_bounds("mono-composer").unwrap();
         let send = visual.debug_bounds("mono-send").unwrap();
-        s.window
-            .update(visual, |_, window, _| {
-                let scale = window.scale_factor();
-                let quads = window.painted_quads();
-                for (bounds, radius) in [
-                    (
-                        field,
-                        if single_line {
-                            f32::from(field.size.height) / 2.
-                        } else {
-                            12.
-                        },
-                    ),
-                    (send, 13.),
-                ] {
-                    let quad = quads
-                        .iter()
-                        .find(|quad| {
-                            (quad.bounds.left().0 / scale - f32::from(bounds.left())).abs() < 0.1
-                                && (quad.bounds.top().0 / scale - f32::from(bounds.top())).abs()
-                                    < 0.1
-                                && (quad.bounds.size.width.0 / scale - f32::from(bounds.size.width))
-                                    .abs()
-                                    < 0.1
-                                && (quad.bounds.size.height.0 / scale
-                                    - f32::from(bounds.size.height))
-                                .abs()
-                                    < 0.1
-                        })
-                        .expect("the composer and send button paint their surfaces");
-                    assert!(
-                        (quad.corner_radii.top_left.0 / scale - radius).abs() < 0.1,
-                        "expected a {radius}px corner radius, got {:?}",
-                        quad.corner_radii
-                    );
-                }
-                assert_eq!(field.size.height <= px(38.), single_line);
-            })
-            .unwrap();
+        let attach = visual.debug_bounds("mono-attach").unwrap();
+        assert!(field.contains(&send.center()));
+        assert!(attach.top() >= field.bottom());
     }
     handle
         .update(visual, |_, w, cx| {

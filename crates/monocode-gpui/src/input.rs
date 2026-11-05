@@ -317,6 +317,21 @@ impl Input {
         input.font_size = 13.;
         input
     }
+    /// The large single-line field heading a command panel.
+    pub fn command_field(
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut input = Self::search(cx);
+        input.label = label.into();
+        input.placeholder = placeholder.into();
+        input.placeholder_alpha = Some(0.38);
+        input.font_size = 17.;
+        input.line_height = 24.;
+        input.height = 24.;
+        input
+    }
     /// GitChangesPanel's commit message: a one-row `text-[13px] leading-5`
     /// textarea growing to `max-h-40` less its `py-1`.
     pub fn commit_message(cx: &mut Context<Self>) -> Self {
@@ -388,15 +403,23 @@ impl Input {
         input.height = 25.;
         input
     }
+    /// The session composer: one line tall until the text grows.
+    pub fn session_composer(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.min_height = LINE_HEIGHT;
+        input.height = LINE_HEIGHT;
+        input
+    }
+    /// The Mono chat's composer, as tall as the session composer.
     pub(crate) fn mono_composer(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.min_height != 18. {
-            self.height = 18.;
+        if self.min_height != LINE_HEIGHT {
+            self.height = LINE_HEIGHT;
         }
         self.label = format!("Message {name}").into();
         self.placeholder = self.label.clone();
         self.font_size = 13.;
-        self.line_height = 18.;
-        self.min_height = 18.;
+        self.line_height = LINE_HEIGHT;
+        self.min_height = LINE_HEIGHT;
         self.max_height = 144.;
         self.height = self.height.clamp(self.min_height, self.max_height);
         cx.notify();

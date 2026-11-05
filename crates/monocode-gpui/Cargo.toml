@@ -9,6 +9,7 @@ publish = false
 serde.workspace = true
 serde_json.workspace = true
 monocode-core = { path = "../monocode-core" }
+log = "0.4"
 pulldown-cmark = "0.13.5"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
@@ -91,11 +92,13 @@ serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
 
 # Exclude the unused screen-capture dependency from all native platforms.
-# Keep the Apple renderer's alpha and font-matching fixes.
+# Keep the Apple renderer's alpha and font-matching fixes, and macOS windows
+# that restart a stalled display link instead of freezing.
 [patch.crates-io]
 gpui-pre = { path = "../../vendor/gpui-pre" }
 gpui-pre-apple = { path = "../../vendor/gpui-pre-apple" }
 gpui-pre-linux = { path = "../../vendor/gpui-pre-linux" }
+gpui-pre-macos = { path = "../../vendor/gpui-pre-macos" }
 gpui-pre-windows = { path = "../../vendor/gpui-pre-windows" }
 
 [profile.native-dev]

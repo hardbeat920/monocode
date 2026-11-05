@@ -6,21 +6,18 @@ import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-nativ
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { PIXEL_MASCOT_NAMES } from "@/features/mascots/pixelMascots";
 import { useMonoModel } from "@/features/models/useMonoModel";
+import { useMonoSubsessions } from "@/features/models/useMonoSubsessions";
 import { ProviderLogo } from "@/features/sessions/ProviderLogo";
 import { SettingsPage, SettingsRow } from "@/features/settings/SettingsUI";
 import { useOffline } from "@/features/connection/ConnectionNotice";
 import { useMonoFiles } from "@/features/connection/ConnectionProvider";
 import { useWorkspace, type MonoChange } from "@/features/workspace/WorkspaceProvider";
 import { Icon } from "@/ui/Icon";
+import { SWATCHES } from "@/features/workspace/monoLook";
 import { setMonoAccent, useMonoAccent, type MonoAccent } from "@/features/workspace/monoAccent";
 import { ACCENTS, paletteFor, radii, themedStyles, useColors, useScheme } from "@/ui/theme";
 
 const TILE_GAP = 10;
-
-/** The desktop's swatches for a Mono (COLORS_MONO). */
-const SWATCHES = [
-  "#459cf7", "#ea603e", "#f4bf25", "#39c363", "#e45a9f", "#b168d4", "#37beb4", "#ef8c39", "#8b63e9",
-];
 
 // A Mono's look: its name, then which mascot it is and in what colour, as the
 // desktop's look editor. Each change shows everywhere at once and saves on the
@@ -31,6 +28,7 @@ export default function EditMonoScreen() {
   const mono = monos.find((m) => m.id === monoId);
   const offline = useOffline();
   const { model, harness } = useMonoModel(mono);
+  const subsessions = useMonoSubsessions(mono);
   // The older desktop app can't hand the phone its soul and memory.
   const files = useMonoFiles();
   const styles = useStyles();
@@ -106,6 +104,19 @@ export default function EditMonoScreen() {
           onPress={() => router.push({ pathname: "/mono-profile/[monoId]/model", params: { monoId } })}
         />
       </View>
+
+      <Text style={styles.heading}>Sessions it starts</Text>
+      <View style={[styles.card, offline && styles.off]} pointerEvents={offline ? "none" : "auto"}>
+        <SettingsRow
+          icon={subsessions.harness ? <ProviderLogo harness={subsessions.harness} size={18} /> : "sparkle"}
+          label={subsessions.modelLabel || "Choose a model"}
+          value={subsessions.effort ? subsessions.effortLabel : undefined}
+          onPress={() =>
+            router.push({ pathname: "/mono-profile/[monoId]/subsessions", params: { monoId } })
+          }
+        />
+      </View>
+      <Text style={styles.note}>The model and effort for sessions it starts without naming one.</Text>
 
       {files ? (
         <>

@@ -65,6 +65,11 @@ impl TranscriptView {
         history: PreparedHistory,
         cx: &mut Context<Self>,
     ) {
+        // A view evicted while inactive restores where the reader left it.
+        if self.history_position.is_some() {
+            self.restore_prepared_history(history, cx);
+            return;
+        }
         self.prepared_parsers = history.parsers;
         self.patch(0, history.rows, cx);
     }

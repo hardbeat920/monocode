@@ -216,6 +216,31 @@ impl Monos {
                 .filter(|c| *c <= 0xffffff)
                 .ok_or("Unknown colour")?;
         }
+        // The model and effort for sessions it starts; null inherits its own.
+        if let Some(value) = params.get("subsessions") {
+            mono.subsessions = if value.is_null() {
+                None
+            } else {
+                let mut next: monocode_core::mono::Subsessions =
+                    serde_json::from_value(value.clone()).map_err(|_| "Unknown model")?;
+                let kind = match next.harness.as_deref() {
+                    Some(harness) => Some(Kind::parse(harness).ok_or("Unknown provider")?),
+                    None => None,
+                };
+                // Kept as the desktop's own picker keeps it, without the
+                // provider the phone's catalog names it with.
+                if let (Some(kind), Some(model)) = (kind, next.model.take()) {
+                    next.model = monocode_core::store::native_model(&model, kind.id());
+                }
+                if [&next.model, &next.effort]
+                    .iter()
+                    .any(|v| v.as_ref().is_some_and(|v| v.len() > 256))
+                {
+                    return Err("Unknown model".into());
+                }
+                next.normalized()
+            };
+        }
         // Projects as the desktop's settings add and remove them.
         if let Some(path) = params["addPath"].as_str() {
             mono.projects.push(path.into());

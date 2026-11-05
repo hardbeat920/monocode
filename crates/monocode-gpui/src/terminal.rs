@@ -1,5 +1,8 @@
 //! Port of TerminalView.tsx: a login shell on a PTY, emulated by
 //! alacritty_terminal and painted as a grid of cell-snapped text runs.
+mod shell;
+use shell::default_shell;
+
 use crate::theme::*;
 use alacritty_terminal::{
     event::{Event as TermEvent, EventListener, WindowSize},
@@ -165,20 +168,21 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
     };
     let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
     let workdir = working_dir(cwd);
-    let (program, args) = default_shell();
+    let search_path = monocode_core::scm::terminal_search_path();
+    let (program, args) = default_shell(&search_path);
     let mut env = HashMap::new();
     for (key, value) in [
         ("TERM", "xterm-256color".to_owned()),
         ("COLORTERM", "truecolor".to_owned()),
         ("COLORFGBG", "15;0".to_owned()),
         ("TERM_PROGRAM", "MonoCode".to_owned()),
-        ("PATH", monocode_core::scm::terminal_search_path()),
+        ("PATH", search_path),
         ("PWD", workdir.to_string_lossy().into_owned()),
     ] {
         env.insert(key.to_owned(), value);
     }
     let options = tty::Options {
-        shell: Some(tty::Shell::new(program, args)),
+        shell: Some(tty::Shell::new(shell::pty_program(&program), args)),
         working_directory: Some(workdir),
         drain_on_exit: false,
         env,
@@ -216,7 +220,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
         Err(error) => {
             write_note(
                 &term,
-                &format!("\x1b[31mCould not start the shell: {error}\x1b[0m"),
+                &format!("\x1b[31mCould not start the shell ({program}): {error}\x1b[0m"),
             );
             None
         }
@@ -1386,29 +1390,6 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
         home().unwrap_or(path)
     }
 }
-fn default_shell() -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                "/bin/zsh".into()
-            } else {
-                "/bin/bash".into()
-            }
-        });
-    let stem = std::path::Path::new(&shell)
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    let args = match stem.as_str() {
-        "zsh" | "bash" | "sh" | "fish" => vec!["-l".to_owned()],
-        _ => Vec::new(),
-    };
-    (shell, args)
-}
-
 /// pty.rs's foreground_label: the command holding the terminal, unless it
 /// is the shell itself.
 #[cfg(unix)]
