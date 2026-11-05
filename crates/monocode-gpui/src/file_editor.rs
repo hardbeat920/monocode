@@ -17,9 +17,6 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 mod chrome;
 mod diff;
-#[cfg(test)]
-#[path = "file_editor/latency_test.rs"]
-mod latency_test;
 mod media;
 #[cfg(test)]
 #[path = "file_editor/tests.rs"]

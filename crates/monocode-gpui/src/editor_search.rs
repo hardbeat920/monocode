@@ -1,27 +1,9 @@
-//! Native find/replace for the file editor.
-//!
-//! The previous implementation evaluated the editor bundle in QuickJS and used
-//! `@codemirror/search`. This module keeps the same result shape and follows
-//! the semantics of the pinned CodeMirror 6.5.11 bundle:
-//!
-//! * literal search is NFKD-normalized (query as a whole, source per code
-//!   point) and optionally lowercased;
-//! * regex search is ECMAScript, with `gmu` flags and optional `i`;
-//! * whole-word uses Unicode `Alphabetic`, `Number`, and `_` on grapheme
-//!   boundaries, not `\b`;
-//! * zero-length matches are dropped, as the old bridge did;
-//! * regex replacement expands the CodeMirror subset (`$$`, `$&`, `$1..$99`).
-//!
-//! Integration boundary: an immutable UTF-8, LF-normalized editor buffer and
-//! query/options in, ordered non-overlapping UTF-8 byte ranges out. This module
-//! owns no UI, tasks, files or global state. Run `search` off the UI thread;
-//! the caller must reject results whose buffer/query snapshot is obsolete.
-//! Invalid and timed-out searches return no matches, so incomplete results
-//! cannot accidentally be used for Replace All.
+//! Find/replace with CodeMirror 6.5.11 semantics and UTF-8 byte offsets.
+//! Run off the UI thread and reject results from obsolete input snapshots.
 
 use corvus_regex_ecma262::{Captures, Flags, MatchError, Regex};
 use memchr::memmem;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::GraphemeCursor;
@@ -36,14 +18,14 @@ pub(crate) struct SearchOptions {
     pub regex: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub(crate) struct SearchMatch {
     pub from: usize,
     pub to: usize,
     pub insert: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub(crate) struct SearchResult {
     pub matches: Vec<SearchMatch>,
     pub invalid: bool,
@@ -79,9 +61,6 @@ pub(crate) fn search(
     }
 }
 
-/// Applies the already-computed matches in one pass. This replaces the old
-/// reverse `String::replace_range` loop, which moved the tail of the file for
-/// every match.
 pub(crate) fn replace_all(source: &str, matches: &[SearchMatch]) -> Result<String, String> {
     let mut out = String::with_capacity(source.len());
     let mut at = 0;
@@ -153,8 +132,7 @@ fn find_ascii(
             });
             at = to;
         } else {
-            // A rejected candidate doesn't consume the text. A later valid
-            // whole-word match can overlap it (e.g. xfoo-foo-foo / foo-foo).
+            // Rejected candidates may overlap a later whole-word match.
             at = from + 1;
         }
     }
@@ -191,9 +169,8 @@ fn find_normalized(
                 at = next_char_boundary(&normalized.text, from_norm);
             }
         } else {
-            // CodeMirror only accepts a match when its end lands on a source
-            // code-point boundary. Advance one normalized code point so a
-            // valid suffix inside the same expansion can still match.
+            // Match ends must map to source code-point boundaries.
+            // A suffix within the same expansion may still match.
             at = next_char_boundary(&normalized.text, from_norm);
         }
     }
@@ -296,9 +273,7 @@ impl Scan<'_> {
             let from = base + matched.start();
             let to = base + matched.end();
             if self.word && !whole_word(self.source, from, to) {
-                // The pinned CodeMirror multiline cursor stops at its first
-                // rejected whole-word candidate. Preserve even this quirk:
-                // changing it would silently expand Replace All's scope.
+                // CodeMirror's multiline cursor stops at the first rejected word.
                 if self.multiline {
                     break;
                 }
@@ -578,10 +553,8 @@ mod tests {
         let expired = search_regex("a\nb", ".", "x", options, Instant::now());
         assert!(expired.timed_out && expired.matches.is_empty());
 
-        // A real backtracking timeout after an earlier successful match. The
-        // old loop spent another 50ms on *each* remaining line and exposed a
-        // partial result to Replace All. The generous bound catches that bug,
-        // not small performance fluctuations.
+        // Stop after the first timeout; discard earlier matches for Replace All.
+        // The bound catches retries on all 100 remaining lines.
         let source = format!("a\n{}", format!("{}!\n", "a".repeat(40)).repeat(100));
         let started = Instant::now();
         let result = search(&source, r"^(?:(a+)\1*)+$", "x", options);
@@ -589,7 +562,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[derive(serde::Deserialize, serde::Serialize)]
+    #[derive(serde::Deserialize)]
     struct ParityFixture {
         source: String,
         query: String,
@@ -626,8 +599,7 @@ mod tests {
                 fixture.word,
                 fixture.regex
             );
-            // Check the range contract and the one-pass rewrite independently
-            // against the original reverse-replacement algorithm.
+            // Compare with the original reverse-replacement algorithm.
             let mut expected = fixture.source.clone();
             for m in fixture.expected.matches.iter().rev() {
                 expected.replace_range(m.from..m.to, &m.insert);
