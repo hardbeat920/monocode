@@ -19,10 +19,10 @@ Install and sign in to at least one supported agent first. See [provider setup](
 
 | Platform | Native | Tauri |
 | --- | --- | --- |
-| macOS, Apple Silicon | [MonocodeNative_aarch64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.13/MonocodeNative_0.16.0-preview.13_aarch64.dmg) | [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg) |
-| macOS, Intel | [MonocodeNative_x64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.13/MonocodeNative_0.16.0-preview.13_x64.dmg) | [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg) |
-| Linux, x86_64 | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/tag/native-v0.16.0-preview.13) | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
-| Windows, x86_64 | [Installer](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.13/MonocodeNative_0.16.0-preview.13_x64-setup.exe) | [Installer](https://github.com/hardbeat920/monocode/releases/latest) |
+| macOS, Apple Silicon | [MonocodeNative_aarch64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_aarch64.dmg) | [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg) |
+| macOS, Intel | [MonocodeNative_x64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_x64.dmg) | [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg) |
+| Linux, x86_64 | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/tag/native-v0.16.0-preview.14) | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
+| Windows, x86_64 | [Installer](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_x64-setup.exe) | [Installer](https://github.com/hardbeat920/monocode/releases/latest) |
 
 On macOS, open the DMG and drag MonoCode to Applications. On Windows, run the installer. See [Linux setup](docs/install.md) for dependencies and package instructions.
 
