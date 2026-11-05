@@ -1,12 +1,15 @@
 //! ParticleText.tsx: reveal the new title while the previous glyphs drift away.
+//! A title leaving for good dissolves the same way, with nothing revealed.
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, Font, Global, GlobalElementId, Hsla,
     InspectorElementId, LayoutId, Pixels, PlatformTextSystem, RenderGlyphParams, ShapedLine, Size,
     TextAlign, TextRun, Window, div, fill, point, prelude::*, px,
 };
 use std::{
+    cell::RefCell,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -17,21 +20,43 @@ const DENSITY: f32 = 0.9;
 const SWEEP: f32 = 1.1;
 const EDGE: f32 = 18.;
 const PARTICLE_LIFE: f32 = 0.85;
+/// A title on its way out sweeps faster, so the list isn't kept waiting.
+const DISSOLVE_SWEEP: f32 = 0.48;
+const DISSOLVE_LIFE: f32 = 0.52;
 
 /// Share GPUI's actual font IDs and rasterizer, including fallback/emoji fonts.
 pub(crate) struct GlyphRaster(pub Arc<dyn PlatformTextSystem>);
 impl Global for GlyphRaster {}
 
-pub(crate) fn particle_text(text: impl Into<String>) -> impl IntoElement {
+/// A title that animates when it changes. With `dissolve` it hands itself over
+/// instead, and the [`Dissolve`] paints it from then on.
+pub(crate) fn particle_text(
+    text: impl Into<String>,
+    dissolve: Option<Dissolve>,
+) -> impl IntoElement {
     ParticleText {
         text: text.into(),
         space: div().size_full().into_any_element(),
+        dissolve,
     }
 }
 
 struct ParticleText {
     text: String,
     space: AnyElement,
+    dissolve: Option<Dissolve>,
+}
+
+/// A title leaving for good. Its label captures it once and stops painting, so
+/// whoever owns this can paint the dust above anything that clips the label.
+#[derive(Clone, Default)]
+pub(crate) struct Dissolve(Rc<RefCell<Option<Captured>>>);
+
+struct Captured {
+    line: ShapedLine,
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+    particles: Vec<Particle>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -85,9 +110,13 @@ fn edge_at(elapsed: f32, width: f32) -> f32 {
 
 impl Particle {
     fn frame(&mut self, elapsed: f32, edge: f32) -> (bool, Option<(Bounds<Pixels>, f32)>) {
+        self.advance(elapsed, self.x <= edge)
+    }
+
+    fn advance(&mut self, elapsed: f32, reached: bool) -> (bool, Option<(Bounds<Pixels>, f32)>) {
         let born = match self.born {
             Some(born) => born,
-            None if self.x > edge => return (true, None),
+            None if !reached => return (true, None),
             None => *self.born.insert(elapsed),
         };
         let t = ((elapsed - born) / self.life).clamp(0., 1.);
@@ -228,6 +257,70 @@ fn sample_text(
     particles
 }
 
+impl Dissolve {
+    fn capture(
+        &self,
+        line: &ShapedLine,
+        bounds: Bounds<Pixels>,
+        color: Hsla,
+        scale: f32,
+        cx: &App,
+    ) {
+        let mut captured = self.0.borrow_mut();
+        if captured.is_some() {
+            return;
+        }
+        let mut particles = cx
+            .try_global::<GlyphRaster>()
+            .map_or_else(Vec::new, |raster| {
+                sample_text(line, bounds.size, scale, raster.0.as_ref())
+            });
+        for particle in &mut particles {
+            particle.vx = -particle.vx;
+            particle.life *= DISSOLVE_LIFE / PARTICLE_LIFE;
+        }
+        *captured = Some(Captured {
+            line: line.clone(),
+            bounds,
+            color,
+            particles,
+        });
+    }
+
+    /// Paints the title `elapsed` seconds into its exit: the edge sweeps in
+    /// from the right, and `strength` scales the dust it leaves.
+    pub(crate) fn paint(&self, elapsed: f32, strength: f32, window: &mut Window, cx: &mut App) {
+        let mut captured = self.0.borrow_mut();
+        let Some(title) = captured.as_mut() else {
+            return;
+        };
+        let edge = dissolve_edge(elapsed, title.line.width().into());
+        if elapsed < DISSOLVE_SWEEP {
+            let mask = (edge - EDGE / 2., edge + EDGE / 2.);
+            paint_text(&title.line, title.bounds, Some(mask), window, cx);
+        }
+        let canvas = title.bounds.dilate(px(PAD));
+        window.paint_layer(canvas, |window| {
+            window.with_content_mask(Some(ContentMask { bounds: canvas }), |window| {
+                for particle in &mut title.particles {
+                    let (_, painted) = particle.advance(elapsed, particle.x >= edge);
+                    if let Some((bounds, alpha)) = painted {
+                        window.paint_quad(fill(
+                            Bounds::new(title.bounds.origin + bounds.origin, bounds.size),
+                            title.color.opacity(alpha * strength),
+                        ));
+                    }
+                }
+            });
+        });
+    }
+}
+
+/// The right-to-left mirror of [`edge_at`], over the shorter sweep.
+fn dissolve_edge(elapsed: f32, width: f32) -> f32 {
+    width - edge_at(elapsed / DISSOLVE_SWEEP * SWEEP, width)
+}
+
 impl State {
     fn prepare(
         &mut self,
@@ -349,7 +442,11 @@ impl Element for ParticleText {
                 style: style.clone(),
                 transition: None,
             });
+            let color = style.color;
             let frame = state.prepare(&self.text, style, bounds, Instant::now(), window, cx);
+            if let Some(dissolve) = &self.dissolve {
+                dissolve.capture(&frame.line, bounds, color, window.scale_factor(), cx);
+            }
             (frame, state)
         })
     }
@@ -363,6 +460,9 @@ impl Element for ParticleText {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if self.dissolve.is_some() {
+            return;
+        }
         if let Some((previous, size, edge)) = &frame.previous {
             paint_text(&frame.line, bounds, Some((edge - EDGE, *edge)), window, cx);
             let ghost = Bounds::new(bounds.origin, *size);

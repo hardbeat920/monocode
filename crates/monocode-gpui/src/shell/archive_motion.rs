@@ -1,22 +1,26 @@
-//! Archiving a thread: its sidebar row slides off to the left, the rows below
-//! close up behind it, and a small burst leaves the archive button.
+//! Archiving a thread: its sidebar title dissolves from the archive button
+//! across, the rest of the row fades, and the rows below close up behind it.
 use super::*;
+use crate::particle_text::Dissolve;
 use crate::reveal::{Disclosure, bezier};
-use gpui::{Hsla, point};
 use std::time::{Duration, Instant};
 
-/// The row slides and fades, then its height folds away.
-const SLIDE: Duration = Duration::from_millis(170);
-const COLLAPSE_AT: Duration = Duration::from_millis(110);
-const ROW: Duration = Duration::from_millis(300);
-const BURST: Duration = Duration::from_millis(640);
-const PARTICLES: usize = 10;
-const PALETTE: [u32; 5] = [ACCENT, 0xfbbf24, 0x6ee7b7, 0xfda4af, 0xb180d7];
+/// The row fades while its title dissolves, then its height folds away.
+const FADE: Duration = Duration::from_millis(336);
+const COLLAPSE_AT: Duration = Duration::from_millis(400);
+const ROW: Duration = Duration::from_millis(600);
+/// The sweep plus the longest a particle lives.
+const DUST: Duration = Duration::from_millis(1104);
+/// How much of the dust stays over the next row, so its title stays readable.
+const DUST_OVER_ROWS: f32 = 0.2;
 
 struct Exit {
     start: Instant,
-    /// Where the burst leaves from, in window coordinates.
-    origin: Point<Pixels>,
+    /// Painted above the list, so the fold doesn't clip it.
+    dust: Dissolve,
+    /// The list's width, so a truncated title keeps its cut. Read here because
+    /// the list can't be asked while it draws its rows.
+    width: Pixels,
     /// The row has been dropped from the list.
     dropped: bool,
 }
@@ -28,25 +32,26 @@ pub(crate) struct ArchiveExits {
 }
 
 impl ArchiveExits {
-    /// Still drawn by the list, so it can slide and fold instead of vanishing.
+    /// Still drawn by the list, so it can fade and fold instead of vanishing.
     /// Held until the tick drops it, so a frame drawn after the fold but before
     /// the list is rebuilt keeps the row collapsed instead of showing it again.
     pub(super) fn listed(&self, id: i64) -> bool {
         self.exits.get(&id).is_some_and(|exit| !exit.dropped)
     }
 
-    /// How far the row has slid and how far its height has folded, 0 to 1.
-    fn row(&self, id: i64) -> Option<(f32, f32)> {
+    /// How far the row has faded and how far its height has folded, 0 to 1,
+    /// with the width it lays out at.
+    fn row(&self, id: i64) -> Option<(f32, f32, Pixels)> {
         let exit = self.exits.get(&id).filter(|exit| !exit.dropped)?;
-        let elapsed = exit.start.elapsed().min(ROW);
-        let slide = (elapsed.as_secs_f32() / SLIDE.as_secs_f32()).min(1.);
-        let fold = (elapsed.saturating_sub(COLLAPSE_AT).as_secs_f32()
-            / (ROW - COLLAPSE_AT).as_secs_f32())
-        .min(1.);
-        Some((
-            bezier(slide, 0.4, 0., 1., 1.),
-            bezier(fold, 0.2, 0., 0., 1.),
-        ))
+        let elapsed = exit.start.elapsed();
+        let fade = (elapsed.as_secs_f32() / FADE.as_secs_f32()).min(1.);
+        Some((bezier(fade, 0.4, 0., 1., 1.), fold_at(elapsed), exit.width))
+    }
+
+    /// The title of a row on its way out.
+    pub(super) fn dissolve(&self, id: i64) -> Option<Dissolve> {
+        let exit = self.exits.get(&id).filter(|exit| !exit.dropped)?;
+        Some(exit.dust.clone())
     }
 
     pub(super) fn exiting(&self, id: i64) -> bool {
@@ -54,50 +59,15 @@ impl ArchiveExits {
     }
 }
 
-/// A stable pseudo-random value in `0..1` for one particle's trait.
-fn jitter(id: i64, particle: usize, salt: u64) -> f32 {
-    let mut x = (id as u64)
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add((particle as u64 + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9))
-        .wrapping_add(salt.wrapping_mul(0x94D0_49BB_1331_11EB));
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
-    x ^= x >> 31;
-    (x >> 40) as f32 / (1u64 << 24) as f32
+fn fold_at(elapsed: Duration) -> f32 {
+    let fold =
+        elapsed.saturating_sub(COLLAPSE_AT).as_secs_f32() / (ROW - COLLAPSE_AT).as_secs_f32();
+    bezier(fold.min(1.), 0.2, 0., 0., 1.)
 }
 
-struct Particle {
-    center: Point<Pixels>,
-    size: f32,
-    color: Hsla,
-}
-
-fn particles(id: i64, origin: Point<Pixels>, elapsed: Duration) -> Vec<Particle> {
-    let t = (elapsed.as_secs_f32() / BURST.as_secs_f32()).min(1.);
-    let travel = bezier(t, 0., 0., 0.2, 1.);
-    let fade = 1. - bezier(((t - 0.45) / 0.55).clamp(0., 1.), 0.4, 0., 1., 1.);
-    (0..PARTICLES)
-        .map(|k| {
-            // A fan thrown up and left, towards where the row is heading.
-            let angle = std::f32::consts::PI * (0.55 + 0.9 * jitter(id, k, 1));
-            let reach = 26. + 34. * jitter(id, k, 2);
-            let fall = 18. * t * t * (0.6 + jitter(id, k, 3));
-            let mut color: Hsla =
-                rgb(PALETTE[(jitter(id, k, 4) * PALETTE.len() as f32) as usize % PALETTE.len()])
-                    .into();
-            color.a = fade;
-            Particle {
-                center: point(
-                    origin.x + px(angle.cos() * reach * travel),
-                    origin.y + px(-angle.sin() * reach * travel + fall),
-                ),
-                size: 2.5 + 2.5 * jitter(id, k, 5),
-                color,
-            }
-        })
-        .collect()
+/// The dust thins as the next row moves up under it.
+fn dust_strength(elapsed: Duration) -> f32 {
+    1. - (1. - DUST_OVER_ROWS) * fold_at(elapsed)
 }
 
 impl Shell {
@@ -121,14 +91,20 @@ impl Shell {
         if cx.reduce_motion() || self.workspace.preferences.show_archived {
             return;
         }
-        let Some(bounds) = self.session_row_bounds.get(&id).and_then(AnchorSlot::get) else {
+        if self
+            .session_row_bounds
+            .get(&id)
+            .and_then(AnchorSlot::get)
+            .is_none()
+        {
             return;
-        };
+        }
         self.archive_exits.exits.insert(
             id,
             Exit {
                 start: Instant::now(),
-                origin: point(bounds.right() - px(24.), bounds.center().y),
+                dust: Dissolve::default(),
+                width: self.sidebar_list.state.viewport_bounds().size.width,
                 dropped: false,
             },
         );
@@ -154,7 +130,7 @@ impl Shell {
                 }
                 this.archive_exits
                     .exits
-                    .retain(|_, exit| exit.start.elapsed() < BURST);
+                    .retain(|_, exit| exit.start.elapsed() < DUST);
                 if dropped {
                     // The list forgets the row once, after it has folded away.
                     this.sidebar_list.invalidate_structure();
@@ -167,7 +143,12 @@ impl Shell {
         }));
     }
 
-    /// The row at `ix` as the list shows it, slid and folded while its thread
+    /// A sidebar row's title, handed to the dust while its thread leaves.
+    pub(super) fn session_title_text(&self, id: i64, title: impl Into<String>) -> impl IntoElement {
+        crate::particle_text::particle_text(title, self.archive_exits.dissolve(id))
+    }
+
+    /// The row at `ix` as the list shows it, faded and folded while its thread
     /// is on the way out.
     pub(super) fn archive_exit_row(
         &self,
@@ -175,50 +156,37 @@ impl Shell {
         row: AnyElement,
         _cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some((slide, fold)) = self.archive_exits.row(id) else {
+        let Some((fade, fold, width)) = self.archive_exits.row(id) else {
             return row;
         };
-        let width = px(self.workspace.sidebar_width.max(0.));
         div()
             .overflow_hidden()
             .child(Disclosure::new(
-                div()
-                    .relative()
-                    .left(-width * 0.4 * slide)
-                    .opacity(1. - slide)
-                    .child(row),
+                div().opacity(1. - fade).child(row),
                 width,
                 1. - fold,
             ))
             .into_any_element()
     }
 
-    /// Paints the bursts above the list, in window coordinates.
-    pub(super) fn archive_burst_overlay(&self) -> Option<AnyElement> {
-        let bursts: Vec<_> = self
+    /// Paints the dissolving titles above the list, in window coordinates.
+    pub(super) fn archive_dust_overlay(&self) -> Option<AnyElement> {
+        let titles: Vec<_> = self
             .archive_exits
             .exits
-            .iter()
-            .filter(|(_, exit)| exit.start.elapsed() < BURST)
-            .flat_map(|(id, exit)| particles(*id, exit.origin, exit.start.elapsed()))
+            .values()
+            .map(|exit| (exit.dust.clone(), exit.start.elapsed()))
+            .filter(|(_, elapsed)| *elapsed < DUST)
             .collect();
-        if bursts.is_empty() {
+        if titles.is_empty() {
             return None;
         }
         Some(
             canvas(
                 |_, _, _| (),
-                move |_, _, window, _| {
-                    for particle in &bursts {
-                        let size = px(particle.size);
-                        window.paint_quad(gpui::quad(
-                            Bounds::centered_at(particle.center, gpui::size(size, size)),
-                            size / 2.,
-                            particle.color,
-                            0.,
-                            gpui::transparent_black(),
-                            gpui::BorderStyle::default(),
-                        ));
+                move |_, _, window, cx| {
+                    for (dust, elapsed) in &titles {
+                        dust.paint(elapsed.as_secs_f32(), dust_strength(*elapsed), window, cx);
                     }
                 },
             )
@@ -241,7 +209,8 @@ mod tests {
             7,
             Exit {
                 start: Instant::now() - age,
-                origin: point(px(100.), px(50.)),
+                dust: Dissolve::default(),
+                width: px(240.),
                 dropped: false,
             },
         );
@@ -249,30 +218,28 @@ mod tests {
     }
 
     #[test]
-    fn row_slides_before_it_folds_and_is_unlisted_when_done() {
-        let early = exit_at(Duration::from_millis(60)).row(7).unwrap();
+    fn row_fades_before_it_folds_and_is_unlisted_when_done() {
+        let early = exit_at(Duration::from_millis(120)).row(7).unwrap();
         assert!(early.0 > 0. && early.1 == 0.);
-        let late = exit_at(Duration::from_millis(250)).row(7).unwrap();
-        assert!(late.0 >= 0.99 && late.1 > 0.5);
+        let late = exit_at(Duration::from_millis(500)).row(7).unwrap();
+        assert!(late.0 == 1. && late.1 > 0.5);
         // Between the end of the fold and the tick that drops the row, it
         // stays listed and fully collapsed rather than snapping back.
         let held = exit_at(ROW + Duration::from_millis(5));
         assert!(held.listed(7));
-        assert_eq!(held.row(7), Some((1., 1.)));
+        assert_eq!(held.row(7), Some((1., 1., px(240.))));
         let mut done = held;
         done.exits.get_mut(&7).unwrap().dropped = true;
         assert!(!done.listed(7) && done.row(7).is_none());
+        assert!(done.dissolve(7).is_none());
         assert!(!exit_at(Duration::ZERO).listed(8));
     }
 
     #[test]
-    fn burst_is_stable_and_fades_out() {
-        let origin = point(px(100.), px(50.));
-        let a = particles(7, origin, Duration::from_millis(200));
-        let b = particles(7, origin, Duration::from_millis(200));
-        assert_eq!(a.len(), PARTICLES);
-        assert!(a.iter().zip(&b).all(|(x, y)| x.center == y.center));
-        assert!(a.iter().all(|p| p.color.a > 0.));
-        assert!(particles(7, origin, BURST).iter().all(|p| p.color.a < 0.01));
+    fn dust_outlives_the_row_and_thins_as_the_next_row_arrives() {
+        assert!(DUST > ROW);
+        assert_eq!(dust_strength(COLLAPSE_AT), 1.);
+        assert!((dust_strength(ROW) - DUST_OVER_ROWS).abs() < 0.001);
+        assert!((dust_strength(DUST) - DUST_OVER_ROWS).abs() < 0.001);
     }
 }

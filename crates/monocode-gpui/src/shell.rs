@@ -6199,7 +6199,7 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(content(1.))
             })
-            .child(crate::particle_text::particle_text(session.display_title()));
+            .child(self.session_title_text(id, session.display_title()));
         let badges = div()
             .flex()
             .items_center()
@@ -9345,7 +9345,7 @@ mod tests {
         window
             .update(visual, |shell, _, cx| {
                 assert!(shell.sessions[&a].read(cx).summary.archived);
-                // With motion the row stays listed while it slides out.
+                // With motion the row stays listed while it dissolves.
                 assert_eq!(shell.archive_exits.exiting(a), !reduce_motion);
                 assert_eq!(shell.sidebar_session_ids(cx).contains(&a), !reduce_motion);
             })
@@ -9357,7 +9357,7 @@ mod tests {
             .update(visual, |shell, _, cx| {
                 assert!(!shell.sessions[&a].read(cx).summary.archived);
                 assert!(!shell.archive_exits.exiting(a) && !shell.archive_exits.listed(a));
-                assert!(shell.archive_burst_overlay().is_none());
+                assert!(shell.archive_dust_overlay().is_none());
                 assert!(shell.sidebar_session_ids(cx).contains(&a));
             })
             .unwrap();
@@ -9379,7 +9379,7 @@ mod tests {
                 assert_eq!(shell.archive_exits.exiting(a), !reduce_motion);
             })
             .unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        std::thread::sleep(std::time::Duration::from_millis(1200));
         for _ in 0..3 {
             visual
                 .executor()
@@ -9390,7 +9390,7 @@ mod tests {
             .update(visual, |shell, _, cx| {
                 assert!(shell.sessions[&a].read(cx).summary.archived);
                 assert!(!shell.archive_exits.listed(a));
-                assert!(shell.archive_burst_overlay().is_none());
+                assert!(shell.archive_dust_overlay().is_none());
                 assert!(!shell.sidebar_session_ids(cx).contains(&a));
             })
             .unwrap();

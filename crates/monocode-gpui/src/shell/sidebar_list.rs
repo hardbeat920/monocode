@@ -471,7 +471,7 @@ impl Shell {
                 !self.workspace.boxy_layout(),
                 false,
             ))
-            .children(self.archive_burst_overlay())
+            .children(self.archive_dust_overlay())
             .into_any()
     }
 
