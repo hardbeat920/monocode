@@ -534,7 +534,16 @@ pub(crate) fn icon_button_hover(
     path: &'static str,
     hover_alpha: f32,
 ) -> Stateful<Div> {
-    chrome_button(id, label, path, true, hover_alpha)
+    chrome_button(id, label, path, true, hover_alpha, 0.5)
+}
+/// An icon button drawn over busy content, where the usual half ink fades out.
+pub(crate) fn icon_button_ink(
+    id: &'static str,
+    label: &'static str,
+    path: &'static str,
+    ink: f32,
+) -> Stateful<Div> {
+    chrome_button(id, label, path, true, 0.1, ink)
 }
 pub(crate) fn icon_button_enabled(
     id: &'static str,
@@ -542,7 +551,7 @@ pub(crate) fn icon_button_enabled(
     path: &'static str,
     enabled: bool,
 ) -> Stateful<Div> {
-    chrome_button(id, label, path, enabled, 0.1)
+    chrome_button(id, label, path, enabled, 0.1, 0.5)
 }
 fn chrome_button(
     id: &'static str,
@@ -550,7 +559,9 @@ fn chrome_button(
     path: &'static str,
     enabled: bool,
     hover_alpha: f32,
+    ink: f32,
 ) -> Stateful<Div> {
+    let ink = content(if enabled { ink } else { 0.25 });
     div()
         .id(id)
         .role(Role::Button)
@@ -563,17 +574,13 @@ fn chrome_button(
         .justify_center()
         .size(px(24.))
         .rounded_md()
-        .text_color(content(if enabled { 0.5 } else { 0.25 }))
+        .text_color(ink)
         .when(enabled, |d| {
             d.hover(|s| s.bg(content(hover_alpha)).text_color(content(1.)))
         })
-        .child(
-            icon(path, 14.)
-                .text_color(content(if enabled { 0.5 } else { 0.25 }))
-                .when(enabled, |i| {
-                    i.group_hover("chrome-button", |s| s.text_color(content(1.)))
-                }),
-        )
+        .child(icon(path, 14.).text_color(ink).when(enabled, |i| {
+            i.group_hover("chrome-button", |s| s.text_color(content(1.)))
+        }))
 }
 // `.primary-action` paints with literal white and black, not theme ink.
 pub(crate) fn white(alpha: f32) -> Hsla {
