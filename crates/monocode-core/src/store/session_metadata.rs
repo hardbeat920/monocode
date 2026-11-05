@@ -1,6 +1,6 @@
 //! Small sidebar metadata can be gathered before the UI constructs chat entities.
 use super::Store;
-use crate::{agent::AccessMode, orchestration, session_groups};
+use crate::{agent::AccessMode, session_groups, subagents};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -11,9 +11,7 @@ pub struct SessionSidebarMetadata {
     pub sidebar_hidden: HashSet<i64>,
     pub started_by: HashMap<i64, i64>,
     pub thread_parents: HashMap<i64, i64>,
-    pub orchestrations: HashMap<i64, orchestration::Summary>,
-    /// Each lead's recent runs, restored for resuming.
-    pub orchestration_runs: HashMap<i64, Vec<orchestration::Run>>,
+    pub agent_summaries: HashMap<i64, subagents::Summary>,
     pub groups: HashMap<String, session_groups::Groups>,
     pub reminders: Vec<super::Reminder>,
 }
@@ -104,8 +102,7 @@ impl Store {
             },
             started_by: self.started_links().unwrap_or_default(),
             thread_parents: self.thread_parents().unwrap_or_default(),
-            orchestrations: self.orchestration_summaries().unwrap_or_default(),
-            orchestration_runs: self.orchestration_runs().unwrap_or_default(),
+            agent_summaries: self.agent_summaries().unwrap_or_default(),
             groups: projects
                 .iter()
                 .filter_map(|project| {

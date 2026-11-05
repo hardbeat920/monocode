@@ -596,13 +596,12 @@ impl Protocol {
                         }
                         if self.request.settings.plan {
                             params["sandboxPolicy"] = json!({"type":"readOnly"});
-                            if self.request.settings.orchestrator
-                                || self
-                                    .request
-                                    .settings
-                                    .environment
-                                    .get("MONOCODE_THREADS")
-                                    .is_some_and(|v| v == "1")
+                            if self
+                                .request
+                                .settings
+                                .environment
+                                .get("MONOCODE_THREADS")
+                                .is_some_and(|v| v == "1")
                             {
                                 params["sandboxPolicy"]["networkAccess"] = true.into();
                             }

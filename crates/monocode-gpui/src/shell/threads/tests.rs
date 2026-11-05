@@ -149,7 +149,7 @@ fn threads_wait_times_out_then_resolves_with_the_child_reply(cx: &mut TestAppCon
     window
         .update(cx, |shell, _, _| {
             shell
-                .orchestration_summaries
+                .agent_summaries
                 .get_mut(&lead)
                 .unwrap()
                 .tasks
@@ -205,7 +205,7 @@ fn threads_wait_times_out_then_resolves_with_the_child_reply(cx: &mut TestAppCon
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.sessions[&child].read(cx).driven_by, Some(lead));
-            assert!(!shell.orchestration_summaries[&lead].live);
+            assert!(!shell.agent_summaries[&lead].live);
         })
         .unwrap();
 }
@@ -326,7 +326,7 @@ fn threads_start_is_idempotent_and_marks_the_child_before_dispatch(cx: &mut Test
                 Some(&lead)
             );
             assert!(
-                shell.orchestration_summaries[&lead]
+                shell.agent_summaries[&lead]
                     .tasks
                     .iter()
                     .any(|t| t.session == Some(child))
@@ -376,7 +376,7 @@ fn threads_new_opens_a_top_level_thread_the_lead_does_not_own(cx: &mut TestAppCo
             );
             assert!(
                 shell
-                    .orchestration_summaries
+                    .agent_summaries
                     .get(&lead)
                     .is_none_or(|s| s.tasks.iter().all(|t| t.session != Some(id)))
             );
@@ -656,7 +656,7 @@ fn threads_close_archives_a_finished_child_and_takes_it_off_the_rail(cx: &mut Te
                 .unwrap();
             assert!(session.archived);
             assert!(
-                !shell.orchestration_summaries[&lead]
+                !shell.agent_summaries[&lead]
                     .tasks
                     .iter()
                     .any(|t| t.session == Some(child))
@@ -671,7 +671,7 @@ fn threads_close_archives_a_finished_child_and_takes_it_off_the_rail(cx: &mut Te
     window
         .update(cx, |shell, _, cx| {
             assert!(
-                shell.orchestration_summaries[&lead]
+                shell.agent_summaries[&lead]
                     .tasks
                     .iter()
                     .any(|t| t.session == Some(child))

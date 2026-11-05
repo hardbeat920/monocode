@@ -1,5 +1,5 @@
-//! One-shot graphics inside freshly sent Plan, Orchestrator and Visualize
-//! prompt bubbles. Visualize shares the charts' ordered dither grid.
+//! One-shot graphics inside freshly sent Plan and Visualize prompt bubbles.
+//! Visualize shares the charts' ordered dither grid.
 //! Timings, colors and keyframes follow index.css; CSS's radial gradient and
 //! rounded `overflow: hidden` are approximated with masked linear gradients and
 //! a coverage fade at the bubble's corners.
@@ -12,7 +12,6 @@ use std::{hash::BuildHasher, time::Instant};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
     Plan,
-    Orchestrator,
     Visualize,
 }
 
@@ -23,8 +22,6 @@ impl Kind {
     ) -> Option<Self> {
         if monocode_core::composer::consume_command(prompt, "visualize").is_some() {
             Some(Self::Visualize)
-        } else if settings.orchestrator {
-            Some(Self::Orchestrator)
         } else if settings.plan {
             Some(Self::Plan)
         } else {
@@ -34,7 +31,6 @@ impl Kind {
     /// Each component's CELEBRATE_MS.
     fn duration_ms(self) -> f32 {
         match self {
-            Self::Orchestrator => 3100.,
             Self::Plan => 3200.,
             Self::Visualize => 2800.,
         }
@@ -85,22 +81,13 @@ impl Burst {
             });
             return;
         }
-        let colors = Palette::new(self.kind, crate::theme::is_light());
+        let colors = Palette::new(crate::theme::is_light());
         paint_halo(&bubble, t, colors.halo_ring, colors.halo_glow, window);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             paint_sheen(&bubble, t, &colors.sheen, window);
             let mut rng = Rng(self.seed | 1);
-            match self.kind {
-                Kind::Plan => {
-                    paint_ember_glow(&bubble, t, colors.ember_glow, window);
-                    paint_plan_steps(&bubble, t, &colors, &mut rng, window, cx);
-                }
-                Kind::Orchestrator => {
-                    paint_network(&bubble, t, &colors, &mut rng, window);
-                    paint_ember_glow(&bubble, t, colors.ember_glow, window);
-                }
-                Kind::Visualize => unreachable!(),
-            }
+            paint_ember_glow(&bubble, t, colors.ember_glow, window);
+            paint_plan_steps(&bubble, t, &colors, &mut rng, window, cx);
         });
     }
 }
@@ -190,32 +177,21 @@ struct Palette {
 }
 
 impl Palette {
-    fn new(kind: Kind, light: bool) -> Self {
-        let (color, glow, spark, ink) = match (kind, light) {
-            (Kind::Plan, false) => (
-                hex(0xfde047, 1.),
-                hex(0xfacc15, 0.85),
-                hex(0xfefce8, 1.),
-                hex(0x422006, 1.),
-            ),
-            (Kind::Plan, true) => (
+    fn new(light: bool) -> Self {
+        let (color, glow, spark, ink) = if light {
+            (
                 hex(0xca8a04, 1.),
                 hex(0xca8a04, 0.55),
                 hex(0xfefce8, 1.),
                 hex(0xffffff, 1.),
-            ),
-            (_, false) => (
-                hex(0xf0abfc, 1.),
-                hex(0xe879f9, 0.85),
-                hex(0xfdf4ff, 1.),
-                hex(0xfdf4ff, 1.),
-            ),
-            (_, true) => (
-                hex(0xc026d3, 1.),
-                hex(0xc026d3, 0.5),
-                hex(0xf5d0fe, 1.),
-                hex(0xf5d0fe, 1.),
-            ),
+            )
+        } else {
+            (
+                hex(0xfde047, 1.),
+                hex(0xfacc15, 0.85),
+                hex(0xfefce8, 1.),
+                hex(0x422006, 1.),
+            )
         };
         Self {
             color,
@@ -680,210 +656,6 @@ fn paint_plan_steps(
     }
 }
 
-const FIRST_EDGE_MS: f32 = 280.;
-const EDGE_GAP_MS: f32 = 80.;
-const EDGE_DRAW_MS: f32 = 320.;
-const CHILD_DRAW_MS: f32 = 220.;
-const INSET: f32 = 8.;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Node {
-    pub(super) x: f32,
-    pub(super) y: f32,
-    /// Where its edge starts: the hub, or the node it branched from.
-    pub(super) from: (f32, f32),
-    /// When its edge starts drawing.
-    pub(super) delay: f32,
-    pub(super) draw: f32,
-    pub(super) child: bool,
-}
-
-/// A lead at the bottom center fans work out to a few agents across the
-/// bubble, and a couple of them hand off again. Everything stays inside the
-/// bubble so its clipping never cuts a node in half.
-pub(super) fn make_constellation(
-    width: f32,
-    height: f32,
-    mut random: impl FnMut() -> f32,
-) -> ((f32, f32), Vec<Node>) {
-    let max_x = INSET.max(width - INSET);
-    let max_y = INSET.max(height - INSET);
-    let hub = (width / 2., max_y);
-    let count = ((width / 90.).round() as usize).clamp(3, 6);
-    // Short single-line bubbles still leave the agents a little above the lead.
-    let top = max_y.min(INSET.max(height * 0.35));
-    let bottom = top.max((max_y - 10.).min(height * 0.7));
-    let mut agents: Vec<Node> = (0..count)
-        .map(|i| Node {
-            x: (((i as f32 + 0.2 + random() * 0.6) / count as f32) * width).clamp(INSET, max_x),
-            y: top + random() * (bottom - top),
-            from: hub,
-            delay: 0.,
-            draw: EDGE_DRAW_MS,
-            child: false,
-        })
-        .collect();
-    // Fan out from the center so the lead reads as reaching both ways at once.
-    agents.sort_by(|a, b| (a.x - hub.0).abs().total_cmp(&(b.x - hub.0).abs()));
-    for (i, agent) in agents.iter_mut().enumerate() {
-        agent.delay = FIRST_EDGE_MS + i as f32 * EDGE_GAP_MS;
-    }
-    let children: Vec<Node> = agents
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 2 == 1)
-        .map(|(_, parent)| {
-            let direction = if parent.x < hub.0 { -1. } else { 1. };
-            Node {
-                x: (parent.x + direction * (22. + random() * 18.)).clamp(INSET, max_x),
-                y: (parent.y + (random() - 0.5) * 12.).clamp(top, max_y),
-                from: (parent.x, parent.y),
-                delay: parent.delay + parent.draw + 60.,
-                draw: CHILD_DRAW_MS,
-                child: true,
-            }
-        })
-        .collect();
-    agents.extend(children);
-    (hub, agents)
-}
-
-fn stroke_line(
-    from: Point<Pixels>,
-    to: Point<Pixels>,
-    width: f32,
-    color: Hsla,
-    window: &mut Window,
-) {
-    let mut path = PathBuilder::stroke(px(width));
-    path.move_to(from);
-    path.line_to(to);
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
-}
-
-/// orchestrator-hub / orchestrator-node with its expanding ::after ring.
-fn paint_node(
-    center: Point<Pixels>,
-    diameter: f32,
-    (t, delay, ring_delay, ring_ms): (f32, f32, f32, f32),
-    fade: f32,
-    colors: &Palette,
-    window: &mut Window,
-) {
-    let p = progress(t, delay, 600.);
-    let opacity = frames(p, &[(0., 0.), (0.3, 1.), (1., 1.)], EASE_OUT) * fade;
-    let peak = if diameter >= 8. { 1.35 } else { 1.4 };
-    let low = if diameter >= 8. { 0.3 } else { 0.2 };
-    let scale = frames(p, &[(0., low), (0.3, peak), (1., 1.)], EASE_OUT);
-    let ring = progress(t, ring_delay, ring_ms);
-    let ring_opacity = frames(ring, &[(0., 0.8), (1., 0.)], EASE_OUT) * opacity;
-    let ring_scale = scale * frames(ring, &[(0., 1.), (1., 3.5)], EASE_OUT);
-    if opacity <= 0.01 {
-        return;
-    }
-    paint_glow(
-        center,
-        diameter * scale,
-        8.,
-        mix(colors.glow, opacity),
-        window,
-    );
-    paint_orb(
-        center,
-        diameter * scale,
-        (mix(colors.spark, opacity), mix(colors.color, opacity)),
-        window,
-    );
-    if ring_opacity > 0.01 {
-        let d = diameter * ring_scale;
-        window.paint_quad(
-            fill(
-                Bounds::new(center - point(px(d * 0.5), px(d * 0.5)), size(px(d), px(d))),
-                gpui::transparent_black(),
-            )
-            .corner_radii(px(d * 0.5))
-            .border_widths(px(1.5 * ring_scale))
-            .border_color(mix(colors.color, ring_opacity)),
-        );
-    }
-}
-
-/// OrchestratorConstellation: the lead lights up at the bubble's base, edges
-/// race out to agents that pop in and hand off again, then the whole network
-/// rises beyond the top edge.
-fn paint_network(bubble: &Bubble, t: f32, colors: &Palette, rng: &mut Rng, window: &mut Window) {
-    let (w, h) = (bubble.width(), bubble.height());
-    let (bx, by) = bubble.origin();
-    let (hub, nodes) = make_constellation(w, h, || rng.next());
-    // orchestrator-network-rise
-    let p = progress(t, 300., 2200.);
-    let fade = frames(p, &[(0., 1.), (0.85, 1.), (1., 0.)], RISE);
-    let lift = -(h + 12.) * ease(p, RISE);
-    if fade <= 0.01 {
-        return;
-    }
-    let at = |(x, y): (f32, f32)| point(px(bx + x), px(by + y + lift));
-    for node in &nodes {
-        let length = (node.x - node.from.0).hypot(node.y - node.from.1);
-        if length <= 0. {
-            continue;
-        }
-        let along = |s: f32| {
-            let k = s / length;
-            at((
-                node.from.0 + (node.x - node.from.0) * k,
-                node.from.1 + (node.y - node.from.1) * k,
-            ))
-        };
-        let q = progress(t, node.delay, node.draw);
-        let drawn = length * ease(q, RISE);
-        if drawn > 0.01 {
-            stroke_line(
-                at(node.from),
-                along(drawn),
-                1.25,
-                mix(colors.color, 0.6 * fade),
-                window,
-            );
-        }
-        // A bright head rides the tip of each edge as it draws out.
-        let offset = frames(q, &[(0., 6.), (1., -length)], RISE);
-        let head = frames(q, &[(0., 1.), (0.85, 1.), (1., 0.)], RISE) * fade;
-        let (start, end) = ((-offset).max(0.), (6. - offset).min(length));
-        if head > 0.01 && end > start && q > 0. {
-            stroke_line(
-                along(start),
-                along(end),
-                5.,
-                mix(colors.glow, 0.35 * head),
-                window,
-            );
-            stroke_line(
-                along(start),
-                along(end),
-                2.5,
-                mix(colors.spark, head),
-                window,
-            );
-        }
-    }
-    paint_node(at(hub), 8., (t, 120., 220., 700.), fade, colors, window);
-    for node in &nodes {
-        let delay = node.delay + node.draw - 40.;
-        let diameter = if node.child { 4.5 } else { 6. };
-        paint_node(
-            at((node.x, node.y)),
-            diameter,
-            (t, delay, delay, 500.),
-            fade,
-            colors,
-            window,
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,18 +665,6 @@ mod tests {
         assert_eq!(plan_step_count(40.), 2);
         assert_eq!(plan_step_count(200.), 3);
         assert_eq!(plan_step_count(900.), 6);
-        let mut rng = Rng(7);
-        for (w, h) in [(60., 36.), (320., 36.), (700., 120.)] {
-            let (hub, nodes) = make_constellation(w, h, || rng.next());
-            assert_eq!(hub, (w / 2., h - INSET));
-            let agents = nodes.iter().filter(|n| !n.child).count();
-            assert!((3..=6).contains(&agents));
-            assert_eq!(nodes.len() - agents, agents / 2);
-            for node in &nodes {
-                assert!(node.x >= INSET && node.x <= w - INSET, "{node:?}");
-                assert!(node.y >= INSET && node.y <= h - INSET, "{node:?}");
-            }
-        }
     }
 
     #[test]

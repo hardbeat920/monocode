@@ -310,7 +310,7 @@ impl Shell {
         if manage
             && (id == caller
                 || self.thread_parents.contains_key(&id)
-                || self.orchestration_worker(id)
+                || self.former_worker(id)
                 || self
                     .monos
                     .as_ref()

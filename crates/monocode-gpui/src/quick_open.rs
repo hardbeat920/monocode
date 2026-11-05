@@ -22,7 +22,6 @@ pub(crate) enum Command {
     Layout,
     WorkspaceStyle,
     Plan,
-    Orchestrator,
 }
 const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::New, "New conversation", "⌘N"),
@@ -39,7 +38,6 @@ const COMMANDS: &[(Command, &str, &str)] = &[
         "⌘⌥L",
     ),
     (Command::Plan, "Toggle Plan mode", ""),
-    (Command::Orchestrator, "Toggle Orchestrator", ""),
 ];
 pub(crate) enum Picked {
     File(String),

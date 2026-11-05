@@ -1,3 +1,4 @@
+import { LeadLink } from "@/features/sessions/LeadLink";
 import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
 import { router, Stack, useIsFocused } from "expo-router";
 import {
@@ -38,7 +39,6 @@ import {
   useReportSessionError,
   useSessionErrorNotice,
 } from "@/features/sessions/sessionError";
-import { OrchestrationStrip } from "@/features/orchestration/OrchestrationStrip";
 import { LiveSessions } from "@/features/sessions/LiveSessions";
 import { NativeTranscript } from "@/features/sessions/NativeTranscript";
 import { FileOpener } from "@/features/sessions/Markdown";
@@ -310,14 +310,10 @@ export function ProjectScreen({
       onClose={sheet ? () => router.back() : undefined}
     />
   ) : null;
-  // A lead's agents, or a worker's way back to its lead.
+  // A subagent's way back to its lead.
   const lead = session?.leadId
     ? sessions.find((entry) => entry.id === session.leadId)
     : undefined;
-  const orchestrationStrip =
-    session && (lead || session.orchestration) ? (
-      <OrchestrationStrip session={session} lead={lead} />
-    ) : undefined;
   const sessionToolbar = sessionId ? (
     <SessionToolbar
       projectId={project.id}
@@ -336,7 +332,7 @@ export function ProjectScreen({
       // pages; a session's composer shows where it does.
       below={
         sessionId ? (
-          orchestrationStrip
+          lead ? <LeadLink lead={lead} /> : undefined
         ) : offline ? (
           // Nothing to pick from while the desktop can't be reached.
           <ReconnectingStatus />

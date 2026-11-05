@@ -156,7 +156,6 @@ impl Completion {
             disabled_paths: Vec::new(),
             known: [
                 "/plan",
-                "/orchestrator",
                 "/compact",
                 "/mcp",
                 "/btw",
@@ -224,7 +223,6 @@ impl Completion {
         self.notes.clear();
         self.known = [
             "/plan",
-            "/orchestrator",
             "/compact",
             "/mcp",
             "/btw",
@@ -533,7 +531,6 @@ impl Completion {
                 this.short_mentions = short_mentions(&this.files);
                 this.known = [
                     "/plan",
-                    "/orchestrator",
                     "/compact",
                     "/mcp",
                     "/btw",
@@ -664,11 +661,6 @@ impl Completion {
                     "Draft",
                     "Save this message without starting the agent",
                 ),
-                (
-                    "orchestrator",
-                    "Orchestrator",
-                    "Plan and coordinate agent work",
-                ),
                 ("plan", "Plan mode", "Review a plan before building"),
                 (
                     "btw",
@@ -785,7 +777,6 @@ impl Completion {
                     "plan"
                         | "compact"
                         | "mcp"
-                        | "orchestrator"
                         | "add-to-folder"
                         | "draft"
                         | "btw"
@@ -1186,7 +1177,6 @@ mod tests {
                     commands,
                     [
                         "/draft",
-                        "/orchestrator",
                         "/plan",
                         "/btw",
                         "/compact",
@@ -1208,18 +1198,6 @@ mod tests {
             .update(cx, |view, _, _| {
                 assert_eq!(view.choices.len(), 1);
                 assert_eq!(view.choices[0].insertion, "/alpha");
-            })
-            .unwrap();
-        window
-            .update(cx, |view, _, cx| {
-                view.input
-                    .update(cx, |input, cx| input.set_text("/o".into(), cx));
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |view, _, _| {
-                assert_eq!(view.choices[0].insertion, "/orchestrator");
             })
             .unwrap();
     }

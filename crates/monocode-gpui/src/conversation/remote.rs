@@ -288,11 +288,6 @@ impl Conversation {
             cx.notify();
             return true;
         }
-        if self.settings.orchestrator {
-            self.status = "Orchestration is not available on remote projects.".into();
-            cx.notify();
-            return true;
-        }
         false
     }
     pub(super) fn remote_draft_action(&mut self, send: bool, cx: &mut Context<Self>) {

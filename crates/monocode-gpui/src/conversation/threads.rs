@@ -73,9 +73,6 @@ impl Conversation {
         self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
 
-    pub(crate) fn driver_label(&self) -> String {
-        self.model_label().to_string()
-    }
     pub(crate) fn thread_outcome(&self, cx: &gpui::App) -> (bool, String) {
         let (success, fallback) = self.external_outcome(cx);
         let rows = self.transcript.read(cx).source_rows();
@@ -89,45 +86,6 @@ impl Conversation {
             monocode_core::response::limit(reply.as_deref().unwrap_or(&fallback), 12000),
         )
     }
-    /// How an orchestration worker's last turn ended: its outcome, its reply
-    /// and the files it edited.
-    pub(crate) fn worker_outcome(
-        &self,
-        cx: &gpui::App,
-    ) -> (monocode_core::orchestration::Outcome, String, Vec<String>) {
-        use monocode_core::orchestration::Outcome;
-        let rows = self.transcript.read(cx).source_rows();
-        let turn = rows
-            .iter()
-            .rposition(|row| row.first && row.role == "user")
-            .unwrap_or(0);
-        let reply = monocode_core::response::prose(&rows[turn..]);
-        let outcome = if self.notification_was_cancelled() {
-            Outcome::Stopped
-        } else if self.status == "Ready" {
-            Outcome::Completed
-        } else {
-            Outcome::Failed
-        };
-        let report = if outcome == Outcome::Failed {
-            format!("{}\n{reply}", self.status)
-        } else {
-            reply
-        };
-        (outcome, report, crate::runtime::edited_paths(&rows[turn..]))
-    }
-    /// Tool calls in the worker's current turn.
-    pub(crate) fn turn_steps(&self, cx: &gpui::App) -> usize {
-        let rows = self.transcript.read(cx).source_rows();
-        let turn = rows
-            .iter()
-            .rposition(|row| row.first && row.role == "user")
-            .unwrap_or(0);
-        rows[turn..]
-            .iter()
-            .filter(|row| row.first && row.role == "tool")
-            .count()
-    }
     pub(crate) fn thread_pending(&self) -> bool {
         self.external_submission_pending()
             || self.follow_ups.requested.is_some()
@@ -138,13 +96,6 @@ impl Conversation {
     }
     pub(crate) fn thread_stopping(&self) -> bool {
         self.stopping || self.notification_was_cancelled()
-    }
-    pub(crate) fn send_thread_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.history_ready() {
-            self.defer_history_action(move |this, cx| this.send_thread_prompt(prompt, cx), cx);
-            return;
-        }
-        self.launch_prompt(prompt, cx);
     }
     /// Starts a turn with a message another thread sent, recording that
     /// thread as the turn's sender.
@@ -177,11 +128,6 @@ impl Conversation {
         environment.insert(
             "MONOCODE_THREADS".into(),
             if enabled { "1" } else { "0" }.into(),
-        );
-        // Lists the plan tool on the MonoCode MCP server for this turn only.
-        environment.insert(
-            monocode_core::orchestration::ENV.into(),
-            if settings.orchestrator { "1" } else { "0" }.into(),
         );
         environment
     }
@@ -281,79 +227,6 @@ mod tests {
                     !v.notification_was_cancelled(),
                     "an idle child keeps its completed outcome"
                 );
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn a_planning_turn_reads_its_submitted_plan_and_keeps_planning_on_the_next_message(
-        cx: &mut TestAppContext,
-    ) {
-        use monocode_core::tool::{ToolCall, ToolState};
-        use monocode_core::transcript::Row;
-        let window = window(cx);
-        window
-            .update(cx, |v, _, cx| {
-                v.install_transfer(Settings::default(), None, cx);
-                v.settings.orchestrator = true;
-                assert_eq!(
-                    v.provider_environment(&v.settings)[monocode_core::orchestration::ENV],
-                    "1"
-                );
-                v.settings.orchestrator = false;
-                let row = |role: &str, text: String| Row {
-                    role: role.into(),
-                    text,
-                    first: true,
-                    sent_at: None,
-                };
-                let mut call = ToolCall::new("plan-call", "mcp__monocode__orchestration_plan");
-                call.input = serde_json::json!({"title":"Split","tasks":[{"id":"a","title":"A","prompt":"Do","files":["./src/"]}]}).to_string();
-                call.state = ToolState::Completed;
-                v.transcript.update(cx, |t, cx| {
-                    t.patch(
-                        0,
-                        vec![
-                            row("user", "Plan it".into()),
-                            row("tool", serde_json::to_string(&call).unwrap()),
-                            // A tag mentioned in prose must not replace the submitted plan.
-                            row("assistant", "Submitted. <monocode_orchestration>".into()),
-                        ],
-                        cx,
-                    )
-                });
-                v.status = "Ready".into();
-                v.planning_orchestration = true;
-                v.finish_orchestration_plan(cx);
-                let (call, plan) = v.orchestration_plan.clone().expect("the submitted plan");
-                assert_eq!(call.as_deref(), Some("plan-call"));
-                assert_eq!(plan.tasks[0].files, vec!["src"]);
-                assert!(v.settings.orchestrator, "a reply revises the plan");
-                assert!(v.take_orchestration_plan(cx).is_some());
-                assert!(!v.settings.orchestrator, "starting releases the planning mode");
-                assert!(v.input.read(cx).content.is_empty());
-                // A failed turn is not read as a missing plan.
-                v.planning_orchestration = true;
-                v.status = "Provider error".into();
-                v.finish_orchestration_plan(cx);
-                assert!(v.orchestration_error.is_none());
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn composer_modes_survive_a_deferred_launch(cx: &mut TestAppContext) {
-        let window = window(cx);
-        window
-            .update(cx, |v, _, cx| {
-                v.install_transfer(Settings::default(), None, cx);
-                v.settings.orchestrator = true;
-                let modes = v.turn_modes();
-                // Send resets the composer while compaction makes the chat busy.
-                v.clear_submitted_mode(cx);
-                let seen = v.with_modes(modes, |v| v.settings.orchestrator);
-                assert!(seen, "the deferred turn runs in its submitted mode");
-                assert!(!v.settings.orchestrator, "the composer keeps its own");
             })
             .unwrap();
     }

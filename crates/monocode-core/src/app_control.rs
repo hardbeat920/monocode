@@ -1,7 +1,7 @@
 //! What every agent can do to the running app: read and move its panels, run
 //! any action the keymap can, and read other threads in its own project. The
 //! tools are never always-loaded, so Claude pays for their names alone.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 const PANELS: [&str; 7] = [

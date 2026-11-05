@@ -34,7 +34,6 @@ pub(super) fn render(
         Panel::Tasks(list) => task_list(&list, start),
         Panel::Agent(run) => agent(view, call, &run, start, width, cx),
         Panel::Thread(run) => super::threads::render(view, call, &run, start, cx),
-        Panel::Orchestration(plan) => super::orchestration::render(view, call, &plan, start, cx),
     })
 }
 fn task_list(list: &TaskList, start: usize) -> AnyElement {

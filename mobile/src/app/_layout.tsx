@@ -215,7 +215,6 @@ function LinkedWorkspace() {
                 <Stack.Screen name="mono-new" options={screens.page} />
                 <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
                 <Stack.Screen name="models" options={screens.modal} />
-                <Stack.Screen name="agents" options={screens.modal} />
                 <Stack.Screen name="changes" options={screens.changes} />
               </Stack>
             </SessionFrame>

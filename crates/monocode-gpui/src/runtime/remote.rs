@@ -534,9 +534,6 @@ pub(crate) fn run_with_client(
             if !binding.outbox.is_empty() {
                 return Err("A remote command needs confirmation. Choose Retry before sending another message.".into());
             }
-            if settings.orchestrator {
-                return Err("Orchestration is not available on remote projects".into());
-            }
             if settings
                 .model
                 .as_deref()

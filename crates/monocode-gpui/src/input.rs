@@ -2207,40 +2207,36 @@ mod native_input_tests {
         window
             .update(cx, |i, _, cx| i.enable_inline_commands(cx))
             .unwrap();
-        for (name, icon) in [
-            ("plan", "ai-idea"),
-            ("orchestrator", "share"),
-        ] {
-            let text = format!(
-                "/{name} café 🙂\nA long prompt that wraps across several visual lines and keeps the full input width."
-            );
-            replace(window, &text, cx);
-            input.read_with(cx, |i, _| {
-                let layout = i.command_layout().unwrap();
-                assert_eq!(layout.mode.icon(), icon);
-                assert!(i.position(1).x >= px(14.));
-                assert_eq!(i.position(name.len() + 2).y, px(0.));
-                assert!(i.has_message_text());
-                for (at, _) in text.char_indices().skip(1) {
-                    assert_eq!(i.index(i.position(at)), at, "{name}: offset {at}");
-                }
-                let next_line = text.find('\n').unwrap() + 1;
-                assert_eq!(i.position(next_line).x, px(0.));
-                assert!(!i.lines[1].wrap_boundaries().is_empty());
-            });
-            cx.simulate_keystrokes(
-                window.into(),
-                if cfg!(target_os = "macos") {
-                    "cmd-a cmd-c"
-                } else {
-                    "ctrl-a ctrl-c"
-                },
-            );
-            assert_eq!(
-                cx.read_from_clipboard().unwrap().text().as_deref(),
-                Some(text.as_str())
-            );
-        }
+        let (name, icon) = ("plan", "ai-idea");
+        let text = format!(
+            "/{name} café 🙂\nA long prompt that wraps across several visual lines and keeps the full input width."
+        );
+        replace(window, &text, cx);
+        input.read_with(cx, |i, _| {
+            let layout = i.command_layout().unwrap();
+            assert_eq!(layout.mode.icon(), icon);
+            assert!(i.position(1).x >= px(14.));
+            assert_eq!(i.position(name.len() + 2).y, px(0.));
+            assert!(i.has_message_text());
+            for (at, _) in text.char_indices().skip(1) {
+                assert_eq!(i.index(i.position(at)), at, "{name}: offset {at}");
+            }
+            let next_line = text.find('\n').unwrap() + 1;
+            assert_eq!(i.position(next_line).x, px(0.));
+            assert!(!i.lines[1].wrap_boundaries().is_empty());
+        });
+        cx.simulate_keystrokes(
+            window.into(),
+            if cfg!(target_os = "macos") {
+                "cmd-a cmd-c"
+            } else {
+                "ctrl-a ctrl-c"
+            },
+        );
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(text.as_str())
+        );
         replace(window, "/plan ", cx);
         assert!(!input.read_with(cx, |i, _| i.has_message_text()));
         replace(window, "/ plan", cx);

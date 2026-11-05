@@ -103,12 +103,6 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
                     result.pinned.insert(at);
                     true
                 }
-                // A plan stays in view after its turn folds: it is where the
-                // run is started and followed.
-                Some(Panel::Orchestration(_)) => {
-                    result.pinned.insert(at);
-                    true
-                }
                 Some(Panel::Tasks(_)) => true,
                 _ => false,
             };

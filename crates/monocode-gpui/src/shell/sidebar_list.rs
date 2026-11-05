@@ -421,7 +421,7 @@ impl Shell {
                 | Row::GroupedSession { id, .. }
                 | Row::ClassicGroupMember { id, .. },
             ) = self.sidebar_list.rows.get(ix)
-                && self.orchestration_summaries.contains_key(id)
+                && self.agent_summaries.contains_key(id)
             {
                 self.sidebar_list.state.remeasure_items(ix..ix + 1);
             }

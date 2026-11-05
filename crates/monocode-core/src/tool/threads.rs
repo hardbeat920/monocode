@@ -1,4 +1,4 @@
-use super::{tasks::Panel, ToolCall, ToolState};
+use super::{tasks::Panel, ToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -19,17 +19,6 @@ impl ToolCall {
             .or_else(|| self.name.strip_prefix("monocode_"))
             .or_else(|| self.name.strip_prefix("monocode:"))
             .unwrap_or(&self.name)
-    }
-
-    /// The plan an accepted `orchestration_plan` call submitted.
-    pub fn orchestration_plan(&self) -> Option<crate::orchestration::Plan> {
-        if self.monocode_tool() != crate::orchestration::TOOL
-            || matches!(self.state, ToolState::Failed | ToolState::Cancelled)
-        {
-            return None;
-        }
-        let input: Value = serde_json::from_str(&self.input).ok()?;
-        crate::orchestration::from_input(&input).ok()
     }
 
     pub fn thread_action(&self) -> Option<&str> {
@@ -98,6 +87,7 @@ impl ToolCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::ToolState;
     use serde_json::json;
     #[test]
     fn native_thread_calls_preserve_identity_through_mcp_envelopes() {

@@ -28,8 +28,9 @@ pub fn validate_project_action(action: &str, input: &Value) -> Result<(), String
             | "worktrees.list"
             | "worktrees.create"
     ) {
-        return Err("Unknown app action. Memory, habits and artifacts are only available to Monos."
-            .into());
+        return Err(
+            "Unknown app action. Memory, habits and artifacts are only available to Monos.".into(),
+        );
     }
     crate::mono::api::validate(action, input)
 }
@@ -310,7 +311,6 @@ pub fn launch_settings(
     settings.mono = None;
     settings.mono_message_id = None;
     settings.mono_sent_at = None;
-    settings.orchestrator = false;
     settings.plan = false;
     settings.environment.clear();
     settings.attachments.clear();

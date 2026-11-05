@@ -30,9 +30,6 @@ import type {
   Message,
   Mono,
   MonoSubsessions,
-  OrchestrationActionName,
-  OrchestrationRun,
-  OrchestrationTask,
   Project,
   QuestionPrompt,
   QuestionReply,
@@ -70,17 +67,8 @@ type Workspace = {
   projects: Project[];
   monos: Mono[];
   sessions: SessionSummary[];
-  /** Orchestrator workers, apart from `sessions` so no list shows them. */
+  /** Subagents, apart from `sessions` so no list shows them. */
   agents: SessionSummary[];
-  /** A lead's plan under review and latest run, in full. */
-  readOrchestration: (conversationId: string) => Promise<OrchestrationRun[]>;
-  /** Presses one of a card's buttons; resolves to the cards as they are after it. */
-  orchestrationAction: (
-    conversationId: string,
-    run: OrchestrationRun,
-    action: OrchestrationActionName,
-    task?: OrchestrationTask,
-  ) => Promise<OrchestrationRun[]>;
   watch: (id: string | null) => void;
   startSession: (
     projectId: string,
@@ -689,30 +677,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     (conversationId: string) => removeSession("session.archive", conversationId),
     [removeSession],
   );
-  const readOrchestration = useCallback(
-    async (conversationId: string) =>
-      (await command<{ runs: OrchestrationRun[] }>("orchestration.read", { conversationId })).runs,
-    [command],
-  );
-  const orchestrationAction = useCallback(
-    async (
-      conversationId: string,
-      run: OrchestrationRun,
-      action: OrchestrationActionName,
-      task?: OrchestrationTask,
-    ) => {
-      const result = await mutate<{ runs: OrchestrationRun[] }>("orchestration.action", {
-        conversationId,
-        call: run.call,
-        action,
-        ...(task ? { taskId: task.id, index: task.index } : {}),
-      });
-      // The lead's row and strip follow on the next catalog.
-      void refresh();
-      return result.runs;
-    },
-    [mutate, refresh],
-  );
   const listSessions = useCallback(
     (projectId: string, query: string, offset: number, filters?: SessionListFilters) =>
       command<SessionPage>("sessions.list", {
@@ -787,8 +751,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }),
       sessions: all.filter((session) => !session.leadId),
       agents: all.filter((session) => !!session.leadId),
-      readOrchestration,
-      orchestrationAction,
       watch,
       startSession,
       sendMessage,
@@ -819,8 +781,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
-    readOrchestration,
-    orchestrationAction,
     answerQuestion,
     keepQuestionOpen,
     recoverUsage,

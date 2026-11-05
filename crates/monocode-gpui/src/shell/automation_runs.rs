@@ -387,7 +387,6 @@ impl Shell {
         settings.worktree_cwd =
             (automation.workspace_mode == "existing").then(|| automation.worktree_cwd.clone());
         settings.plan = false;
-        settings.orchestrator = false;
         settings.prepared_prompt = None;
         let store = self.store.clone();
         let launch = due.clone();

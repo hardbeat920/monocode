@@ -96,7 +96,6 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 ];
 // Tailwind v4 accents the composer menus tint their icons with.
 const YELLOW_300: u32 = 0xffdf20;
-const FUCHSIA_300: u32 = 0xf4a8ff;
 const AMBER_400: u32 = 0xffb900;
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
     let mut c: gpui::Hsla = gpui::rgb(color).into();
@@ -170,16 +169,6 @@ pub(crate) struct Conversation {
     app_environment: std::collections::HashMap<String, String>,
     /// The running turn's policy, independent of the next composer's mode.
     pub(crate) app_read_only: bool,
-    /// The running turn prepares an orchestration plan.
-    planning_orchestration: bool,
-    /// The plan under review, with the tool call that submitted it (none for
-    /// the tagged fallback).
-    pub(crate) orchestration_plan: Option<(Option<String>, monocode_core::orchestration::Plan)>,
-    orchestration_error: Option<String>,
-    /// The shell's cards for this lead's plans and runs.
-    orchestration_views: Vec<(Option<String>, crate::transcript::orchestration::RunView)>,
-    /// One of this lead's runs is not finished.
-    pub(crate) orchestration_active: bool,
     status: String,
     loaded: bool,
     history_unloaded: bool,
@@ -192,7 +181,7 @@ pub(crate) struct Conversation {
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
-    /// Automation runs, Orchestrator workers and subagents: they are run by
+    /// Automation runs and subagents: they are run by
     /// something else, so they cannot start threads of their own.
     pub(crate) managed: bool,
     /// The lead that drives this subagent. The user can watch it, answer
@@ -645,11 +634,6 @@ impl Conversation {
             attachment_error: None,
             app_environment: Default::default(),
             app_read_only: false,
-            planning_orchestration: false,
-            orchestration_plan: None,
-            orchestration_error: None,
-            orchestration_views: Vec::new(),
-            orchestration_active: false,
             status: "Loading conversation…".into(),
             loaded: false,
             history_unloaded: false,
@@ -994,13 +978,7 @@ impl Conversation {
         }
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else {
-            None
-        };
+        let mode = self.settings.plan.then_some("plan");
         if self.settings.pending_provider_switch.is_some() && self.busy {
             // Picking a provider only arms the change. Sending is what stops
             // the outgoing provider and commits the handoff.
@@ -1056,9 +1034,8 @@ impl Conversation {
         {
             return None;
         }
-        let mode = self.settings.orchestrator || self.settings.plan;
         Some(
-            if self.busy && !mode && self.steers_follow_up(alternate, cx) {
+            if self.busy && !self.settings.plan && self.steers_follow_up(alternate, cx) {
                 ("Steer", "queue-steer")
             } else {
                 ("Queue", "queue-list")
@@ -1067,13 +1044,7 @@ impl Conversation {
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         if self.stopping {
-            let mode = if self.settings.orchestrator {
-                Some("orchestrator")
-            } else if self.settings.plan {
-                Some("plan")
-            } else {
-                None
-            };
+            let mode = self.settings.plan.then_some("plan");
             self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
             if let Some(id) = self
                 .follow_ups
@@ -1128,13 +1099,6 @@ impl Conversation {
         self.sync_tool_paths(cx);
         self.transcript
             .update(cx, |v, _| v.identity(&self.summary.provider, &model_label));
-        // Set here, where the turn really starts, so a deferred or failed
-        // launch cannot leave a later turn parsed as a plan.
-        self.planning_orchestration = self.settings.orchestrator;
-        if self.planning_orchestration {
-            self.orchestration_plan = None;
-            self.orchestration_error = None;
-        }
         self.begin_turn(cx);
         let generation = self.submission_generation;
         let source_provider = self.summary.provider.clone();
@@ -1151,9 +1115,7 @@ impl Conversation {
         let cancel = self.cancel.clone();
         // Composer modes reset after Send; the running turn's access policy
         // must outlive that reset and edits to the next draft.
-        self.app_read_only = self.settings.plan
-            || self.settings.orchestrator
-            || self.settings.access == AccessMode::ReadOnly;
+        self.app_read_only = self.settings.plan || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
         if let Some(model) = self.model_info() {
             for control in &model.controls {
@@ -1220,10 +1182,6 @@ impl Conversation {
         {
             self.transcript
                 .update(cx, |view, cx| view.submit_prompt(&prompt, &settings, cx));
-        }
-        if settings.orchestrator {
-            settings.plan = true;
-            self.settings.orchestrator = false;
         }
         if self.settings.handoff.take().is_some() {
             self.save_settings(cx);
@@ -1549,11 +1507,6 @@ impl Conversation {
                                     info.model_id = model_id;
                                 }
                             });
-                            if stopping {
-                                this.planning_orchestration = false;
-                            } else {
-                                this.finish_orchestration_plan(cx);
-                            }
                             this.settings.turns = this.transcript.read(cx).window_turns();
                             this.save_settings(cx);
                             this.refresh_git(cx);
@@ -1605,7 +1558,6 @@ impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<OpenThread> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
-impl EventEmitter<crate::transcript::orchestration::OrchestrationAction> for Conversation {}
 
 impl Conversation {
     pub(crate) fn install_transfer(
@@ -1619,8 +1571,8 @@ impl Conversation {
         }
         self.install_lead_transfer(settings, prompt, cx);
     }
-    /// install_transfer for a lead or the Orchestrator starting work on its
-    /// own subagent, which the user can't send messages to.
+    /// install_transfer for a lead starting work on its own subagent, which
+    /// the user can't send messages to.
     pub(crate) fn install_lead_transfer(
         &mut self,
         settings: Settings,
@@ -2144,7 +2096,7 @@ impl Conversation {
                 "thinking" => {
                     self.settings.thinking = Some(!self.settings.thinking.unwrap_or(false))
                 }
-                "plan" | "orchestrator" | "draft" => {
+                "plan" | "draft" => {
                     self.toggle_mode(id, cx);
                     return;
                 }
@@ -2604,12 +2556,6 @@ impl Conversation {
                             .icon("ai-idea")
                             .icon_color(tint(YELLOW_300, 0.8))
                             .description("Review a plan before building"),
-                        MenuAction::new("orchestrator", "Orchestrator")
-                            .disabled(self.is_remote())
-                            .icon("share")
-                            .icon_color(tint(FUCHSIA_300, 0.65))
-                            .badge("v1")
-                            .description("Plan and coordinate agent work"),
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save this message without starting the agent")
@@ -2620,7 +2566,6 @@ impl Conversation {
                         let checked = match action.id.as_ref() {
                             "plan" => self.settings.plan,
                             "draft" => self.draft_active(cx),
-                            "orchestrator" => self.settings.orchestrator,
                             _ => false,
                         };
                         action.checked(checked).into()
@@ -2843,8 +2788,6 @@ impl Conversation {
         let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
-        } else if self.settings.orchestrator {
-            Some(input::Command::Orchestrator)
         } else if self.settings.plan {
             Some(input::Command::Plan)
         } else {
@@ -2896,7 +2839,6 @@ impl Conversation {
             .child(self.composer_anchor.probe())
             .children(menu)
             .children(self.model_list_popover(cx))
-            .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
             .children(self.subagent_strip(cx))
             .child(self.changes_shelf(window, cx))
@@ -4672,11 +4614,8 @@ mod menu_tests {
                     .update(cx, |i, cx| i.set_text("Review this".into(), cx));
                 c.toggle_mode("plan", cx);
                 assert_eq!(c.input.read(cx).content, "/plan Review this");
-                c.toggle_mode("orchestrator", cx);
-                assert_eq!(c.input.read(cx).content, "/orchestrator Review this");
-                c.toggle_mode("orchestrator", cx);
-                assert_eq!(c.input.read(cx).content, "Review this");
                 c.toggle_mode("plan", cx);
+                assert_eq!(c.input.read(cx).content, "Review this");
             })
             .unwrap();
         cx.run_until_parked();
@@ -4710,35 +4649,34 @@ mod menu_tests {
     fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
         cx: &mut TestAppContext,
     ) {
-        for mode in ["orchestrator", "plan"] {
-            let window = conversation(cx);
-            window
-                .update(cx, |view, _, cx| {
-                    // An unsupported synthetic provider stops before any CLI I/O.
-                    view.summary.provider = "fixture".into();
-                    view.loaded = true;
-                    view.input
-                        .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
-                    view.toggle_mode(mode, cx);
-                    view.send(cx);
-                    assert!(view.busy);
-                    assert!(view.input.read(cx).content.is_empty());
-                    assert!(!view.settings.plan && !view.settings.orchestrator);
-                })
-                .unwrap();
-            cx.run_until_parked();
-            window
-                .update(cx, |view, _, cx| {
-                    let saved = locked(&view.store)
-                        .unwrap()
-                        .agent_settings(view.summary.id)
-                        .unwrap()
-                        .unwrap();
-                    assert!(!saved.plan && !saved.orchestrator);
-                    assert!(view.input.read(cx).content.is_empty());
-                })
-                .unwrap();
-        }
+        let mode = "plan";
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                // An unsupported synthetic provider stops before any CLI I/O.
+                view.summary.provider = "fixture".into();
+                view.loaded = true;
+                view.input
+                    .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
+                view.toggle_mode(mode, cx);
+                view.send(cx);
+                assert!(view.busy);
+                assert!(view.input.read(cx).content.is_empty());
+                assert!(!view.settings.plan);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .agent_settings(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert!(!saved.plan);
+                assert!(view.input.read(cx).content.is_empty());
+            })
+            .unwrap();
     }
 
     #[gpui::test]

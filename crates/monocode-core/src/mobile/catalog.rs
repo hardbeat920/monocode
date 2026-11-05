@@ -9,7 +9,7 @@ const SESSION_PAGE_MAX: usize = 100;
 
 /// The workspace poll's sessions: each project's most recent, every busy one,
 /// and every Mono's. `sessions` is newest first, as the catalog is sorted.
-/// Orchestrator workers (with a `leadId`) ride along with their lead and don't
+/// Subagents (with a `leadId`) ride along with their lead and don't
 /// count toward the project's recent ones.
 pub fn recent_sessions(sessions: &Value) -> Vec<Value> {
     let mut per_project: HashMap<&str, usize> = HashMap::new();

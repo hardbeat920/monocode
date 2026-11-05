@@ -26,7 +26,7 @@ const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
 pub const SERVER_NAME: &str = "monocode";
 /// What the MCP server needs from the provider process: the visual capability
 /// and, in a chat that can start threads, its app capability.
-const SERVER_ENV: [&str; 9] = [
+const SERVER_ENV: [&str; 8] = [
     ENV_ENDPOINT,
     ENV_TOKEN,
     ENV_SESSION,
@@ -35,7 +35,6 @@ const SERVER_ENV: [&str; 9] = [
     "MONOCODE_APP_TOKEN",
     "MONOCODE_APP_SESSION",
     "MONOCODE_THREADS",
-    crate::orchestration::ENV,
 ];
 /// Harnesses ship their own subagent tools, which run out of the user's sight
 /// and only on that harness. Claude Code also defers MCP tools to a name until
@@ -896,32 +895,8 @@ pub fn read_only_tool(name: &str) -> bool {
         name.strip_prefix("mcp__monocode__")
             .or_else(|| name.strip_prefix("monocode:"))
             .or_else(|| name.strip_prefix("monocode_")),
-        Some("thread_wait" | "thread_read" | "thread_list" | crate::orchestration::TOOL)
+        Some("thread_wait" | "thread_read" | "thread_list")
     )
-}
-
-fn planning_orchestration(environment: &HashMap<String, String>) -> bool {
-    environment
-        .get(crate::orchestration::ENV)
-        .is_some_and(|v| v == "1")
-}
-
-/// The plan lives in the tool call's input, where the app reads it when the
-/// turn ends. This only refuses a plan it could not start.
-fn check_orchestration_plan(
-    input: &Value,
-    environment: &HashMap<String, String>,
-) -> Result<Value, String> {
-    if !planning_orchestration(environment) {
-        return Err("Orchestration plans can only be submitted in an Orchestrator turn".into());
-    }
-    let plan = crate::orchestration::from_input(input)?;
-    Ok(json!({
-        "ok": true,
-        "title": plan.title,
-        "assignments": plan.tasks.len(),
-        "next": "The user reviews and starts the plan in MonoCode. Reply with a short explanation of the approach; do not repeat the plan."
-    }))
 }
 
 fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option<Value> {
@@ -947,9 +922,6 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                     }
                 }
             }
-            if planning_orchestration(environment) {
-                tools.push(crate::orchestration::tool_definition());
-            }
             if crate::app_control::enabled(environment) {
                 tools.extend(crate::app_control::tool_definitions());
             }
@@ -964,7 +936,6 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                     .ok_or("source must be a JavaScript string".into())
                     .and_then(check),
                 "visual_show" => publish_with_environment(input, environment),
-                crate::orchestration::TOOL => check_orchestration_plan(&input, environment),
                 NEW_THREAD => call_thread_tool("new", input, environment),
                 name if name.starts_with("app_") => {
                     crate::app_control::call(name, input, environment)
@@ -1186,7 +1157,6 @@ mod tests {
         };
         let plain = names(&HashMap::new());
         assert!(!plain.iter().any(|name| name.starts_with("thread_")));
-        assert!(!plain.contains(&crate::orchestration::TOOL.to_owned()));
         let lead = HashMap::from([("MONOCODE_THREADS".to_string(), "1".to_string())]);
         let tools = names(&lead);
         for name in ["thread_start", "thread_wait", "thread_close", NEW_THREAD] {
@@ -1206,8 +1176,6 @@ mod tests {
             .find(|tool| tool["name"] == "thread_start")
             .unwrap();
         assert_eq!(start["_meta"]["anthropic/alwaysLoad"], true);
-        let planning = HashMap::from([(crate::orchestration::ENV.to_string(), "1".to_string())]);
-        assert!(names(&planning).contains(&crate::orchestration::TOOL.to_owned()));
         let refused = mcp_response(
             json!({"id":4,"method":"tools/call","params":{"name":"thread_list","arguments":{}}}),
             &HashMap::new(),

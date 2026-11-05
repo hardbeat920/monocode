@@ -78,7 +78,6 @@ impl ToolCall {
             Some(tasks::Panel::Tasks(list)) => return ("Tasks".into(), list.progress()),
             Some(tasks::Panel::Agent(run)) => return ("Agent".into(), run.title().into()),
             Some(tasks::Panel::Thread(run)) => return ("Thread".into(), run.title),
-            Some(tasks::Panel::Orchestration(plan)) => return ("Orchestration".into(), plan.title),
             None => {}
         }
         let shown = self.presentation();

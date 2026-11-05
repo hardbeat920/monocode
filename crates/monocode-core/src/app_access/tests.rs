@@ -56,13 +56,11 @@ fn a_launch_applies_validated_overrides_without_transferring_app_access() {
         );
     }
     let descriptor = model_description(Kind::Codex, &model());
-    assert!(
-        descriptor["settings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["id"] == "reasoningEffort")
-    );
+    assert!(descriptor["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["id"] == "reasoningEffort"));
 }
 
 #[test]
@@ -212,17 +210,15 @@ fn notes_support_desktop_ids_partial_updates_empty_bodies_and_pagination() {
     )
     .unwrap();
     assert!(edited["sourceCwd"].is_null());
-    assert!(
-        notes_action(
-            &store,
-            caller.id,
-            "read",
-            "notes.read",
-            &json!({"id":original.id}),
-            &["/other".into()]
-        )
-        .is_err()
-    );
+    assert!(notes_action(
+        &store,
+        caller.id,
+        "read",
+        "notes.read",
+        &json!({"id":original.id}),
+        &["/other".into()]
+    )
+    .is_err());
 }
 
 #[test]
@@ -250,12 +246,10 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             .prepare_app_prompt(child.id, "start", "Saved request")
             .unwrap();
         assert!(store.draft_sessions().unwrap().contains(&child.id));
-        assert!(
-            !store
-                .session_sidebar_metadata(&["/project".into()])
-                .sidebar_hidden
-                .contains(&child.id)
-        );
+        assert!(!store
+            .session_sidebar_metadata(&["/project".into()])
+            .sidebar_hidden
+            .contains(&child.id));
         drop(store);
         let store = open();
         let (retried, fresh) = store
@@ -268,11 +262,9 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             store.follow_ups(child.id).unwrap().draft.unwrap().text,
             "Saved request"
         );
-        assert!(
-            store
-                .create_app_session(caller.id, "start", "different", "codex", "/project")
-                .is_err()
-        );
+        assert!(store
+            .create_app_session(caller.id, "start", "different", "codex", "/project")
+            .is_err());
         let page = store
             .app_conversation(child.id, &json!({}), false, true)
             .unwrap();

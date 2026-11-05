@@ -35,12 +35,11 @@ const PICKER_RESIZE: f32 = 0.24;
 const PICKER_FADE_DELAY: f32 = 0.04;
 const PICKER_FADE: f32 = 0.18;
 /// Commands the floating composer offers after a leading `/`.
-const COMMANDS: [(Command, &str); 3] = [
+const COMMANDS: [(Command, &str); 2] = [
     (
         Command::Plan,
         "Create a reviewable implementation plan before changing files.",
     ),
-    (Command::Orchestrator, "Plan and coordinate agent work."),
     (
         Command::Draft,
         "Save this message without starting the agent.",

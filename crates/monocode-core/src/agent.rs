@@ -132,7 +132,6 @@ pub struct Settings {
     /// Provider-advertised controls beyond the common effort/speed switches.
     pub model_settings: std::collections::HashMap<String, String>,
     pub plan: bool,
-    pub orchestrator: bool,
     pub new_worktree: bool,
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,

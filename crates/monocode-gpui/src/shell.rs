@@ -22,7 +22,6 @@ mod new_chat_choice;
 #[cfg(test)]
 mod new_chat_choice_tests;
 mod notifications;
-mod orchestration;
 mod picker_preferences;
 mod pinned_tabs;
 mod project_rail;
@@ -46,8 +45,8 @@ mod sidebar_list;
 mod sidebar_peek;
 mod space_reorder;
 mod terminal_dock;
-mod threads;
 mod terminal_panes;
+mod threads;
 use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -611,15 +610,14 @@ pub(crate) struct Shell {
     mobile: mobile_host::Mobile,
     app_results: HashMap<(i64, String), (String, Result<serde_json::Value, String>)>,
     app_pending: HashSet<(i64, String)>,
-    orchestrations: orchestration::Runs,
-    /// Each lead's last orchestration, whose agents hang under it in the sidebar.
-    orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
+    /// Each lead's subagents, summed up on its row and strip.
+    agent_summaries: HashMap<i64, monocode_core::subagents::Summary>,
     /// Top-level threads a thread opened, by the session that opened them.
     started_by: HashMap<i64, i64>,
     thread_parents: HashMap<i64, i64>,
     thread_waiters: HashMap<i64, Vec<monocode_core::mono::bridge::Call>>,
     agent_summary_writes: HashMap<i64, gpui::Task<()>>,
-    /// The sidebar rails under orchestrators and the threads they opened.
+    /// The sidebar rails under leads and the threads they opened.
     rails: rails::Rails,
     usage_footer: Entity<UsageFooter>,
     /// The footer's high-usage chip and its running-work dialog.
@@ -1003,11 +1001,12 @@ impl Shell {
         });
         let worktree_focus = workspace.worktree_focus.clone();
         let session_worktrees = sidebar_metadata.worktrees;
-        let mut orchestration_summaries = sidebar_metadata.orchestrations;
-        let orchestrations = orchestration::Runs::restore(
-            sidebar_metadata.orchestration_runs,
-            &mut orchestration_summaries,
-        );
+        let mut agent_summaries = sidebar_metadata.agent_summaries;
+        // Nothing ran while the app was closed; children recompute theirs on
+        // their next event.
+        for summary in agent_summaries.values_mut() {
+            summary.live = false;
+        }
         let notification_state = notifications::State::new(&workspace, store.clone(), cx);
         let classic_session_search = classic_sidebar::session_search(cx);
         let classic_search_subscription =
@@ -1025,8 +1024,7 @@ impl Shell {
             mobile: mobile_host::Mobile::default(),
             app_results: HashMap::new(),
             app_pending: HashSet::new(),
-            orchestrations,
-            orchestration_summaries,
+            agent_summaries,
             started_by: sidebar_metadata.started_by,
             thread_parents: sidebar_metadata.thread_parents,
             thread_waiters: HashMap::new(),
@@ -1451,7 +1449,6 @@ impl Shell {
                     this.git.update(cx, |git, cx| git.reload(cx));
                 }
                 this.sync_search_session(id, cx);
-                this.orchestration_session_changed(id, cx);
                 this.thread_session_changed(id, cx);
                 // A subagent waiting on an approval shows on its lead's strip.
                 if let Some(lead) = this.subagent_lead(id) {
@@ -1516,14 +1513,10 @@ impl Shell {
                     this.sidebar_frame.update(cx, |_, cx| cx.notify());
                 }
             }));
-        self.observe_orchestration(&view, id, cx);
         self.observe_session_folders(&view, id, cx);
         self.sessions.insert(id, view);
         if !self.order.contains(&id) {
             self.order.push(id);
-        }
-        if self.orchestrations.has_runs(id) {
-            self.push_orchestration_views(id, cx);
         }
     }
     /// SessionPane's reviewUndoLocked: another running session shares the checkout.
@@ -1616,11 +1609,7 @@ impl Shell {
                             this.thread_session_changed(id, cx);
                         }
                         // Subagents never outlive their lead: archiving it
-                        // stops its run and archives them, and restoring it
-                        // brings them back.
-                        if archived && this.orchestrations.active(id) {
-                            this.stop_orchestration(id, cx);
-                        }
+                        // archives them, and restoring it brings them back.
                         for sub in this.subagents(id) {
                             if this
                                 .session_summaries

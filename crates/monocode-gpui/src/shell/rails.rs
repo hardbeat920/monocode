@@ -1,6 +1,5 @@
 //! Session cards in the sidebar, and the summary a lead's row gives of its
-//! subagents. Subagents (threads a lead drives, and an Orchestrator's agents)
-//! are never rows of their own: while their lead is the focused chat they
+//! subagents. Subagents (threads a lead drives) are never rows of their own: while their lead is the focused chat they
 //! branch off its card on a curved tree, and open beside it. Threads another
 //! thread only opened are ordinary rows.
 use super::*;
@@ -63,8 +62,8 @@ struct Standing {
 
 /// What a lead's sidebar row summarizes.
 pub(crate) enum Rail {
-    /// Its subagents: threads it drives, or its Orchestrator agents.
-    Agents(monocode_core::orchestration::Summary),
+    /// Its subagents.
+    Agents(monocode_core::subagents::Summary),
 }
 
 /// `.zen-phase-step.orchestration-tree-step`: a step branching off the
@@ -79,25 +78,34 @@ pub(super) fn step(last: bool, child: impl IntoElement) -> gpui::Div {
 }
 
 impl Shell {
-    /// Orchestrated workers live on their lead's rail, never in the list.
-    pub(super) fn orchestration_worker(&self, id: i64) -> bool {
-        self.orchestration_lead(id).is_some()
+    /// A chat from an Orchestrator run, before that mode was removed. It
+    /// stays on its lead's rail, never in the list.
+    pub(super) fn former_worker(&self, id: i64) -> bool {
+        self.former_worker_lead(id).is_some()
     }
-    /// The lead whose run a worker session belongs to. A thread another
+    /// The lead whose saved list names a former worker. A thread another
     /// started is a session of its own, even though its lead tracks it.
-    pub(super) fn orchestration_lead(&self, id: i64) -> Option<i64> {
+    pub(super) fn former_worker_lead(&self, id: i64) -> Option<i64> {
         if self.thread_parents.contains_key(&id) {
             return None;
         }
-        self.orchestration_summaries
+        self.agent_summaries
             .iter()
             .find(|(_, s)| s.tasks.iter().any(|t| t.session == Some(id)))
             .map(|(lead, _)| *lead)
     }
-    /// The lead's orchestrated agents, without the threads it started.
+    /// A deleted former worker leaves its lead's list.
+    pub(super) fn forget_former_worker(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(lead) = self.former_worker_lead(id) else {
+            return;
+        };
+        let mut summary = self.agent_summaries[&lead].clone();
+        summary.tasks.retain(|task| task.session != Some(id));
+        self.set_agent_summary(lead, summary, cx);
+    }
     /// What the lead's row summarizes: all of its subagents.
     fn rail(&self, id: i64) -> Option<Rail> {
-        let summary = self.orchestration_summaries.get(&id)?;
+        let summary = self.agent_summaries.get(&id)?;
         (!summary.tasks.is_empty()).then(|| Rail::Agents(summary.clone()))
     }
     /// A lead shows its subagents while it, or one of them, is the chat in
@@ -312,8 +320,8 @@ impl Shell {
     }
     fn standing(
         &self,
-        summary: &monocode_core::orchestration::Summary,
-        task: &monocode_core::orchestration::SummaryTask,
+        summary: &monocode_core::subagents::Summary,
+        task: &monocode_core::subagents::SummaryTask,
         cx: &App,
     ) -> Standing {
         let needs_input = task.session.is_some_and(|s| {
@@ -342,7 +350,7 @@ impl Shell {
     pub(super) fn agent_progress(
         &self,
         lead: i64,
-        summary: &monocode_core::orchestration::Summary,
+        summary: &monocode_core::subagents::Summary,
         compact: bool,
         cx: &App,
     ) -> AnyElement {
@@ -410,7 +418,7 @@ impl Shell {
     }
 
     /// The original sidebar uses the full, three-line SessionCard. Folder
-    /// members omit only the model header. Orchestrated agents are contained
+    /// members omit only the model header. Subagents are contained
     /// within their lead's card, between its title and workspace footer.
     pub(super) fn classic_session_card_at_depth(
         &self,
@@ -786,7 +794,7 @@ impl Shell {
             status
                 .text_color(rgb(0xfbbf24))
                 .child(icon("circle-alert", 12.))
-                .child(if self.orchestration_summaries.contains_key(&id) {
+                .child(if self.agent_summaries.contains_key(&id) {
                     "Needs input"
                 } else {
                     "Need approval"
@@ -834,14 +842,14 @@ mod tests {
     fn subagents_stay_off_the_sidebar_and_threads_are_rows(cx: &mut TestAppContext) {
         let (window, _, lead) = crate::shell::tests::window(cx);
         let cx = &mut VisualTestContext::from_window(window.into(), cx);
-        let task = |session: Option<i64>, status: &str| monocode_core::orchestration::SummaryTask {
+        let task = |session: Option<i64>, status: &str| monocode_core::subagents::SummaryTask {
             session,
             title: "Write the tests".into(),
             provider: "codex".into(),
             model: None,
             status: status.into(),
         };
-        let (thread, subagent, orchestrator, worker) = window
+        let (thread, subagent, old_lead, worker) = window
             .update(cx, |shell, _, cx| {
                 let mut ids = Vec::new();
                 for _ in 0..4 {
@@ -855,22 +863,22 @@ mod tests {
                 for id in ids.iter().copied().chain([lead]) {
                     shell.sessions[&id].update(cx, |s, _| s.summary.has_messages = true);
                 }
-                let (thread, subagent, orchestrator, worker) = (ids[0], ids[1], ids[2], ids[3]);
+                let (thread, subagent, old_lead, worker) = (ids[0], ids[1], ids[2], ids[3]);
                 // new_thread: only started by the lead.
                 shell.started_by.insert(thread, lead);
                 // thread_start: driven by it too.
                 shell.started_by.insert(subagent, lead);
                 shell.thread_parents.insert(subagent, lead);
-                shell.orchestration_summaries.insert(
+                shell.agent_summaries.insert(
                     lead,
-                    monocode_core::orchestration::Summary {
+                    monocode_core::subagents::Summary {
                         live: true,
                         tasks: vec![task(Some(subagent), "running")],
                     },
                 );
-                shell.orchestration_summaries.insert(
-                    orchestrator,
-                    monocode_core::orchestration::Summary {
+                shell.agent_summaries.insert(
+                    old_lead,
+                    monocode_core::subagents::Summary {
                         live: false,
                         tasks: vec![task(Some(worker), "completed"), task(None, "pending")],
                     },
@@ -878,7 +886,7 @@ mod tests {
                 shell.selected_sessions.clear();
                 shell.workspace.active = Some(lead);
                 shell.invalidate_chrome(cx);
-                (thread, subagent, orchestrator, worker)
+                (thread, subagent, old_lead, worker)
             })
             .unwrap();
         cx.run_until_parked();
@@ -893,17 +901,17 @@ mod tests {
                 "a subagent is never a row of its own"
             );
         }
-        for id in [lead, orchestrator] {
+        for id in [lead, old_lead] {
             assert!(
                 bounds(cx, format!("rail-progress-{id}")).is_some(),
                 "a lead sums up its subagents on its row"
             );
         }
-        assert!(bounds(cx, format!("rail-agent-{orchestrator}-0")).is_none());
+        assert!(bounds(cx, format!("rail-agent-{old_lead}-0")).is_none());
         window
             .read_with(cx, |shell, _| {
                 assert_eq!(shell.subagent_lead(subagent), Some(lead));
-                assert_eq!(shell.subagent_lead(worker), Some(orchestrator));
+                assert_eq!(shell.subagent_lead(worker), Some(old_lead));
                 assert_eq!(shell.subagent_lead(thread), None);
                 assert_eq!(shell.subagents(lead), [subagent]);
             })
@@ -915,7 +923,7 @@ mod tests {
         let (window, _, lead) = crate::shell::tests::window(cx);
         let cx = &mut VisualTestContext::from_window(window.into(), cx);
         cx.update(|_, cx| cx.set_reduce_motion(true));
-        let task = |session: Option<i64>, status: &str| monocode_core::orchestration::SummaryTask {
+        let task = |session: Option<i64>, status: &str| monocode_core::subagents::SummaryTask {
             session,
             title: "Write the tests".into(),
             provider: "codex".into(),
@@ -938,9 +946,9 @@ mod tests {
                 }
                 let (other, subagent) = (ids[0], ids[1]);
                 shell.thread_parents.insert(subagent, lead);
-                shell.orchestration_summaries.insert(
+                shell.agent_summaries.insert(
                     lead,
-                    monocode_core::orchestration::Summary {
+                    monocode_core::subagents::Summary {
                         live: true,
                         tasks: vec![task(Some(subagent), "running"), task(None, "pending")],
                     },

@@ -485,41 +485,23 @@ impl Store {
     pub fn save_thread_parent(&self, child: i64, parent: i64) -> Result<(), String> {
         self.save_setting(&format!("thread-parent:{child}"), &parent.to_string())
     }
-    /// Every lead's last orchestration summary.
-    pub fn orchestration_summaries(
+    /// Every lead's saved subagent list.
+    pub fn agent_summaries(
         &self,
-    ) -> Result<std::collections::HashMap<i64, crate::orchestration::Summary>, String> {
+    ) -> Result<std::collections::HashMap<i64, crate::subagents::Summary>, String> {
         Ok(self
             .settings_with_prefix("orchestration:")?
             .into_iter()
             .filter_map(|(lead, value)| Some((lead, serde_json::from_str(&value).ok()?)))
             .collect())
     }
-    pub fn save_orchestration_summary(
+    pub fn save_agent_summary(
         &self,
         lead: i64,
-        summary: &crate::orchestration::Summary,
+        summary: &crate::subagents::Summary,
     ) -> Result<(), String> {
         let value = serde_json::to_string(summary).map_err(|e| e.to_string())?;
         self.save_setting(&format!("orchestration:{lead}"), &value)
-    }
-    /// Each lead's recent orchestration runs, oldest first, as they were saved.
-    pub fn orchestration_runs(
-        &self,
-    ) -> Result<std::collections::HashMap<i64, Vec<crate::orchestration::Run>>, String> {
-        Ok(self
-            .settings_with_prefix("orchestration-runs:")?
-            .into_iter()
-            .filter_map(|(lead, value)| Some((lead, serde_json::from_str(&value).ok()?)))
-            .collect())
-    }
-    pub fn save_orchestration_runs(
-        &self,
-        lead: i64,
-        runs: &[crate::orchestration::Run],
-    ) -> Result<(), String> {
-        let value = serde_json::to_string(runs).map_err(|e| e.to_string())?;
-        self.save_setting(&format!("orchestration-runs:{lead}"), &value)
     }
     /// `prefix<session id>` settings, by session id.
     fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(i64, String)>, String> {
@@ -1344,15 +1326,15 @@ mod tests {
         }
     }
     #[test]
-    fn started_links_and_orchestration_summaries_survive_restart_and_delete() {
+    fn started_links_and_agent_summaries_survive_restart_and_delete() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.sqlite3");
         let store = Store::open(&path).unwrap();
         let lead = store.create("codex", "/p").unwrap().id;
         let child = store.create("codex", "/p").unwrap().id;
         store.save_started_link(child, lead).unwrap();
-        let summary = crate::orchestration::Summary {
-            tasks: vec![crate::orchestration::SummaryTask {
+        let summary = crate::subagents::Summary {
+            tasks: vec![crate::subagents::SummaryTask {
                 session: Some(child),
                 title: "Tests".into(),
                 provider: "codex".into(),
@@ -1361,36 +1343,24 @@ mod tests {
             }],
             live: true,
         };
-        store.save_orchestration_summary(lead, &summary).unwrap();
-        let plan = crate::orchestration::from_input(&serde_json::json!({
-            "title": "Tests", "tasks": [{"id": "a", "title": "Tests", "prompt": "Run", "files": ["tests"]}]
-        }))
-        .unwrap();
-        let mut run = crate::orchestration::Run::new(
-            plan,
-            Some("call-1".into()),
-            "/p".into(),
-            "codex".into(),
-            Default::default(),
-        );
-        run.dispatch();
-        store.save_orchestration_runs(lead, &[run]).unwrap();
+        store.save_agent_summary(lead, &summary).unwrap();
+        // A run saved by a build that still had Orchestrator mode.
+        store
+            .save_setting(&format!("orchestration-runs:{lead}"), "[]")
+            .unwrap();
         drop(store);
         let mut store = Store::open(&path).unwrap();
         assert_eq!(store.started_links().unwrap()[&child], lead);
-        assert_eq!(store.orchestration_summaries().unwrap()[&lead], summary);
-        let runs = store.orchestration_runs().unwrap();
-        assert_eq!(runs[&lead][0].call.as_deref(), Some("call-1"));
-        assert_eq!(
-            runs[&lead][0].tasks[0].state,
-            crate::orchestration::State::Starting
-        );
+        assert_eq!(store.agent_summaries().unwrap()[&lead], summary);
         assert_eq!(summary.tasks[0].label(&summary, false), "Working");
         store.delete(child).unwrap();
         store.delete(lead).unwrap();
         assert!(store.started_links().unwrap().is_empty());
-        assert!(store.orchestration_summaries().unwrap().is_empty());
-        assert!(store.orchestration_runs().unwrap().is_empty());
+        assert!(store.agent_summaries().unwrap().is_empty());
+        assert!(store
+            .setting(&format!("orchestration-runs:{lead}"))
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {

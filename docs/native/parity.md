@@ -36,12 +36,12 @@ approval for every edit. Native Supervised mode does not add that guarantee.
 | --- | --- |
 | Chat | Live attachment/steering/rewind checks, complete keyboard selection and screen-reader navigation, richer nested task artifacts and provider-specific task controls |
 | History and workspace | Transcript/database paging, cache runtime checks, remaining desktop layout consumers, explicit import/export |
-| Files and Git | Platform visual/IME checks, Linux/Windows media hosting, non-Git checkpoints, per-file checkpoint Undo/Keep and orchestration checkpoint integration |
+| Files and Git | Platform visual/IME checks, Linux/Windows media hosting, non-Git checkpoints and per-file checkpoint Undo/Keep |
 | Accounts and settings | Live OAuth/MCP authentication checks and remaining platform-specific settings behavior |
 | Inbox | Runtime/visual checks, inline video, linked-update notices and richer CI evidence/repair progress |
 | Notes | Runtime/visual checks and composer note-card presentation |
 | Automations | Scheduler, provider and recovery checks; current implementation has source review only |
-| Monos | Existing-data checks, live heartbeat and background delegation checks, native visual/document accessibility, floating-document interactions and durable orchestration recovery |
+| Monos | Existing-data checks, live heartbeat and background delegation checks, native visual/document accessibility and floating-document interactions |
 | Remote connections | Real-machine installation/update, existing-data restoration and cross-platform checks; the existing host's feature limits still apply |
 | Integrations | Completion/approval notifications, sounds and Dock badges; Quick Composer attachments/shortcut checks, MCP/skills checks and remaining app-control endpoints. macOS reminder delivery and click routing passed on Oct 22 |
 | Shared data | Concurrent Tauri/native use with active scheduled tasks or phone connections remains unverified and deferred |

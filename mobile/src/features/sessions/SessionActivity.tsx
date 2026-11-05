@@ -12,7 +12,7 @@ import { resetSessionActivity, trackSessions } from "./activityStore";
 export function SessionActivity() {
   const { connected, catalog } = useConnection();
   useEffect(() => {
-    // Orchestrator workers show on their lead, not as sessions of their own.
+    // Subagents show on their lead, not as sessions of their own.
     if (connected) trackSessions(catalog.sessions.filter((session) => !session.leadId));
   }, [connected, catalog]);
   useEffect(() => resetSessionActivity, []);

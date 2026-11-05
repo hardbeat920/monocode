@@ -12,7 +12,6 @@ mod live_phase;
 mod mascot;
 mod measurements;
 mod mono_divider;
-pub(crate) mod orchestration;
 mod outline;
 mod perf_scroll;
 pub(crate) mod phases;
@@ -759,10 +758,6 @@ pub(crate) struct TranscriptView {
     agent_panels: tasks::AgentPanels,
     thread_states: HashMap<i64, serde_json::Value>,
     thread_expanded: HashSet<i64>,
-    /// Orchestration cards, by the tool call that submitted their plan.
-    orchestration: HashMap<String, orchestration::RunView>,
-    /// Assignments whose details are open, by plan call and index.
-    orchestration_open: HashSet<(String, usize)>,
     /// Finished child threads the user removed from the spawn tree.
     thread_dismissed: HashSet<i64>,
     /// Threads that sent messages into this one, by session.
@@ -2545,8 +2540,6 @@ impl TranscriptView {
             agent_panels: Default::default(),
             thread_states: HashMap::new(),
             thread_expanded: HashSet::new(),
-            orchestration: HashMap::new(),
-            orchestration_open: HashSet::new(),
             thread_dismissed: HashSet::new(),
             senders: HashMap::new(),
             subagent: false,

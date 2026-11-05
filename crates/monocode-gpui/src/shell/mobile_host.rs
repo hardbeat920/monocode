@@ -4,10 +4,7 @@
 use super::*;
 use crate::{
     accounts::Tone,
-    mobile::{
-        catalog as mobile_catalog, orchestration as mobile_orchestration, project,
-        transcript as turns,
-    },
+    mobile::{catalog as mobile_catalog, project, transcript as turns},
     notifications::delivery,
     pickers,
 };
@@ -73,8 +70,7 @@ struct MonoPreview {
 
 struct CatalogEntry {
     id: i64,
-    /// The lead of a subagent (a thread it drives, or an Orchestrator
-    /// worker), which the phone lists under it.
+    /// The lead of a subagent, which the phone lists under it.
     lead: Option<i64>,
     project: String,
     summary: Session,
@@ -434,9 +430,6 @@ impl Shell {
                             Some(crate::conversation::MobileWaiting::Question) => Some("question"),
                             None => None,
                         },
-                        orchestration: mobile_orchestration::current(view.orchestration_views())
-                            .last()
-                            .map(|(_, run)| mobile_orchestration::summary(run)),
                     }
                 });
                 Some(CatalogEntry {
@@ -760,10 +753,6 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
-            "orchestration.read" => {
-                let result = self.mobile_orchestration(&request.params, cx);
-                request.reply(result);
-            }
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1453,27 +1442,6 @@ impl Shell {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
             }
-            ("orchestration.action", Target::Session(id)) => {
-                let action = mobile_orchestration::action(
-                    params["action"].as_str().unwrap_or_default(),
-                    params["taskId"].as_str(),
-                    params["index"].as_u64().map(|ix| ix as usize),
-                )
-                .ok_or("Unsupported orchestration action")?;
-                let call = string(params, "call").unwrap_or_default();
-                let lead = *id;
-                self.ensure_session(lead, cx)
-                    .ok_or("Session is no longer available")?;
-                self.orchestration_action(
-                    lead,
-                    crate::transcript::orchestration::OrchestrationAction { call, action },
-                    cx,
-                );
-                self.mobile_orchestration(params, cx)
-            }
-            ("orchestration.action", Target::Mono(_)) => {
-                Err("A Mono's conversation has no orchestration".into())
-            }
             ("session.answerQuestion" | "session.keepQuestionOpen", target) => {
                 let view = match target {
                     Target::Session(id) => self.sessions.get(id).cloned(),
@@ -1501,40 +1469,6 @@ impl Shell {
             }
             _ => Err("Unsupported mobile command".into()),
         }
-    }
-
-    /// A lead's current Orchestrator cards in full, for the phone's Agents
-    /// sheet. Opening the lead brings back a run saved before a restart.
-    fn mobile_orchestration(
-        &mut self,
-        params: &Value,
-        cx: &mut Context<Self>,
-    ) -> Result<Value, String> {
-        let conversation = string(params, "conversationId").unwrap_or_default();
-        let Target::Session(lead) = self.mobile_target(&conversation, cx)? else {
-            return Ok(json!({"runs": []}));
-        };
-        let view = self
-            .ensure_session(lead, cx)
-            .ok_or("Session is no longer available")?;
-        self.push_orchestration_views(lead, cx);
-        let views: Vec<_> = mobile_orchestration::current(view.read(cx).orchestration_views())
-            .into_iter()
-            .cloned()
-            .collect();
-        let workers: HashMap<i64, String> = views
-            .iter()
-            .flat_map(|(_, run)| run.tasks.iter().filter_map(|task| task.session))
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|id| (id, self.mobile_session_id(id)))
-            .collect();
-        Ok(json!({
-            "runs": views
-                .iter()
-                .map(|(call, run)| mobile_orchestration::run(call.as_deref(), run, |id| workers.get(&id).cloned()))
-                .collect::<Vec<_>>(),
-        }))
     }
 
     fn mobile_send(
@@ -2615,60 +2549,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_lead_shows_its_plan_on_the_phone_and_lists_its_workers_under_it(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        use monocode_core::orchestration::{Plan, Summary, SummaryTask, Task};
+    fn a_lead_lists_its_subagents_under_it_on_the_phone(cx: &mut gpui::TestAppContext) {
+        use monocode_core::subagents::{Summary, SummaryTask};
         let (window, lead, worker) = super::super::tests::window(cx);
-        let task = |id: &str| Task {
-            id: id.into(),
-            title: format!("Assignment {id}"),
-            prompt: "Do it and report.".into(),
-            files: vec!["src".into()],
-            depends_on: Vec::new(),
-            provider: None,
-            model: None,
-            difficulty: None,
-        };
-        let plan = Plan {
-            title: "Split settings".into(),
-            summary: String::new(),
-            tasks: vec![task("a"), task("b")],
-        };
         window
             .update(cx, |shell, _, cx| {
-                let id = shell.mobile_session_id(lead);
-                let params = json!({"conversationId": id});
-                assert_eq!(
-                    shell.mobile_orchestration(&params, cx).unwrap()["runs"],
-                    json!([])
-                );
-
-                shell.sessions[&lead].update(cx, |v, cx| {
-                    v.orchestration_plan = Some((Some("plan-call".into()), plan.clone()));
-                    cx.notify();
-                });
-                let runs = shell.mobile_orchestration(&params, cx).unwrap()["runs"].clone();
-                assert_eq!(runs[0]["phase"], "review");
-                assert_eq!(runs[0]["call"], "plan-call");
-                assert_eq!(runs[0]["tasks"].as_array().unwrap().len(), 2);
-
-                // The phone's Remove reaches the plan under review.
-                let action = mobile_orchestration::action("remove", Some("b"), None).unwrap();
-                shell.orchestration_action(
-                    lead,
-                    crate::transcript::orchestration::OrchestrationAction {
-                        call: "plan-call".into(),
-                        action,
-                    },
-                    cx,
-                );
-                let runs = shell.mobile_orchestration(&params, cx).unwrap()["runs"].clone();
-                assert_eq!(runs[0]["tasks"].as_array().unwrap().len(), 1);
-
-                // The lead's catalog entry carries the card; its worker names it.
                 shell.sessions[&worker].update(cx, |chat, _| chat.summary.has_messages = true);
-                shell.orchestration_summaries.insert(
+                shell.agent_summaries.insert(
                     lead,
                     Summary {
                         tasks: vec![SummaryTask {
@@ -2682,15 +2569,6 @@ mod tests {
                 let paths = shell.mobile_projects(cx);
                 let entries = shell.mobile_catalog_sessions(&paths, cx);
                 let entry = |id: i64| entries.iter().find(|e| e.id == id).unwrap();
-                let summary = entry(lead)
-                    .live
-                    .as_ref()
-                    .unwrap()
-                    .orchestration
-                    .clone()
-                    .unwrap();
-                assert_eq!(summary["phase"], "review");
-                assert_eq!(summary["tones"], json!(["queued"]));
                 assert_eq!(entry(worker).lead, Some(lead));
                 assert_eq!(entry(lead).lead, None);
             })

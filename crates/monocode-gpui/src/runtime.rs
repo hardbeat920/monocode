@@ -173,7 +173,6 @@ fn run_turn_using(
         persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
         persisted.plan = false;
-        persisted.orchestrator = false;
         let start = transcript.begin(if settings.internal_message {
             "mono-system"
         } else {
@@ -540,12 +539,6 @@ fn run_turn_using(
                     );
                 }
             }
-        }
-        if !raw_native_command && settings.orchestrator {
-            prompt = format!(
-                "{}\n\nUser request:\n{prompt}",
-                monocode_core::orchestration::INSTRUCTIONS
-            );
         }
         // Every foreground session receives an independent visual capability.
         // This happens after configuration was persisted, and Settings' env is

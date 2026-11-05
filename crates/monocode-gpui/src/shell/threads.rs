@@ -2,7 +2,7 @@ use super::*;
 use monocode_core::{
     app_access as app,
     mono::bridge::Call,
-    orchestration::{Summary, SummaryTask},
+    subagents::{Summary, SummaryTask},
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -15,7 +15,7 @@ impl Shell {
             .ok_or("Caller is not available")?
             .read(cx);
         if self.thread_parents.contains_key(&call.session)
-            || self.orchestration_worker(call.session)
+            || self.former_worker(call.session)
             || caller.settings.mono.is_some()
             || self
                 .monos
@@ -48,7 +48,7 @@ impl Shell {
             view.filter(|v| v.history_loaded())
                 .map(|v| v.thread_outcome(cx))
                 .or_else(|| {
-                    self.orchestration_summaries
+                    self.agent_summaries
                         .values()
                         .flat_map(|s| &s.tasks)
                         .find(|t| {
@@ -332,9 +332,8 @@ impl Shell {
         let live = self.sessions.get(&lead).is_some_and(|v| v.read(cx).busy)
             || tasks
                 .iter()
-                .any(|t| matches!(t.status.as_str(), "running" | "blocked"))
-            || self.orchestrations.active(lead);
-        if let Some(previous) = self.orchestration_summaries.get(&lead) {
+                .any(|t| matches!(t.status.as_str(), "running" | "blocked"));
+        if let Some(previous) = self.agent_summaries.get(&lead) {
             tasks.extend(
                 previous
                     .tasks
@@ -352,13 +351,13 @@ impl Shell {
         cx.notify();
     }
     /// The lead a subagent belongs to: the thread that started it with
-    /// thread_start, or the Orchestrator whose run it works on. A thread
-    /// opened with new_thread has none; it is the user's own.
+    /// thread_start, or the lead of a former worker. A thread opened with
+    /// new_thread has none; it is the user's own.
     pub(crate) fn subagent_lead(&self, id: i64) -> Option<i64> {
         self.thread_parents
             .get(&id)
             .copied()
-            .or_else(|| self.orchestration_lead(id))
+            .or_else(|| self.former_worker_lead(id))
     }
     /// A subagent opens in a pane beside its lead, never as a tab of its own,
     /// and one at a time: opening another takes the shown one's place.
@@ -413,7 +412,7 @@ impl Shell {
         cx: &App,
     ) -> Vec<crate::conversation::subagents::Subagent> {
         use crate::conversation::subagents::{Subagent, SubagentState};
-        let Some(summary) = self.orchestration_summaries.get(&lead) else {
+        let Some(summary) = self.agent_summaries.get(&lead) else {
             return Vec::new();
         };
         summary
@@ -442,7 +441,7 @@ impl Shell {
         view.update(cx, |v, cx| v.set_subagents(strip, cx));
     }
     /// Every subagent of the lead, archived or closed ones included: its
-    /// thread_start children, then its Orchestrator agents.
+    /// thread_start children, then its former workers.
     pub(crate) fn subagents(&self, lead: i64) -> Vec<i64> {
         let mut ids: Vec<i64> = self
             .thread_parents
@@ -451,7 +450,7 @@ impl Shell {
             .map(|(id, _)| *id)
             .collect();
         ids.sort_unstable();
-        if let Some(summary) = self.orchestration_summaries.get(&lead) {
+        if let Some(summary) = self.agent_summaries.get(&lead) {
             for id in summary.tasks.iter().filter_map(|t| t.session) {
                 if !ids.contains(&id) {
                     ids.push(id);
@@ -524,7 +523,7 @@ impl Shell {
         summary: Summary,
         cx: &mut Context<Self>,
     ) {
-        if self.orchestration_summaries.get(&lead) == Some(&summary) {
+        if self.agent_summaries.get(&lead) == Some(&summary) {
             return;
         }
         let previous = self.agent_summary_writes.remove(&lead);
@@ -536,12 +535,12 @@ impl Shell {
             }
             cx.background_executor()
                 .spawn(async move {
-                    let _ = locked(&store).and_then(|s| s.save_orchestration_summary(lead, &saved));
+                    let _ = locked(&store).and_then(|s| s.save_agent_summary(lead, &saved));
                 })
                 .await;
         });
         self.agent_summary_writes.insert(lead, write);
-        self.orchestration_summaries.insert(lead, summary);
+        self.agent_summaries.insert(lead, summary);
         self.push_subagent_strip(lead, cx);
         self.invalidate_chrome(cx);
     }

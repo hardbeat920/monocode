@@ -10,7 +10,6 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
-import { AgentDots } from "@/features/orchestration/AgentDots";
 import { relativeTime } from "@/features/workspace/relativeTime";
 import type { SessionSummary } from "@/features/workspace/types";
 import { Icon, type IconName } from "@/ui/Icon";
@@ -97,7 +96,6 @@ export function SessionCard({
           <Text style={styles.title} numberOfLines={1}>
             {session.title}
           </Text>
-          {session.orchestration ? <AgentDots run={session.orchestration} /> : null}
         </>
       )}
     </Pressable>
@@ -153,7 +151,6 @@ function SessionDetails({ session }: { session: SessionSummary }) {
         <Text style={styles.cardTitle} numberOfLines={1}>
           {session.title}
         </Text>
-        {session.orchestration ? <AgentDots run={session.orchestration} /> : null}
         {session.busy ? (
           <View style={styles.status}>
             <TerminalSpinner style={styles.statusLabel} />
