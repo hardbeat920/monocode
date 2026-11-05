@@ -19,6 +19,7 @@ pub(crate) enum Command {
     Sidebar,
     Panel,
     Terminal,
+    Device,
     Layout,
     WorkspaceStyle,
     Plan,
@@ -33,6 +34,7 @@ const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Sidebar, "Toggle sidebar", "⌘B"),
     (Command::Panel, "Toggle files and changes", "⌘⇧B"),
     (Command::Terminal, "Toggle terminal", "⌘J"),
+    (Command::Device, "Toggle device", ""),
     (Command::Layout, "Switch workspace layout", "⌘⇧L"),
     (
         Command::WorkspaceStyle,

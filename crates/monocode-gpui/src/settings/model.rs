@@ -11,6 +11,7 @@ pub(crate) enum Section {
     Appearance,
     Keybindings,
     Chat,
+    Devices,
     Providers,
     Mcp,
     Skills,
@@ -34,6 +35,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
         "Agents",
         &[
             Section::Chat,
+            Section::Devices,
             Section::Providers,
             Section::Mcp,
             Section::Skills,
@@ -47,12 +49,13 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 12] = [
+    pub(crate) const ALL: [Section; 13] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
         Section::Keybindings,
         Section::Chat,
+        Section::Devices,
         Section::Providers,
         Section::Mcp,
         Section::Skills,
@@ -68,6 +71,7 @@ impl Section {
             Section::Appearance => "appearance",
             Section::Keybindings => "keybindings",
             Section::Chat => "chat",
+            Section::Devices => "devices",
             Section::Providers => "providers",
             Section::Mcp => "mcp",
             Section::Skills => "skills",
@@ -84,6 +88,7 @@ impl Section {
             Section::Appearance => "Appearance",
             Section::Keybindings => "Keybindings",
             Section::Chat => "Chat",
+            Section::Devices => "Devices",
             Section::Providers => "Providers",
             Section::Mcp => "MCP",
             Section::Skills => "Skills",
@@ -107,6 +112,9 @@ impl Section {
             }
             Section::Chat => {
                 "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open."
+            }
+            Section::Devices => {
+                "iOS Simulators and Android Emulators in the right panel, and what agents may do with them."
             }
             Section::Providers => {
                 "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with."
@@ -134,6 +142,9 @@ impl Section {
             Section::Chat => {
                 "transcript composer prompt message diff review layout format save editor"
             }
+            Section::Devices => {
+                "simulator emulator ios android iphone pixel device hub stream agent-device node xcode adb"
+            }
             Section::Providers => {
                 "account sign in login model harness claude codex gemini cli default hooks"
             }
@@ -157,6 +168,7 @@ impl Section {
             Section::Appearance => "palette",
             Section::Keybindings => "keyboard",
             Section::Chat => "message-square",
+            Section::Devices => "smart-phone",
             Section::Providers => "bot",
             Section::Mcp => "globe",
             Section::Skills => "sparkles",
@@ -187,6 +199,18 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Connections,
         "Connect away from home",
         "router port upnp nat remote address public hostname vpn wifi",
+    ),
+    (
+        "devices",
+        Section::Devices,
+        "Devices",
+        "simulator emulator ios android iphone pixel device hub stream",
+    ),
+    (
+        "device-agents",
+        Section::Devices,
+        "Agent access",
+        "agent-device automation tap screenshot drive tools",
     ),
     (
         "mcp-servers",

@@ -7,6 +7,7 @@ mod classic_sidebar;
 #[cfg(test)]
 mod classic_surface_tests;
 mod classic_surfaces;
+mod devices;
 mod file_panes;
 mod github_star;
 mod idle_agents;
@@ -128,6 +129,7 @@ actions!(
         FocusPaneUp,
         FocusPaneDown,
         ToggleTerminal,
+        ToggleDevice,
         NewTerminal,
         SplitTerminal,
         ToggleLayout,
@@ -627,6 +629,7 @@ pub(crate) struct Shell {
     project_rail_stats: project_rail::ProjectRailStats,
     project_resize: Option<(Pixels, f32)>,
     classic_sidebar_tab: classic_sidebar::ClassicSidebarTab,
+    device_scope: devices::DeviceScope,
     classic_tabs: classic_sidebar::WorkspaceTabs,
     classic_session_search: Entity<input::Input>,
     classic_worktree_picker: Option<classic_sidebar::WorktreePicker>,
@@ -1027,6 +1030,7 @@ impl Shell {
             project_rail_stats: Default::default(),
             project_resize: None,
             classic_sidebar_tab,
+            device_scope: Default::default(),
             classic_tabs: Default::default(),
             classic_session_search,
             classic_worktree_picker: None,
@@ -1678,13 +1682,18 @@ impl Shell {
             let changes = panel.read(cx).changes.clone();
             changes.update(cx, |c, _| c.text_provider = kind);
         }
+        self.sync_device_scope(cx);
         self.sync_right_panel(cx);
     }
     /// App.tsx's `insetRightPanelShown`: open (or sliding shut), over a
     /// project, and not covered by an app view.
     fn right_panel_shown(&self, cx: &App) -> bool {
         (self.workspace.right_panel_open || self.right_slide.is_some())
-            && (!self.workspace.classic_layout || self.mono_active(cx))
+            && (!self.workspace.classic_layout
+                || self.mono_active(cx)
+                || self.right_panel.as_ref().is_some_and(|panel| {
+                    panel.read(cx).tab() == crate::right_panel::RightTab::Device
+                }))
             && !self.app_view_open()
             && self.settings.is_none()
             && !self.search_page()
@@ -1692,8 +1701,13 @@ impl Shell {
     }
     fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let opening = self.right_slide.as_ref().is_some_and(PaneSlide::opening);
+        // Classic shows the panel only for a device.
+        let device_tab = self
+            .right_panel
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).tab() == crate::right_panel::RightTab::Device);
         let shown = !self.mono_active(cx)
-            && !self.workspace.classic_layout
+            && (!self.workspace.classic_layout || device_tab)
             && self.workspace.right_panel_open
             && !self.app_view_open()
             && self.settings.is_none()
@@ -1707,10 +1721,12 @@ impl Shell {
             .then(|| self.classic_sidebar_tab.tool_tab())
             .flatten();
             let terminal_tab = self.terminal_in_panel(cx);
+            let device_tab = self.devices_in_panel();
             panel.update(cx, |p, cx| {
                 p.set_shown(shown, cx);
                 p.set_sidebar_tab(sidebar_tab, cx);
                 p.set_terminal_tab(terminal_tab, cx);
+                p.set_device_tab(device_tab, cx);
             });
         }
     }
@@ -1780,15 +1796,7 @@ impl Shell {
         {
             self.focus_active(window, cx);
         }
-        let full = self.right_panel_width();
-        let to = if open { full } else { 0. };
-        self.workspace.right_panel_open = open;
-        let previous = self.right_slide.take();
-        self.right_slide = (!cx.reduce_motion()).then(|| match previous {
-            Some(slide) => slide.retarget(to, std::time::Instant::now()),
-            None => PaneSlide::new(if open { 0. } else { full }, to, full),
-        });
-        self.sync_right_panel(cx);
+        self.slide_right_panel(open, cx);
         if open
             && !self.mono_active(cx)
             && let Some(panel) = self.right_panel.clone()
@@ -1798,6 +1806,17 @@ impl Shell {
         self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
+    }
+    fn slide_right_panel(&mut self, open: bool, cx: &mut Context<Self>) {
+        let full = self.right_panel_width();
+        let to = if open { full } else { 0. };
+        self.workspace.right_panel_open = open;
+        let previous = self.right_slide.take();
+        self.right_slide = (!cx.reduce_motion()).then(|| match previous {
+            Some(slide) => slide.retarget(to, std::time::Instant::now()),
+            None => PaneSlide::new(if open { 0. } else { full }, to, full),
+        });
+        self.sync_right_panel(cx);
     }
     fn ensure_right_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.right_panel.is_some() {
@@ -1810,11 +1829,26 @@ impl Shell {
             self.workspace.changes_view,
         );
         let terminal_tab = self.terminal_in_panel(cx);
+        let device_tab = self.devices_in_panel();
         let panel = cx.new(|cx| {
             let mut panel = RightPanel::new(git, tab, order, window, cx);
             panel.set_terminal_tab(terminal_tab, cx);
+            panel.set_device_tab(device_tab, cx);
             panel
         });
+        let device = panel.read(cx).device.clone();
+        self.observations.push(cx.subscribe_in(
+            &device,
+            window,
+            |this, _, event: &crate::device::DeviceEvent, window, cx| match event {
+                crate::device::DeviceEvent::OpenSettings => {
+                    this.open_settings(crate::settings::Section::Devices, window, cx)
+                }
+                crate::device::DeviceEvent::Attach(paths) => {
+                    this.attach_to_visible_message(paths.clone(), window, cx)
+                }
+            },
+        ));
         let explorer = panel.read(cx).explorer.clone();
         self.observations.push(cx.subscribe(
             &explorer,
@@ -1872,6 +1906,12 @@ impl Shell {
                         this.workspace.right_panel_tab = *tab;
                         if *tab == crate::right_panel::RightTab::Terminal {
                             this.ensure_panel_terminal(cx);
+                        }
+                        // Classic shows the panel for a device too.
+                        if *tab == crate::right_panel::RightTab::Device {
+                            this.sync_right_panel(cx);
+                        } else {
+                            this.device_scope.opened_panel = false;
                         }
                     }
                     PanelEvent::Reordered(order) => this.workspace.right_panel_tabs = order.clone(),
@@ -4713,6 +4753,9 @@ impl Shell {
                 && panel.read(cx).tab() == crate::right_panel::RightTab::Terminal
             {
                 self.panel_terminal(window, cx)
+            } else if panel.read(cx).tab() == crate::right_panel::RightTab::Device {
+                // The device's native view is placed on every paint.
+                div().size_full().child(panel).into_any_element()
             } else {
                 panel
                     .cached(StyleRefinement::default().size_full())
@@ -5187,7 +5230,11 @@ impl Shell {
     /// Explorer and History, and Terminal when it lives in the panel. Changes
     /// opens from the diff stat instead.
     fn right_tab_count(&self, cx: &App) -> usize {
-        2 + usize::from(self.terminal_in_panel(cx))
+        2 + usize::from(self.terminal_in_panel(cx)) + usize::from(self.devices_in_panel())
+    }
+    /// Settings › Devices adds the Device tab.
+    pub(crate) fn devices_in_panel(&self) -> bool {
+        cfg!(target_os = "macos") && self.workspace.preferences.devices
     }
     /// The toggle's room at the end of the strip: `pl-1.5`, the button, `pr-3`.
     fn toggle_room(&self, cx: &App) -> f32 {
@@ -9027,6 +9074,9 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleDevice, window, cx| {
+                this.toggle_device_panel(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
                 // Title bar terminals open a new tab each time.
                 if this.terminal_in_title() {
@@ -9176,6 +9226,8 @@ impl Render for Shell {
                     .as_ref()
                     .map(|(view, _)| crate::image_lightbox::overlay(view)),
             )
+            // After everything that can hold a device's screen.
+            .child(crate::device::overlay::sentinel())
             .map(|root| {
                 #[cfg(target_os = "linux")]
                 let caption = self.client_decorations;

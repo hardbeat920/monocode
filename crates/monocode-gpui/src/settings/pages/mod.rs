@@ -3,6 +3,7 @@ mod appearance;
 mod archive;
 mod chat;
 mod connections;
+mod devices;
 mod general;
 mod inbox;
 mod keybindings;
@@ -36,6 +37,7 @@ impl SettingsView {
             Section::Appearance => self.appearance_page(window, cx),
             Section::Keybindings => self.keybindings_page(cx),
             Section::Chat => self.chat_page(cx),
+            Section::Devices => self.devices_page(cx),
             Section::Providers => self.providers_page(cx),
             Section::Mcp => self.mcp_page(cx),
             Section::Skills => self.skills_page(cx),

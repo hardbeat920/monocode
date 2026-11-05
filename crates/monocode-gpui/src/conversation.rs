@@ -1150,6 +1150,16 @@ impl Conversation {
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
         settings.environment.extend(self.app_environment.clone());
+        // Lists the device tools when the user lets agents drive devices.
+        settings.environment.insert(
+            monocode_core::device::ENV.into(),
+            if monocode_core::device::agents_enabled() && !self.is_remote() {
+                "1"
+            } else {
+                "0"
+            }
+            .into(),
+        );
         if settings.remote_action.as_ref().is_none_or(|action| {
             (action["type"] == "send"
                 && action["draftBlockId"].is_null()

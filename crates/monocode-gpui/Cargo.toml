@@ -47,6 +47,8 @@ tree-sitter-java = "0.23"
 tree-sitter-yaml = "0.7"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-ruby = "0.23"
+# The device hub's input and Android video sockets, on their own threads.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tree-sitter-zig = "1.1"
 # Settings → Mobile draws the pairing code from the module matrix.
 qrcode = { version = "0.14", default-features = false }
@@ -68,6 +70,15 @@ raw-window-handle = "0.6"
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle"] }
 objc2-user-notifications = "0.3"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFArray", "CFNumber", "CFString"] }
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "IOSurfaceBase", "libc", "objc2", "objc2-core-foundation", "bitflags"] }
+objc2-core-video = { version = "0.3", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2-io-surface"] }
+# Device screens: H.264 from the device hub, decoded and shown by Core
+# Animation beside GPUI rather than through its frames.
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAnimation", "AVQueuedSampleBufferRendering", "AVSampleBufferDisplayLayer", "AVSampleBufferVideoRenderer", "objc2-core-media", "objc2-core-video", "objc2-quartz-core"] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMTime", "CMAttachment", "objc2-core-video"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGPath", "CGEventSource", "CGEventTypes", "CGSession"] }
 # libmalloc keeps freed large spans dirty, so startup and image churn stayed
 # resident. mimalloc 3 retains churn the same way; the v2 feature pins 2.x.
 mimalloc = { version = "0.1", default-features = false, features = ["v2"] }

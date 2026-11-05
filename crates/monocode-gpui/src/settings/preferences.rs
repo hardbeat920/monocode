@@ -97,6 +97,12 @@ pub(crate) struct Preferences {
     /// The model for session titles, branch names, commit messages and pull
     /// requests; `None` lets each use its own harness's quick model.
     pub background_model: Option<ModelChoice>,
+    // Devices
+    /// iOS Simulators and Android Emulators in the right panel. Off until
+    /// chosen: it installs and runs the device hub with the user's Node.
+    pub devices: bool,
+    /// Agents may open, see and drive devices.
+    pub device_agents: bool,
     // Monos
     pub monos: bool,
     pub rail_monos_pinned: bool,
@@ -181,6 +187,8 @@ impl Default for Preferences {
             default_access: None,
             provider_efforts: HashMap::new(),
             background_model: None,
+            devices: false,
+            device_agents: false,
             monos: true,
             rail_monos_pinned: false,
             mono_menu_bar_icon: true,

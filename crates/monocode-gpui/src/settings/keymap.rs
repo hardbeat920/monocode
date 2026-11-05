@@ -88,6 +88,7 @@ fn command(binding: &KeyBinding) -> Option<&'static str> {
         "workspace::NewTerminal" => "Terminal: New",
         "workspace::SplitTerminal" => "Terminal: Split Right",
         "workspace::ToggleTerminal" => "Terminal: Toggle Dock",
+        "workspace::ToggleDevice" => "View: Toggle Device",
         "file_editor::Find" => "Editor: Find",
         "file_editor::Replace" => "Editor: Replace",
         "workspace::ZoomIn" | "image_lightbox::ZoomIn" => "View: Zoom In",

@@ -214,7 +214,7 @@ pub(crate) fn disabled(button: Stateful<Div>, disabled: bool) -> Stateful<Div> {
         button.cursor_pointer()
     }
 }
-fn danger(alpha: f32) -> Hsla {
+pub(crate) fn danger(alpha: f32) -> Hsla {
     gpui::hsla(0., 0.66, if is_light() { 0.5 } else { 0.47 }, alpha)
 }
 
