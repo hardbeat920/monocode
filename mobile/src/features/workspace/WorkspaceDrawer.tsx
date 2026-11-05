@@ -7,7 +7,12 @@ import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ProjectMascot } from "@/features/mascots/ProjectMascot";
+import { MonoGroup } from "@/features/sessions/MonoGroup";
+import { setMonoGroupPrefs, useMonoGroupPrefs } from "@/features/sessions/monoGroupPrefs";
+import { searchMonos } from "@/features/sessions/sessionMonos";
 import { HEADER_GAP, HEADER_HEIGHT, useKeyboardLift } from "@/features/sessions/SessionScreen";
+import { useConnection } from "@/features/connection/ConnectionProvider";
+import { useMonosInDrawer } from "@/features/settings/monosInDrawer";
 import { MONOCODE_MARK } from "@/ui/brand";
 import { CircleButton } from "@/ui/CircleButton";
 import { useWarmDitherLoading } from "@/ui/DitherLoading";
@@ -20,9 +25,11 @@ import { AnimationsPaused } from "@/ui/AnimationsPaused";
 import { useDrawerActions, useDrawerOpen } from "@/ui/ScenePager";
 import { radii, themedStyles, useColors, useScheme } from "@/ui/theme";
 
+import { useUnreadMonos } from "./monoSeen";
 import { pickProject } from "./projectPick";
 import { projectForRoute } from "./routing";
-import type { Project } from "./types";
+import type { Mono, Project } from "./types";
+import { useCreateMono } from "./useCreateMono";
 import { useWorkspace } from "./WorkspaceProvider";
 
 /** As the composer's pill, so the drawer's foot lines up with a chat's. */
@@ -46,7 +53,8 @@ type Filter = "all" | "working";
  * filter up top, level with a screen's header; the projects under their own
  * label; and at the foot settings and search, level with a screen's composer.
  * Picking a project switches the screen under it as the drawer shuts. Monos
- * are not here: each sits pinned on its projects' Sessions pages.
+ * sit pinned on their projects' Sessions pages, unless "Monos in the drawer"
+ * is on: then they head the drawer, above the projects.
  */
 export function WorkspaceDrawer() {
   const drawer = useDrawerActions();
@@ -56,7 +64,11 @@ export function WorkspaceDrawer() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const styles = useStyles();
-  const { projects } = useWorkspace();
+  const { projects, monos } = useWorkspace();
+  const [monosInDrawer] = useMonosInDrawer();
+  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const prefs = useMonoGroupPrefs(desktop);
+  const unread = useUnreadMonos(desktop, monos);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const pathname = usePathname();
@@ -89,13 +101,29 @@ export function WorkspaceDrawer() {
   const openSettings = () => {
     if (!isModalRoute(pathname)) router.push("/settings");
   };
+  // A new Mono starts in the open project, else the first.
+  const createMono = useCreateMono(activeProject ?? projects[0]?.id ?? "");
+  // The Monos here, narrowed by the search and the filter as the projects are.
+  const byActivity = [...monos].sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
+  const searched = searchMonos({ assigned: byActivity, unassigned: [] }, needle).assigned;
+  const shownMonos = !monosInDrawer
+    ? []
+    : filter === "working"
+      ? searched.filter((mono) => mono.status === "working")
+      : searched;
+  const monoGroup = { assigned: shownMonos, unassigned: [] };
+  // Pushed over the screen as the drawer shuts, as a Sessions page pushes one.
+  const openMono = (mono: Pick<Mono, "id">) => {
+    if (pathname.startsWith(`/mono/${mono.id}`)) return drawer.close();
+    drawer.closeThen(() => router.push({ pathname: "/mono/[monoId]", params: { monoId: mono.id } }));
+  };
   const headerTop = insets.top + HEADER_GAP;
   const headerBottom = headerTop + HEADER_HEIGHT + 12;
   const footerBottom = Math.max(insets.bottom, 12);
   const footerTop = footerBottom + FOOTER_HEIGHT + 12;
   // The search rides the keyboard, resting just above it.
   const lift = useKeyboardLift(footerBottom - 10);
-  const nothing = !shownProjects.length;
+  const nothing = !shownProjects.length && !shownMonos.length;
 
   return (
     // A shut drawer's mascots hold still; they move again as it opens.
@@ -109,6 +137,16 @@ export function WorkspaceDrawer() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
+          {shownMonos.length ? (
+            <MonoGroup
+              group={monoGroup}
+              unread={unread}
+              collapsed={prefs.collapsed}
+              onToggle={() => setMonoGroupPrefs(desktop, { collapsed: !prefs.collapsed })}
+              onOpen={openMono}
+              onNew={projects.length ? createMono : undefined}
+            />
+          ) : null}
           {shownProjects.length ? (
             <View style={styles.list}>
               <Text style={styles.sectionLabel}>Projects</Text>

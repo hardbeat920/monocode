@@ -15,6 +15,7 @@ import {
   useNotificationPreferences,
   type NotificationCategory,
 } from "@/features/settings/notifications";
+import { useMonosInDrawer } from "@/features/settings/monosInDrawer";
 import { useOpenSessionAfterStarting } from "@/features/settings/newSessions";
 import { SettingsPage, SettingsRow } from "@/features/settings/SettingsUI";
 import { projectForRoute } from "@/features/workspace/routing";
@@ -41,6 +42,7 @@ export default function SettingsScreen() {
   const defaultAccess = useDefaultRuntimeMode();
   const notifications = useNotificationPreferences();
   const [openAfterStarting, setOpenAfterStarting] = useOpenSessionAfterStarting();
+  const [monosInDrawer, setMonosInDrawer] = useMonosInDrawer();
   const blocked = useNotificationsBlocked();
   // Both pages act on the project open under settings.
   const params = project ? { projectId: project.id } : {};
@@ -170,6 +172,26 @@ export default function SettingsScreen() {
       </View>
       <Text style={styles.note}>
         Turn off to stay on the new session screen and start more sessions.
+      </Text>
+
+      <Text style={styles.heading}>Layout</Text>
+      <View style={styles.card}>
+        <SettingsRow
+          icon="chat"
+          label="Monos in the drawer"
+          onPress={() => setMonosInDrawer(!monosInDrawer)}
+          accessory={
+            <Switch
+              accessibilityLabel="Monos in the drawer"
+              value={monosInDrawer}
+              onValueChange={setMonosInDrawer}
+              trackColor={{ true: colors.accent }}
+            />
+          }
+        />
+      </View>
+      <Text style={styles.note}>
+        Lists your Monos above the projects in the drawer, instead of above each project’s sessions.
       </Text>
 
       <Text style={styles.heading}>Workspace</Text>

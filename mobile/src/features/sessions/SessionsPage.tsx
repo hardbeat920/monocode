@@ -15,6 +15,7 @@ import { router } from "expo-router";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
 import { FileSearchBar, SEARCH_BAR } from "@/features/files/FileSearchBar";
+import { useMonosInDrawer } from "@/features/settings/monosInDrawer";
 import { useUnreadMonos } from "@/features/workspace/monoSeen";
 import type { Harness, Mono, SessionSummary, Worktree } from "@/features/workspace/types";
 import { useCreateMono } from "@/features/workspace/useCreateMono";
@@ -96,7 +97,9 @@ export function SessionsPage({
   const actions = useSessionActions(() => {}, sink);
   const { closeOpenRow } = actions;
 
-  // The Monos pinned above the rows, unless the filter menu hides them.
+  // The Monos pinned above the rows, unless the filter menu hides them or
+  // they sit in the drawer.
+  const [monosInDrawer] = useMonosInDrawer();
   const prefs = useMonoGroupPrefs(desktop);
   const unread = useUnreadMonos(desktop, monos);
   const createMono = useCreateMono(projectId);
@@ -105,7 +108,7 @@ export function SessionsPage({
     [monos, projects, projectId, needle],
   );
   // The filter offers "Monos" wherever the project has some, so it can come back.
-  const hasMonos = groupSize(monosForProject(monos, projects, projectId)) > 0;
+  const hasMonos = !monosInDrawer && groupSize(monosForProject(monos, projects, projectId)) > 0;
   // Who started each session, from every Mono on the desktop.
   const everyMono = useMemo(() => new Map(allMonos.map((mono) => [mono.id, mono])), [allMonos]);
   const shownMonos = useMemo(() => new Set(monos.map((mono) => mono.id)), [monos]);
@@ -180,7 +183,7 @@ export function SessionsPage({
           renderItem={renderItem}
           ItemSeparatorComponent={Divider}
           ListHeaderComponent={
-            prefs.shown && groupSize(group) > 0 ? (
+            !monosInDrawer && prefs.shown && groupSize(group) > 0 ? (
               <MonoGroup
                 group={group}
                 unread={unread}
