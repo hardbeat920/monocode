@@ -64,6 +64,39 @@ fn a_launch_applies_validated_overrides_without_transferring_app_access() {
 }
 
 #[test]
+fn a_launch_accepts_the_full_id_behind_a_model_alias() {
+    let alias = |id: &str, target: &str| Model {
+        id: id.into(),
+        alias_target: Some(target.into()),
+        ..model()
+    };
+    let models = [
+        alias("opus", "claude-opus-5-5"),
+        alias("sonnet", "claude-sonnet-5-5"),
+    ];
+    let launch = |model: &str| {
+        launch_settings(
+            &json!({"prompt":"x","model":model,"effort":"high"}),
+            "claude",
+            Settings::default(),
+            Kind::Claude,
+            &models,
+        )
+    };
+    for id in [
+        "sonnet",
+        "claude-sonnet-5-5",
+        "sonnet-5.5",
+        "claude:claude-sonnet-5-5",
+    ] {
+        let settings = launch(id).unwrap();
+        assert_eq!(settings.model.as_deref(), Some("sonnet"), "{id}");
+        assert_eq!(settings.effort.as_deref(), Some("high"), "{id}");
+    }
+    assert!(launch("claude-sonnet-4-6").is_err());
+}
+
+#[test]
 fn project_actions_reject_unknown_fields_and_anything_only_monos_may_do() {
     for (action, input) in [
         ("sessions.start", json!({"prompt":"x"})),

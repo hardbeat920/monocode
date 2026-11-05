@@ -4086,6 +4086,32 @@ mod menu_tests {
     use monocode_core::store::Store;
     use std::sync::Mutex;
     #[gpui::test]
+    fn an_agent_can_set_the_full_id_behind_a_model_alias(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.catalog = vec![Model {
+                    alias_target: Some("claude-sonnet-5-5".into()),
+                    id: "sonnet".into(),
+                    name: "Sonnet 5.5".into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                view.check_agent_change(Some("claude-sonnet-5-5"), None)
+                    .unwrap();
+                assert!(view.check_agent_change(Some("nope"), None).is_err());
+                view.apply_agent_change(Some("claude-sonnet-5-5"), None, None, cx)
+                    .unwrap();
+                assert_eq!(view.model.as_deref(), Some("sonnet"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
         cx: &mut TestAppContext,
     ) {

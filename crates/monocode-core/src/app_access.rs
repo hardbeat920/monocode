@@ -2,7 +2,7 @@
 //! Visibility and Mono-only capabilities belong to the caller, not launch JSON.
 use crate::{
     agent::{AccessMode, Settings},
-    catalog::{Model, ModelControl},
+    catalog::{find_model, Model, ModelControl},
     provider::Kind,
     store::Store,
 };
@@ -217,8 +217,9 @@ pub fn launch_settings(
     models: &[Model],
 ) -> Result<Settings, String> {
     crate::mono::api::validate("sessions.start", input)?;
-    let requested =
-        optional_text(input, "model", 512)?.and_then(|m| crate::store::native_model(&m, kind.id()));
+    let requested = optional_text(input, "model", 512)?
+        .and_then(|m| crate::store::native_model(&m, kind.id()))
+        .map(|id| find_model(models, &id).map_or(id, |m| m.id.clone()));
     let changing = source_provider != kind.id()
         || requested
             .as_ref()

@@ -809,7 +809,7 @@ pub(crate) fn thread_tool_definitions() -> Vec<Value> {
                 for key in ["model", "effort", "title"] { properties[key] = json!({"type":"string"}); }
                 let harnesses: Vec<&str> = crate::provider::Kind::ALL.iter().map(|kind| kind.id()).collect();
                 properties["harness"] = json!({"type":"string","description":format!("One of {}. Defaults to yours.", harnesses.join(", "))});
-                properties["model"] = json!({"type":"string","description":"The harness's model id or alias, such as haiku for claude"});
+                properties["model"] = json!({"type":"string","description":"The harness's model. For claude use its alias: opus, sonnet, haiku or fable"});
                 properties["modelSettings"] = json!({"type":"object","additionalProperties":{"type":"string"}});
                 properties["workspaceMode"] = json!({"enum":["current","worktree"]});
                 vec!["prompt"]
@@ -852,7 +852,7 @@ fn new_thread_definition() -> Value {
         "prompt":{"type":"string","minLength":1,"maxLength":240000,"description":"The thread's first message"},
         "title":{"type":"string","maxLength":160},
         "harness":{"type":"string","description":format!("One of {}. Defaults to yours.", harnesses.join(", "))},
-        "model":{"type":"string","description":"The harness's model id or alias, such as haiku for claude"},
+        "model":{"type":"string","description":"The harness's model. For claude use its alias: opus, sonnet, haiku or fable"},
         "effort":{"type":"string"},
         "modelSettings":{"type":"object","additionalProperties":{"type":"string"}},
         "workspaceMode":{"enum":["current","worktree"]},

@@ -9,16 +9,9 @@ impl Conversation {
         if self.driven_by.is_some() {
             return Err("A subagent follows its lead; change the lead instead.".into());
         }
-        let cached;
-        let catalog = if self.catalog.is_empty() {
-            let kind = Kind::from_id(&self.summary.provider);
-            cached = catalog::cached_models_for(kind, &self.settings.account).unwrap_or_default();
-            &cached
-        } else {
-            &self.catalog
-        };
+        let catalog = self.agent_models();
         let info = match model {
-            Some(id) => Some(catalog.iter().find(|m| m.id == id).ok_or_else(|| {
+            Some(id) => Some(catalog::find_model(&catalog, id).ok_or_else(|| {
                 let ids: Vec<_> = catalog.iter().take(12).map(|m| m.id.as_str()).collect();
                 format!("Unknown model for this harness. Try: {}", ids.join(", "))
             })?),
@@ -37,6 +30,17 @@ impl Conversation {
         }
     }
 
+    /// The models an agent can pick from, before this thread's list has
+    /// loaded too.
+    fn agent_models(&self) -> Vec<catalog::Model> {
+        if self.catalog.is_empty() {
+            let kind = Kind::from_id(&self.summary.provider);
+            catalog::cached_models_for(kind, &self.settings.account).unwrap_or_default()
+        } else {
+            self.catalog.clone()
+        }
+    }
+
     /// An agent's change to this thread, already checked. Unlike the pickers,
     /// it leaves the person's defaults for new chats alone.
     pub(crate) fn apply_agent_change(
@@ -48,6 +52,8 @@ impl Conversation {
     ) -> Result<(), String> {
         if let Some(model) = model {
             let kind = Kind::from_id(&self.summary.provider);
+            let catalog = self.agent_models();
+            let model = catalog::find_model(&catalog, model).map_or(model, |m| m.id.as_str());
             if !self.apply_model_pick(&ModelPicked(kind, Some(model.to_owned())), cx) {
                 return Err("This thread can't change model right now.".into());
             }
