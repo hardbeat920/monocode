@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
+import { FloatingSafeArea } from "@/ui/FloatingSafeArea";
 import Animated, {
   Easing,
   interpolate,
@@ -132,7 +132,7 @@ export function FinishedSessions({
         style={[deckStyle, appearStyle]}
         pointerEvents={visible ? "box-none" : "none"}
       >
-        <OcclusionSafeArea fill margin={28} insetMargin={8}>
+        <FloatingSafeArea fill margin={28} insetMargin={8}>
           <Animated.View
             style={[styles.header, headerStyle]}
             pointerEvents={open ? "box-none" : "none"}
@@ -181,7 +181,7 @@ export function FinishedSessions({
               }}
             />
           ))}
-        </OcclusionSafeArea>
+        </FloatingSafeArea>
       </Animated.View>
     </GlassPresence>
   );

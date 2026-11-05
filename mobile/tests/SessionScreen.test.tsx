@@ -80,8 +80,8 @@ vi.mock("react-native-safe-area-context", () => ({
   }) => <div data-safe-edges={edges.join(",")} style={style}>{children}</div>,
   useSafeAreaInsets: () => ({ top: 20, bottom: 0, left: 0, right: 0 }),
 }));
-vi.mock("@/ui/OcclusionSafeArea", () => ({
-  OcclusionSafeArea: ({ children }: { children?: ReactNode }) => <div data-occlusion-safe-area>{children}</div>,
+vi.mock("@/ui/FloatingSafeArea", () => ({
+  FloatingSafeArea: ({ children }: { children?: ReactNode }) => <div data-floating-safe-area>{children}</div>,
 }));
 vi.mock("@/ui/CircleButton", () => ({ CircleButton: () => null }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
@@ -143,7 +143,7 @@ describe("persistent session frame", () => {
         </SessionFrame>,
       ));
       const send = container.querySelector("[data-send]")!;
-      const safeArea = send.closest<HTMLElement>("[data-occlusion-safe-area]")!;
+      const safeArea = send.closest<HTMLElement>("[data-floating-safe-area]")!;
       expect(safeArea.parentElement!.style.paddingBottom).toBe("12px");
       // The native screen's provider includes its navigation controls, unlike
       // the window provider above the navigator. The transcript stays full-bleed.

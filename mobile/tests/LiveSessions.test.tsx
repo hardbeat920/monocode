@@ -36,8 +36,8 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ left: 0, right: 0, top: 0, bottom: 0 }),
 }));
-vi.mock("@/ui/OcclusionSafeArea", () => ({
-  OcclusionSafeArea: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+vi.mock("@/ui/FloatingSafeArea", () => ({
+  FloatingSafeArea: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("expo-haptics", () => ({
   notificationAsync: vi.fn(),

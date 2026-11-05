@@ -6,7 +6,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-cont
 import { useKeyboardLift, useSessionLayout } from "@/features/sessions/SessionScreen";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
-import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
+import { FloatingSafeArea } from "@/ui/FloatingSafeArea";
 import { themedStyles, useColors, useScheme } from "@/ui/theme";
 
 /** The pill's height: the resting composer's, so the pages' bottoms match. */
@@ -49,7 +49,7 @@ export function FileSearchBar({
   return (
     <SafeAreaProvider pointerEvents="box-none" style={styles.overlay}>
       <Animated.View pointerEvents="box-none" style={[styles.anchor, { bottom: dockBottom }, lift]}>
-        <OcclusionSafeArea>
+        <FloatingSafeArea>
           <SearchRow>
             {/* No onPress: it would wrap the glass in a Pressable that doesn't
                 stretch across the row. The field inside takes the taps instead. */}
@@ -97,7 +97,7 @@ export function FileSearchBar({
               accessory
             )}
           </SearchRow>
-        </OcclusionSafeArea>
+        </FloatingSafeArea>
       </Animated.View>
     </SafeAreaProvider>
   );

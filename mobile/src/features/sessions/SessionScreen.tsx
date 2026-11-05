@@ -42,7 +42,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-cont
 import { CircleButton } from "@/ui/CircleButton";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon, type IconName } from "@/ui/Icon";
-import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
+import { FloatingSafeArea } from "@/ui/FloatingSafeArea";
 import {
   GLASS_PUSH_DURATION,
   HEADER_PUSH_TOTAL,
@@ -711,7 +711,7 @@ export function SessionFrame({
                     color={colors.background}
                   />
                   <View style={{ paddingBottom: composerBottom }}>
-                    <OcclusionSafeArea>
+                    <FloatingSafeArea>
                       <View onLayout={onComposerLayout}>
                         <GlassBlurTarget
                           value={androidBlur && blurTargetReady ? blurTarget : undefined}
@@ -719,7 +719,7 @@ export function SessionFrame({
                           {chrome?.composer}
                         </GlassBlurTarget>
                       </View>
-                    </OcclusionSafeArea>
+                    </FloatingSafeArea>
                   </View>
                   {/* Only a transcript needs this glass surface. Empty sessions
                       have no scroll target, so keep it out of the native tree. */}

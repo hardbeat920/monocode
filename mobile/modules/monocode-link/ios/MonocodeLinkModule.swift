@@ -6,10 +6,6 @@ public class MonocodeLinkModule: Module {
     Name("MonocodeLink")
     Constant("nativeTranscriptVersion") { 1 }
     Constant("typingPostureVersion") { 1 }
-    Constant("occlusionObserverVersion") { 1 }
-    View(OcclusionObserverView.self) {
-      Events("onOcclusionChange")
-    }
     View(NativeTranscriptView.self) {
       Events("onStatus", "onAction", "onScrollState")
       Prop("configuration") { (view: NativeTranscriptView, value: String) in

@@ -32,7 +32,7 @@ import {
   useGlassEntrance,
   usePopStyle,
 } from "@/ui/LiquidView";
-import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
+import { FloatingSafeArea } from "@/ui/FloatingSafeArea";
 import { GLASS_MIN_OPACITY } from "@/ui/SceneFade";
 import { Ticker, type TickerHandle } from "@/ui/Ticker";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
@@ -254,7 +254,7 @@ function NowWorking({
             onStop={stopSession}
           />
           <GlassPresence value={presence}>
-            <OcclusionSafeArea margin={20}>
+            <FloatingSafeArea margin={20}>
               <Animated.View
                 style={appearStyle}
                 onLayout={(event) => pillHeight.set(event.nativeEvent.layout.height)}
@@ -303,7 +303,7 @@ function NowWorking({
                   ) : null}
                 </LiquidView>
               </Animated.View>
-            </OcclusionSafeArea>
+            </FloatingSafeArea>
           </GlassPresence>
         </View>
       ) : null}
@@ -353,7 +353,7 @@ function MiniPills({
         style={listStyle}
         pointerEvents={visible ? "box-none" : "none"}
       >
-        <OcclusionSafeArea fill margin={28} insetMargin={8}>
+        <FloatingSafeArea fill margin={28} insetMargin={8}>
           {live.map((session, index) => (
             <MiniPill
               key={session.id}
@@ -366,7 +366,7 @@ function MiniPills({
               onStop={() => onStop(session)}
             />
           ))}
-        </OcclusionSafeArea>
+        </FloatingSafeArea>
       </Animated.View>
     </GlassPresence>
   );
