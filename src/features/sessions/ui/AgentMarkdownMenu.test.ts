@@ -8,11 +8,16 @@ const actions = vi.hoisted(() => ({
   copyText: vi.fn(async () => {}),
   openPathWithDefaultApp: vi.fn(async () => {}),
   openUrl: vi.fn(async () => {}),
+  openLink: vi.fn(async () => {}),
   revealPath: vi.fn(async () => {}),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: actions.openUrl,
+}));
+
+vi.mock("../../browser/model/openLink", () => ({
+  openLink: actions.openLink,
 }));
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
@@ -119,7 +124,7 @@ describe("AgentMarkdown file link context menu", () => {
     expect(menu).toBeNull();
   });
 
-  it("opens external web links in the default browser", async () => {
+  it("routes web links through the in-app link opener", async () => {
     props = {
       text: "[Website](https://example.com/docs)",
       cwd: "/repo",
@@ -135,7 +140,10 @@ describe("AgentMarkdown file link context menu", () => {
     await act(async () => link.dispatchEvent(event));
 
     expect(event.defaultPrevented).toBe(true);
-    expect(actions.openUrl).toHaveBeenCalledWith("https://example.com/docs");
+    expect(actions.openLink).toHaveBeenCalledWith(
+      "https://example.com/docs",
+      expect.objectContaining({ type: "click" }),
+    );
     expect(props.onOpenFile).not.toHaveBeenCalled();
   });
 

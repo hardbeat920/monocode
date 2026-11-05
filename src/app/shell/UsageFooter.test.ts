@@ -53,7 +53,7 @@ describe("UsageFooter terminal control", () => {
     const markup = renderToStaticMarkup(
       createElement(UsageFooter, {
         providers: [],
-        onNewTerminal: vi.fn(),
+        onToggleProjectTerminal: vi.fn(),
       }),
     );
 
@@ -153,5 +153,23 @@ describe("UsageFooter terminal control", () => {
     act(() => button!.click());
     expect(onNewTerminal).toHaveBeenCalledTimes(1);
     expect(onToggleProjectTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe("toggle-only terminal control", () => {
+  it("shows the terminal button pressed only while the dock is open", () => {
+    const render = (projectTerminalOpen: boolean) =>
+      renderToStaticMarkup(
+        createElement(UsageFooter, {
+          providers: [],
+          onToggleProjectTerminal: vi.fn(),
+          projectTerminalOpen,
+        }),
+      );
+
+    expect(render(false)).toContain('aria-pressed="false"');
+    expect(render(false)).toContain("Show Terminal");
+    expect(render(true)).toContain('aria-pressed="true"');
+    expect(render(true)).toContain("Hide Terminal");
   });
 });
