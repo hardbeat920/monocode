@@ -3474,6 +3474,19 @@ impl Shell {
     }
     /// Close one pane of a split tab; the tab's only pane closes the tab.
     fn close_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .workspace
+            .tab_of(id)
+            .is_some_and(|tab| self.workspace.layout(tab).is_split())
+        {
+            self.close(id, window, cx);
+            return;
+        }
+        self.confirm_close_terminal_panes(&[id], window, cx, move |this, window, cx| {
+            this.finish_close_pane(id, window, cx);
+        });
+    }
+    fn finish_close_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.workspace.active;
         let before = self.active_leaves();
         if !self.workspace.close_pane(id) {

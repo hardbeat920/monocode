@@ -30,6 +30,55 @@ pub(super) fn terminal_drag_ghost(position: Point<Pixels>, title: String) -> Any
 }
 
 impl Shell {
+    /// Pane and title-tab closes must ask before dropping a running shell,
+    /// just like closing a terminal in the dock.
+    pub(super) fn confirm_close_terminal_panes(
+        &mut self,
+        panes: &[i64],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        close: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let running = panes
+            .iter()
+            .filter_map(|pane| self.terminal_pane_views.get(pane))
+            .filter_map(|terminal| {
+                let terminal = terminal.read(cx);
+                let process = terminal.foreground.as_deref()?;
+                Some((project_name(&terminal.cwd), process.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        let message = match running.as_slice() {
+            [] => {
+                close(self, window, cx);
+                return;
+            }
+            [(label, process)] => {
+                format!("\"{process}\" is still running in {label}. Close this terminal anyway?")
+            }
+            many => format!(
+                "These terminals are still running:\n{}\n\nClose them anyway?",
+                many.iter()
+                    .map(|(label, process)| format!("• {label} ({process})"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &message,
+            None,
+            &["Close", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update_in(cx, close);
+            }
+        })
+        .detach();
+    }
+
     /// A terminal pane's shell, reopened in its directory after a restart.
     fn terminal_pane_view(
         &mut self,
@@ -339,6 +388,158 @@ mod tests {
     }
     const DOCK_PULL_TEST: Pixels = px(60.);
 
+    fn title_terminal(
+        cx: &mut TestAppContext,
+        split: bool,
+    ) -> (WindowHandle<Shell>, VisualTestContext, i64, i64) {
+        let (window, _, owner) = window(cx);
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::terminal::bind(cx);
+            cx.set_reduce_motion(true);
+        });
+        let pane = window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.set_terminal_placement("title");
+                shell.open(owner, w, cx);
+                if split {
+                    shell.split_title_terminal(w, cx);
+                } else {
+                    shell.new_title_terminal(w, cx);
+                }
+                shell.workspace.active.unwrap()
+            })
+            .unwrap();
+        let visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        (window, visual, owner, pane)
+    }
+
+    #[gpui::test]
+    fn cmd_w_asks_before_closing_a_running_terminal_tab_or_split_pane(cx: &mut TestAppContext) {
+        for split in [false, true] {
+            let (window, mut visual, owner, pane) = title_terminal(cx, split);
+            let terminal = window
+                .update(&mut visual, |shell, _, cx| {
+                    let terminal = shell.terminal_pane_views[&pane].clone();
+                    terminal.update(cx, |terminal, _| terminal.foreground = Some("sleep".into()));
+                    terminal.downgrade()
+                })
+                .unwrap();
+            for answer in ["Cancel", "Close"] {
+                visual.simulate_keystrokes("cmd-w");
+                visual.run_until_parked();
+                assert!(visual.has_pending_prompt());
+                assert!(visual.pending_prompt().unwrap().0.contains("sleep"));
+                window
+                    .update(&mut visual, |shell, _, _| {
+                        assert_eq!(shell.workspace.active, Some(pane));
+                        assert!(shell.workspace.tab_of(pane).is_some());
+                        assert_eq!(
+                            shell.terminal_pane_views[&pane],
+                            terminal.upgrade().unwrap()
+                        );
+                    })
+                    .unwrap();
+                visual.simulate_prompt_answer(answer);
+                visual.run_until_parked();
+                assert!(!visual.has_pending_prompt());
+                window
+                    .update(&mut visual, |shell, _, _| {
+                        let kept = answer == "Cancel";
+                        assert_eq!(shell.workspace.terminal_panes.contains_key(&pane), kept);
+                        assert_eq!(shell.terminal_pane_views.contains_key(&pane), kept);
+                        assert_eq!(terminal.upgrade().is_some(), kept);
+                        assert!(shell.workspace.tab_of(owner).is_some());
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn cmd_w_closes_idle_terminal_tabs_and_split_panes_without_prompting(cx: &mut TestAppContext) {
+        for split in [false, true] {
+            let (window, mut visual, owner, pane) = title_terminal(cx, split);
+            visual.simulate_keystrokes("cmd-w");
+            visual.run_until_parked();
+            assert!(!visual.has_pending_prompt());
+            window
+                .update(&mut visual, |shell, _, _| {
+                    assert!(!shell.workspace.terminal_panes.contains_key(&pane));
+                    assert!(!shell.terminal_pane_views.contains_key(&pane));
+                    assert!(shell.workspace.tab_of(owner).is_some());
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn closing_title_tabs_asks_for_all_running_terminal_panes_before_changing_tabs(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, mut visual, _, pane) = title_terminal(cx, true);
+        let (tabs, other) = window
+            .update(&mut visual, |shell, w, cx| {
+                shell.new_title_terminal(w, cx);
+                let other = shell.workspace.active.unwrap();
+                for (id, process) in [(pane, "sleep"), (other, "vite")] {
+                    shell.terminal_pane_views[&id]
+                        .update(cx, |terminal, _| terminal.foreground = Some(process.into()));
+                }
+                (shell.visible_tabs(cx), other)
+            })
+            .unwrap();
+        for answer in ["Cancel", "Close"] {
+            window
+                .update(&mut visual, |shell, w, cx| {
+                    shell.close_title_tabs(&tabs, None, w, cx);
+                    assert_eq!(shell.visible_tabs(cx), tabs);
+                    assert!(shell.workspace.tab_of(pane).is_some());
+                    assert!(shell.workspace.tab_of(other).is_some());
+                })
+                .unwrap();
+            visual.run_until_parked();
+            assert!(visual.has_pending_prompt());
+            let message = visual.pending_prompt().unwrap().0;
+            assert!(message.contains("sleep") && message.contains("vite"));
+            visual.simulate_prompt_answer(answer);
+            visual.run_until_parked();
+            assert!(!visual.has_pending_prompt());
+            window
+                .update(&mut visual, |shell, _, cx| {
+                    if answer == "Cancel" {
+                        assert_eq!(shell.visible_tabs(cx), tabs);
+                        assert_eq!(shell.workspace.active, Some(other));
+                        assert_eq!(shell.terminal_pane_views.len(), 2);
+                    } else {
+                        assert!(shell.workspace.terminal_panes.is_empty());
+                        assert!(shell.terminal_pane_views.is_empty());
+                        assert!(shell.workspace.tab_of(pane).is_none());
+                        assert!(shell.workspace.tab_of(other).is_none());
+                    }
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn closing_a_chat_pane_keeps_its_running_terminal_without_prompting(cx: &mut TestAppContext) {
+        let (window, mut visual, owner, pane) = title_terminal(cx, true);
+        window
+            .update(&mut visual, |shell, w, cx| {
+                shell.terminal_pane_views[&pane]
+                    .update(cx, |terminal, _| terminal.foreground = Some("sleep".into()));
+                shell.close_pane(owner, w, cx);
+                assert!(shell.workspace.tab_of(owner).is_none());
+                assert!(shell.workspace.tab_of(pane).is_some());
+                assert!(shell.terminal_pane_views.contains_key(&pane));
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(!visual.has_pending_prompt());
+    }
+
     #[gpui::test]
     fn a_dock_tab_pulled_onto_a_pane_edge_splits_with_its_running_shell(cx: &mut TestAppContext) {
         let (window, _, b) = window(cx);
@@ -435,12 +636,7 @@ mod tests {
                         Some(edge) => (Some((b, edge)), None),
                     };
                     shell.drop_dock_terminal(0, over, insert, w, cx);
-                    assert!(
-                        shell
-                            .terminal_pane_views
-                            .values()
-                            .any(|t| *t == pulled)
-                    );
+                    assert!(shell.terminal_pane_views.values().any(|t| *t == pulled));
                     // The panel stays open on a new shell.
                     assert!(shell.workspace.right_panel_open);
                     let panel = shell.right_panel.clone().unwrap();
