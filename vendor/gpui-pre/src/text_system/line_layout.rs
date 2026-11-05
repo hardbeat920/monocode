@@ -697,6 +697,8 @@ impl LineLayoutCache {
             layout
         } else {
             let text = SharedString::from(text);
+            crate::frame_stats::count("shape:lines");
+            crate::frame_stats::add("shape:chars", text.len() as u32);
             let mut layout = self
                 .platform_text_system
                 .layout_line(&text, font_size, runs);

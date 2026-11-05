@@ -53,6 +53,8 @@ struct Lease {
 struct Clock {
     epoch: Option<Instant>,
     leases: HashMap<EntityId, Lease>,
+    /// Waiters for the next tick, see [`beat`].
+    beats: Vec<async_channel::Sender<()>>,
     tick: u64,
     running: bool,
 }
@@ -140,9 +142,35 @@ pub(crate) fn running(cx: &App) -> bool {
     cx.try_global::<Clock>().is_some_and(|clock| clock.running)
 }
 
+/// Waits for the clock's next tick, or returns at once while no loop runs.
+/// Work that would otherwise draw a frame of its own, such as a streamed
+/// reply's updates, lands in the loops' frame instead.
+pub(crate) async fn beat(cx: &mut gpui::AsyncApp) {
+    // Tests park the executor without advancing the clock, so a tick would
+    // never come; they apply updates as soon as they arrive.
+    if cfg!(test) {
+        return;
+    }
+    let beat = cx.update(|cx| {
+        let clock = cx.default_global::<Clock>();
+        clock.running.then(|| {
+            let (tx, rx) = async_channel::bounded(1);
+            clock.beats.push(tx);
+            rx
+        })
+    });
+    if let Some(beat) = beat {
+        beat.recv().await.ok();
+    }
+}
+
 fn tick(cx: &mut App) -> bool {
     let background = !app_visible(cx);
     let clock = cx.global_mut::<Clock>();
+    // Before the loops notify, so whatever the waiters change draws with them.
+    for beat in clock.beats.drain(..) {
+        beat.try_send(()).ok();
+    }
     clock.tick = clock.tick.wrapping_add(1);
     let tick = clock.tick;
     let mut due = Vec::new();
