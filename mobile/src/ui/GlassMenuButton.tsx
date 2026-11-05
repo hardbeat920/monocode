@@ -26,6 +26,11 @@ const PADDING = 14;
  * inside, which is what lets it morph; earlier, the app's glass with the menu
  * laid over it. `children` are the menu's items; `on` tells a screen reader
  * that a filter is in effect, and the icon stays its usual colour.
+ *
+ * The Hosts ignore the keyboard's safe area. A composer rides the keyboard on a
+ * layer transform, which UIKit doesn't see, so SwiftUI goes on measuring the
+ * button at its resting place, behind the keyboard, and pushes it half its
+ * height out of the frame until something re-lays it out.
  */
 export function GlassMenuButton({
   icon,
@@ -51,7 +56,7 @@ export function GlassMenuButton({
   if (isLiquidGlassAvailable()) {
     return (
       <View style={{ width: size, height: size }}>
-        <Host style={{ width: size, height: size }}>
+        <Host ignoreSafeArea="keyboard" style={{ width: size, height: size }}>
           <Menu
             modifiers={[
               buttonStyle("glass"),
@@ -79,7 +84,7 @@ export function GlassMenuButton({
       <LiquidView borderRadius={size / 2} innerStyle={{ width: size, height: size }}>
         <Icon name={icon} size={20} color={colors.content} />
       </LiquidView>
-      <Host style={StyleSheet.absoluteFill}>
+      <Host ignoreSafeArea="keyboard" style={StyleSheet.absoluteFill}>
         <Menu
           modifiers={[accessibilityLabel(spoken)]}
           label={
