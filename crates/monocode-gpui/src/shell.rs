@@ -6631,8 +6631,9 @@ impl Shell {
         let Some(active) = self.active_title_tab(cx) else {
             return;
         };
+        // Pins survive the bulk closes, as in the tab menu.
         let tabs = self
-            .visible_tabs(cx)
+            .strip_tabs(cx)
             .into_iter()
             .filter(|tab| *tab != active)
             .collect::<Vec<_>>();
@@ -8856,7 +8857,8 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &CloseAllTabs, window, cx| {
                 // An empty strip can still have a new-tab request in flight.
                 this.navigation_revision += 1;
-                this.close_title_tabs(&this.visible_tabs(cx), None, window, cx);
+                // Pins survive the bulk closes, as in the tab menu.
+                this.close_title_tabs(&this.strip_tabs(cx), None, window, cx);
                 if !this.mono_active(cx) {
                     this.ensure_project_session(window, cx);
                 }
@@ -9693,6 +9695,33 @@ mod tests {
                 assert!(!shell.sessions[&active].read(cx).summary.has_messages);
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn bulk_close_shortcuts_keep_pinned_tabs(cx: &mut TestAppContext) {
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        for keys in ["shift-w", "alt-t"] {
+            let (window, a, b) = same_project_window(cx);
+            cx.update(bind_keys);
+            window
+                .update(cx, |shell, w, cx| {
+                    shell.toggle_pin_tab(TitleTab::Session(b), cx);
+                    shell.open(a, w, cx);
+                })
+                .unwrap();
+            cx.simulate_keystrokes(window.into(), &format!("{modifier}-{keys}"));
+            cx.run_until_parked();
+            window
+                .update(cx, |shell, _, cx| {
+                    assert!(shell.workspace.tabs.contains(&b), "{keys} closed the pin");
+                    assert_eq!(shell.workspace.pinned_tabs, [TitleTab::Session(b)]);
+                    assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(b)));
+                })
+                .unwrap();
+        }
     }
     #[gpui::test]
     fn tab_lifecycle_close_stays_in_project_and_keeps_running_drafts(cx: &mut TestAppContext) {
