@@ -383,13 +383,10 @@ export async function upsertSession(
     return null;
   }
   const mono = !!session.monoTranscript || isMonoSession(session.id);
-  const snapshot = mono
-    ? session.blocks.filter((block) => monoPersistedBlock(block) !== null)
-    : session.blocks;
-  // Mono writes sanitize only the changed suffix inside the serialized queue.
-  const payload = mono
-    ? persistableMeta(session)
-    : sanitizeSessionForPersist(session);
+  const snapshot = session.blocks.filter(
+    (block) => persistedBlock(block) !== null,
+  );
+  const payload = persistableMeta(session);
   if (session.orchestrationLeadId) {
     sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
   } else {
@@ -397,50 +394,94 @@ export async function upsertSession(
   }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
+    const previous = (mono ? monoSavedBlocks : savedBlocks).get(session.id);
+    let same = 0;
+    if (previous) {
+      while (
+        same < previous.length &&
+        same < snapshot.length &&
+        previous[same] === snapshot[same]
+      )
+        same++;
+    }
+    const firstUser = mono
+      ? undefined
+      : session.blocks.find((block) => block.role === "user");
+    const leadId = session.orchestrationLeadId ?? null;
+    // The lead stamp lives on the first user block; resend from there when it
+    // arrives, moves, or is scrubbed because the lead itself was deleted.
+    const stampedLead =
+      !mono && firstUser && leadId && !deletedSessionIds.has(leadId)
+        ? leadId
+        : null;
+    if (!mono && stampedLead !== (savedLeadId.get(session.id) ?? null)) {
+      const stamp = firstUser ? snapshot.indexOf(firstUser) : -1;
+      same = Math.min(same, Math.max(stamp, 0));
+    }
+    const changed =
+      !previous || same !== previous.length || same !== snapshot.length;
+    const suffix = changed ? snapshot.slice(same) : [];
+    const afterBlockId = same > 0 ? snapshot[same - 1].id : null;
+    const fromBlockId =
+      same === 0
+        ? previous !== undefined
+          ? (previous[0]?.id ?? null)
+          : mono
+            ? (session.monoTranscript?.firstBlockId ?? null)
+            : null
+        : null;
     if (mono) {
-      const previous = monoSavedBlocks.get(session.id);
-      let same = 0;
-      if (previous) {
-        while (
-          same < previous.length &&
-          same < snapshot.length &&
-          previous[same] === snapshot[same]
-        )
-          same++;
-      }
-      const changed =
-        !previous || same !== previous.length || same !== snapshot.length;
       const summary = await invoke<SessionSummary>("mono_session_upsert", {
         session: {
           ...payload,
-          blocks: changed
-            ? snapshot.slice(same).map((block) => monoPersistedBlock(block)!)
-            : [],
+          blocks: suffix.map((block) => persistedBlock(block)!),
         },
-        afterBlockId: same > 0 ? snapshot[same - 1].id : null,
-        fromBlockId:
-          same === 0
-            ? previous !== undefined
-              ? (previous[0]?.id ?? null)
-              : (session.monoTranscript?.firstBlockId ?? null)
-            : null,
+        afterBlockId,
+        fromBlockId,
         blocksChanged: changed,
         appendOnly: previous?.length === 0,
       });
       monoSavedBlocks.set(session.id, snapshot);
       return summary;
     }
-    return invoke<SessionSummary>("session_upsert", {
-      session: {
-        ...payload,
-        blocks: (payload as SessionUpsertPayload).blocks.map((block) =>
-          block.orchestrationLeadId &&
-          deletedSessionIds.has(block.orchestrationLeadId)
-            ? { ...block, orchestrationLeadId: undefined }
-            : block,
-        ),
-      },
-    });
+    const persisted = (block: Block): Block => {
+      const source =
+        block === firstUser && session.orchestrationLeadId
+          ? { ...block, orchestrationLeadId: session.orchestrationLeadId }
+          : block;
+      const sanitized = persistedBlock(source)!;
+      return sanitized.orchestrationLeadId &&
+        deletedSessionIds.has(sanitized.orchestrationLeadId)
+        ? { ...sanitized, orchestrationLeadId: undefined }
+        : sanitized;
+    };
+    // A stale or missing anchor must not wedge the session: retry as the full
+    // write the store always used before this command existed.
+    try {
+      const summary = await invoke<SessionSummary>("session_upsert_tail", {
+        session: {
+          ...payload,
+          blocks: suffix.map(persisted),
+        },
+        afterBlockId,
+        fromBlockId,
+        blocksChanged: changed,
+        appendOnly: previous?.length === 0,
+      });
+      savedBlocks.set(session.id, snapshot);
+      savedLeadId.set(session.id, stampedLead);
+      return summary;
+    } catch {
+      const summary = await invoke<SessionSummary>("session_upsert", {
+        session: {
+          ...payload,
+          blocks: snapshot.map(persisted),
+        },
+      });
+      savedBlocks.set(session.id, snapshot);
+      savedLeadId.set(session.id, stampedLead);
+      return summary;
+    }
   });
   return summary ? normalizeSummary(summary) : null;
 }
@@ -552,11 +593,16 @@ export function cancelSessionSearch(searchOwner: string): Promise<void> {
 }
 
 const monoSavedBlocks = new Map<string, Block[]>();
-const monoBlockPayloads = new WeakMap<Block, Block | null>();
-function monoPersistedBlock(block: Block): Block | null {
-  if (monoBlockPayloads.has(block)) return monoBlockPayloads.get(block)!;
+/** Last persisted block array per regular session; the delta source. */
+const savedBlocks = new Map<string, Block[]>();
+/** Lead id persisted on the first user block, per session. */
+const savedLeadId = new Map<string, string | null>();
+const persistedBlockPayloads = new WeakMap<Block, Block | null>();
+function persistedBlock(block: Block): Block | null {
+  if (persistedBlockPayloads.has(block))
+    return persistedBlockPayloads.get(block)!;
   const payload = sanitizeBlock(block);
-  monoBlockPayloads.set(block, payload);
+  persistedBlockPayloads.set(block, payload);
   return payload;
 }
 
@@ -611,7 +657,15 @@ export async function readSession(sessionId: string): Promise<Session | null> {
   );
   if (!record) return null;
   const session = recordToSession(record);
-  if (session.monoTranscript) monoSavedBlocks.set(sessionId, session.blocks);
+  if (session.monoTranscript) {
+    monoSavedBlocks.set(sessionId, session.blocks);
+  } else {
+    savedBlocks.set(
+      sessionId,
+      session.blocks.filter((block) => persistedBlock(block) !== null),
+    );
+    savedLeadId.set(sessionId, session.orchestrationLeadId ?? null);
+  }
   return session;
 }
 
@@ -828,6 +882,8 @@ export async function deleteSession(
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
     monoSavedBlocks.delete(sessionId);
+    savedBlocks.delete(sessionId);
+    savedLeadId.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
       60_000,
@@ -847,6 +903,8 @@ export async function discardDraftSessionRecord(
     invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
   monoSavedBlocks.delete(sessionId);
+  savedBlocks.delete(sessionId);
+  savedLeadId.delete(sessionId);
 }
 
 export async function setSessionArchived(

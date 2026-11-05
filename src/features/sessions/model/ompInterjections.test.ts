@@ -35,6 +35,34 @@ function foldedIds(blocks: Block[]) {
   return foldedBlocks(items, foldableWork(items)!).map(block => block.id);
 }
 
+// Mirrors the store's tail splice so a mocked record survives a delta write.
+function tailMerge(
+  record: { blocks?: Block[] },
+  args: {
+    session: { blocks?: Block[] };
+    afterBlockId?: string | null;
+    fromBlockId?: string | null;
+    blocksChanged?: boolean;
+    appendOnly?: boolean;
+  },
+): Block[] {
+  if (!args.blocksChanged) return record.blocks ?? [];
+  const stored = record.blocks ?? [];
+  const suffix = args.session.blocks ?? [];
+  if (args.appendOnly) return suffix;
+  if (args.afterBlockId) {
+    const at = stored.findIndex((block) => block.id === args.afterBlockId);
+    if (at < 0) throw new Error("Transcript anchor is gone");
+    return [...stored.slice(0, at + 1), ...suffix];
+  }
+  if (args.fromBlockId) {
+    const at = stored.findIndex((block) => block.id === args.fromBlockId);
+    if (at < 0) throw new Error("Transcript anchor is gone");
+    return [...stored.slice(0, at), ...suffix];
+  }
+  return suffix;
+}
+
 describe("OMP persisted interjection repair", () => {
   it("restores the complete answer outside the work fold without inventing a turn", () => {
     const before = oldBlocks();
@@ -464,9 +492,13 @@ describe("persisted session loading", () => {
     mocks.invoke.mockImplementation(async (command, args) => {
       if (command === "session_get") return record;
       if (command === "omp_session_interjections") return [anchor];
-      if (command === "session_upsert") {
+      if (command === "session_upsert" || command === "session_upsert_tail") {
         writes += 1;
-        record = { ...record, ...args.session };
+        const blocks =
+          command === "session_upsert_tail"
+            ? tailMerge(record, args)
+            : args.session.blocks;
+        record = { ...record, ...args.session, blocks };
         return record;
       }
       throw new Error(command);
@@ -494,9 +526,13 @@ describe("persisted session loading", () => {
         expect(args).toEqual({ providerSessionId: "provider" });
         return verified ? [{ text: "First.Second.", concat: "First.Second." }] : [];
       }
-      if (command === "session_upsert") {
+      if (command === "session_upsert" || command === "session_upsert_tail") {
         writes++;
-        record = { ...record, ...args.session };
+        const blocks =
+          command === "session_upsert_tail"
+            ? tailMerge(record, args)
+            : args.session.blocks;
+        record = { ...record, ...args.session, blocks };
         return record;
       }
       throw new Error(command);
@@ -524,7 +560,8 @@ describe("persisted session loading", () => {
       if (command === "session_get") return record;
       if (command === "omp_session_interjections") return [];
       if (command === "omp_active_assistant_texts") return [{ text: "First.Second.", concat: "First.Second." }];
-      if (command === "session_upsert") return args.session;
+      if (command === "session_upsert" || command === "session_upsert_tail")
+        return args.session;
       throw new Error(command);
     });
     const loaded = (await getSession(record.id))!;

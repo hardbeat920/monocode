@@ -46,15 +46,54 @@ let root: Root | undefined;
 let container: HTMLDivElement;
 let stored: Map<string, SessionRecord>;
 
+// Mirrors the store's tail splice so a mocked record survives a delta write.
+function tailMerge(
+  record: SessionRecord | undefined,
+  args: {
+    session: SessionRecord & { blocks?: Session["blocks"] };
+    afterBlockId?: string | null;
+    fromBlockId?: string | null;
+    blocksChanged?: boolean;
+    appendOnly?: boolean;
+  },
+): Session["blocks"] {
+  if (!args.blocksChanged) return record?.blocks ?? [];
+  const storedBlocks = record?.blocks ?? [];
+  const suffix = args.session.blocks ?? [];
+  if (args.appendOnly) return suffix;
+  if (args.afterBlockId) {
+    const at = storedBlocks.findIndex(
+      (block) => block.id === args.afterBlockId,
+    );
+    if (at < 0) throw new Error("Transcript anchor is gone");
+    return [...storedBlocks.slice(0, at + 1), ...suffix];
+  }
+  if (args.fromBlockId) {
+    const at = storedBlocks.findIndex(
+      (block) => block.id === args.fromBlockId,
+    );
+    if (at < 0) throw new Error("Transcript anchor is gone");
+    return [...storedBlocks.slice(0, at), ...suffix];
+  }
+  return suffix;
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   mocks.forgetHarnessSession.mockReset().mockResolvedValue(undefined);
   stored = new Map();
   mocks.invoke.mockReset().mockImplementation(async (command, args) => {
-    if (command === "session_upsert") {
+    if (command === "session_upsert" || command === "session_upsert_tail") {
+      const previous = stored.get(args.session.id);
+      const blocks =
+        command === "session_upsert_tail"
+          ? tailMerge(previous, args)
+          : args.session.blocks;
       const record = structuredClone({
+        ...previous,
         ...args.session,
+        blocks,
         createdAt: 1,
         updatedAt: 2,
       });

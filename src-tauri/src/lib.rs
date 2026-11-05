@@ -531,6 +531,7 @@ pub fn run() {
             pty::pty_kill,
             pty::pty_kill_all,
             session_store::session_upsert,
+            session_store::session_upsert_tail,
             session_store::session_list_by_project,
             session_store::session_rebase_project,
             session_store::session_list_linked,
