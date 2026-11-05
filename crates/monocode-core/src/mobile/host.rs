@@ -42,6 +42,8 @@ const APP_METHODS: &[&str] = &[
     "session.rename",
     "session.delete",
     "session.archive",
+    "composer.read",
+    "composer.write",
     "mono.document",
     "mono.profile",
     "mono.update",

@@ -121,6 +121,8 @@ export type SessionSummary = {
   id: string;
   projectId: string;
   monoId?: string;
+  /** Unsent composer text or a saved draft; absent from an older desktop. */
+  draft?: boolean;
   title: string;
   harness: Harness;
   model: string;

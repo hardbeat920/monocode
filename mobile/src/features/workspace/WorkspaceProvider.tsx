@@ -62,7 +62,13 @@ type Workspace = {
     choice?: StartChoice,
     attachments?: Attachment[],
   ) => Promise<string>;
-  sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
+  sendMessage: (
+    conversationId: string,
+    text: string,
+    attachments?: Attachment[],
+    /** The desktop composer revision the text was based on. */
+    draftRev?: number,
+  ) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
   recoverUsage: (conversationId: string, state: UsageLimitState, automatic?: boolean) => Promise<void>;
   /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
@@ -467,7 +473,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
   // The message shows at once, as its own turn, until the desktop's transcript
   // has one more user message than when it was sent.
-  const sendMessage = useCallback(async (conversationId: string, text: string, attachments: Attachment[] = []) => {
+  const sendMessage = useCallback(async (
+    conversationId: string,
+    text: string,
+    attachments: Attachment[] = [],
+    draftRev?: number,
+  ) => {
     const at = Date.now();
     const id = `pending:${at}`;
     const userCount = hasNativeTranscript
@@ -497,6 +508,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         conversationId,
         text,
         ...(attachments.length ? { attachments: toWire(attachments) } : {}),
+        ...(draftRev !== undefined ? { draftRev } : {}),
       });
     } catch (reason) {
       setPending((previous) => withoutKey(previous, conversationId));

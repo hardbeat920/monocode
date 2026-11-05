@@ -10,6 +10,7 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
+import { useDraftMark } from "@/features/sessions/composerDraft";
 import { relativeTime } from "@/features/workspace/relativeTime";
 import type { SessionSummary } from "@/features/workspace/types";
 import { Icon, type IconName } from "@/ui/Icon";
@@ -63,12 +64,19 @@ export function SessionCard({
   const styles = useStyles();
   const swipeable = useRef<SwipeableMethods>(null);
   const opened = useRef(false);
+  const draft = useDraftMark(session);
 
   const row = (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected: active, busy: !!session.busy }}
-      accessibilityLabel={session.busy ? `${session.title}, working` : session.title}
+      accessibilityLabel={
+        session.busy
+          ? `${session.title}, working`
+          : draft
+            ? `${session.title}, draft`
+            : session.title
+      }
       // A tap on a row with its actions out puts them away instead.
       onPress={() => (opened.current ? swipeable.current?.close() : onPress())}
       onLongPress={onLongPress}
@@ -83,7 +91,7 @@ export function SessionCard({
       ]}
     >
       {detailed ? (
-        <SessionDetails session={session} />
+        <SessionDetails session={session} draft={draft} />
       ) : (
         <>
           <View style={styles.mark}>
@@ -141,7 +149,7 @@ export function SessionCard({
  * branch with the model and its provider's mark on its right. The desktop
  * reveals the model's name on hover; with no hover here it always shows.
  */
-function SessionDetails({ session }: { session: SessionSummary }) {
+function SessionDetails({ session, draft }: { session: SessionSummary; draft: boolean }) {
   const colors = useColors();
   const styles = useStyles();
   const model = session.modelName || session.model;
@@ -155,6 +163,11 @@ function SessionDetails({ session }: { session: SessionSummary }) {
           <View style={styles.status}>
             <TerminalSpinner style={styles.statusLabel} />
             <Text style={styles.statusLabel}>Working...</Text>
+          </View>
+        ) : draft ? (
+          <View style={styles.status}>
+            <Icon name="draft" size={14} color={colors.faint} />
+            <Text style={styles.time}>Draft</Text>
           </View>
         ) : (
           <Text style={styles.time}>{relativeTime(session.updatedAt)}</Text>

@@ -33,6 +33,11 @@ impl Metadata<'_> {
     pub(super) fn shows_draft(&self) -> bool {
         self.has_saved_draft() || (self.composer_draft && !self.open)
     }
+    /// The phone's Draft mark. The thread open here isn't open there, so its
+    /// composer text counts.
+    pub(super) fn has_any_draft(&self) -> bool {
+        self.has_saved_draft() || self.composer_draft
+    }
 }
 
 impl Shell {

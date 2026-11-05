@@ -199,6 +199,9 @@ vi.mock("@/features/sessions/attachments", () => ({
   isImage: () => false,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
+vi.mock("@/features/sessions/useComposerDraft", () => ({
+  useComposerDraft: () => ({ typed: () => {}, flush: () => {}, sent: () => undefined }),
+}));
 vi.mock("@/ui/LiquidView", () => ({ LiquidView: () => null }));
 vi.mock("@/ui/theme", () => ({
   useColors: () => ({}),
@@ -283,7 +286,7 @@ it("excludes the hidden model from Android touches, then permits only its contro
   act(() => button("Model: GPT").click());
   expect(model).toHaveBeenCalledOnce();
   await act(async () => button("Send").click());
-  expect(send).toHaveBeenCalledWith("Hello", []);
+  expect(send).toHaveBeenCalledWith("Hello", [], undefined);
   expect(modelTouches()).toBe("none");
 });
 
@@ -376,7 +379,7 @@ it("keeps the field open while the desktop is away and holds the message until i
   expect(button("Send").disabled).toBe(false);
   expect(container.querySelector('[data-testid="pulsing-dot"]')).toBeNull();
   await act(async () => button("Send").click());
-  expect(send).toHaveBeenCalledWith("Written on the train", []);
+  expect(send).toHaveBeenCalledWith("Written on the train", [], undefined);
 });
 
 it("can't stop a turn while the desktop is away, but dictation still works", () => {

@@ -6,6 +6,7 @@ import ArrowUp02Icon from "@hugeicons/core-free-icons/ArrowUp02Icon";
 import BotIcon from "@hugeicons/core-free-icons/BotIcon";
 import BubbleChatIcon from "@hugeicons/core-free-icons/BubbleChatIcon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
+import CircleDashedIcon from "@hugeicons/core-free-icons/CircleDashedIcon";
 import CircleIcon from "@hugeicons/core-free-icons/CircleIcon";
 import ChartBreakoutSquareIcon from "@hugeicons/core-free-icons/ChartBreakoutSquareIcon";
 import ComputerIcon from "@hugeicons/core-free-icons/ComputerIcon";
@@ -109,6 +110,7 @@ const icons = {
   people: UserGroupIcon,
   layers: Layers01Icon,
   circle: CircleIcon,
+  draft: CircleDashedIcon,
 };
 
 export type IconName = keyof typeof icons;

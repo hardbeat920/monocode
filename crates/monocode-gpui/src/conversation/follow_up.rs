@@ -1,6 +1,11 @@
 //! Composer.tsx / MessageQueue.tsx's durable follow-ups and saved user draft.
 use super::*;
 use monocode_core::follow_up::{Message, State};
+use monocode_core::store::ComposerWrite;
+
+/// How long after a keystroke here the phone's text waits, so it never lands
+/// under the person's fingers.
+const PHONE_HOLD: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Default)]
 pub(super) struct FollowUps {
@@ -14,12 +19,13 @@ pub(super) struct FollowUps {
     pub ready: bool,
     pub edit: Option<QueueEdit>,
 }
-/// The last composer draft written to the store, and the save waiting on a
-/// pause in typing.
+/// The last composer draft written to the store, the save waiting on a
+/// pause in typing, and when the person last changed it here.
 #[derive(Default)]
 pub(super) struct ComposerDraft {
     pub saved: Option<Message>,
     pub pending: Option<gpui::Task<()>>,
+    pub typed: Option<std::time::Instant>,
 }
 pub(super) struct QueueEdit {
     id: String,
@@ -214,6 +220,7 @@ impl Conversation {
         {
             return;
         }
+        self.composer_draft.typed = Some(cx.background_executor().now());
         self.composer_draft.pending = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(150))
@@ -238,6 +245,63 @@ impl Conversation {
         {
             self.composer_draft.saved = draft;
         }
+    }
+    /// The phone's composer text, written against the revision it was based
+    /// on (see docs/native/composer-drafts-sync.md). It lands here unless the
+    /// person typed here just now; the files here stay.
+    pub(crate) fn mobile_composer_write(
+        &mut self,
+        text: &str,
+        base: u64,
+        cx: &mut Context<Self>,
+    ) -> Result<ComposerWrite, String> {
+        // A save still waiting on the typing pause is the newer text.
+        self.flush_composer_draft(cx);
+        let id = self.summary.id;
+        if self.composer_draft.typed.is_some_and(|at| {
+            cx.background_executor().now().saturating_duration_since(at) < PHONE_HOLD
+        }) {
+            return locked(&self.store)?
+                .composer_text(id)
+                .map(ComposerWrite::Stale);
+        }
+        let write = locked(&self.store)?.write_composer_text(id, text, base)?;
+        if let ComposerWrite::Saved(saved) = &write
+            && self.input.read(cx).content.as_ref() != saved.text
+        {
+            let typed = self.composer_draft.typed;
+            let text = saved.text.clone();
+            self.input.update(cx, |input, cx| input.set_text(text, cx));
+            // Already in the store; this is not typing here.
+            self.composer_draft.saved = self.composer_draft(cx);
+            self.composer_draft.pending = None;
+            self.composer_draft.typed = typed;
+        }
+        Ok(write)
+    }
+    /// A message sent from the phone uses up the composer text it was based
+    /// on, so it does not wait behind its own copy. Newer text typed here, and
+    /// the files, stay.
+    pub(crate) fn clear_composer_text_sent_from_phone(
+        &mut self,
+        sent: &str,
+        based_on: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        self.flush_composer_draft(cx);
+        let Ok(current) = locked(&self.store).and_then(|s| s.composer_text(self.summary.id)) else {
+            return;
+        };
+        if !monocode_core::store::composer_sent_from(&current, sent, based_on)
+            || self.input.read(cx).content.as_ref() != current.text
+        {
+            return;
+        }
+        let typed = self.composer_draft.typed;
+        self.input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.save_composer_draft(cx);
+        self.composer_draft.typed = typed;
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.is_remote() {

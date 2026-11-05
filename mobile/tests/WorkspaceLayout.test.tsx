@@ -43,6 +43,7 @@ vi.mock("@/ui/theme", () => ({
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/features/mascots/ProjectMascot", () => ({ ProjectMascot: () => null }));
 vi.mock("@/features/sessions/ProviderLogo", () => ({ ProviderLogo: () => null }));
+vi.mock("@/features/sessions/composerDraft", () => ({ useDraftMark: () => false }));
 vi.mock("@/features/workspace/WorkspaceProvider", () => ({
   useWorkspace: () => ({
     projects: [{ id: "encoded-project", path: "/work/project", name: "Project" }],
