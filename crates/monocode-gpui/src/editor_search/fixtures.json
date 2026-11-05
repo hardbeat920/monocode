@@ -1,5 +1,75 @@
 [
   {
+    "source": "foo FOO fOo", "query": "foo", "replacement": "x",
+    "case": true, "word": false, "regex": false,
+    "expected": { "matches": [{ "from": 0, "to": 3, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "é abc def 🙂 abc", "query": "b", "replacement": "x",
+    "case": false, "word": false, "regex": false,
+    "expected": { "matches": [{ "from": 4, "to": 5, "insert": "x" }, { "from": 17, "to": 18, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "xfoo foo\nfoo", "query": "foo\\s*", "replacement": "x",
+    "case": false, "word": true, "regex": true,
+    "expected": { "matches": [], "invalid": false }
+  },
+  {
+    "source": "xfoo foo\nfoo", "query": "foo", "replacement": "x",
+    "case": false, "word": true, "regex": true,
+    "expected": { "matches": [{ "from": 5, "to": 8, "insert": "x" }, { "from": 9, "to": 12, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "xfoo-foo-foo", "query": "foo-foo", "replacement": "x",
+    "case": false, "word": true, "regex": false,
+    "expected": { "matches": [{ "from": 5, "to": 12, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "xé-é-é", "query": "é-é", "replacement": "x",
+    "case": false, "word": true, "regex": false,
+    "expected": { "matches": [{ "from": 4, "to": 9, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "É", "query": "é", "replacement": "x",
+    "case": true, "word": false, "regex": false,
+    "expected": { "matches": [], "invalid": false }
+  },
+  {
+    "source": "É", "query": "é", "replacement": "x",
+    "case": false, "word": false, "regex": false,
+    "expected": { "matches": [{ "from": 0, "to": 2, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "ﬃ", "query": "ff", "replacement": "x",
+    "case": true, "word": false, "regex": false,
+    "expected": { "matches": [], "invalid": false }
+  },
+  {
+    "source": "abc", "query": "a(?=b)", "replacement": "x",
+    "case": false, "word": false, "regex": true,
+    "expected": { "matches": [{ "from": 0, "to": 1, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "ab", "query": "(?<=a)b", "replacement": "x",
+    "case": false, "word": false, "regex": true,
+    "expected": { "matches": [{ "from": 1, "to": 2, "insert": "x" }], "invalid": false }
+  },
+  {
+    "source": "a", "query": "[[:alpha:]]", "replacement": "x",
+    "case": false, "word": false, "regex": true,
+    "expected": { "matches": [], "invalid": true }
+  },
+  {
+    "source": "a1 b2", "query": "a*?\\b", "replacement": "x",
+    "case": false, "word": false, "regex": true,
+    "expected": { "matches": [], "invalid": false }
+  },
+  {
+    "source": "ax\nb", "query": "a\\S\\x0ab", "replacement": "x",
+    "case": false, "word": false, "regex": true,
+    "expected": { "matches": [], "invalid": false }
+  },
+  {
     "source": "🙂 café CAFE caféine\nCAFÉ",
     "query": "café",
     "replacement": "tea",

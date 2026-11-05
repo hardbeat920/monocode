@@ -49,3 +49,33 @@ had to shape because its line cache missed. Any run of the app takes
 Compare a change with the report from before it (CPU, main thread, and the
 view and layout rows). Profile a release build; a debug build's numbers say
 little about release.
+
+# Editor search
+
+- `KEEP=1 scripts/perf/search-bench.sh --iterations 30` performs paired release
+  measurements and exact result/output parity checks. See
+  [methodology and integration contract](search-bench/README.md).
+- `KEEP=1 scripts/perf/search-ui-latency.sh` builds the current tree and the
+  upstream baseline (`c8ec3de2`) before timing. It runs the same ignored GPUI
+  test in new/old, then old/new order and retains each log. `PROFILE` defaults
+  to `native-dev` (the crate and dependencies use opt-level 1); set
+  `PROFILE=release` for a separately built release comparison.
+
+The UI test measures **key dispatch → test executor idle**, validating the
+complete results after every sample. It reports each prefix of `needle`
+separately, with two warmups and 20 measured rounds per pass (override with
+`SEARCH_LATENCY_ROUNDS`, minimum 20). `coalesced:needle` dispatches all six keys
+before background work runs, so only the final query needs to complete. It
+does not simulate real typing intervals or cancelling in-flight work.
+
+GPUI's mock platform and deterministic scheduler exercise the real editor
+integration but exclude OS dispatch, real worker contention and physical
+presentation. The time-to-idle boundary can also include other runnable work;
+these are not hardware-to-photon measurements. Prefixes with more matches can
+be much slower than the completed query, which a pooled median conceals.
+
+For a live application probe, `MONOCODE_SEARCH_LATENCY=1 npm run native:dev`
+logs search scheduling → results applied with `applied=true/false`. Cancelled
+tasks that never deliver a result produce no completion line. The probe takes
+timestamps only when enabled; leave it unset during benchmarks to avoid
+timing log I/O. It does not measure paint or physical input latency.

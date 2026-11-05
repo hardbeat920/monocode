@@ -1,6 +1,223 @@
-//! editorSearch.ts's two-row Find/Replace panel, using the same query engine.
+//! FileEditor adapter for the pure `editor_search` engine: snapshot ownership,
+//! background scheduling, result validation, edits and the Find/Replace panel.
 use super::*;
+use crate::editor_search::{self, SearchOptions, SearchResult};
+use std::time::Instant;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone)]
+pub(super) struct SearchSnapshot {
+    generation: u64,
+    source: SharedString,
+    query: SharedString,
+    replacement: SharedString,
+    options: SearchOptions,
+}
+
+impl SearchSnapshot {
+    fn current(&self, editor: &FileEditor, cx: &App) -> bool {
+        editor.search_open
+            && editor.search_generation == self.generation
+            && editor.input.read(cx).content == self.source
+            && editor.search.read(cx).content == self.query
+            && editor.replacement.read(cx).content == self.replacement
+            && editor.search_options() == self.options
+    }
+
+    fn run(&self) -> SearchResult {
+        editor_search::search(&self.source, &self.query, &self.replacement, self.options)
+    }
+}
+
+fn latency_started() -> Option<Instant> {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    ENABLED
+        .get_or_init(|| std::env::var_os("MONOCODE_SEARCH_LATENCY").is_some())
+        .then(Instant::now)
+}
+
 impl FileEditor {
+    fn search_options(&self) -> SearchOptions {
+        SearchOptions {
+            case_sensitive: self.match_case,
+            whole_word: self.whole_word,
+            regex: self.regex,
+        }
+    }
+
+    fn capture_search(&self, cx: &App) -> SearchSnapshot {
+        SearchSnapshot {
+            generation: self.search_generation,
+            source: self.input.read(cx).content.clone(),
+            query: self.search.read(cx).content.clone(),
+            replacement: self.replacement.read(cx).content.clone(),
+            options: self.search_options(),
+        }
+    }
+
+    pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document.is_none() {
+            return;
+        }
+        self.preview = false;
+        let was_open = self.search_open;
+        self.search_open = true;
+        let mut seeded = false;
+        if !was_open {
+            let input = self.input.read(cx);
+            let selected = input.content[input.selection_range()].to_owned();
+            if !selected.is_empty() && !selected.contains('\n') {
+                self.search.update(cx, |i, cx| i.set_text(selected, cx));
+                seeded = true;
+            }
+        }
+        if !was_open && !seeded && !self.search.read(cx).content.is_empty() {
+            self.find_matches(cx);
+        }
+        window.focus(&self.search.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    pub(super) fn find_matches(&mut self, cx: &mut Context<Self>) {
+        if !self.search_open {
+            return;
+        }
+        let started = latency_started();
+        let previous = self.matches.get(self.match_index).map_or(0, |m| m.from);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let snapshot = self.capture_search(cx);
+        self.search_snapshot = None;
+        self.matches.clear();
+        self.match_index = 0;
+        self.search_invalid = false;
+        self.search_timed_out = false;
+        self.input
+            .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
+        self.search_task = None;
+        if snapshot.query.is_empty() {
+            cx.notify();
+            return;
+        }
+        self.search_task = Some(cx.spawn(async move |this, cx| {
+            let (snapshot, result) = cx.background_executor().spawn(async move {
+                let result = snapshot.run();
+                (snapshot, result)
+            }).await;
+            let _ = this.update(cx, |this, cx| {
+                let applied = this.apply_search_result(snapshot, result, previous, cx);
+                if let Some(started) = started {
+                    eprintln!("search-latency: {:.2}ms applied={applied} matches={} invalid={} timed_out={}",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        this.matches.len(), this.search_invalid, this.search_timed_out);
+                }
+            });
+        }));
+        cx.notify();
+    }
+
+    fn apply_search_result(
+        &mut self,
+        snapshot: SearchSnapshot,
+        result: SearchResult,
+        previous: usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !snapshot.current(self, cx) {
+            return false;
+        }
+        self.search_invalid = result.invalid;
+        self.search_timed_out = result.timed_out;
+        self.matches = if result.invalid || result.timed_out {
+            Vec::new()
+        } else {
+            result.matches
+        };
+        self.match_index = self
+            .matches
+            .iter()
+            .position(|m| m.from >= previous)
+            .unwrap_or(0);
+        self.search_snapshot = Some(snapshot);
+        let ranges = self.matches.iter().map(|m| m.from..m.to).collect();
+        self.input
+            .update(cx, |i, cx| i.set_search_matches(ranges, cx));
+        if let Some(m) = self.matches.get(self.match_index) {
+            self.input
+                .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
+        }
+        cx.notify();
+        true
+    }
+
+    fn search_results_current(&self, cx: &App) -> bool {
+        !self.search_invalid
+            && !self.search_timed_out
+            && self
+                .search_snapshot
+                .as_ref()
+                .is_some_and(|s| s.current(self, cx))
+    }
+
+    pub(super) fn step_match(&mut self, backwards: bool, cx: &mut Context<Self>) {
+        if self.matches.is_empty() || !self.search_results_current(cx) {
+            return;
+        }
+        self.match_index = (self.match_index as isize + if backwards { -1 } else { 1 })
+            .rem_euclid(self.matches.len() as isize) as usize;
+        let m = &self.matches[self.match_index];
+        self.input
+            .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
+        cx.notify();
+    }
+
+    pub(super) fn replace_matches(&mut self, all: bool, cx: &mut Context<Self>) {
+        if self.input.read(cx).is_composing()
+            || self.matches.is_empty()
+            || !self.search_results_current(cx)
+        {
+            return;
+        }
+        let content = &self.input.read(cx).content;
+        let (text, cursor) = if all {
+            match editor_search::replace_all(content, &self.matches) {
+                Ok(text) => (text, 0),
+                Err(_) => return,
+            }
+        } else {
+            let m = &self.matches[self.match_index];
+            let mut text = content.to_string();
+            text.replace_range(m.from..m.to, &m.insert);
+            (text, m.from + m.insert.len())
+        };
+        // Invalidate synchronously, before the deferred Changed subscription:
+        // a second Replace action must never reuse offsets from the old buffer.
+        self.search_snapshot = None;
+        self.input.update(cx, |i, cx| {
+            i.replace_bytes(0..i.content.len(), &text, cursor, cx)
+        });
+    }
+
+    pub(super) fn dismiss_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.search_open {
+            cx.propagate();
+            return;
+        }
+        self.search_open = false;
+        self.search_task = None;
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.search_snapshot = None;
+        self.matches.clear();
+        self.match_index = 0;
+        self.search_invalid = false;
+        self.search_timed_out = false;
+        self.input
+            .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
+        window.focus(&self.input.focus_handle(cx), cx);
+        cx.notify();
+    }
+
     pub(super) fn search_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = if self.search_invalid {
             "Invalid regex".into()
