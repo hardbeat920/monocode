@@ -17,8 +17,12 @@ const remember = (pages: Pages | null) => {
  * A project's sessions from the desktop a page at a time, newest first: the
  * first page when the list opens or the search changes, the next as the list
  * nears its end. Null until the first page for this search lands.
+ *
+ * `reload` names what the pages follow, the sessions the poll carries: the
+ * first page is read again when it changes, so a session archived or deleted
+ * on the desktop leaves.
  */
-export function useSessionPages(projectId: string, query: string, active: boolean) {
+export function useSessionPages(projectId: string, query: string, active: boolean, reload = "") {
   const { listSessions } = useWorkspace();
   const key = `${projectId}\n${query}`;
   const [pages, setPages] = useState<Pages | null>(() => lastRead.get(key) ?? null);
@@ -38,7 +42,7 @@ export function useSessionPages(projectId: string, query: string, active: boolea
             setPages((previous) =>
               previous?.key === key && sameFirstPage(previous.sessions, page.sessions)
                 ? previous
-                : remember({ key, ...page }),
+                : remember({ key, ...refreshedPages(previous?.key === key ? previous : null, page) }),
             );
           },
           () => {
@@ -52,7 +56,7 @@ export function useSessionPages(projectId: string, query: string, active: boolea
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [active, key, projectId, query, listSessions]);
+  }, [active, key, projectId, query, listSessions, reload]);
 
   const current = pages?.key === key ? pages : (lastRead.get(key) ?? null);
   if (!current) return null;
@@ -93,20 +97,53 @@ function sameFirstPage(shown: SessionSummary[], page: SessionSummary[]) {
 }
 
 /**
- * What a session list shows: the paged sessions, kept fresh by the poll's copy
- * of any it carries and by renames and deletes made here, or, until the first
- * page lands, the poll's recent ones matching the search.
+ * A first page read again, over what the list had. The rows past it that are
+ * older than its last stay, so a list scrolled far down doesn't collapse; a
+ * newer one missing from it has left the list.
+ */
+export function refreshedPages(
+  previous: Pick<Pages, "sessions" | "hasMore"> | null,
+  page: Omit<Pages, "key">,
+): Omit<Pages, "key"> {
+  const last = page.sessions.at(-1);
+  if (!previous || !last || !page.hasMore) return page;
+  const read = new Set(page.sessions.map((session) => session.id));
+  const older = previous.sessions.filter(
+    (session) => !read.has(session.id) && session.updatedAt < last.updatedAt,
+  );
+  return older.length
+    ? { ...page, sessions: [...page.sessions, ...older], hasMore: previous.hasMore }
+    : page;
+}
+
+/**
+ * What a session list shows, newest first, as the desktop's sidebar does. The
+ * pages are read only now and then, so the poll keeps them current: its copy of
+ * a session replaces theirs, moving the row, and a session it carries (in
+ * `polled`) that they don't have yet joins them. A remembered session isn't
+ * polled, and may be archived, so only the pages list one. Until the first page
+ * lands, the poll's recent ones matching the search stand in.
  */
 export function visibleSessions(
   pages: ReturnType<typeof useSessionPages>,
   recent: SessionSummary[],
   query: string,
   edited: (session: SessionSummary) => SessionSummary | null,
+  polled: ReadonlySet<string>,
 ) {
+  const found = (session: SessionSummary) =>
+    [session.title, session.model, session.branch].some((field) =>
+      field.toLowerCase().includes(query),
+    );
   const live = new Map(recent.map((session) => [session.id, session]));
-  return pages
-    ? pages.sessions.flatMap((session) => live.get(session.id) ?? edited(session) ?? [])
-    : recent.filter((s) =>
-        [s.title, s.model, s.branch].some((field) => field.toLowerCase().includes(query)),
-      );
+  const read = new Set(pages?.sessions.map((session) => session.id));
+  const listed = pages
+    ? [
+        ...pages.sessions.flatMap((session) => live.get(session.id) ?? edited(session) ?? []),
+        ...recent.filter(
+          (session) => !read.has(session.id) && polled.has(session.id) && found(session),
+        ),
+      ]
+    : recent.filter(found);
+  return listed.sort((a, b) => b.updatedAt - a.updatedAt);
 }

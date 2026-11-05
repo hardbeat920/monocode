@@ -18,6 +18,7 @@ import { AnimationsPaused } from "@/ui/AnimationsPaused";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { themedStyles, useColors } from "@/ui/theme";
 
+import { dayHeadings } from "./dayHeadings";
 import { SessionCard } from "./SessionCard";
 import {
   filterSessions,
@@ -31,12 +32,12 @@ import { REMOVE_MS, useSessionActions } from "./useSessionActions";
 import { useSessionPages, visibleSessions } from "./useSessionPages";
 
 /**
- * A project's sessions, newest first and paged in as the list scrolls. Each
- * swipes left to rename or delete, as on the desktop sidebar. Searched and
- * filtered from the bar where the composer rests on the chat page, and
- * narrowed to `worktree` when the header's menu picks one, as the desktop's
- * sidebar is. `active` while the page is in view: it reads the list then, and
- * its spinners only run then.
+ * A project's sessions, newest first under the desktop sidebar's day headings
+ * and paged in as the list scrolls. Each swipes left to rename or delete, as on
+ * the desktop sidebar. Searched and filtered from the bar where the composer
+ * rests on the chat page, and narrowed to `worktree` when the header's menu
+ * picks one, as the desktop's sidebar is. `active` while the page is in view:
+ * it reads the list then, and its spinners only run then.
  */
 export function SessionsPage({
   projectId,
@@ -51,7 +52,7 @@ export function SessionsPage({
 }) {
   const colors = useColors();
   const styles = useStyles();
-  const { sessions, edited, rememberSession } = useWorkspace();
+  const { sessions, polled, edited, rememberSession } = useWorkspace();
   const { pageTop, dockBottom } = useSessionLayout();
   // Room for the search bar where the composer rests, and the blur under it.
   const bottom = dockBottom + SEARCH_BAR + 16;
@@ -59,13 +60,23 @@ export function SessionsPage({
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
   const needle = query.trim().toLowerCase();
   const recent = sessions.filter((session) => session.projectId === projectId);
-  const pages = useSessionPages(projectId, needle, active);
-  const listed = visibleSessions(pages, recent, needle, edited).filter((session) =>
+  // Which sessions the poll carries, not their order: visibleSessions keeps the
+  // order, so an agent finishing a turn costs no read.
+  const roster = recent
+    .flatMap((session) => (polled.has(session.id) ? [session.id] : []))
+    .sort()
+    .join(",");
+  const pages = useSessionPages(projectId, needle, active, roster);
+  const listed = visibleSessions(pages, recent, needle, edited, polled).filter((session) =>
     inWorktree(session, worktree),
   );
   const visible = filterSessions(listed, filter);
   const scope = JSON.stringify([projectId, needle, filter, worktree?.path, !!pages]);
   const arrivals = useArrivals(visible, scope, active);
+  const dayStarts = dayHeadings(arrivals.sessions);
+  const headingsKey = [...dayStarts].join();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const headings = useMemo(() => dayStarts, [headingsKey]);
   // The agents to filter by: those in the list, in the order first seen.
   const harnesses = [...new Set<Harness>(listed.map((session) => session.harness))];
   if (filter.harness && !harnesses.includes(filter.harness)) harnesses.push(filter.harness);
@@ -100,15 +111,21 @@ export function SessionsPage({
   const removingId = actions.removing?.id;
   const { arriving, moving } = arrivals;
   const renderItem = useCallback(
-    ({ item }: { item: SessionSummary }) => (
-      <SessionRow
-        session={item}
-        removing={removingId === item.id}
-        arriving={arriving.has(item.id)}
-        handlers={handlers}
-      />
-    ),
-    [removingId, arriving, handlers],
+    ({ item, index }: { item: SessionSummary; index: number }) => {
+      const heading = headings.get(item.id);
+      return (
+        <>
+          {heading ? <SectionLabel title={heading} /> : index > 0 ? <Divider /> : null}
+          <SessionRow
+            session={item}
+            removing={removingId === item.id}
+            arriving={arriving.has(item.id)}
+            handlers={handlers}
+          />
+        </>
+      );
+    },
+    [removingId, arriving, handlers, headings],
   );
 
   return (
@@ -127,7 +144,6 @@ export function SessionsPage({
           extraData={moving}
           keyExtractor={(session) => session.id}
           renderItem={renderItem}
-          ItemSeparatorComponent={Divider}
           ListEmptyComponent={
             pages ? (
               <Text style={styles.empty}>
@@ -178,6 +194,16 @@ function samePath(a: string, b: string) {
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
 }
 
+/** A small title over a run of rows, such as a day's sessions. */
+function SectionLabel({ title }: { title: string }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.section} accessibilityRole="header">
+      <Text style={styles.sectionTitle}>{title}</Text>
+    </View>
+  );
+}
+
 /** A hairline between cards, inset to their text. */
 function Divider() {
   const styles = useStyles();
@@ -201,6 +227,8 @@ function sameRow(a: SessionSummary, b: SessionSummary) {
       a.title === b.title &&
       a.busy === b.busy &&
       a.updatedAt === b.updatedAt &&
+      a.workItem?.kind === b.workItem?.kind &&
+      a.workItem?.number === b.workItem?.number &&
       a.branch === b.branch &&
       a.model === b.model &&
       a.modelName === b.modelName &&
@@ -255,6 +283,16 @@ const useStyles = themedStyles((colors) => ({
   },
   more: {
     paddingVertical: 16,
+  },
+  section: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  sectionTitle: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
   },
   divider: {
     height: StyleSheet.hairlineWidth,

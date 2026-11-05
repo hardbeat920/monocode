@@ -101,6 +101,8 @@ type Workspace = {
   deleteSession: (conversationId: string) => Promise<void>;
   /** Archives a session on the desktop; like a delete, it leaves every list at once. */
   archiveSession: (conversationId: string) => Promise<void>;
+  /** The sessions the desktop's poll carries now, not ones only remembered here. */
+  polled: ReadonlySet<string>;
   /** A session as the phone last changed it, or null once deleted here. */
   edited: (session: SessionSummary) => SessionSummary | null;
   nativeTranscriptStatus: (id: string, status: NativeTranscriptStatus) => void;
@@ -735,6 +737,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         ...selected.sessions,
         ...Object.values(remembered).filter((session) => !known.has(session.id)),
       ].flatMap((session) => edited(session) ?? []),
+      polled: known,
       watch,
       startSession,
       sendMessage,

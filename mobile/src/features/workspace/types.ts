@@ -132,6 +132,8 @@ export type SessionSummary = {
   /** Its permission mode, as the desktop's access picker sets it. */
   runtimeMode?: RuntimeMode;
   updatedAt: number;
+  /** The pull request or issue linked to it; absent from an older desktop. */
+  workItem?: { kind: "pr" | "issue"; number: number };
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
   waiting?: "approval" | "question";
