@@ -148,8 +148,10 @@ pub(crate) struct FileEditor {
     whole_word: bool,
     regex: bool,
     search_invalid: bool,
+    search_timed_out: bool,
     search_task: Option<Task<()>>,
-    matches: Vec<crate::editor_analysis::SearchMatch>,
+    search_generation: u64,
+    matches: Vec<crate::editor_search::SearchMatch>,
     autosave: Option<Task<()>>,
     formatting: Option<Task<()>>,
     pub show_diff: bool,
@@ -292,7 +294,9 @@ impl FileEditor {
             whole_word: false,
             regex: false,
             search_invalid: false,
+            search_timed_out: false,
             search_task: None,
+            search_generation: 0,
             autosave: None,
             formatting: None,
             show_diff: false,
@@ -859,14 +863,20 @@ impl FileEditor {
             return;
         }
         self.preview = false;
-        if !self.search_open {
+        let was_open = self.search_open;
+        let mut seeded = false;
+        if !was_open {
             let input = self.input.read(cx);
             let selected = input.content[input.selection_range()].to_owned();
             if !selected.is_empty() && !selected.contains('\n') {
                 self.search.update(cx, |i, cx| i.set_text(selected, cx));
+                seeded = true;
             }
         }
         self.search_open = true;
+        if !was_open && !seeded && !self.search.read(cx).content.is_empty() {
+            self.find_matches(cx);
+        }
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
     }
@@ -880,23 +890,28 @@ impl FileEditor {
             .get(self.match_index)
             .map(|m| m.from)
             .unwrap_or(0);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
         self.matches.clear();
+        self.search_invalid = false;
+        self.search_timed_out = false;
         self.search_task = Some(cx.spawn(async move |this, cx| {
             let text = source.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::editor_analysis::search(&text, &query, &replacement, case, word, regex)
+                    crate::editor_search::search(&text, &query, &replacement, case, word, regex)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.input.read(cx).content != source {
+                if this.search_generation != generation || this.input.read(cx).content != source {
                     return;
                 }
                 match result {
                     Ok(result) => {
                         this.matches = result.matches;
                         this.search_invalid = result.invalid;
+                        this.search_timed_out = result.timed_out;
                     }
                     Err(_) => {
                         this.matches.clear();
@@ -935,16 +950,17 @@ impl FileEditor {
         if self.input.read(cx).is_composing() || self.matches.is_empty() {
             return;
         }
-        let mut text = self.input.read(cx).content.to_string();
-        let cursor = if all {
-            for m in self.matches.iter().rev() {
-                text.replace_range(m.from..m.to, &m.insert);
+        let content = self.input.read(cx).content.to_string();
+        let (text, cursor) = if all {
+            match crate::editor_search::replace_all(&content, &self.matches) {
+                Ok(text) => (text, 0),
+                Err(_) => return,
             }
-            0
         } else {
             let m = &self.matches[self.match_index];
+            let mut text = content;
             text.replace_range(m.from..m.to, &m.insert);
-            m.from + m.insert.len()
+            (text, m.from + m.insert.len())
         };
         self.input.update(cx, |i, cx| {
             i.replace_bytes(0..i.content.len(), &text, cursor, cx)
@@ -972,6 +988,11 @@ impl FileEditor {
         if self.search_open {
             self.search_open = false;
             self.search_task = None;
+            self.search_generation = self.search_generation.wrapping_add(1);
+            self.matches.clear();
+            self.match_index = 0;
+            self.search_invalid = false;
+            self.search_timed_out = false;
             self.input
                 .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
             window.focus(&self.input.focus_handle(cx), cx);

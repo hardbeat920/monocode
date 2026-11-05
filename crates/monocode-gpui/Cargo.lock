@@ -1162,6 +1162,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "corvus-regex-ecma262"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be72de82781404398482a431a88c1d03b82d474a5fad3003cac18f5893fc71ee"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+]
+
+[[package]]
 name = "cosmic-text"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3785,6 +3795,7 @@ dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
  "chrono",
+ "corvus-regex-ecma262",
  "embed-resource",
  "gpui-pre",
  "gpui-pre-apple",
@@ -3792,6 +3803,7 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "memchr",
  "mermaid-rs-renderer",
  "mimalloc",
  "monocode-core",
@@ -3829,6 +3841,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+ "unicode-normalization",
  "unicode-segmentation",
 ]
 

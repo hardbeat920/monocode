@@ -1,0 +1,609 @@
+[
+  {
+    "source": "🙂 café CAFE caféine\nCAFÉ",
+    "query": "café",
+    "replacement": "tea",
+    "case": false,
+    "word": true,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 5,
+          "to": 10,
+          "insert": "tea"
+        },
+        {
+          "from": 25,
+          "to": 30,
+          "insert": "tea"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a🙂b",
+    "query": "🙂",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 1,
+          "to": 5,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a🙂b",
+    "query": ".",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "x"
+        },
+        {
+          "from": 1,
+          "to": 5,
+          "insert": "x"
+        },
+        {
+          "from": 5,
+          "to": 6,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a\nb",
+    "query": "^.",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "x"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a\nb",
+    "query": "\\s",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 1,
+          "to": 2,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a b",
+    "query": "^b",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 4,
+          "to": 5,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a1 b2",
+    "query": "(\\w)(\\d)",
+    "replacement": "$2$1",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 2,
+          "insert": "1a"
+        },
+        {
+          "from": 3,
+          "to": 5,
+          "insert": "2b"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a",
+    "query": "(a)(b)?",
+    "replacement": "$2|$1|$0|$<x>|$&|$$",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "undefined|a|$0|$<x>|a|$"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "foo_bar foo-bar éfooé",
+    "query": "foo",
+    "replacement": "x",
+    "case": false,
+    "word": true,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 8,
+          "to": 11,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "ﬃ ffi",
+    "query": "ffi",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 3,
+          "insert": "x"
+        },
+        {
+          "from": 4,
+          "to": 7,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "café",
+    "query": "cafe",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "aaa",
+    "query": "aa",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 2,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "ba",
+    "query": "a*",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 1,
+          "to": 2,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "b",
+    "query": "a*|b",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "aa",
+    "query": "(a)\\1",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 2,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "é",
+    "query": "\\w",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "١٢٣",
+    "query": "\\d",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a",
+    "query": "[",
+    "replacement": "",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": true,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "",
+    "query": "",
+    "replacement": "",
+    "case": false,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "é",
+    "query": "é",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 2,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "é",
+    "query": "é",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 3,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "① ㎏",
+    "query": "1",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 3,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "① ㎏",
+    "query": "kg",
+    "replacement": "x",
+    "case": true,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 4,
+          "to": 7,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "ΟΣ ΟΣΟ",
+    "query": "ΟΣ",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "Σ σ ς",
+    "query": "σ",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 2,
+          "insert": "x"
+        },
+        {
+          "from": 3,
+          "to": 5,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "áb",
+    "query": "a",
+    "replacement": "x",
+    "case": false,
+    "word": true,
+    "regex": false,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "abcdefghij",
+    "query": "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)",
+    "replacement": "$10|$11|$1x|$01|$99",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 10,
+          "insert": "j|a1|ax|a|i9"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a",
+    "query": "(a)",
+    "replacement": "$0 $& $$ $1 $10 $01 $",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "$0 a $ a a0 a $"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "baaac",
+    "query": "a*",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 1,
+          "to": 4,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a\nb",
+    "query": "^",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a\nb",
+    "query": "$",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a\nb",
+    "query": "\\b",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [],
+      "invalid": false,
+      "timed_out": false
+    }
+  },
+  {
+    "source": "a b",
+    "query": ".",
+    "replacement": "x",
+    "case": false,
+    "word": false,
+    "regex": true,
+    "expected": {
+      "matches": [
+        {
+          "from": 0,
+          "to": 1,
+          "insert": "x"
+        },
+        {
+          "from": 4,
+          "to": 5,
+          "insert": "x"
+        }
+      ],
+      "invalid": false,
+      "timed_out": false
+    }
+  }
+]
