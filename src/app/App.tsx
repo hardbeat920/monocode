@@ -347,6 +347,7 @@ import {
   refreshHarnessCatalogs,
   registerBuiltinHarnesses,
   promoteLastAssistantToPlan,
+  promoteProposedPlan,
   respondHarnessApproval,
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
@@ -8520,8 +8521,16 @@ function Workspace({
                           ),
                     )
                   : intent === "plan" && !nativePlanSeen && !providerFailed
-                    ? promoteLastAssistantToPlan(stopped, planEventKey)
-                    : stopped;
+                    ? // A tagged Codex plan wins over the last-message fallback.
+                      promoteLastAssistantToPlan(
+                        current.harness === "codex"
+                          ? promoteProposedPlan(stopped, planEventKey)
+                          : stopped,
+                        planEventKey,
+                      )
+                    : current.harness === "codex" && !providerFailed
+                      ? promoteProposedPlan(stopped, planEventKey)
+                      : stopped;
               return approvedPlan && intent === "build"
                 ? withPlanStatus(
                     finalized,

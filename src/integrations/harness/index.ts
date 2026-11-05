@@ -12,6 +12,7 @@ export {
   appendUser,
   appendSteerUser,
   promoteLastAssistantToPlan,
+  promoteProposedPlan,
   stopStreaming,
 } from "./core/apply";
 export {
