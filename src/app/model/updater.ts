@@ -72,15 +72,69 @@ export async function readAppVersion(): Promise<string> {
   }
 }
 
-export async function probeForUpdate(): Promise<Update | null> {
+/**
+ * What started an update check: "fg" while the window is focused or the user
+ * asked, "bg" from the timer that runs whatever the window state.
+ */
+export type UpdateCheckKind = "fg" | "bg";
+
+/** Update checks identify which MonoCode updater ran them and the app version. */
+export const UPDATER_USER_AGENT_PRODUCT: Record<UpdateCheckKind, string> = {
+  fg: "MonoCode-Updater",
+  bg: "MonoCode-Background-Updater",
+};
+
+export function updaterUserAgent(version: string, kind: UpdateCheckKind): string {
+  return `${UPDATER_USER_AGENT_PRODUCT[kind]}/${version}`;
+}
+
+async function checkFeed(kind: UpdateCheckKind): Promise<Update | null> {
+  const version = await readAppVersion();
+  return check({ headers: { "User-Agent": updaterUserAgent(version, kind) } });
+}
+
+export async function probeForUpdate(kind: UpdateCheckKind = "bg"): Promise<Update | null> {
   if (await packageManagedInstall()) {
     pendingUpdate = null;
     return null;
   }
-  const update = await check();
+  const update = await checkFeed(kind);
   pendingUpdate = update;
   if (update) announceUpdateAvailable(update.version);
   return update;
+}
+
+/** Minimum gap between automatic checks of each kind. */
+export const PROBE_INTERVAL_MS: Record<UpdateCheckKind, number> = {
+  fg: 60 * 60 * 1000,
+  bg: 4 * 60 * 60 * 1000,
+};
+
+const lastProbeAt: Record<UpdateCheckKind, number | null> = { fg: null, bg: null };
+let probeInFlight = false;
+
+/**
+ * Automatic checks: "fg" when the window gains focus, "bg" on a timer. Each
+ * kind runs at most once per PROBE_INTERVAL_MS[kind], and only one runs at a
+ * time so results can't land out of order. Resolves to undefined when the
+ * check was skipped.
+ */
+export async function probeForUpdateThrottled(
+  kind: UpdateCheckKind,
+  now = Date.now(),
+): Promise<Update | null | undefined> {
+  // Skipped without claiming the interval: the next focus or tick retries.
+  if (probeInFlight) return undefined;
+  const last = lastProbeAt[kind];
+  if (last !== null && now - last < PROBE_INTERVAL_MS[kind]) return undefined;
+  // Claimed before the request so a failing feed is not retried on every focus.
+  lastProbeAt[kind] = now;
+  probeInFlight = true;
+  try {
+    return await probeForUpdate(kind);
+  } finally {
+    probeInFlight = false;
+  }
 }
 
 export async function runUpdateFlow(
@@ -109,7 +163,7 @@ export async function runUpdateFlow(
   }
 
   try {
-    const update = await check();
+    const update = await checkFeed(manual ? "fg" : "bg");
     if (!update) {
       pendingUpdate = null;
       const current: UpdaterSnapshot = { phase: "current", currentVersion };
