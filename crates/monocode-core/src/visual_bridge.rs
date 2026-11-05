@@ -636,7 +636,7 @@ fn embed(document: &VisualDocument) -> String {
 }
 
 fn current_environment() -> HashMap<String, String> {
-    [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
+    SERVER_ENV
         .into_iter()
         .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
         .collect()
