@@ -1,5 +1,6 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
+import { useNavigation } from "expo-router";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -30,12 +31,14 @@ import {
 } from "./attachments";
 import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
+import { TypingPostureFocus } from "./TypingPostureFocus";
 import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
 /** Mid-turn the desktop steers with the message or queues it, as its setting says. */
 const BUSY_PLACEHOLDER = "Send a follow-up…";
+const OFFLINE_PLACEHOLDER = "Reconnecting to desktop…";
 
 const BUTTON = 36;
 /** Gap between the round buttons and the composer's edge. */
@@ -44,11 +47,17 @@ const COLLAPSED = BUTTON + EDGE * 2;
 const RADIUS = COLLAPSED / 2;
 /** Expanded layout: context row on top, buttons and model along the bottom. */
 const TOP_ROW = 46;
+/** The card's top edge above the field when there is no context to show. */
+const TOP_BARE = 12;
 /** The attachments' strip, under the context row as on the desktop. */
 const THUMB = 48;
 const STRIP = THUMB + 10;
+/** The message being replied to, as an outlined pill above the field. */
+const REPLY_ROW = 44;
 const BOTTOM_ROW = BUTTON + EDGE * 2;
 const INPUT_MIN = 64;
+/** A compact field's least height once it has its own row: two lines. */
+const INPUT_MIN_COMPACT = 60;
 const INPUT_MAX = 160;
 /** Inset from the screen edges: roomier as a pill, wider as a card. */
 const MARGIN_COLLAPSED = 20;
@@ -79,7 +88,13 @@ export function Composer({
   onModelPress,
   workspace,
   notice,
+  active = true,
+  compact = false,
+  reply,
+  onClearReply,
 }: {
+  /** Only the visible route may focus its composer in response to folding. */
+  active?: boolean;
   /** Where this runs: the project, or the mono. */
   context: string;
   branch: string;
@@ -96,12 +111,23 @@ export function Composer({
   workspace?: ReactNode;
   /** The session's latest error, in place of the field until tapped away. */
   notice?: { text: string; dismiss: () => void } | null;
+  /**
+   * One line, as a Mono's chat has it: no model or context, and the pill
+   * stays a pill until the draft outgrows it. Then the field takes its own
+   * row above add and send.
+   */
+  compact?: boolean;
+  /** A Mono's message being replied to, shown over the field until sent or cleared. */
+  reply?: string | null;
+  onClearReply?: () => void;
 }) {
   const scheme = useScheme();
   const colors = useColors();
   const styles = useStyles();
   const offline = useOffline();
-  const blocked = offline ? "offline" : notice ? "error" : null;
+  // Losing the desktop holds back only what needs it, Send and Stop; the
+  // person can keep writing. An error waits until it's back.
+  const blocked = !offline && !!notice;
   const input = useRef<TextInput>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -113,6 +139,10 @@ export function Composer({
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
   // A draft, in words or files, keeps the card open.
   const hasText = text.length > 0 || attachments.length > 0;
+  // A compact draft past the pill's one line, measured at the pill's width so
+  // the wider row it moves to can't fold it straight back.
+  const [wraps, setWraps] = useState(false);
+  const opens = compact ? wraps || attachments.length > 0 || !!reply : hasText || !!reply;
 
   // Focus lives on the UI thread rather than in React state. The keyboard
   // starts moving as the field focuses, and a React commit in that same frame
@@ -124,9 +154,36 @@ export function Composer({
   const progress = useSharedValue(0);
   const morph = (expand: boolean) => progress.set(withTiming(expand ? 1 : 0, MORPH));
   useEffect(() => {
-    if (hasText) progress.set(withTiming(1, MORPH));
-    else if (!focused.get()) progress.set(withTiming(0, MORPH));
-  }, [hasText, focused, progress]);
+    if (opens) progress.set(withTiming(1, MORPH));
+    else if (compact || !focused.get()) progress.set(withTiming(0, MORPH));
+  }, [opens, compact, focused, progress]);
+
+  // Picking a message to reply to is ready to type the reply.
+  useEffect(() => {
+    if (reply) input.current?.focus();
+  }, [reply]);
+
+  // Lets go of the keyboard as the screen starts to leave, or as another
+  // covers it. A popped screen is unmounted without ever losing focus, and
+  // the native back button pops before JS hears of it, so this goes on the
+  // transition's start, while the field is still on screen. Left focused, the
+  // keyboard outlives the chat: the list behind rides it up, and the next
+  // chat's field can't take focus until it is left and entered again.
+  const navigation = useNavigation();
+  useEffect(() => {
+    const letGo = () => input.current?.blur();
+    const offStart = navigation.addListener(
+      "transitionStart" as never,
+      (event: { data?: { closing?: boolean } }) => {
+        if (event.data?.closing) letGo();
+      },
+    );
+    const offBlur = navigation.addListener("blur", letGo);
+    return () => {
+      offStart();
+      offBlur();
+    };
+  }, [navigation]);
 
   // Lets go of the keyboard as the field gives way.
   useEffect(() => {
@@ -134,11 +191,16 @@ export function Composer({
   }, [blocked]);
 
   const strip = attachments.length > 0 ? STRIP : 0;
-  const expandedHeight = TOP_ROW + strip + inputHeight + BOTTOM_ROW;
+  const replyRow = reply ? REPLY_ROW : 0;
+  // A Mono's chat has no project or branch to name; the card closes up.
+  const topRow = !compact && (workspace || context || branch) ? TOP_ROW : TOP_BARE;
+  // A compact card keeps the pill's inset, so the pill's line measures true.
+  const marginExpanded = compact ? MARGIN_COLLAPSED : MARGIN_EXPANDED;
+  const expandedHeight = topRow + replyRow + strip + inputHeight + BOTTOM_ROW;
 
   const containerStyle = useAnimatedStyle(() => ({
     height: interpolate(progress.get(), [0, 1], [COLLAPSED, expandedHeight]),
-    marginHorizontal: interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, MARGIN_EXPANDED]),
+    marginHorizontal: interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, marginExpanded]),
   }));
   // The field slides from between the pill's buttons to its own band in the card.
   const inputStyle = useAnimatedStyle(() => {
@@ -146,7 +208,7 @@ export function Composer({
     return {
       left: interpolate(p, [0, 1], [EDGE + BUTTON + 8, 18]),
       right: interpolate(p, [0, 1], [EDGE + BUTTON + 8, 18]),
-      top: interpolate(p, [0, 1], [EDGE - 1, TOP_ROW + strip]),
+      top: interpolate(p, [0, 1], [EDGE - 1, topRow + replyRow + strip]),
       bottom: interpolate(p, [0, 1], [EDGE, BOTTOM_ROW]),
     };
   });
@@ -215,19 +277,22 @@ export function Composer({
     }
   };
 
-  // Clears, lets go of the keyboard and folds back to the pill at once; the
-  // draft comes back if the desktop never takes it.
+  // Clears and folds back to the pill at once; the draft comes back if the
+  // desktop never takes it. A Mono's chat keeps the keyboard up for the next
+  // message, as a messaging app; a session's card lets go of it.
   const send = async () => {
     // The draft stays put until the desktop can take it.
-    if (!canSend || blocked) return;
+    if (!canSend || blocked || offline) return;
     const message = text.trim();
     const files = attachments;
     setSending(true);
     setText("");
     setAttachments([]);
-    focused.set(false);
     morph(false);
-    input.current?.blur();
+    if (!compact) {
+      focused.set(false);
+      input.current?.blur();
+    }
     try {
       await onSend(message, files);
     } catch (reason) {
@@ -241,22 +306,44 @@ export function Composer({
 
   return (
     <Animated.View style={containerStyle}>
+      <TypingPostureFocus
+        enabled={active && !blocked && !dictating && !sending}
+        onEnterTypingPosture={() => input.current?.focus()}
+      />
       <LiquidView fill row={false} borderRadius={RADIUS} style={StyleSheet.absoluteFill}>
         <View />
       </LiquidView>
 
-      <Animated.View style={[styles.contextRow, expandedOnly]}>
-        <View style={styles.picker}>
-          {workspace ?? (
-            <Text style={styles.context} numberOfLines={1}>
-              {context} <Text style={styles.branch}>{branch}</Text>
-            </Text>
-          )}
-        </View>
-      </Animated.View>
+      {topRow === TOP_ROW ? (
+        <Animated.View style={[styles.contextRow, expandedOnly]}>
+          <View style={styles.picker}>
+            {workspace ?? (
+              <Text style={styles.context} numberOfLines={1}>
+                {context} <Text style={styles.branch}>{branch}</Text>
+              </Text>
+            )}
+          </View>
+        </Animated.View>
+      ) : null}
+
+      {reply ? (
+        <Animated.View style={[styles.reply, { top: topRow - 2 }, expandedOnly]}>
+          <Text style={styles.replyText} numberOfLines={1}>
+            {reply.replace(/\s+/g, " ").trim()}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel reply"
+            hitSlop={10}
+            onPress={onClearReply}
+          >
+            <Icon name="close" size={16} color={colors.muted} />
+          </Pressable>
+        </Animated.View>
+      ) : null}
 
       {attachments.length > 0 ? (
-        <Animated.View style={[styles.strip, expandedOnly]}>
+        <Animated.View style={[styles.strip, { top: topRow + replyRow }, expandedOnly]}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -288,18 +375,21 @@ export function Composer({
           }}
           onFocus={() => {
             focused.set(true);
-            morph(true);
+            if (!compact) morph(true);
           }}
           onBlur={() => {
             focused.set(false);
-            if (!hasText) morph(false);
+            if (!opens) morph(false);
           }}
           onContentSizeChange={(event) =>
             setInputHeight(
-              Math.min(INPUT_MAX, Math.max(INPUT_MIN, event.nativeEvent.contentSize.height + 12)),
+              Math.min(
+                INPUT_MAX,
+                Math.max(compact ? INPUT_MIN_COMPACT : INPUT_MIN, event.nativeEvent.contentSize.height + 12),
+              ),
             )
           }
-          placeholder={busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
+          placeholder={offline ? OFFLINE_PLACEHOLDER : busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
           placeholderTextColor={colors.muted}
           multiline
           keyboardAppearance={scheme}
@@ -307,21 +397,7 @@ export function Composer({
           selectionColor={colors.accent}
           style={[styles.input, blocked && styles.hidden]}
         />
-        {blocked === "offline" ? (
-          <Animated.View
-            key="offline"
-            entering={FadeIn.duration(DICTATION_FADE.duration)}
-            exiting={FadeOut.duration(DICTATION_FADE.duration)}
-            accessibilityRole="text"
-            accessibilityLabel="Reconnecting to your desktop. Messages can't be sent until it's back."
-            style={styles.status}
-          >
-            <PulsingDot />
-            <Text style={styles.statusLabel} numberOfLines={1}>
-              Reconnecting to desktop
-            </Text>
-          </Animated.View>
-        ) : blocked === "error" && notice ? (
+        {blocked && notice ? (
           <Animated.View
             key="error"
             entering={FadeIn.duration(DICTATION_FADE.duration)}
@@ -355,6 +431,19 @@ export function Composer({
         />
       </Animated.View>
 
+      {compact ? (
+        // Lays the draft out at the pill field's width, unseen, to tell when it wraps.
+        <Text
+          aria-hidden
+          pointerEvents="none"
+          style={[styles.input, styles.measure]}
+          onTextLayout={(event) => setWraps(event.nativeEvent.lines.length > 1)}
+        >
+          {text || " "}
+        </Text>
+      ) : null}
+
+      {compact ? null : (
       <Animated.View
         style={[styles.modelChip, expandedOnly]}
       >
@@ -373,6 +462,7 @@ export function Composer({
           <Icon name="chevronDown" size={14} color={colors.muted} />
         </Pressable>
       </Animated.View>
+      )}
 
       <Animated.View
         pointerEvents={blocked ? "none" : "auto"}
@@ -380,14 +470,26 @@ export function Composer({
       >
         {/* A draft mid-turn sends; without one the button stops the turn. */}
         {canSend ? (
-          <RoundButton icon="send" label="Send" onPress={() => void send()} primary />
+          <RoundButton
+            icon="send"
+            label="Send"
+            hint={offline ? "Available once your desktop reconnects" : undefined}
+            onPress={() => void send()}
+            primary
+            disabled={offline}
+          />
         ) : busy && onStop ? (
-          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary>
+          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary disabled={offline}>
             <View style={styles.stop} />
           </RoundButton>
         ) : (
           <RoundButton icon="mic" label="Dictate" onPress={dictate} />
         )}
+        {offline && canSend ? (
+          <View pointerEvents="none" style={styles.sendStatus}>
+            <PulsingDot />
+          </View>
+        ) : null}
       </Animated.View>
 
       {dictating ? (
@@ -413,8 +515,8 @@ function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => v
   const colors = useColors();
   if (Platform.OS === "android") return (
     <ChoiceMenu label="Add photos or files" actions={[
-      { label: "Photo Library", onPress: onPhotos },
-      { label: "Files", onPress: onFiles },
+      { label: "Photo Library", icon: "image", onPress: onPhotos },
+      { label: "Files", icon: "folder", onPress: onFiles },
     ]}>
       <View style={styles.round}><Icon name="add" size={18} color={colors.content} /></View>
     </ChoiceMenu>
@@ -485,14 +587,18 @@ function AttachmentChip({
 function RoundButton({
   icon,
   label,
+  hint,
   onPress,
   primary = false,
+  disabled = false,
   children,
 }: {
   icon?: IconName;
   label: string;
+  hint?: string;
   onPress?: () => void;
   primary?: boolean;
+  disabled?: boolean;
   children?: ReactNode;
 }) {
   const colors = useColors();
@@ -501,12 +607,16 @@ function RoundButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       hitSlop={4}
       onPress={onPress}
       style={({ pressed }) => [
         styles.round,
         primary && styles.roundPrimary,
         pressed && styles.pressed,
+        disabled && styles.disabled,
       ]}
     >
       {children ??
@@ -552,9 +662,28 @@ const useStyles = themedStyles((colors) => ({
   inputSlot: {
     position: "absolute",
   },
+  reply: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    height: REPLY_ROW - 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingLeft: 16,
+    paddingRight: 14,
+    borderRadius: (REPLY_ROW - 8) / 2,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: colors.stroke,
+  },
+  replyText: {
+    flex: 1,
+    color: colors.muted,
+    fontSize: 15,
+  },
   strip: {
     position: "absolute",
-    top: TOP_ROW,
     left: 0,
     right: 0,
     height: STRIP,
@@ -610,6 +739,14 @@ const useStyles = themedStyles((colors) => ({
     fontSize: 17,
     lineHeight: 22,
     textAlignVertical: "top",
+  },
+  measure: {
+    position: "absolute",
+    top: 0,
+    left: EDGE + BUTTON + 8,
+    right: EDGE + BUTTON + 8,
+    flex: 0,
+    opacity: 0,
   },
   button: {
     position: "absolute",
@@ -689,6 +826,11 @@ const useStyles = themedStyles((colors) => ({
   },
   hidden: {
     opacity: 0,
+  },
+  sendStatus: {
+    position: "absolute",
+    top: 0,
+    right: 0,
   },
   disabled: {
     opacity: 0.4,

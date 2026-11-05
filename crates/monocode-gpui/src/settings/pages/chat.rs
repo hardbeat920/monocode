@@ -48,6 +48,34 @@ impl SettingsView {
                     |this, on, cx| this.update(cx, |p| p.paced_reveal = on),
                 )],
             ),
+            self.row(
+                Some("collapse-tool-groups"),
+                false,
+                "Collapse tool groups",
+                Some("Keep tool groups closed, even while they run. Click a group to see its steps.".into()),
+                vec![self.toggle(
+                    "collapse-tool-groups",
+                    "Collapse tool groups",
+                    p.collapse_tool_groups,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.collapse_tool_groups = on),
+                )],
+            ),
+            self.row(
+                Some("fold-finished-work"),
+                false,
+                "Fold finished work",
+                Some("Fold a finished reply's tool calls under \"worked for\". Turn off to keep text and tool groups inline.".into()),
+                vec![self.toggle(
+                    "fold-finished-work",
+                    "Fold finished work",
+                    p.fold_finished_work,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.fold_finished_work = on),
+                )],
+            ),
         ];
         let composer = vec![
             self.row(
@@ -137,17 +165,17 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("empty-session-games"),
+                Some("empty-session"),
                 false,
-                "Empty session games",
-                Some("Show playable games in empty sessions.".into()),
-                vec![self.toggle(
-                    "empty-session-games",
-                    "Empty session games",
-                    p.empty_session_games,
-                    false,
+                "Empty session",
+                Some("Stir dithered ink, play a game, or leave it blank.".into()),
+                vec![self.segmented(
+                    "empty-session",
+                    "Empty session",
+                    &p.empty_session,
+                    &[("ink", "Ink"), ("games", "Games"), ("none", "Off")],
                     cx,
-                    |this, on, cx| this.update(cx, |p| p.empty_session_games = on),
+                    |this, v, cx| this.update(cx, |p| p.empty_session = v.into()),
                 )],
             ),
         ];

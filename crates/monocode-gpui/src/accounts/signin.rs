@@ -159,6 +159,27 @@ impl Accounts {
                         }
                     })),
             )
+            // The CLI cannot see a closed browser tab; let the user give up
+            // on a waiting sign-in (from any surface) and start again.
+            .when(auth_running && !complete, |d| {
+                d.child(
+                    div()
+                        .id("footer-provider-auth-cancel")
+                        .role(Role::Button)
+                        .aria_label("Cancel sign-in")
+                        .mt(px(8.))
+                        .px(px(8.))
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(content(0.5))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(content(0.8)))
+                        .child("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_auth(cx))),
+                )
+            })
             .children(error.map(|error| {
                 div()
                     .id("footer-provider-signin-error")
@@ -196,6 +217,7 @@ mod tests {
                 complete: false,
                 error: None,
                 adding: None,
+                started: std::time::Instant::now(),
             });
             assert!(!accounts.has_modal_auth());
             accounts.signin.as_mut().unwrap().complete = true;
@@ -228,6 +250,7 @@ mod tests {
                     complete: false,
                     error: None,
                     adding: None,
+                    started: std::time::Instant::now(),
                 });
                 cx.notify();
                 previous
@@ -269,5 +292,44 @@ mod tests {
                 assert!(accounts.dialog_focus.is_focused(window));
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn returning_to_the_app_resets_a_sign_in_the_browser_abandoned(cx: &mut gpui::TestAppContext) {
+        let store = Arc::new(std::sync::Mutex::new(
+            monocode_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let view =
+            cx.new(|cx| Accounts::new(PathBuf::from("/fixture"), Book::default(), store, cx));
+        let waiting = |complete| SignIn {
+            kind: Kind::Claude,
+            profile: Profile::default(),
+            action: AuthAction::SignIn,
+            surface: Surface::Footer,
+            cancel: Arc::new(AtomicBool::new(false)),
+            complete,
+            error: None,
+            adding: None,
+            started: std::time::Instant::now() - std::time::Duration::from_secs(30),
+        };
+        view.update(cx, |accounts, cx| {
+            accounts.signin = Some(waiting(false));
+            accounts.app_reactivated(cx);
+        });
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(6));
+        cx.run_until_parked();
+        view.update(cx, |accounts, _| {
+            assert!(accounts.signin.is_none(), "an abandoned sign-in resets");
+            assert!(!accounts.has_footer_auth(Kind::Claude, accounts::DEFAULT));
+        });
+        // A sign-in that finished while the user was away is left alone.
+        view.update(cx, |accounts, cx| {
+            accounts.signin = Some(waiting(true));
+            accounts.app_reactivated(cx);
+        });
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(6));
+        cx.run_until_parked();
+        view.update(cx, |accounts, _| assert!(accounts.signin.is_some()));
     }
 }

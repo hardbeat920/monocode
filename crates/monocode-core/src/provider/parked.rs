@@ -44,12 +44,32 @@ pub(super) struct Wire {
     reader: Option<thread::JoinHandle<()>>,
     stderr_reader: Option<thread::JoinHandle<()>>,
     writer: Option<thread::JoinHandle<()>>,
-    _registration: process::Registration,
-    _account: crate::accounts::Tracked,
+    // Held until the child is gone, which may be after `Wire` is dropped.
+    _registration: Option<process::Registration>,
+    _account: Option<crate::accounts::Tracked>,
 }
+#[cfg(unix)]
+fn spawn_process(command: &mut Command) -> std::io::Result<std::process::Child> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 1..ATTEMPTS {
+        match command.spawn() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                thread::sleep(Duration::from_millis(25 * attempt as u64));
+            }
+            settled => return settled,
+        }
+    }
+    command.spawn()
+}
+
+#[cfg(not(unix))]
+fn spawn_process(command: &mut Command) -> std::io::Result<std::process::Child> {
+    command.spawn()
+}
+
 impl Wire {
     pub fn spawn(command: &mut Command, request: &Request) -> Result<Self, String> {
-        let mut child = command.spawn().map_err(|e| {
+        let mut child = spawn_process(command).map_err(|e| {
             format!(
                 "Cannot start {} at {}: {e}",
                 request.kind.label(),
@@ -120,12 +140,38 @@ impl Wire {
             reader: Some(reader),
             stderr_reader: Some(stderr_reader),
             writer: Some(writer),
-            _registration: registration,
-            _account: account,
+            _registration: Some(registration),
+            _account: Some(account),
         })
     }
 }
 impl Drop for Wire {
+    /// Close stdin and let the provider exit on its own before any signal, on
+    /// a background thread: `process::retire_pid` explains why a hard kill can
+    /// sign Claude out. Pool locks and turn completion never wait on this.
+    #[cfg(unix)]
+    fn drop(&mut self) {
+        self.stdin.sender.take();
+        // Disconnect before joining so a bounded stdout sender cannot deadlock.
+        let (_, empty) = mpsc::channel();
+        drop(std::mem::replace(&mut self.rx, empty));
+        let pid = self.child.id();
+        let threads = [
+            self.writer.take(),
+            self.reader.take(),
+            self.stderr_reader.take(),
+        ];
+        let held = (self._registration.take(), self._account.take());
+        thread::spawn(move || {
+            process::retire_pid(pid, || {
+                for t in threads.into_iter().flatten() {
+                    let _ = t.join();
+                }
+            });
+            drop(held);
+        });
+    }
+    #[cfg(not(unix))]
     fn drop(&mut self) {
         process::terminate(&mut self.child);
         self.stdin.sender.take();
@@ -378,7 +424,8 @@ pub(super) fn settle_cancelled(mut wire: Wire, mut protocol: Protocol) {
                             && thread.is_none_or(|id| {
                                 Some(id) == protocol.request.provider_id.as_deref()
                             });
-                        let claude_terminal = kind == Kind::Claude && value["type"] == "result";
+                        let claude_terminal =
+                            kind == Kind::Claude && super::claude_turn_result(&value);
                         if codex_terminal || claude_terminal {
                             // Discard already-buffered trailing frames too.
                             while wire.rx.try_recv().is_ok() {}

@@ -11,6 +11,7 @@ mod floating;
 mod host;
 mod html;
 mod memory_ui;
+mod mobile;
 mod notifications;
 mod overview;
 mod panel_stack;
@@ -53,7 +54,7 @@ use std::{
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);
-pub(crate) use notifications::{NotificationChanged, NotificationFinished};
+pub(crate) use notifications::{NotificationChanged, NotificationFinished, NotificationPosted};
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
@@ -119,6 +120,8 @@ pub(crate) struct Monos {
     picker: Option<OpenPicker>,
     settings_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
+    subsession_model_anchor: AnchorSlot,
+    subsession_effort_anchor: AnchorSlot,
     projects_anchor: AnchorSlot,
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
@@ -351,6 +354,8 @@ impl Monos {
             picker: None,
             settings_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
+            subsession_model_anchor: AnchorSlot::default(),
+            subsession_effort_anchor: AnchorSlot::default(),
             projects_anchor: AnchorSlot::default(),
             access_anchor: AnchorSlot::default(),
             menu: None,
@@ -699,9 +704,13 @@ impl Monos {
             let mut summary = db.create(provider.id(), &home)?;
             summary.title = mono.label();
             db.title(summary.id, &summary.title)?;
+            // A Mono's chat is conversation: it answers quickly at low effort
+            // and hands heavy work to background sessions. Only new chats get
+            // this; existing Monos keep whatever effort they already have.
             let settings = Settings {
                 access: AccessMode::Auto,
                 model: prefs.default_models.get(provider.id()).cloned(),
+                effort: Some("low".into()),
                 ..Default::default()
             };
             db.configure_agent(summary.id, provider.id(), &settings)?;
@@ -975,10 +984,19 @@ impl Monos {
                         .strip_prefix("mono-card:")
                         .map(|s| ("mono-card", s.to_string()))
                         .unwrap_or_else(|| ("assistant", report.clone()));
+                    let body = (role == "assistant").then(|| {
+                        text.strip_prefix("**Habit report**")
+                            .unwrap_or(&text)
+                            .trim()
+                            .to_owned()
+                    });
                     if let Err(error) = view.update(cx, |v, cx| v.mono_post(role, text, cx)) {
                         self.error = Some(error);
                         self.failed_reports.insert(id.into());
                         failed.push(report);
+                    } else if let Some(body) = body {
+                        let session = view.read(cx).summary.id;
+                        cx.emit(NotificationPosted { session, body });
                     }
                 }
                 if let Some(mono) = self.roster.get_mut(id) {
@@ -1231,7 +1249,9 @@ impl Monos {
                 icon_button("new-mono", "New mono", "plus")
                     .debug_selector(|| "sidebar-mono-button".into())
                     .size(px(20.))
-                    .when(!original, |d| d.mr(px(-2.)))
+                    // Centred on the sidebar's trailing column, with the
+                    // session filter and the navigation hints and counts.
+                    .when(!original, |d| d.mr(px(-3.)))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.create(add_project.clone().into_iter().collect(), w, cx)
                     })),
@@ -1487,11 +1507,15 @@ impl Monos {
                         .w_full()
                         .min_w_0()
                         .pr_7()
-                        .gap(px(6.))
+                        .gap(px(crate::tab_tile::TAB_TILE_GAP))
                         .group_hover(group.clone(), move |s| {
                             s.opacity(1.).bg(title_tab_fill(active, true))
                         })
-                        .child(avatar::avatar(&mono.mascot, mono.color, "idle", 16., true))
+                        .child(crate::tab_tile::mark_tile(
+                            &crate::tab_tile::TAB_TILE,
+                            crate::tab_tile::Face::Neutral,
+                            avatar::avatar(&mono.mascot, mono.color, "idle", 14., true),
+                        ))
                         .child(
                             div()
                                 .flex_1()

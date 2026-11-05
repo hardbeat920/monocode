@@ -9,7 +9,7 @@ use std::time::Duration;
 /// One wave across the grid, as TerminalSpinner's `monocode-spinner-wave`.
 pub(crate) const SPINNER_PERIOD: Duration = Duration::from_millis(1_200);
 /// Slate, peach and pink, top row to bottom.
-const ROWS: [u32; 3] = [0x6f84a3, 0xe8b583, 0xe47fa6];
+pub(crate) const SPINNER_ROWS: [u32; 3] = [0x6f84a3, 0xe8b583, 0xe47fa6];
 
 /// The working spinner turning on the shared clock at `rate`.
 pub(crate) fn spinner(id: impl Into<ElementId>, rate: Rate) -> pulse::Looping {
@@ -30,7 +30,7 @@ pub(crate) fn spinner_at(fraction: f32) -> gpui::Div {
                 let wave = (0.5 - 0.5 * (phase - (col + row) as f32 * 0.9).cos()).powf(3.52);
                 let peak = 0.93 * (1. - 0.65 * (col as f32 - row as f32).abs() / 2.);
                 let alpha = 0.07 + peak * wave;
-                let mut color: Hsla = rgb(ROWS[row]).into();
+                let mut color: Hsla = rgb(SPINNER_ROWS[row]).into();
                 color.a = alpha;
                 div()
                     .size(px(4.))
