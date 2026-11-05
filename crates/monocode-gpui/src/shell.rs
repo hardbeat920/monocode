@@ -10992,6 +10992,39 @@ mod tests {
         assert!(!open(cx));
     }
     #[gpui::test]
+    fn boxy_collapsed_sidebar_peeks_too(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.workspace.new_layout_boxy = true;
+                shell.layout_changed(cx);
+                shell.toggle_sidebar(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let open = |cx: &mut gpui::VisualTestContext| {
+            window.update(cx, |shell, _, _| shell.peek_open()).unwrap()
+        };
+        cx.simulate_mouse_move(gpui::point(px(2.), px(300.)), None, Default::default());
+        cx.run_until_parked();
+        assert!(open(cx));
+        assert!(cx.debug_bounds("sidebar-peek").is_some());
+        // The classic layout never peeks.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.workspace.classic_layout = true;
+                shell.layout_changed(cx);
+            })
+            .unwrap();
+        cx.simulate_mouse_move(gpui::point(px(300.), px(300.)), None, Default::default());
+        cx.simulate_mouse_move(gpui::point(px(2.), px(300.)), None, Default::default());
+        cx.run_until_parked();
+        assert!(!open(cx));
+    }
+    #[gpui::test]
     fn original_sidebar_geometry_matches_tauri_chrome(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let (window, _, _) = window(cx);
