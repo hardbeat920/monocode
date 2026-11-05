@@ -269,6 +269,44 @@ release workflow. No live-provider requests, companion device tests, or manual
 packaged upgrade checks were performed in this preflight. Existing platform
 runtime limitations remain as recorded above and in [preview limitations](parity.md).
 
+## Preview 14 candidate — November 5, 2026
+
+Source revision
+[`da39885e`](https://github.com/hardbeat920/monocode/commit/da39885e5503a924647bd19b2a2376bc15eea0c0)
+passed every native-check stage locally on macOS Apple Silicon with Rust 1.97.1
+and Node 26.9.0:
+
+- Native development, dependency-guard, packaging, and release script tests: 29 passed.
+- Native workspace formatting: passed.
+- Strict Clippy for core and GPUI, all targets, `native-dev` profile: passed.
+- Native core tests: 671 passed, 2 ignored.
+- GPUI tests, run serially: 843 passed, 11 ignored.
+- Wheel-scroll integration tests: 3 passed.
+
+The initial `npm run native:check` passed its script, formatting, and Clippy
+stages, then encountered sandbox denials in core fixtures that open loopback
+sockets or inspect processes. Rerunning the Rust stage with the required host
+permissions completed successfully:
+
+```sh
+npm run native:test
+```
+
+The machine was also low on disk space during compilation. Removing the older
+debug-profile incremental compiler cache made room for the test build; the
+`native-dev` artifacts used for this check were retained.
+
+The [candidate native workflow](https://github.com/hardbeat920/monocode/actions/runs/42036909502)
+has passed core checks on macOS, Linux, and Windows. Its macOS desktop job was
+still running when these local results were recorded.
+
+These results cover automated fixtures. The native release workflow builds the
+platform packages, signs and verifies the update packages and manifest, and
+handles macOS notarization before publication. No live-provider requests,
+performance benchmarks, companion device tests, or manual packaged upgrade tests
+were performed in this preflight. Existing platform runtime limitations remain
+as recorded above and in [preview limitations](parity.md).
+
 ## Local checks
 
 Run the complete native check from the repository root:
