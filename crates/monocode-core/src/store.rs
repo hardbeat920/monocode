@@ -1314,7 +1314,7 @@ mod tests {
         assert!(!store.sessions().unwrap()[0].archived);
     }
     #[test]
-    fn thread_parent_lock_survives_restart_and_is_distinct_from_operator_launches() {
+    fn thread_parent_lock_survives_restart_and_is_distinct_from_started_threads() {
         let dir = tempfile::tempdir().unwrap();
         for shared in [false, true] {
             let path = dir.path().join(if shared {

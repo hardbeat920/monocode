@@ -47,14 +47,6 @@ impl Conversation {
         }
         cx.emit(SessionChanged);
     }
-    pub(crate) fn save_app_draft(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if self.driven_by.is_some() {
-            return;
-        }
-        self.input
-            .update(cx, |input, cx| input.set_text(prompt, cx));
-        self.save_message_draft(cx);
-    }
     pub(crate) fn stop_app_session(&mut self, cx: &mut Context<Self>) {
         if self.needs_history_restore() {
             self.stop_if_busy(cx);

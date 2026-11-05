@@ -950,6 +950,9 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
             if planning_orchestration(environment) {
                 tools.push(crate::orchestration::tool_definition());
             }
+            if crate::app_control::enabled(environment) {
+                tools.extend(crate::app_control::tool_definitions());
+            }
             Ok(json!({"tools":tools}))
         }
         "tools/call" => {
@@ -963,6 +966,9 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                 "visual_show" => publish_with_environment(input, environment),
                 crate::orchestration::TOOL => check_orchestration_plan(&input, environment),
                 NEW_THREAD => call_thread_tool("new", input, environment),
+                name if name.starts_with("app_") => {
+                    crate::app_control::call(name, input, environment)
+                }
                 name if name.starts_with("thread_") => {
                     call_thread_tool(&name["thread_".len()..], input, environment)
                 }

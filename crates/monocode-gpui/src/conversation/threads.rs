@@ -1,6 +1,78 @@
 use super::*;
 
 impl Conversation {
+    pub(crate) fn check_agent_change(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<(), String> {
+        if self.driven_by.is_some() {
+            return Err("A subagent follows its lead; change the lead instead.".into());
+        }
+        let cached;
+        let catalog = if self.catalog.is_empty() {
+            let kind = Kind::from_id(&self.summary.provider);
+            cached = catalog::cached_models_for(kind, &self.settings.account).unwrap_or_default();
+            &cached
+        } else {
+            &self.catalog
+        };
+        let info = match model {
+            Some(id) => Some(catalog.iter().find(|m| m.id == id).ok_or_else(|| {
+                let ids: Vec<_> = catalog.iter().take(12).map(|m| m.id.as_str()).collect();
+                format!("Unknown model for this harness. Try: {}", ids.join(", "))
+            })?),
+            None => self.model_info(),
+        };
+        match (effort, info) {
+            (Some(effort), Some(info))
+                if !info.efforts.is_empty() && !info.efforts.iter().any(|e| e == effort) =>
+            {
+                Err(format!(
+                    "Unknown effort for this model. Try: {}",
+                    info.efforts.join(", ")
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// An agent's change to this thread, already checked. Unlike the pickers,
+    /// it leaves the person's defaults for new chats alone.
+    pub(crate) fn apply_agent_change(
+        &mut self,
+        model: Option<&str>,
+        effort: Option<&str>,
+        access: Option<AccessMode>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if let Some(model) = model {
+            let kind = Kind::from_id(&self.summary.provider);
+            if !self.apply_model_pick(&ModelPicked(kind, Some(model.to_owned())), cx) {
+                return Err("This thread can't change model right now.".into());
+            }
+        }
+        if let Some(effort) = effort {
+            self.apply_effort(effort);
+        }
+        if let Some(access) = access {
+            self.settings.access = access;
+        }
+        self.save_settings(cx);
+        cx.emit(SessionChanged);
+        cx.notify();
+        Ok(())
+    }
+
+    /// What is waiting in the composer, sent or not.
+    pub(crate) fn composer_text(&self, cx: &gpui::App) -> String {
+        self.input.read(cx).content.to_string()
+    }
+
+    pub(crate) fn set_composer_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
     pub(crate) fn driver_label(&self) -> String {
         self.model_label().to_string()
     }
@@ -187,7 +259,6 @@ mod tests {
                 v.send(cx);
                 v.quick_submit("Quick submit".into(), Settings::default(), cx);
                 v.mobile_submit("Mobile submit".into(), Vec::new(), cx);
-                v.save_app_draft("Operator draft".into(), cx);
                 let settings = v.settings.clone();
                 assert!(!v.apply_model_pick(&ModelPicked(Kind::Claude, Some("other".into())), cx));
                 v.mobile_configure(

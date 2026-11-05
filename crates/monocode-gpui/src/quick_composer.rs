@@ -35,14 +35,10 @@ const PICKER_RESIZE: f32 = 0.24;
 const PICKER_FADE_DELAY: f32 = 0.04;
 const PICKER_FADE: f32 = 0.18;
 /// Commands the floating composer offers after a leading `/`.
-const COMMANDS: [(Command, &str); 4] = [
+const COMMANDS: [(Command, &str); 3] = [
     (
         Command::Plan,
         "Create a reviewable implementation plan before changing files.",
-    ),
-    (
-        Command::Operator,
-        "Give this thread access to MonoCode sessions, folders, and notes.",
     ),
     (Command::Orchestrator, "Plan and coordinate agent work."),
     (
@@ -420,11 +416,11 @@ impl QuickComposer {
     fn leading(&self, cx: &App) -> Option<Command> {
         Command::leading(&self.input.read(cx).content)
     }
-    /// The prompt without a leading mode command; Operator is part of it.
+    /// The prompt without a leading mode command.
     fn message(&self, cx: &App) -> String {
         let prompt = self.prompt(cx);
         match self.leading(cx) {
-            Some(Command::Operator) | None => prompt,
+            None => prompt,
             Some(command) => prompt[command.name().len() + 1..].trim().to_owned(),
         }
     }
@@ -606,8 +602,8 @@ impl QuickComposer {
         }
         cx.notify();
     }
-    /// A leading `/word` opens the command list; Operator only activates at
-    /// the start of a prompt, so every mode does.
+    /// A leading `/word` opens the command list; a mode only activates at the
+    /// start of a prompt.
     fn sync_commands(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).content.clone();
         let token = text

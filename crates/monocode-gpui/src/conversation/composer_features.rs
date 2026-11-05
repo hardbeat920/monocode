@@ -7,7 +7,6 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Default)]
 pub(super) struct TurnModes {
     plan: bool,
-    operator: bool,
     orchestrator: bool,
 }
 
@@ -38,7 +37,6 @@ impl Conversation {
         let enabled = match id {
             "draft" => self.follow_ups.draft_selected,
             "plan" => self.settings.plan,
-            "operator" => self.settings.operator,
             "orchestrator" => self.settings.orchestrator,
             _ => true,
         };
@@ -50,7 +48,6 @@ impl Conversation {
         let enabled = match id {
             "draft" => &mut self.follow_ups.draft_selected,
             "plan" => &mut self.settings.plan,
-            "operator" => &mut self.settings.operator,
             "orchestrator" => &mut self.settings.orchestrator,
             _ => return,
         };
@@ -65,7 +62,6 @@ impl Conversation {
     pub(super) fn turn_modes(&self) -> TurnModes {
         TurnModes {
             plan: self.settings.plan,
-            operator: self.settings.operator,
             orchestrator: self.settings.orchestrator,
         }
     }
@@ -73,11 +69,9 @@ impl Conversation {
     pub(super) fn with_modes<R>(&mut self, modes: TurnModes, f: impl FnOnce(&mut Self) -> R) -> R {
         let composer = self.turn_modes();
         self.settings.plan = modes.plan;
-        self.settings.operator = modes.operator;
         self.settings.orchestrator = modes.orchestrator;
         let result = f(self);
         self.settings.plan = composer.plan;
-        self.settings.operator = composer.operator;
         self.settings.orchestrator = composer.orchestrator;
         result
     }
@@ -85,7 +79,6 @@ impl Conversation {
         // The accepted turn or queue item already owns its mode. The empty
         // composer starts a fresh draft, matching Composer.tsx's submit reset.
         self.settings.plan = false;
-        self.settings.operator = false;
         self.settings.orchestrator = false;
         self.input
             .update(cx, |input, cx| input.selected_command(None, cx));
@@ -93,7 +86,7 @@ impl Conversation {
         cx.notify();
     }
     pub(crate) fn toggle_mode(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.is_remote() && matches!(id, "operator" | "orchestrator") {
+        if self.is_remote() && id == "orchestrator" {
             self.status = "This mode is not available on remote projects.".into();
             cx.notify();
             return;
@@ -105,23 +98,15 @@ impl Conversation {
             "draft" => {
                 self.follow_ups.draft_selected = !self.follow_ups.draft_selected;
                 self.settings.plan = false;
-                self.settings.operator = false;
                 self.settings.orchestrator = false;
             }
             "plan" => {
                 self.settings.plan = !self.settings.plan;
                 self.settings.orchestrator = false;
-                self.settings.operator = false;
-            }
-            "operator" => {
-                self.settings.operator = !self.settings.operator;
-                self.settings.plan = false;
-                self.settings.orchestrator = false;
             }
             "orchestrator" => {
                 self.settings.orchestrator = !self.settings.orchestrator;
                 self.settings.plan = false;
-                self.settings.operator = false;
             }
             _ => return,
         }
@@ -131,8 +116,6 @@ impl Conversation {
             Some("orchestrator")
         } else if self.settings.plan {
             Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
         } else {
             None
         };
@@ -155,32 +138,21 @@ impl Conversation {
         mut text: String,
         cx: &mut Context<Self>,
     ) -> String {
-        for mode in ["plan", "operator", "orchestrator"] {
+        for mode in ["plan", "orchestrator"] {
             if let Some(rest) = monocode_core::composer::consume_command(&text, mode) {
                 let rest = rest.to_owned();
                 match mode {
                     "plan" => {
                         self.settings.plan = true;
                         self.settings.orchestrator = false;
-                        self.settings.operator = false;
-                    }
-                    "operator" => {
-                        self.settings.operator = true;
-                        self.settings.plan = false;
-                        self.settings.orchestrator = false;
                     }
                     _ => {
                         self.settings.orchestrator = true;
                         self.settings.plan = false;
-                        self.settings.operator = false;
                     }
                 }
                 self.save_settings(cx);
-                text = if rest.is_empty() && mode == "operator" {
-                    "Explain what you can do in MonoCode with the app CLI.".into()
-                } else {
-                    rest
-                };
+                text = rest;
                 break;
             }
         }

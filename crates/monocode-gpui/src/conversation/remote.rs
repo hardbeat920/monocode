@@ -288,8 +288,8 @@ impl Conversation {
             cx.notify();
             return true;
         }
-        if self.settings.operator || self.settings.orchestrator {
-            self.status = "Operator and orchestration are not available on remote projects.".into();
+        if self.settings.orchestrator {
+            self.status = "Orchestration is not available on remote projects.".into();
             cx.notify();
             return true;
         }

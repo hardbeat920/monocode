@@ -392,8 +392,8 @@ impl Shell {
         self.session_card_at_depth(id, false, cx)
     }
 
-    /// Folder members use the same compact row as an Operator's children,
-    /// while keeping any Operator or Orchestrator rail of their own.
+    /// Folder members use the same compact row as a lead's children, while
+    /// keeping any rail of their own.
     pub(super) fn nested_session_card(&self, id: i64, cx: &mut Context<Self>) -> AnyElement {
         self.session_card_at_depth(id, true, cx)
     }

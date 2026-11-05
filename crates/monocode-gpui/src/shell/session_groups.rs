@@ -2013,7 +2013,7 @@ mod tests {
                                 .as_solid()
                                 .is_some_and(|color| color == crate::theme::rail_color())
                     }),
-                    "the same spine as Operator rows connects folder members"
+                    "the same spine as lead rows connects folder members"
                 );
             })
             .unwrap();

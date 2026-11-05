@@ -1,4 +1,4 @@
-//! Shared project actions for ordinary Operator threads and resident Monos.
+//! Shared project actions for ordinary threads and resident Monos.
 //! Visibility and Mono-only capabilities belong to the caller, not launch JSON.
 use crate::{
     agent::{AccessMode, Settings},
@@ -12,18 +12,14 @@ use std::collections::HashMap;
 #[cfg(test)]
 mod tests;
 
-pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
+/// Project actions any chat may run. Starting, messaging and deleting sessions
+/// stay with Monos: the thread tools cover the first, and the others would let
+/// one agent drive or destroy another's work.
+pub fn validate_project_action(action: &str, input: &Value) -> Result<(), String> {
     if !matches!(
         action,
-        "models.list"
-            | "sessions.list"
-            | "sessions.read"
-            | "sessions.start"
-            | "sessions.send"
-            | "sessions.draft"
-            | "sessions.stop"
+        "sessions.stop"
             | "sessions.archive"
-            | "sessions.delete"
             | "folders.list"
             | "folders.move"
             | "notes.list"
@@ -32,13 +28,10 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
             | "worktrees.list"
             | "worktrees.create"
     ) {
-        return Err("Unknown Operator action. Run app help for project actions; memory, habits and artifacts require a Mono.".into());
+        return Err("Unknown app action. Memory, habits and artifacts are only available to Monos."
+            .into());
     }
-    crate::mono::api::validate(action, input)?;
-    if input["notifyOnComplete"] == true {
-        return Err("Completion notifications are only available in a Mono's chat".into());
-    }
-    Ok(())
+    crate::mono::api::validate(action, input)
 }
 
 pub fn validate_threads(action: &str, input: &Value) -> Result<(), String> {
@@ -115,11 +108,7 @@ pub fn optional_text(input: &Value, key: &str, max: usize) -> Result<Option<Stri
     input.get(key).map(|_| text(input, key, max)).transpose()
 }
 pub fn prompt(input: &Value) -> Result<String, String> {
-    let prompt = text(input, "prompt", 240_000)?;
-    if crate::composer::consume_command(&prompt, "operator").is_some() {
-        return Err("App calls cannot enable /operator in another session".into());
-    }
-    Ok(prompt)
+    text(input, "prompt", 240_000)
 }
 pub fn fingerprint(action: &str, input: &Value) -> String {
     crate::mono::files::content_hash(&format!("{action}:{input}"))
@@ -215,8 +204,10 @@ pub fn models_catalog(profiles: Vec<(Kind, crate::accounts::Profile)>) -> Result
     ]}))
 }
 
+const NO_MODEL_SETTINGS: &str = "This harness has no model settings to choose from.";
+
 /// Account choice is supplied by the caller; transports and credentials are never
-/// inherited from a Mono or an Operator grant into its child.
+/// inherited from a Mono into its child.
 pub fn launch_settings(
     input: &Value,
     source_provider: &str,
@@ -253,7 +244,11 @@ pub fn launch_settings(
             .iter()
             .any(|m| Some(m.id.as_str()) == settings.model.as_deref())
     {
-        return Err("Unknown model; run models.list for exact model IDs".into());
+        let ids: Vec<_> = models.iter().take(12).map(|m| m.id.as_str()).collect();
+        return Err(format!(
+            "Unknown model for this harness. Try: {}",
+            ids.join(", ")
+        ));
     }
     if settings.model.is_none() {
         settings.model = selected.map(|m| m.id.clone());
@@ -264,7 +259,7 @@ pub fn launch_settings(
         .transpose()?
         .unwrap_or_default();
     if let Some(effort) = optional_text(input, "effort", 128)? {
-        let model = selected.ok_or("No model settings available; run models.list first")?;
+        let model = selected.ok_or(NO_MODEL_SETTINGS)?;
         let control = model_controls(kind, model)
             .into_iter()
             .find(|c| is_effort(&c.id))
@@ -272,17 +267,20 @@ pub fn launch_settings(
         values.insert(control.id, effort);
     }
     if !values.is_empty() {
-        let controls = model_controls(
-            kind,
-            selected.ok_or("No model settings available; run models.list first")?,
-        );
+        let controls = model_controls(kind, selected.ok_or(NO_MODEL_SETTINGS)?);
         for (key, value) in &values {
-            if !controls
-                .iter()
-                .any(|c| c.id == *key && c.choices.iter().any(|(id, _)| id == value))
-            {
+            let Some(control) = controls.iter().find(|c| c.id == *key) else {
+                let keys: Vec<_> = controls.iter().map(|c| c.id.as_str()).collect();
                 return Err(format!(
-                    "Invalid model setting {key}; run models.list for allowed values"
+                    "Unknown model setting {key}. Try: {}",
+                    keys.join(", ")
+                ));
+            };
+            if !control.choices.iter().any(|(id, _)| id == value) {
+                let choices: Vec<_> = control.choices.iter().map(|(id, _)| id.as_str()).collect();
+                return Err(format!(
+                    "Invalid value for {key}. Try: {}",
+                    choices.join(", ")
                 ));
             }
             if is_effort(key) {
@@ -312,8 +310,6 @@ pub fn launch_settings(
     settings.mono = None;
     settings.mono_message_id = None;
     settings.mono_sent_at = None;
-    settings.operator = false;
-    settings.operator_enabled = false;
     settings.orchestrator = false;
     settings.plan = false;
     settings.environment.clear();
@@ -425,7 +421,6 @@ pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, Strin
     let selected = &turns[start..end];
     Ok(json!({"turns":selected.iter().map(|(user,answers)|{
         let text=user["text"].as_str().unwrap_or("");
-        let text=crate::composer::consume_command(text,"operator").unwrap_or(text);
         json!({"turnId":user["id"],"user":capped(text,max),"assistant":answers.last().map(|b|capped(b["text"].as_str().unwrap_or(""),max)),"earlierAssistantMessages":answers.len().saturating_sub(1)})
     }).collect::<Vec<_>>(),"nextBefore":if start>0 {selected.first().map(|(b,_)|b["id"].clone())}else{None}}))
 }

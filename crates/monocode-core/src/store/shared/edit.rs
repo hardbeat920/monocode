@@ -129,10 +129,7 @@ impl Store {
             }
         }
         let start = blocks::project(&blocks[..first])?.len();
-        let mut prompt = block["text"].as_str().unwrap_or("").to_owned();
-        if block["monocode"] == true {
-            prompt = format!("/operator {prompt}");
-        }
+        let prompt = block["text"].as_str().unwrap_or("").to_owned();
         let attachments = block["attachments"]
             .as_array()
             .into_iter()

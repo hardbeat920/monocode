@@ -40,7 +40,7 @@ soul.read {}; soul.update {text,expectedHash}
 memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,until?}; memory.replace {find,fact,topic?,until?}; memory.remove {find,topic?}
 habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
-Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
+Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
 sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits, cards and notifyOnComplete:true require a Mono.
@@ -233,6 +233,9 @@ pub fn client(args: &[String]) -> Result<Value, String> {
 fn response_timeout(action: &str, input: &Value) -> Duration {
     Duration::from_secs(if action == "threads.wait" {
         input["timeoutSeconds"].as_u64().unwrap_or(50).min(50) + 10
+    } else if action == "control.set" {
+        // Raising access waits on the person.
+        300
     } else {
         60
     })

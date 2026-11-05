@@ -2209,7 +2209,6 @@ mod native_input_tests {
             .unwrap();
         for (name, icon) in [
             ("plan", "ai-idea"),
-            ("operator", "cursor-magic"),
             ("orchestrator", "share"),
         ] {
             let text = format!(

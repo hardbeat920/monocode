@@ -83,8 +83,6 @@ fn worker_settings(lead: &Conversation) -> Settings {
     settings.model = lead.current_model();
     settings.plan = false;
     settings.orchestrator = false;
-    settings.operator = false;
-    settings.operator_enabled = false;
     settings.handoff = None;
     settings.pending_provider_switch = None;
     settings.remote_action = None;

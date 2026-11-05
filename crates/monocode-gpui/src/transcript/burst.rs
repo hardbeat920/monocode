@@ -1,5 +1,5 @@
-//! One-shot graphics inside freshly sent Operator, Plan, Orchestrator and
-//! Visualize prompt bubbles. Visualize shares the charts' ordered dither grid.
+//! One-shot graphics inside freshly sent Plan, Orchestrator and Visualize
+//! prompt bubbles. Visualize shares the charts' ordered dither grid.
 //! Timings, colors and keyframes follow index.css; CSS's radial gradient and
 //! rounded `overflow: hidden` are approximated with masked linear gradients and
 //! a coverage fade at the bubble's corners.
@@ -11,7 +11,6 @@ use std::{hash::BuildHasher, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
-    Operator,
     Plan,
     Orchestrator,
     Visualize,
@@ -28,8 +27,6 @@ impl Kind {
             Some(Self::Orchestrator)
         } else if settings.plan {
             Some(Self::Plan)
-        } else if settings.operator {
-            Some(Self::Operator)
         } else {
             None
         }
@@ -38,7 +35,7 @@ impl Kind {
     fn duration_ms(self) -> f32 {
         match self {
             Self::Orchestrator => 3100.,
-            Self::Operator | Self::Plan => 3200.,
+            Self::Plan => 3200.,
             Self::Visualize => 2800.,
         }
     }
@@ -94,10 +91,6 @@ impl Burst {
             paint_sheen(&bubble, t, &colors.sheen, window);
             let mut rng = Rng(self.seed | 1);
             match self.kind {
-                Kind::Operator => {
-                    paint_ember_glow(&bubble, t, colors.ember_glow, window);
-                    paint_sparkles(&bubble, t, &colors, &mut rng, window);
-                }
                 Kind::Plan => {
                     paint_ember_glow(&bubble, t, colors.ember_glow, window);
                     paint_plan_steps(&bubble, t, &colors, &mut rng, window, cx);
@@ -198,33 +191,6 @@ struct Palette {
 
 impl Palette {
     fn new(kind: Kind, light: bool) -> Self {
-        if kind == Kind::Operator {
-            let color = if light {
-                hex(0xf59e0b, 1.)
-            } else {
-                hex(0xfde68a, 1.)
-            };
-            let glow = if light {
-                hex(0xd97706, 0.55)
-            } else {
-                hex(0xfbbf24, 0.9)
-            };
-            return Self {
-                color,
-                glow,
-                spark: hex(0xfffbeb, 1.),
-                ink: color,
-                halo_ring: hex(0xf59e0b, 0.55),
-                halo_glow: hex(0xf59e0b, 0.35),
-                sheen: [
-                    (0.3, hex(0xfef3c7, 0.)),
-                    (0.48, hex(0xfef3c7, 0.5)),
-                    (0.52, hex(0xfbbf24, 0.35)),
-                    (0.7, hex(0xfbbf24, 0.)),
-                ],
-                ember_glow: hex(0xfbbf24, 0.35),
-            };
-        }
         let (color, glow, spark, ink) = match (kind, light) {
             (Kind::Plan, false) => (
                 hex(0xfde047, 1.),
@@ -570,83 +536,6 @@ pub(crate) fn paint_orb(
 ) {
     paint_dot(center, diameter, colors.1, window);
     paint_dot(center, diameter * 0.55, mix(colors.0, 0.8), window);
-}
-
-const STAR: [[(f32, f32); 3]; 4] = [
-    [(12.9, 6.6), (17.4, 11.1), (24., 12.)],
-    [(17.4, 12.9), (12.9, 17.4), (12., 24.)],
-    [(11.1, 17.4), (6.6, 12.9), (0., 12.)],
-    [(6.6, 11.1), (11.1, 6.6), (12., 0.)],
-];
-
-fn paint_star(center: Point<Pixels>, size: f32, turn: f32, color: Hsla, window: &mut Window) {
-    let (sin, cos) = turn.to_radians().sin_cos();
-    let scale = size / 24.;
-    let at = |(x, y): (f32, f32)| {
-        let (x, y) = ((x - 12.) * scale, (y - 12.) * scale);
-        center + point(px(x * cos - y * sin), px(x * sin + y * cos))
-    };
-    let mut path = PathBuilder::fill();
-    path.move_to(at((12., 0.)));
-    for [a, b, to] in STAR {
-        path.cubic_bezier_to(at(to), at(a), at(b));
-    }
-    path.close();
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
-}
-
-/// MonocodeSparkles: eighteen stars and embers drift up and twinkle.
-fn paint_sparkles(bubble: &Bubble, t: f32, colors: &Palette, rng: &mut Rng, window: &mut Window) {
-    const COUNT: usize = 18;
-    let (w, h) = (bubble.width(), bubble.height());
-    let (bx, by) = bubble.origin();
-    for i in 0..COUNT {
-        let star = i % 3 != 2;
-        let x = (((i as f32 + rng.next()) / COUNT as f32) * 100.).clamp(4., 96.) / 100. * w;
-        let size = if star {
-            7. + rng.next() * 6.
-        } else {
-            2.5 + rng.next() * 2.
-        };
-        let delay = 150. + rng.next() * 950.;
-        let duration = 1200. + rng.next() * 800.;
-        let drift = (rng.next() - 0.5) * 28.;
-        let spin = if rng.next() < 0.5 { -1. } else { 1. } * (90. + rng.next() * 120.);
-        let (opacity, scale, turn) = twinkle(progress(t, delay, duration));
-        let (dx, dy) = rise(t, delay, duration, h, drift);
-        let (cx, cy) = (x + dx, h + size * 0.5 + dy);
-        let opacity = opacity * bubble.coverage(cx, cy, size * 0.5 * scale);
-        if opacity <= 0.01 {
-            continue;
-        }
-        let center = point(px(bx + cx), px(by + cy));
-        if star {
-            paint_glow(
-                center,
-                size * scale * 0.45,
-                3.,
-                mix(colors.glow, opacity),
-                window,
-            );
-            paint_star(
-                center,
-                size * scale,
-                spin * turn,
-                mix(colors.color, opacity),
-                window,
-            );
-        } else {
-            paint_glow(center, size * scale, 3., mix(colors.glow, opacity), window);
-            paint_orb(
-                center,
-                size * scale,
-                (mix(colors.spark, opacity), mix(colors.color, opacity)),
-                window,
-            );
-        }
-    }
 }
 
 const FIRST_STEP_MS: f32 = 250.;

@@ -56,7 +56,7 @@ impl Shell {
                     Command::WorkspaceStyle => {
                         window.dispatch_action(Box::new(ToggleWorkspaceStyle), cx)
                     }
-                    Command::Plan | Command::Operator | Command::Orchestrator => {
+                    Command::Plan | Command::Orchestrator => {
                         if let Some(view) =
                             this.workspace.active.and_then(|id| this.sessions.get(&id))
                         {
@@ -64,7 +64,6 @@ impl Shell {
                                 v.toggle_mode(
                                     match command {
                                         Command::Plan => "plan",
-                                        Command::Operator => "operator",
                                         _ => "orchestrator",
                                     },
                                     cx,

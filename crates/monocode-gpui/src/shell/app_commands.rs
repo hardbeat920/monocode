@@ -1,4 +1,4 @@
-//! Operator's project actions. Monos share the launch/request helpers but keep
+//! Project actions every chat can run. Monos share the launch/request helpers but keep
 //! their own project grants, visibility preference and completion bookkeeping.
 use super::*;
 use monocode_core::{
@@ -40,7 +40,7 @@ impl Shell {
                 })
                 .detach();
             }
-            Err(error) => self.error = Some(format!("Operator app access: {error}")),
+            Err(error) => self.error = Some(format!("App access: {error}")),
         }
     }
     pub(super) fn finish_app_call(
@@ -162,7 +162,7 @@ impl Shell {
         if thread {
             app::validate_threads(&call.action, &call.input)?;
         } else {
-            app::validate_operator(&call.action, &call.input)?;
+            app::validate_project_action(&call.action, &call.input)?;
         }
         if call.request_id.is_empty()
             || call.request_id.len() > 128
@@ -177,13 +177,12 @@ impl Shell {
             .sessions
             .get(&call.session)
             .map(|v| v.read(cx))
-            .filter(|v| thread || v.settings.operator_enabled)
-            .ok_or("Operator is not enabled for this thread.")?;
+            .ok_or("This thread is not open in MonoCode.")?;
         if thread {
             self.authorize_thread_caller(call, cx)?;
         }
         if caller.summary.cwd.starts_with("remote://") {
-            return Err("Operator is not available on remote projects".into());
+            return Err("App actions are not available on remote projects".into());
         }
         if call
             .input
@@ -194,17 +193,14 @@ impl Shell {
                     != monocode_core::files::path_key(&caller.summary.cwd)
             })
         {
-            return Err("Operator can only access this thread's project.".into());
+            return Err("App actions can only reach this thread's project.".into());
         }
         if (caller.app_read_only
             || caller.settings.plan
             || caller.settings.access == monocode_core::agent::AccessMode::ReadOnly)
             && !matches!(
                 call.action.as_str(),
-                "models.list"
-                    | "sessions.list"
-                    | "sessions.read"
-                    | "folders.list"
+                "folders.list"
                     | "notes.list"
                     | "notes.read"
                     | "worktrees.list"
@@ -223,6 +219,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if call.action.starts_with("control.") {
+            self.handle_control_call(call, window, cx);
+            return;
+        }
         if let Err(error) = self.authorize_app_call(&call, cx) {
             let _ = call.reply.send(Err(error));
             return;
@@ -244,7 +244,7 @@ impl Shell {
             return;
         }
         if !mutating(&call.action) {
-            self.dispatch_app_call(call, window, cx);
+            self.dispatch_app_call(call, cx);
             return;
         }
         let generation = self.sessions[&call.session].read(cx).submission_generation;
@@ -261,7 +261,7 @@ impl Shell {
         });
         cx.spawn(async move |this, cx| {
             let saved = work.await;
-            let _ = this.update_in(cx, |this, window, cx| match saved {
+            let _ = this.update(cx, |this, cx| match saved {
                 Ok(Some((hash, result))) => {
                     this.app_pending
                         .remove(&(call.session, call.request_id.clone()));
@@ -284,7 +284,7 @@ impl Shell {
                         cx,
                     );
                 }
-                Ok(None) => this.dispatch_app_call(call, window, cx),
+                Ok(None) => this.dispatch_app_call(call, cx),
                 Err(error) => this.finish_app_call(call, Err(error), cx),
             });
         })
@@ -367,7 +367,7 @@ impl Shell {
         }
         self.persist(cx);
     }
-    fn dispatch_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
+    fn dispatch_app_call(&mut self, call: Call, cx: &mut Context<Self>) {
         if let Err(error) = self.authorize_app_call(&call, cx) {
             self.finish_app_call(call, Err(error), cx);
             return;
@@ -386,38 +386,9 @@ impl Shell {
         let input = call.input.clone();
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
-            "sessions.list" => Ok(
-                json!({"cwd":project,"sessions":self.order.iter().filter_map(|id|{
-                let metadata=self.session_metadata(*id,cx);
-                if metadata.summary.cwd!=project || self.monos.as_ref().is_some_and(|m|m.read(cx).hidden_session(*id)) || self.orchestration_worker(*id){return None;}
-                let live=self.sessions.get(id).map(|v|v.read(cx));
-                Some(json!({"id":id,"sessionId":id,"title":metadata.summary.title,"harness":metadata.summary.provider,"model":live.and_then(|v|v.settings.model.clone()).or_else(||self.session_details.get(id).and_then(|m|m.model.clone())),"busy":metadata.busy,"hasDraft":live.is_some_and(|v|v.has_saved_draft() || !v.input.read(cx).content.is_empty()) || self.draft_sessions.contains(id),"archived":metadata.summary.archived}))
-            }).collect::<Vec<_>>()}),
-            ),
-            "models.list" => {
-                let profiles: Vec<_> = Kind::ALL
-                    .into_iter()
-                    .map(|kind| {
-                        let profile = if kind.id() == provider {
-                            inherited.account.clone()
-                        } else {
-                            crate::accounts::get(cx)
-                                .map(|center| center.read(cx).selected(kind, &project))
-                                .unwrap_or_default()
-                        };
-                        (kind, profile)
-                    })
-                    .collect();
-                self.app_background(
-                    call,
-                    move |_| Ok((app::models_catalog(profiles)?, Effect::None)),
-                    cx,
-                );
-                return;
-            }
-            // threads.new reuses sessions.start: a top-level thread the user
-            // owns, opened from a lead without the Operator grant.
-            "sessions.start" | "threads.start" | "threads.new" => {
+            // threads.new makes a top-level thread the user owns; threads.start
+            // a subagent. Both share Mono's sessions.start launch.
+            "threads.start" | "threads.new" => {
                 let parsed = (|| {
                     let prompt = app::prompt(&input)?;
                     let kind = Kind::parse(input["harness"].as_str().unwrap_or(&provider))
@@ -466,30 +437,7 @@ impl Shell {
                 },cx);
                 return;
             }
-            "sessions.read" => match self.app_target(&input, call.session, &project, false, cx) {
-                Ok(id) => {
-                    let busy = self.session_metadata(id, cx).busy;
-                    let draft = self
-                        .sessions
-                        .get(&id)
-                        .is_some_and(|v| v.read(cx).has_saved_draft())
-                        || self.draft_sessions.contains(&id);
-                    self.app_background(
-                        call,
-                        move |store| {
-                            Ok((
-                                locked(&store)?.app_conversation(id, &input, busy, draft)?,
-                                Effect::None,
-                            ))
-                        },
-                        cx,
-                    );
-                    return;
-                }
-                Err(e) => Err(e),
-            },
-            "sessions.send" | "sessions.draft" | "sessions.stop" | "sessions.archive"
-            | "sessions.delete" => {
+            "sessions.stop" | "sessions.archive" => {
                 match self
                     .app_target(&input, call.session, &project, true, cx)
                     .and_then(|id| {
@@ -499,42 +447,10 @@ impl Shell {
                     }) {
                     Err(e) => Err(e),
                     Ok((id, view)) => {
-                        if action == "sessions.delete" {
-                            self.delete_session(id, window, cx);
-                            if !self.deleting.contains(&id) {
-                                self.finish_app_call(
-                                    call,
-                                    Err(self
-                                        .error
-                                        .clone()
-                                        .unwrap_or("Could not delete session".into())),
-                                    cx,
-                                );
-                                return;
-                            }
-                            let deleting = self.group_writes.take();
-                            let store = self.store.clone();
-                            self.group_writes = Some(cx.spawn(async move |this, cx| {
-                                if let Some(deleting) = deleting {
-                                    deleting.await;
-                                }
-                                let result = cx
-                                    .background_executor()
-                                    .spawn(async move {
-                                        if locked(&store)?.sessions()?.iter().any(|s| s.id == id) {
-                                            Err("Could not delete session; its data was preserved"
-                                                .into())
-                                        } else {
-                                            Ok(json!({"sessionId":id,"deleted":true}))
-                                        }
-                                    })
-                                    .await;
-                                let _ = this
-                                    .update(cx, |this, cx| this.finish_app_call(call, result, cx));
-                            }));
-                            return;
-                        } else if action == "sessions.archive" {
-                            view.update(cx, |v, cx| v.stop_app_session(cx));
+                        view.update(cx, |v, cx| v.stop_app_session(cx));
+                        if action == "sessions.stop" {
+                            Ok(json!({"sessionId":id,"stopped":true}))
+                        } else {
                             self.app_background(
                                 call,
                                 move |store| {
@@ -547,36 +463,6 @@ impl Shell {
                                 cx,
                             );
                             return;
-                        } else if action == "sessions.stop" {
-                            view.update(cx, |v, cx| v.stop_app_session(cx));
-                            Ok(json!({"sessionId":id,"stopped":true}))
-                        } else {
-                            view.update(cx, |v, cx| v.load(cx));
-                            if !view.read(cx).ready_for_external(cx)
-                                || view.read(cx).has_saved_draft()
-                            {
-                                Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into())
-                            } else {
-                                match app::prompt(&input) {
-                                    Err(e) => Err(e),
-                                    Ok(prompt) => {
-                                        view.update(cx, |v, cx| {
-                                            if action == "sessions.draft" {
-                                                v.save_app_draft(prompt, cx)
-                                            } else {
-                                                v.install_transfer(
-                                                    v.settings.clone(),
-                                                    Some(prompt),
-                                                    cx,
-                                                )
-                                            }
-                                        });
-                                        Ok(
-                                            json!({"sessionId":id,"submitted":action=="sessions.send","saved":action=="sessions.draft"}),
-                                        )
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -668,7 +554,7 @@ impl Shell {
                 );
                 return;
             }
-            _ => Err("Unknown Operator action".into()),
+            _ => Err("Unknown app action".into()),
         };
         self.finish_app_call(call, result, cx);
     }
@@ -676,10 +562,7 @@ impl Shell {
 fn mutating(action: &str) -> bool {
     !matches!(
         action,
-        "models.list"
-            | "sessions.list"
-            | "sessions.read"
-            | "folders.list"
+        "folders.list"
             | "notes.list"
             | "notes.read"
             | "worktrees.list"

@@ -58,7 +58,7 @@ fn call(
 }
 
 #[gpui::test]
-fn threads_are_top_level_owned_and_available_without_operator(cx: &mut TestAppContext) {
+fn threads_are_top_level_owned_and_available_to_every_chat(cx: &mut TestAppContext) {
     let (window, child, lead) = setup(cx);
     let denied = call(window, child, "child-list", "threads.list", json!({}), cx)
         .try_recv()
@@ -349,7 +349,7 @@ fn threads_new_opens_a_top_level_thread_the_lead_does_not_own(cx: &mut TestAppCo
             });
         })
         .unwrap();
-    // No Operator grant: a lead opens a new thread through its thread tools.
+    // A lead opens a new thread through its thread tools.
     let value = call(
         window,
         lead,

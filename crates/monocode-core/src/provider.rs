@@ -596,9 +596,7 @@ impl Protocol {
                         }
                         if self.request.settings.plan {
                             params["sandboxPolicy"] = json!({"type":"readOnly"});
-                            if self.request.settings.operator
-                                || self.request.settings.operator_enabled
-                                || self.request.settings.orchestrator
+                            if self.request.settings.orchestrator
                                 || self
                                     .request
                                     .settings
@@ -1964,29 +1962,6 @@ mod tests {
         assert!(instructions.starts_with("You are the coding agent in Monocode."));
         assert!(instructions.contains("## Be quick"));
         assert!(instructions.contains("- /repo"));
-    }
-    #[test]
-    fn operator_thread_access_keeps_the_codex_app_bridge_reachable_on_later_turns() {
-        for plan in [false, true] {
-            let mut p = protocol(Kind::Codex);
-            p.request.settings.operator_enabled = true;
-            p.request.settings.plan = plan;
-            assert!(!p.request.settings.operator);
-            assert_eq!(p.codex_access().2["networkAccess"], true);
-            let mut out = Vec::new();
-            p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
-            p.frame(json!({"id":2,"result":{"thread":{"id":"saved"}}}), &mut out)
-                .unwrap();
-            let started: Value = String::from_utf8_lossy(&out)
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                .find(|message| message["method"] == "turn/start")
-                .unwrap();
-            assert_eq!(started["params"]["sandboxPolicy"]["networkAccess"], true);
-            if plan {
-                assert_eq!(started["params"]["sandboxPolicy"]["type"], "readOnly");
-            }
-        }
     }
     #[test]
     fn context_reports_use_the_latest_request_and_include_cached_tokens() {

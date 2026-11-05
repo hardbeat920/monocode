@@ -1,6 +1,7 @@
 mod accounts;
 mod actions;
 mod app_commands;
+mod app_control;
 mod app_views;
 mod automation_runs;
 mod classic_sidebar;
@@ -613,14 +614,13 @@ pub(crate) struct Shell {
     orchestrations: orchestration::Runs,
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
-    /// Sessions an /operator thread started, by the session that started them.
+    /// Top-level threads a thread opened, by the session that opened them.
     started_by: HashMap<i64, i64>,
     thread_parents: HashMap<i64, i64>,
     thread_waiters: HashMap<i64, Vec<monocode_core::mono::bridge::Call>>,
     agent_summary_writes: HashMap<i64, gpui::Task<()>>,
-    /// The sidebar rails under orchestrators and /operator threads.
+    /// The sidebar rails under orchestrators and the threads they opened.
     rails: rails::Rails,
-    /// The sidebar rails under orchestrators and /operator threads.
     usage_footer: Entity<UsageFooter>,
     /// The footer's high-usage chip and its running-work dialog.
     resources: Entity<ResourceMonitor>,
@@ -753,6 +753,8 @@ pub(crate) struct Shell {
     /// The project whose colors were last painted; leaving it blends colors.
     theme_project: Option<String>,
     quit_prompted: bool,
+    /// An agent's request to raise a thread's access is waiting on the person.
+    access_prompted: bool,
     pub(crate) menu: Option<ShellMenu>,
     background_dialog: Option<project_settings::OpenBackground>,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
@@ -1140,6 +1142,7 @@ impl Shell {
             window_glass: None,
             theme_project: None,
             quit_prompted: false,
+            access_prompted: false,
             menu: None,
             background_dialog: None,
             backgrounds: HashMap::new(),

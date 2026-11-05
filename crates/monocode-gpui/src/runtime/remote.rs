@@ -534,10 +534,8 @@ pub(crate) fn run_with_client(
             if !binding.outbox.is_empty() {
                 return Err("A remote command needs confirmation. Choose Retry before sending another message.".into());
             }
-            if settings.operator || settings.orchestrator {
-                return Err(
-                    "Operator and orchestration are not available on remote projects".into(),
-                );
+            if settings.orchestrator {
+                return Err("Orchestration is not available on remote projects".into());
             }
             if settings
                 .model
