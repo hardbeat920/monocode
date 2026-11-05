@@ -461,6 +461,79 @@ fn a_subagent_opens_read_only_beside_its_lead(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn an_agent_row_opens_its_conversation_beside_the_lead(cx: &mut TestAppContext) {
+    use monocode_core::tool::{ToolCall, ToolState};
+    let tool = |id: &str, state, output: Value| {
+        let mut call = ToolCall::new(id, "mcp__monocode__thread_start");
+        call.input = json!({"title":"Fix the export","prompt":"Go"}).to_string();
+        call.output = output.to_string();
+        call.state = state;
+        Row {
+            role: "tool".into(),
+            text: serde_json::to_string(&call).unwrap(),
+            first: true,
+            sent_at: None,
+        }
+    };
+    let (window, child, lead) = setup(cx);
+    window
+        .update(cx, |shell, window, cx| {
+            shell.open(lead, window, cx);
+            shell.sessions[&lead].update(cx, |v, _| v.summary.has_messages = true);
+            let transcript = shell.sessions[&lead].read(cx).transcript.clone();
+            transcript.update(cx, |view, cx| {
+                view.restore_history(
+                    vec![
+                        tool("failed", ToolState::Failed, json!("Unknown model")),
+                        tool("started", ToolState::Completed, json!({"threadId":child})),
+                    ],
+                    cx,
+                )
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let click = |visual: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = visual.debug_bounds(selector).expect(selector);
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.run_until_parked();
+    };
+    let state = |visual: &mut gpui::VisualTestContext| {
+        window
+            .update(visual, |shell, _, cx| {
+                let tab = shell.workspace.tab_of(lead).unwrap();
+                let transcript = shell.sessions[&lead].read(cx).transcript.read(cx);
+                (
+                    shell.workspace.layout(tab).leaf_ids(),
+                    transcript.thread_expanded.clone(),
+                )
+            })
+            .unwrap()
+    };
+
+    // The chevron shows the exchange here and leaves the conversation closed.
+    click(visual, "thread-toggle-1");
+    let (panes, expanded) = state(visual);
+    assert_eq!(panes, [lead]);
+    assert!(expanded.contains(&child));
+
+    // A failed start has no conversation, so its row shows the error instead.
+    click(visual, "thread-row-0");
+    let (panes, expanded) = state(visual);
+    assert_eq!(panes, [lead]);
+    assert!(expanded.contains(&0));
+
+    click(visual, "thread-row-1");
+    let (panes, _) = state(visual);
+    assert_eq!(panes, [lead, child]);
+}
+
+#[gpui::test]
 fn archiving_a_lead_archives_its_subagents_and_restoring_brings_them_back(cx: &mut TestAppContext) {
     let (window, child, lead) = setup(cx);
     window

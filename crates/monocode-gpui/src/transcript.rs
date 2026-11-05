@@ -757,7 +757,7 @@ pub(crate) struct TranscriptView {
     expanded: HashSet<usize>,
     agent_panels: tasks::AgentPanels,
     thread_states: HashMap<i64, serde_json::Value>,
-    thread_expanded: HashSet<i64>,
+    pub(crate) thread_expanded: HashSet<i64>,
     /// Finished child threads the user removed from the spawn tree.
     thread_dismissed: HashSet<i64>,
     /// Threads that sent messages into this one, by session.
