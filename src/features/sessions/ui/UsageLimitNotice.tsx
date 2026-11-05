@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Clock, Gauge, Play, X } from "../../../shared/ui/icons";
 import type { UsageLimit } from "../model/session";
-import { formatUsageLimitReset } from "../model/usageLimit";
+import { formatUsageLimitReset, usageLimitWaiting } from "../model/usageLimit";
 
 const BUTTON =
   "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content";
@@ -24,7 +24,7 @@ export function UsageLimitNotice({
   modelPicker?: ReactNode;
 }) {
   const [now, setNow] = useState(Date.now);
-  const waiting = limit.resetsAt != null && limit.resetsAt > now;
+  const waiting = usageLimitWaiting(limit, now);
   // Tick the countdown, and flip to "Resume" once the window resets.
   useEffect(() => {
     if (!waiting) return;

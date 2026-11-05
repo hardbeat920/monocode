@@ -263,6 +263,30 @@ const rect = (
   fill,
 });
 
+/**
+ * How far a mascot's drawn cells sit from the grid's centre, in grid units:
+ * most leave a row or column of the sprite empty, so centring the grid alone
+ * leaves the figure off to one side.
+ */
+export function pixelOffset(name: string): { x: number; y: number } {
+  const rows = pixelSprite(SPRITES[name] ? name : "ghost");
+  let [left, top, right, bottom] = [SIZE, SIZE, -1, -1];
+  rows.forEach((row, y) =>
+    [...row].forEach((cell, x) => {
+      if (cell !== "#") return;
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+    }),
+  );
+  if (right < 0) return { x: 0, y: 0 };
+  return {
+    x: (PIXEL_GRID - (INSET + left * CELL) - (INSET + (right + 1) * CELL)) / 2,
+    y: (PIXEL_GRID - (INSET + top * CELL) - (INSET + (bottom + 1) * CELL)) / 2,
+  };
+}
+
 const cache = new Map<string, PixelLayers>();
 
 /**

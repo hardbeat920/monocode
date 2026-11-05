@@ -221,6 +221,12 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             _ => return Err(format!("Unknown app argument: {arg}")),
         }
     }
+    call(action, input, request_id)
+}
+
+/// One authenticated request to the running app, with the capability this
+/// provider process inherited.
+fn call(action: String, input: Value, request_id: String) -> Result<Value, String> {
     let endpoint: SocketAddr = std::env::var("MONOCODE_APP_ENDPOINT")
         .map_err(|_| "App access is unavailable outside a Mono's provider process")?
         .parse()
@@ -264,6 +270,162 @@ pub fn client(args: &[String]) -> Result<Value, String> {
     serde_json::from_str(&line).map_err(|e| e.to_string())
 }
 
+/// The MCP server a Mono's provider reaches the app through: one long-lived
+/// stdio child per provider process, instead of a shell and a fresh app
+/// executable for every call.
+pub const MCP_SERVER: &str = "monocode_app";
+/// Claude's allowlist entry: the app checks every call against the Mono's own
+/// capability and projects, so it needs no second permission check.
+pub const CLAUDE_ALLOWED_TOOLS: &str = "mcp__monocode_app";
+const ENV_KEYS: [&str; 3] = [
+    "MONOCODE_APP_ENDPOINT",
+    "MONOCODE_APP_TOKEN",
+    "MONOCODE_APP_SESSION",
+];
+
+fn configured(environment: &HashMap<String, String>) -> bool {
+    ENV_KEYS.iter().all(|key| environment.contains_key(*key))
+}
+
+/// Claude's stdio server entry for a Mono, or None without app access.
+pub fn mcp_server(
+    mono: Option<&crate::agent::MonoContext>,
+    environment: &HashMap<String, String>,
+) -> Option<Value> {
+    let mono = mono.filter(|_| configured(environment))?;
+    Some(json!({"type":"stdio","command":mono.executable,"args":["app-mcp"]}))
+}
+
+/// ACP's stdio server shape, which names the server and passes its env.
+pub fn acp_server(
+    mono: Option<&crate::agent::MonoContext>,
+    environment: &HashMap<String, String>,
+) -> Option<Value> {
+    let mut server = mcp_server(mono, environment)?;
+    server.as_object_mut()?.remove("type");
+    server["name"] = MCP_SERVER.into();
+    server["env"] = ENV_KEYS
+        .iter()
+        .map(|key| json!({"name":key,"value":environment[*key]}))
+        .collect::<Vec<_>>()
+        .into();
+    Some(server)
+}
+
+pub fn configure_codex(
+    command: &mut std::process::Command,
+    mono: Option<&crate::agent::MonoContext>,
+    environment: &HashMap<String, String>,
+) {
+    let Some(server) = mcp_server(mono, environment) else {
+        return;
+    };
+    for (key, value) in [
+        ("command", server["command"].clone()),
+        ("args", server["args"].clone()),
+        ("env_vars", json!(ENV_KEYS)),
+        // The app checks every call against the Mono's own capability and
+        // projects. Without this, Codex's auto-review spends a model call
+        // (~3s) approving each one.
+        ("default_tools_approval_mode", json!("approve")),
+    ] {
+        // JSON's strings and arrays are valid TOML literals for these values.
+        command.args(["-c", &format!("mcp_servers.{MCP_SERVER}.{key}={value}")]);
+    }
+}
+
+pub fn tool_definitions() -> Vec<Value> {
+    vec![json!({
+        "name": "app",
+        "description": format!("Run a MonoCode app action: sessions, worktrees, folders, notes, artifacts, soul, memory, habits and chat cards. Pass the action name and its JSON input. Retry an uncertain mutation with the same requestId and identical input.\n\n{HELP}"),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "For example memory.add or sessions.start"},
+                "input": {"type": "object", "description": "The action's input object"},
+                "requestId": {"type": "string", "maxLength": 128, "description": "Reuse when retrying an uncertain mutation"}
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        },
+        "annotations": {"openWorldHint": false}
+    })]
+}
+
+fn mcp_response(request: Value) -> Option<Value> {
+    let id = request.get("id")?.clone();
+    let result = match request["method"].as_str().unwrap_or("") {
+        "initialize" => Ok(json!({
+            "protocolVersion": request["params"]["protocolVersion"].as_str().unwrap_or("2024-11-05"),
+            "capabilities": {"tools": {"listChanged": false}},
+            "serverInfo": {"name": MCP_SERVER, "version": env!("CARGO_PKG_VERSION")}
+        })),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": tool_definitions()})),
+        "tools/call" => {
+            let arguments = &request["params"]["arguments"];
+            let result = if request["params"]["name"].as_str() != Some("app") {
+                Err("Unknown MonoCode app tool".to_string())
+            } else if let Some(action) = arguments["action"].as_str() {
+                let input = match &arguments["input"] {
+                    Value::Null => json!({}),
+                    input => input.clone(),
+                };
+                let request_id = arguments["requestId"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map_or_else(super::new_id, str::to_owned);
+                call(action.to_owned(), input, request_id)
+            } else {
+                Err("action is required".to_string())
+            };
+            Ok(match result {
+                Ok(value) => {
+                    let failed = value.get("ok") == Some(&Value::Bool(false));
+                    json!({"content":[{"type":"text","text":value.to_string()}],"isError":failed})
+                }
+                Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
+            })
+        }
+        _ => Err(json!({"code":-32601,"message":"Method not found"})),
+    };
+    Some(match result {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+        Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+    })
+}
+
+/// Runs before GUI initialization. stdout carries MCP JSON-RPC frames only.
+pub fn mcp_stdio() -> Result<(), String> {
+    const MAX_FRAME: usize = 4 * 1024 * 1024;
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    loop {
+        let mut line = String::new();
+        (&mut input)
+            .take((MAX_FRAME + 1) as u64)
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        if line.is_empty() {
+            return Ok(());
+        }
+        if line.len() > MAX_FRAME || !line.ends_with('\n') {
+            return Err("Oversized or incomplete MCP frame".into());
+        }
+        let response = match serde_json::from_str(&line) {
+            Ok(request) => mcp_response(request),
+            Err(_) => Some(
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}),
+            ),
+        };
+        if let Some(response) = response {
+            writeln!(output, "{response}")
+                .and_then(|_| output.flush())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+}
+
 #[cfg(test)]
 mod capability_tests {
     use super::*;
@@ -290,6 +452,44 @@ mod capability_tests {
             let _ = BufReader::new(stream).read_line(&mut result);
             serde_json::from_str(&result).ok()
         })
+    }
+    #[test]
+    fn mcp_server_offers_one_app_tool_only_to_a_mono_with_app_access() {
+        let mono = crate::agent::MonoContext {
+            mono: Default::default(),
+            root: "/monos".into(),
+            executable: "/bin/monocode-gpui".into(),
+        };
+        let (server, _rx) = Server::start().unwrap();
+        let environment = server.environment(7);
+        assert!(mcp_server(None, &environment).is_none());
+        assert!(mcp_server(Some(&mono), &HashMap::new()).is_none());
+        let entry = mcp_server(Some(&mono), &environment).unwrap();
+        assert_eq!(entry["args"], json!(["app-mcp"]));
+        let mut codex = std::process::Command::new("codex");
+        configure_codex(&mut codex, Some(&mono), &environment);
+        let args: Vec<_> = codex
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(
+            &r#"mcp_servers.monocode_app.default_tools_approval_mode="approve""#.to_string()
+        ));
+        let acp = acp_server(Some(&mono), &environment).unwrap();
+        assert_eq!(acp["name"], MCP_SERVER);
+        assert_eq!(acp["env"].as_array().unwrap().len(), 3);
+
+        let list = mcp_response(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap();
+        let tools = list["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "app");
+        let unknown = mcp_response(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"other","arguments":{}}})).unwrap();
+        assert_eq!(unknown["result"]["isError"], true);
+        let missing = mcp_response(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"app","arguments":{}}})).unwrap();
+        assert_eq!(missing["result"]["isError"], true);
+        assert!(
+            mcp_response(json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none()
+        );
     }
     #[test]
     fn capability_is_bound_to_its_session_and_only_authenticated_calls_reach_the_app() {

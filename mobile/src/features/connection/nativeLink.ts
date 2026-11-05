@@ -3,12 +3,17 @@ import { Platform } from "react-native";
 
 type NativeLink = {
   execute(input: string): Promise<string>;
+  hideScrollEdgeEffects?(testID: string): Promise<boolean>;
   nativeTranscriptVersion?: number;
+  typingPostureVersion?: number;
 };
 const module = requireOptionalNativeModule<NativeLink>("MonocodeLink");
 // Older development builds and Android retain the existing transcript.
 export const hasNativeTranscript =
   Platform.OS === "ios" && module?.nativeTranscriptVersion === 1;
+
+export const hasTypingPosture =
+  Platform.OS === "ios" && module?.typingPostureVersion === 1;
 
 export type Identity = { certificate: string; privateKey: string };
 export type Address = { host: string; port: number };
@@ -79,3 +84,12 @@ export function makeCommandId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 export { parseInvitation } from "./invitation";
+
+/**
+ * Turns off iOS's scroll edge effects on the scroll view tagged `testID`, so
+ * only the screen's own gradual blur shows under its header (see
+ * ScrollEdgeEffects). Call once the scroll view is laid out.
+ */
+export function hideScrollEdgeEffects(testID: string) {
+  void module?.hideScrollEdgeEffects?.(testID);
+}
