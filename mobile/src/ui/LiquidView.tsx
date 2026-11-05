@@ -143,6 +143,7 @@ export function LiquidView({
   style,
   innerStyle,
   fill = false,
+  interactive: touchable = false,
 }: {
   children: ReactNode;
   onPress?: () => void;
@@ -164,13 +165,17 @@ export function LiquidView({
   innerStyle?: StyleProp<ViewStyle>;
   /** Stretch the glass to the outer container's size, e.g. one whose height animates. */
   fill?: boolean;
+  /** Native glass that answers touches (it lifts and stretches under a finger)
+   *  though there's no `onPress`, as for a field or a button a menu lies over. */
+  interactive?: boolean;
 }) {
   const styles = useStyles();
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.get() }],
   }));
-  const interactive = !!onPress && !disabled;
+  const interactive = (!!onPress || touchable) && !disabled;
+  const nativeGlass = isLiquidGlassAvailable();
   const presence = use(GlassPresence);
   const scheme = useScheme();
   const blurTarget = use(GlassBlurTarget);
@@ -178,12 +183,15 @@ export function LiquidView({
 
   const surface: StyleProp<ViewStyle> = [
     styles.surface,
+    // Interactive native glass lifts and stretches past its frame under a
+    // finger, so it can't be cut to it; the rest, and the blurred fallback, are.
+    !(nativeGlass && interactive) && styles.clip,
     { borderRadius, flexDirection: row ? "row" : "column" },
     fill && styles.fill,
     innerStyle,
   ];
 
-  const content = isLiquidGlassAvailable() ? (
+  const content = nativeGlass ? (
     <GlassView
       glassEffectStyle={
         presence
@@ -253,8 +261,10 @@ const useStyles = themedStyles((colors) => ({
   surface: {
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
     borderCurve: "continuous",
+  },
+  clip: {
+    overflow: "hidden",
   },
   fill: {
     flex: 1,

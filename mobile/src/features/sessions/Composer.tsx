@@ -1,7 +1,7 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
-import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
+import { Button } from "@expo/ui/swift-ui";
 import { useNavigation } from "expo-router";
-import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, {
@@ -506,9 +506,8 @@ export function Composer({
 }
 
 /**
- * The add button: a native menu to attach photos or files. The menu lies
- * over the button, its label an invisible box of the button's size, as in
- * SessionFilterMenu.
+ * The add button: a native menu to attach photos or files. The menu grows
+ * out of the button (see GlassMenuButton).
  */
 function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => void }) {
   const styles = useStyles();
@@ -522,29 +521,10 @@ function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => v
     </ChoiceMenu>
   );
   return (
-    <View>
-      <View style={styles.round}>
-        <Icon name="add" size={18} color={colors.content} />
-      </View>
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel("Add photos or files")]}
-          label={
-            <HStack
-              modifiers={[
-                frame({ width: BUTTON, height: BUTTON }),
-                contentShape(shapes.circle()),
-              ]}
-            >
-              <Spacer />
-            </HStack>
-          }
-        >
-          <Button label="Photo Library" systemImage="photo.on.rectangle" onPress={onPhotos} />
-          <Button label="Files" systemImage="folder" onPress={onFiles} />
-        </Menu>
-      </Host>
-    </View>
+    <GlassMenuButton icon="add" symbol="plus" label="Add photos or files" size={BUTTON}>
+      <Button label="Photo Library" systemImage="photo.on.rectangle" onPress={onPhotos} />
+      <Button label="Files" systemImage="folder" onPress={onFiles} />
+    </GlassMenuButton>
   );
 }
 

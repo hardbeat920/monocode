@@ -1,8 +1,8 @@
-import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
-import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
-import { Platform, StyleSheet, View } from "react-native";
+import { Button } from "@expo/ui/swift-ui";
+import { Platform, StyleSheet } from "react-native";
 
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 
@@ -35,27 +35,11 @@ export function MonoMenu({
     </ChoiceMenu>
   );
   return (
-    <View>
-      <LiquidView borderRadius={SIZE / 2} innerStyle={styles.round}>
-        <Icon name="more" size={20} />
-      </LiquidView>
-      {/* The native menu lies over the glass, its label an invisible box of
-          the button's size, as in SessionFilterMenu. */}
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel("More")]}
-          label={
-            <HStack modifiers={[frame({ width: SIZE, height: SIZE }), contentShape(shapes.circle())]}>
-              <Spacer />
-            </HStack>
-          }
-        >
-          <Button label="View details" systemImage="info.circle" onPress={onDetails} />
-          <Button label="Reset conversation" systemImage="arrow.counterclockwise" onPress={onReset} />
-          <Button label="Delete Mono" systemImage="trash" role="destructive" onPress={onDelete} />
-        </Menu>
-      </Host>
-    </View>
+    <GlassMenuButton icon="more" symbol="ellipsis" label="More" size={SIZE}>
+      <Button label="View details" systemImage="info.circle" onPress={onDetails} />
+      <Button label="Reset conversation" systemImage="arrow.counterclockwise" onPress={onReset} />
+      <Button label="Delete Mono" systemImage="trash" role="destructive" onPress={onDelete} />
+    </GlassMenuButton>
   );
 }
 
