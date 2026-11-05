@@ -494,7 +494,7 @@ export function ProjectScreen({
               <Timed id="project sessions page">
                 <SessionsPage
                   projectId={project.id}
-                  active={pages.view === "sessions"}
+                  active={focused && pages.view === "sessions"}
                   worktree={
                     workspace.mode === "existing" ? workspace.worktree : undefined
                   }

@@ -244,7 +244,7 @@ vi.mock("@/features/sessions/SessionScreen", () => ({
   ),
 }));
 vi.mock("@/features/sessions/SessionsPage", () => ({
-  SessionsPage: () => null,
+  SessionsPage: ({ active }: { active: boolean }) => <output data-sessions-active={String(active)} />,
 }));
 vi.mock("@/features/sessions/SessionToolbar", () => ({
   SessionTitle: () => null,
@@ -256,7 +256,7 @@ vi.mock("@/features/sessions/Transcript", () => ({
 }));
 vi.mock("@/features/workspace/ProjectPages", () => ({
   useProjectPages: () => ({ progress: { get: () => 0 }, view: desktop.page }),
-  ProjectPages: () => null,
+  ProjectPages: ({ sessions }: { sessions: ReactNode }) => sessions,
   ProjectSwitch: () => null,
 }));
 vi.mock("@/features/workspace/WorkspaceProvider", () => ({
@@ -465,6 +465,22 @@ describe("new session composer workspace", () => {
     act(() => root.render(<MonoScreen />));
     expect(container.querySelector("[data-usage-card]")?.textContent).toBe("mono:second:paused");
     expect(desktop.cardMounts).toBe(2);
+  });
+
+  it("reactivates the sessions list after returning from a parent session and its handoffs", () => {
+    desktop.page = "sessions";
+    const active = () => container.querySelector("[data-sessions-active]")!.getAttribute("data-sessions-active");
+    render();
+    expect(active()).toBe("true");
+    desktop.focused = false;
+    render();
+    expect(active()).toBe("false");
+    desktop.focused = true;
+    render();
+    expect(active()).toBe("true");
+    desktop.page = "chat";
+    render();
+    expect(active()).toBe("false");
   });
 
   it("permits posture focus only for a visible chat composer", () => {
