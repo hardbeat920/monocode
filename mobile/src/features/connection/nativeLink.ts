@@ -6,6 +6,7 @@ type NativeLink = {
   hideScrollEdgeEffects?(testID: string): Promise<boolean>;
   nativeTranscriptVersion?: number;
   typingPostureVersion?: number;
+  occlusionObserverVersion?: number;
 };
 const module = requireOptionalNativeModule<NativeLink>("MonocodeLink");
 // Older development builds and Android retain the existing transcript.
@@ -14,6 +15,9 @@ export const hasNativeTranscript =
 
 export const hasTypingPosture =
   Platform.OS === "ios" && module?.typingPostureVersion === 1;
+
+export const hasOcclusionObserver =
+  Platform.OS === "ios" && module?.occlusionObserverVersion === 1;
 
 export type Identity = { certificate: string; privateKey: string };
 export type Address = { host: string; port: number };

@@ -5,6 +5,7 @@ import { Composer } from "@/features/sessions/Composer";
 
 const runtime = vi.hoisted(() => ({
   os: "android",
+  insets: { top: 0, bottom: 24, left: 0, right: 0 },
   values: [] as { get: () => unknown; set: (value: unknown) => void }[],
   photos: vi.fn(async () => []),
   files: vi.fn(async () => []),
@@ -164,7 +165,7 @@ vi.mock("expo-router", () => ({
   useNavigation: () => ({ addListener: () => () => {} }),
 }));
 vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ bottom: 24 }),
+  useSafeAreaInsets: () => runtime.insets,
 }));
 vi.mock("@/features/connection/ConnectionNotice", () => ({
   useOffline: () => false,
@@ -228,6 +229,7 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
+  runtime.insets = { top: 0, bottom: 24, left: 0, right: 0 };
   runtime.values = [];
   vi.clearAllMocks();
   container = document.createElement("div");
@@ -333,4 +335,29 @@ it("focuses the existing draft on typing posture only for the active route", () 
   act(() => button("Enter typing posture").click());
   expect(document.activeElement).not.toBe(input);
   expect(input.value).toBe("Unsent draft");
+});
+
+
+it("aligns to either toolbar edge as the rail changes without losing focus or a draft", () => {
+  runtime.os = "ios";
+  render();
+  const input = container.querySelector("textarea")!;
+  act(() => {
+    input.focus();
+    input.value = "Keep this draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  runtime.insets.right = 84;
+  render();
+  const frame = container.firstElementChild as HTMLElement;
+  expect(frame.style.marginRight).toBe("0px");
+  expect(Number.parseFloat(frame.style.marginLeft)).toBeGreaterThan(0);
+  runtime.insets.left = 84;
+  runtime.insets.right = 0;
+  render();
+  expect(frame.style.marginLeft).toBe("0px");
+  expect(Number.parseFloat(frame.style.marginRight)).toBeGreaterThan(0);
+  expect(container.querySelector("textarea")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("Keep this draft");
 });

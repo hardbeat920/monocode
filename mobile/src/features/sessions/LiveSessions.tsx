@@ -32,6 +32,7 @@ import {
   useGlassEntrance,
   usePopStyle,
 } from "@/ui/LiquidView";
+import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
 import { GLASS_MIN_OPACITY } from "@/ui/SceneFade";
 import { Ticker, type TickerHandle } from "@/ui/Ticker";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
@@ -253,54 +254,56 @@ function NowWorking({
             onStop={stopSession}
           />
           <GlassPresence value={presence}>
-            <Animated.View
-              style={[styles.pillSlot, appearStyle]}
-              onLayout={(event) => pillHeight.set(event.nativeEvent.layout.height)}
-              pointerEvents={visible ? "box-none" : "none"}
-            >
-              <LiquidView
-                borderRadius={radii.pill}
-                innerStyle={styles.pill}
-                onPress={() => {
-                  if (displayed.length > 1) {
-                    void Haptics.selectionAsync();
-                    setOpen((was) => !was);
-                  } else openSession(session);
-                }}
-                pressedScale={1.02}
-                accessibilityLabel={
-                  displayed.length > 1
-                    ? `${displayed.length} working sessions. ${open ? "Hide" : "Show"} them`
-                    : `${session.title}, ${statusLabel(session)}. Open`
-                }
+            <OcclusionSafeArea margin={20}>
+              <Animated.View
+                style={appearStyle}
+                onLayout={(event) => pillHeight.set(event.nativeEvent.layout.height)}
+                pointerEvents={visible ? "box-none" : "none"}
               >
-                <Artwork session={session} pulse={pulse} />
-                <View style={styles.text}>
-                  <Ticker
-                    ref={ticker}
-                    held={swiping}
-                    items={items}
-                    style={styles.title}
-                    onActiveChange={setActive}
-                  />
-                  <Subtitle
-                    session={session}
-                    arrived={session.id in shownArrivals}
-                    index={index}
-                    count={displayed.length}
-                  />
-                </View>
-                <StopButton onPress={() => stopSession(session)} />
-                {displayed.length > 1 ? (
-                  <SkipButton
-                    onPress={() => {
+                <LiquidView
+                  borderRadius={radii.pill}
+                  innerStyle={styles.pill}
+                  onPress={() => {
+                    if (displayed.length > 1) {
                       void Haptics.selectionAsync();
-                      ticker.current?.skipTo((index + 1) % displayed.length);
-                    }}
-                  />
-                ) : null}
-              </LiquidView>
-            </Animated.View>
+                      setOpen((was) => !was);
+                    } else openSession(session);
+                  }}
+                  pressedScale={1.02}
+                  accessibilityLabel={
+                    displayed.length > 1
+                      ? `${displayed.length} working sessions. ${open ? "Hide" : "Show"} them`
+                      : `${session.title}, ${statusLabel(session)}. Open`
+                  }
+                >
+                  <Artwork session={session} pulse={pulse} />
+                  <View style={styles.text}>
+                    <Ticker
+                      ref={ticker}
+                      held={swiping}
+                      items={items}
+                      style={styles.title}
+                      onActiveChange={setActive}
+                    />
+                    <Subtitle
+                      session={session}
+                      arrived={session.id in shownArrivals}
+                      index={index}
+                      count={displayed.length}
+                    />
+                  </View>
+                  <StopButton onPress={() => stopSession(session)} />
+                  {displayed.length > 1 ? (
+                    <SkipButton
+                      onPress={() => {
+                        void Haptics.selectionAsync();
+                        ticker.current?.skipTo((index + 1) % displayed.length);
+                      }}
+                    />
+                  ) : null}
+                </LiquidView>
+              </Animated.View>
+            </OcclusionSafeArea>
           </GlassPresence>
         </View>
       ) : null}
@@ -328,7 +331,6 @@ function MiniPills({
   onOpen: (session: SessionSummary) => void;
   onStop: (session: SessionSummary) => void;
 }) {
-  const styles = useStyles();
   const { mounted, visible, presence } = useGlassEntrance(open, PRESENCE_MS);
   const count = live.length;
   useEffect(() => () => height.set(0), [height]);
@@ -348,21 +350,23 @@ function MiniPills({
   return (
     <GlassPresence value={presence}>
       <Animated.View
-        style={[styles.miniList, listStyle]}
+        style={listStyle}
         pointerEvents={visible ? "box-none" : "none"}
       >
-        {live.map((session, index) => (
-          <MiniPill
-            key={session.id}
-            session={session}
-            // Counted up from the now-playing pill.
-            place={count - 1 - index}
-            count={count}
-            visible={visible}
-            onPress={() => onOpen(session)}
-            onStop={() => onStop(session)}
-          />
-        ))}
+        <OcclusionSafeArea fill margin={28} insetMargin={8}>
+          {live.map((session, index) => (
+            <MiniPill
+              key={session.id}
+              session={session}
+              // Counted up from the now-playing pill.
+              place={count - 1 - index}
+              count={count}
+              visible={visible}
+              onPress={() => onOpen(session)}
+              onStop={() => onStop(session)}
+            />
+          ))}
+        </OcclusionSafeArea>
       </Animated.View>
     </GlassPresence>
   );
@@ -660,12 +664,6 @@ const useStyles = themedStyles((colors) => ({
     bottom: 0,
     left: 0,
     right: 0,
-  },
-  pillSlot: {
-    marginHorizontal: 20,
-  },
-  miniList: {
-    marginHorizontal: 28,
   },
   miniSlot: {
     position: "absolute",

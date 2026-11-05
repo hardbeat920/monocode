@@ -38,7 +38,7 @@ vi.mock("react-native", () => {
     if (onLayout && Array.isArray(style) && style.some((entry) => entry?.minHeight === 22)) {
       layout.onBelowLayout = onLayout;
     }
-    return <div>{children}</div>;
+    return <div style={Array.isArray(style) ? Object.assign({}, ...style) : style as object}>{children}</div>;
   };
   return {
     Platform: { get OS() { return layout.OS; } },
@@ -79,6 +79,9 @@ vi.mock("react-native-safe-area-context", () => ({
     children?: ReactNode; edges: string[]; style: object;
   }) => <div data-safe-edges={edges.join(",")} style={style}>{children}</div>,
   useSafeAreaInsets: () => ({ top: 20, bottom: 0, left: 0, right: 0 }),
+}));
+vi.mock("@/ui/OcclusionSafeArea", () => ({
+  OcclusionSafeArea: ({ children }: { children?: ReactNode }) => <div data-occlusion-safe-area>{children}</div>,
 }));
 vi.mock("@/ui/CircleButton", () => ({ CircleButton: () => null }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
@@ -140,9 +143,8 @@ describe("persistent session frame", () => {
         </SessionFrame>,
       ));
       const send = container.querySelector("[data-send]")!;
-      const safeArea = send.closest<HTMLElement>("[data-safe-edges]")!;
-      expect(safeArea.dataset.safeEdges).toBe("left,right");
-      expect(safeArea.style.paddingBottom).toBe("12px");
+      const safeArea = send.closest<HTMLElement>("[data-occlusion-safe-area]")!;
+      expect(safeArea.parentElement!.style.paddingBottom).toBe("12px");
       // The native screen's provider includes its navigation controls, unlike
       // the window provider above the navigator. The transcript stays full-bleed.
       expect(safeArea.closest<HTMLElement>("[data-local-safe-area]")?.dataset.pointerEvents).toBe("box-none");

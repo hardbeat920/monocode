@@ -37,11 +37,12 @@ import Animated, {
   type AnimatedStyle,
   type SharedValue,
 } from "react-native-reanimated";
-import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CircleButton } from "@/ui/CircleButton";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon, type IconName } from "@/ui/Icon";
+import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
 import {
   GLASS_PUSH_DURATION,
   HEADER_PUSH_TOTAL,
@@ -709,15 +710,17 @@ export function SessionFrame({
                     height={composerHeight + composerBottom + FADE}
                     color={colors.background}
                   />
-                  <SafeAreaView edges={["left", "right"]} style={{ paddingBottom: composerBottom }}>
-                    <View onLayout={onComposerLayout}>
-                      <GlassBlurTarget
-                        value={androidBlur && blurTargetReady ? blurTarget : undefined}
-                      >
-                        {chrome?.composer}
-                      </GlassBlurTarget>
-                    </View>
-                  </SafeAreaView>
+                  <View style={{ paddingBottom: composerBottom }}>
+                    <OcclusionSafeArea>
+                      <View onLayout={onComposerLayout}>
+                        <GlassBlurTarget
+                          value={androidBlur && blurTargetReady ? blurTarget : undefined}
+                        >
+                          {chrome?.composer}
+                        </GlassBlurTarget>
+                      </View>
+                    </OcclusionSafeArea>
+                  </View>
                   {/* Only a transcript needs this glass surface. Empty sessions
                       have no scroll target, so keep it out of the native tree. */}
                   {hasJumpTarget ? (

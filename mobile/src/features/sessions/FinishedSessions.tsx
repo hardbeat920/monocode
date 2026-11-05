@@ -1,6 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import { OcclusionSafeArea } from "@/ui/OcclusionSafeArea";
 import Animated, {
   Easing,
   interpolate,
@@ -128,57 +129,59 @@ export function FinishedSessions({
   return (
     <GlassPresence value={presence}>
       <Animated.View
-        style={[styles.deck, deckStyle, appearStyle]}
+        style={[deckStyle, appearStyle]}
         pointerEvents={visible ? "box-none" : "none"}
       >
-        <Animated.View
-          style={[styles.header, headerStyle]}
-          pointerEvents={open ? "box-none" : "none"}
-        >
-          <Text style={styles.headerLabel}>Finished</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Clear finished sessions"
-            hitSlop={8}
-            onPress={() => {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              if (entries[0]) dismissAllFinished(entries[0].session.projectId);
-            }}
-            style={({ pressed }) => [styles.clear, pressed && styles.pressed]}
+        <OcclusionSafeArea fill margin={28} insetMargin={8}>
+          <Animated.View
+            style={[styles.header, headerStyle]}
+            pointerEvents={open ? "box-none" : "none"}
           >
-            <Text style={styles.clearLabel}>Clear</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Stack finished sessions"
-            hitSlop={8}
-            onPress={() => setOpen(false)}
-            style={({ pressed }) => [styles.clear, pressed && styles.pressed]}
-          >
-            <Icon name="chevronDown" size={14} color={colors.muted} />
-          </Pressable>
-        </Animated.View>
-        {entries.map((entry, index) => (
-          <Card
-            key={entry.session.id}
-            entry={entry}
-            landed={!onMount.has(entry.session.id)}
-            index={index}
-            count={count}
-            spread={spread}
-            open={open}
-            onPress={() => {
-              if (!open && count > 1) {
-                void Haptics.selectionAsync();
-                setOpen(true);
-              } else openSession(entry.session);
-            }}
-            onLongPress={() => {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              dismissFinished(entry.session.id);
-            }}
-          />
-        ))}
+            <Text style={styles.headerLabel}>Finished</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Clear finished sessions"
+              hitSlop={8}
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                if (entries[0]) dismissAllFinished(entries[0].session.projectId);
+              }}
+              style={({ pressed }) => [styles.clear, pressed && styles.pressed]}
+            >
+              <Text style={styles.clearLabel}>Clear</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stack finished sessions"
+              hitSlop={8}
+              onPress={() => setOpen(false)}
+              style={({ pressed }) => [styles.clear, pressed && styles.pressed]}
+            >
+              <Icon name="chevronDown" size={14} color={colors.muted} />
+            </Pressable>
+          </Animated.View>
+          {entries.map((entry, index) => (
+            <Card
+              key={entry.session.id}
+              entry={entry}
+              landed={!onMount.has(entry.session.id)}
+              index={index}
+              count={count}
+              spread={spread}
+              open={open}
+              onPress={() => {
+                if (!open && count > 1) {
+                  void Haptics.selectionAsync();
+                  setOpen(true);
+                } else openSession(entry.session);
+              }}
+              onLongPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                dismissFinished(entry.session.id);
+              }}
+            />
+          ))}
+        </OcclusionSafeArea>
       </Animated.View>
     </GlassPresence>
   );
@@ -310,9 +313,6 @@ function Card({
 }
 
 const useStyles = themedStyles((colors) => ({
-  deck: {
-    marginHorizontal: 28,
-  },
   header: {
     position: "absolute",
     top: 0,
