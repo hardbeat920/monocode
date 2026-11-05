@@ -5,6 +5,8 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   root,
+  // Metro supplies this React Native global when bundling the app.
+  define: { __DEV__: false },
   resolve: {
     alias: {
       "@": `${root}src`,

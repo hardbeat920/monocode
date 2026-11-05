@@ -574,9 +574,17 @@ impl Shell {
     }
 }
 
+/// The navigation rows' trailing column: centred 7px in from the row's
+/// padding, on the same axis as the section headers' 24px icon buttons.
+const TRAILING_SLOT: f32 = 14.;
+
 impl Shell {
     pub(super) fn sidebar_options_menu_items(&self) -> Vec<MenuItem> {
         vec![
+            MenuAction::new("sidebar-search", "Search")
+                .icon("search")
+                .toggle(self.workspace.sidebar_search_visible)
+                .into(),
             MenuAction::new("sidebar-notes", "Notes")
                 .icon("note")
                 .toggle(self.workspace.sidebar_notes_visible)
@@ -609,6 +617,7 @@ impl Shell {
 
     pub(super) fn change_sidebar_option(&mut self, action: &str, cx: &mut Context<Self>) {
         let value = match action {
+            "sidebar-search" => &mut self.workspace.sidebar_search_visible,
             "sidebar-notes" => &mut self.workspace.sidebar_notes_visible,
             "sidebar-automations" => &mut self.workspace.sidebar_automations_visible,
             "sidebar-inbox" => &mut self.workspace.sidebar_inbox_visible,
@@ -629,6 +638,10 @@ impl Shell {
     }
 
     pub(super) fn sidebar_navigation(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // The Focused layout shows Search as an icon beside Sidebar options.
+        let search_field = self.workspace.sidebar_search_visible && self.workspace.classic_layout;
+        let focused = !self.workspace.classic_layout;
+        let blank_session = focused && self.active_session_is_blank(cx);
         div()
             .w_full()
             .px_2()
@@ -645,80 +658,86 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_px()
-            .child(
-                div()
-                    .id("rail-search")
-                    .debug_selector(|| "sidebar-search-field".into())
-                    .group("rail-search")
-                    .w_full()
-                    .h(px(32.))
-                    .mb(px(if self.workspace.classic_layout {
-                        2.
-                    } else {
-                        4.
-                    }))
-                    .px_1p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(content(0.08))
-                    // RailSearch's Tailwind shadow-sm, including
-                    // its tighter second layer below the border.
-                    // The vendored shader keeps it outside the
-                    // box, as CSS does.
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into()).blur_radius(px(3.)),
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
-                            .blur_radius(px(2.))
-                            .spread_radius(px(-1.)),
-                    ])
-                    .text_color(content(if self.sidebar_hover == Some("Search") {
-                        1.
-                    } else {
-                        0.5
-                    }))
-                    .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .on_hover(cx.listener(|this, hovered, _, cx| {
-                        this.sidebar_hover = if *hovered { Some("Search") } else { None };
-                        this.notify_navigation(cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.focus_search(window, cx);
-                        }),
-                    )
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(14.))
-                    .child(
-                        icon("search", 16.)
-                            .text_color(content(0.35))
-                            .group_hover("rail-search", |s| s.text_color(content(0.7))),
-                    )
-                    .child(div().flex_1().min_w_0().h(px(20.)).child("Search"))
-                    .child(
-                        // The shortcut span sits outside the label's `font-medium`.
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(content(0.4))
-                            .child(if cfg!(target_os = "macos") {
-                                "⌘K"
-                            } else {
-                                "Ctrl K"
+            .when(search_field, |d| {
+                d.child(
+                    div()
+                        .id("rail-search")
+                        .debug_selector(|| "sidebar-search-field".into())
+                        .group("rail-search")
+                        .w_full()
+                        .h(px(32.))
+                        .mb(px(if self.workspace.classic_layout {
+                            2.
+                        } else {
+                            4.
+                        }))
+                        .px_1p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.08))
+                        // RailSearch's Tailwind shadow-sm, including
+                        // its tighter second layer below the border.
+                        // The vendored shader keeps it outside the
+                        // box, as CSS does.
+                        .shadow(vec![
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(3.)),
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(2.))
+                                .spread_radius(px(-1.)),
+                        ])
+                        .text_color(content(if self.sidebar_hover == Some("Search") {
+                            1.
+                        } else {
+                            0.5
+                        }))
+                        .font_weight(FontWeight::MEDIUM)
+                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                        .on_hover(cx.listener(|this, hovered, _, cx| {
+                            this.sidebar_hover = if *hovered { Some("Search") } else { None };
+                            this.notify_navigation(cx);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.focus_search(window, cx);
                             }),
-                    ),
-            )
+                        )
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(14.))
+                        .child(
+                            icon("search", 16.)
+                                .text_color(content(0.35))
+                                .group_hover("rail-search", |s| s.text_color(content(0.7))),
+                        )
+                        .child(div().flex_1().min_w_0().h(px(20.)).child("Search"))
+                        .child(
+                            // The shortcut span sits outside the label's `font-medium`.
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(content(0.4))
+                                .child(if cfg!(target_os = "macos") {
+                                    "⌘K"
+                                } else {
+                                    "Ctrl K"
+                                }),
+                        ),
+                )
+            })
             .children(
                 [
+                    ("New", "square-plus"),
                     ("Inbox", "inbox"),
                     ("Notes", "note"),
                     ("Automations", "zap"),
                 ]
                 .into_iter()
                 .filter(|(label, _)| match *label {
+                    // Only the Focused layout lists New here.
+                    "New" => focused,
                     "Notes" => {
                         self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                     }
@@ -732,7 +751,11 @@ impl Shell {
                     } else {
                         glyph
                     };
-                    let selected = self.app_view_label() == Some(label);
+                    let selected = if label == "New" {
+                        blank_session
+                    } else {
+                        self.app_view_label() == Some(label)
+                    };
                     let unread = label == "Inbox"
                         && self
                             .inbox
@@ -767,19 +790,47 @@ impl Shell {
                             0.35
                         })))
                         .child(div().flex_1().child(label))
-                        .when(unread, |row| {
-                            row.child(
-                                div()
-                                    .size(px(if self.workspace.classic_layout {
-                                        8.
-                                    } else {
-                                        6.
-                                    }))
-                                    .rounded_full()
-                                    .bg(accent_color()),
-                            )
-                        })
+                        .when_some(
+                            match label {
+                                "New" => Some(format!("{MOD}T").into_any_element()),
+                                "Notes" => self
+                                    .note_count
+                                    .map(|count| count.to_string().into_any_element()),
+                                "Inbox" if unread => Some(
+                                    div()
+                                        .flex_shrink_0()
+                                        .size(px(if self.workspace.classic_layout {
+                                            8.
+                                        } else {
+                                            6.
+                                        }))
+                                        .rounded_full()
+                                        .bg(accent_color())
+                                        .into_any_element(),
+                                ),
+                                _ => None,
+                            },
+                            // One column for hints, counts and the unread dot,
+                            // centred under the section buttons' icons below.
+                            |row, trailing| {
+                                row.child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("sidebar-navigation-trailing-{label}")
+                                        })
+                                        .w(px(TRAILING_SLOT))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .justify_center()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(content(0.35))
+                                        .child(trailing),
+                                )
+                            },
+                        )
                         .on_click(cx.listener(move |this, _, window, cx| match label {
+                            "New" => this.new_chat(cx),
                             "Inbox" => this.open_inbox(window, cx),
                             "Notes" => this.open_notes(window, cx),
                             "Automations" => this.open_automations(window, cx),
@@ -796,6 +847,16 @@ impl Shell {
                 }),
             )
             .into_any()
+    }
+    /// The workspace shows an open session that has no messages yet.
+    fn active_session_is_blank(&self, cx: &App) -> bool {
+        !self.app_view_open()
+            && self.app_search.is_none()
+            && !self.mono_active(cx)
+            && self.workspace.active.is_some_and(|id| {
+                self.session_summaries.contains_key(&id)
+                    && !self.session_metadata(id, cx).summary.has_messages
+            })
     }
     fn notify_navigation(&self, cx: &mut Context<Self>) {
         if self.workspace.classic_layout {
@@ -866,14 +927,89 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
-    fn search_field_fills_the_virtual_sidebar_row(cx: &mut TestAppContext) {
+    fn focused_navigation_trailing_items_share_the_filter_axis(cx: &mut TestAppContext) {
+        let (window, _, _) = super::super::tests::window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for count in [0, 128] {
+            window
+                .update(visual, |shell, _, cx| {
+                    shell.note_count = Some(count);
+                    shell.notify_sidebar(cx);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let axis = visual
+                .debug_bounds("sidebar-filter-button")
+                .unwrap()
+                .center()
+                .x;
+            for selector in [
+                "sidebar-navigation-trailing-New",
+                "sidebar-navigation-trailing-Notes",
+            ] {
+                let trailing = visual.debug_bounds(selector).unwrap();
+                assert_eq!(trailing.center().x, axis, "{selector} with {count} notes");
+            }
+        }
+    }
+    #[gpui::test]
+    fn focused_search_sits_beside_sidebar_options(cx: &mut TestAppContext) {
         let (window, _, _) = super::super::tests::window(cx);
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
-        let sidebar = visual.debug_bounds("sidebar-content").unwrap();
-        let search = visual.debug_bounds("sidebar-search-field").unwrap();
-        assert_eq!(search.left() - sidebar.left(), px(8.));
-        assert_eq!(sidebar.right() - search.right(), px(8.));
+        assert!(visual.debug_bounds("sidebar-search-field").is_none());
+        let search = visual.debug_bounds("sidebar-search-button").unwrap();
+        let options = visual.debug_bounds("sidebar-options").unwrap();
+        assert!(search.right() <= options.left());
+        assert!((search.center().y - options.center().y).abs() <= px(1.));
+        visual.simulate_click(search.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| assert!(shell.app_search.is_some()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn focused_new_session_leads_navigation_and_marks_blank_sessions(cx: &mut TestAppContext) {
+        let (window, _, active) = super::super::tests::window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let new = visual.debug_bounds("sidebar-navigation-New").unwrap();
+        let inbox = visual.debug_bounds("sidebar-navigation-Inbox").unwrap();
+        assert!(new.bottom() <= inbox.top());
+        let selected = |visual: &mut gpui::VisualTestContext| {
+            window
+                .update(visual, |shell, _, cx| shell.active_session_is_blank(cx))
+                .unwrap()
+        };
+        window
+            .update(visual, |shell, _, cx| {
+                assert_eq!(shell.workspace.active, Some(active));
+                assert!(!shell.session_metadata(active, cx).summary.has_messages);
+            })
+            .unwrap();
+        assert!(selected(visual));
+        visual.simulate_click(inbox.center(), Default::default());
+        visual.run_until_parked();
+        assert!(!selected(visual), "Inbox takes the highlight");
+        window
+            .update(visual, |shell, w, cx| {
+                shell.close_app_view(w, cx);
+                shell.sessions[&active]
+                    .update(cx, |session, _| session.summary.has_messages = true);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(!selected(visual), "a conversation is not a new session");
+        window
+            .update(visual, |shell, _, cx| {
+                shell.workspace.classic_layout = true;
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("sidebar-navigation-New").is_none());
     }
 
     #[gpui::test]
@@ -987,7 +1123,9 @@ mod tests {
                 assert_eq!(bounds.size.width, px(184.));
             })
             .unwrap();
+        let search = visual.debug_bounds("menu-action-sidebar-search").unwrap();
         let notes = visual.debug_bounds("menu-action-sidebar-notes").unwrap();
+        assert!(search.bottom() <= notes.top());
         let automations = visual
             .debug_bounds("menu-action-sidebar-automations")
             .unwrap();
@@ -1004,6 +1142,7 @@ mod tests {
             "a divider separates Compact view"
         );
         for (action, navigation) in [
+            ("menu-action-sidebar-search", "sidebar-search-button"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
                 "menu-action-sidebar-automations",
@@ -1033,6 +1172,7 @@ mod tests {
                 );
                 let menu = shell.menu.as_ref().unwrap().menu.read(cx);
                 for id in [
+                    "sidebar-search",
                     "sidebar-notes",
                     "sidebar-automations",
                     "sidebar-inbox",
@@ -1043,6 +1183,7 @@ mod tests {
                 assert!(!cx.global::<crate::settings::Preferences>().monos);
                 let saved = shell.latest_state.lock().unwrap().clone();
                 let restored = Workspace::restore(Some(&saved), &[], "/work/monocode");
+                assert!(!restored.sidebar_search_visible);
                 assert!(!restored.sidebar_notes_visible);
                 assert!(!restored.sidebar_automations_visible);
                 assert!(!restored.sidebar_inbox_visible);
@@ -1050,6 +1191,7 @@ mod tests {
             })
             .unwrap();
         for (action, navigation) in [
+            ("menu-action-sidebar-search", "sidebar-search-button"),
             ("menu-action-sidebar-notes", "sidebar-navigation-Notes"),
             (
                 "menu-action-sidebar-automations",

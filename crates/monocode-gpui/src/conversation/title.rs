@@ -1,8 +1,31 @@
 //! Background session names never join or rewrite the user's provider history.
 use super::*;
-use monocode_core::session_title::display_title;
+use monocode_core::session_title::{TextModel, display_title};
 
 impl Conversation {
+    /// The background model picked in Settings, else this session's harness.
+    /// Only the session's own provider reuses the session's account.
+    pub(super) fn background_text_model(&self, cx: &gpui::App) -> TextModel {
+        let kind = Kind::from_id(&self.summary.provider);
+        let account = self.settings.account.clone();
+        let chosen = cx
+            .try_global::<crate::settings::Preferences>()
+            .and_then(|p| p.background_text_model());
+        match chosen {
+            Some((chosen, model)) => TextModel {
+                account: if chosen == kind {
+                    account
+                } else {
+                    crate::accounts::get(cx)
+                        .map(|center| center.read(cx).selected(chosen, &self.summary.cwd))
+                        .unwrap_or_default()
+                },
+                kind: chosen,
+                model,
+            },
+            None => TextModel::automatic(kind, account),
+        }
+    }
     /// Tauri's sessionDisplayTitle: the harness prefix belongs to persistence,
     /// while every conversation headline shows only the user's title.
     pub(crate) fn display_title(&self) -> String {
@@ -45,14 +68,13 @@ impl Conversation {
         self.summary.title = seed.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.title_cancel = Some(cancel.clone());
-        let kind = Kind::from_id(&self.summary.provider);
+        let text = self.background_text_model(cx);
         let cwd = self
             .settings
             .worktree_cwd
             .clone()
             .unwrap_or_else(|| self.summary.cwd.clone());
         let message = message.to_owned();
-        let account = self.settings.account.clone();
         let id = self.summary.id;
         let store = self.store.clone();
         let expected = seed.clone();
@@ -68,13 +90,7 @@ impl Conversation {
             let generated = if !titled || cfg!(test) {
                 None
             } else {
-                monocode_core::session_title::generate_for(
-                    kind,
-                    Path::new(&cwd),
-                    &message,
-                    account,
-                    flag,
-                )
+                monocode_core::session_title::generate_for(text, Path::new(&cwd), &message, flag)
             };
             // Tauri's resolveLinkedWorkItem: a pasted issue or PR links the
             // session even when a manual name kept the title. Tests never shell

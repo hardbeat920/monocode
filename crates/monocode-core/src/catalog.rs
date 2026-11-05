@@ -205,6 +205,32 @@ fn cache() -> &'static Mutex<CatalogCache> {
     static CACHE: OnceLock<Mutex<CatalogCache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
+/// Each Claude probe is a cold CLI start that may refresh the account's OAuth
+/// token, so its catalog is kept until a CLI update or sign-in invalidates it.
+fn fresh_for(kind: Kind) -> Duration {
+    if kind == Kind::Claude {
+        Duration::from_secs(6 * 60 * 60)
+    } else {
+        Duration::from_secs(300)
+    }
+}
+/// A CLI update changes every account's catalog for that provider.
+pub fn invalidate_all(kind: Kind) {
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
+    // Bump fetches still in flight too, so none stores a pre-update catalog.
+    let accounts: Vec<_> = cache
+        .entries
+        .iter()
+        .map(|(k, profile, ..)| (*k, profile))
+        .chain(cache.generation.keys().map(|(k, profile)| (*k, profile)))
+        .filter(|(k, _)| *k == kind)
+        .map(|(_, profile)| profile.clone())
+        .collect();
+    for account in accounts {
+        *cache.generation.entry((kind, account)).or_default() += 1;
+    }
+    cache.entries.retain(|(k, ..)| *k != kind);
+}
 pub fn invalidate(kind: Kind, account: &crate::accounts::Profile) {
     let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
     *cache.generation.entry((kind, account.clone())).or_default() += 1;
@@ -238,7 +264,7 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
     let cache = cache();
     let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, _, rows, _)) = guard.entries.iter().find(|(k, profile, _, at)| {
-        *k == kind && profile == account && at.elapsed() < Duration::from_secs(300)
+        *k == kind && profile == account && at.elapsed() < fresh_for(kind)
     }) {
         return Ok(rows.clone());
     }
@@ -843,9 +869,13 @@ fn query_provider(
             }
         }
     })();
-    process::terminate(&mut child);
+    // A cold Claude probe is often the first process to refresh an expired
+    // OAuth token. Let it exit on stdin EOF instead of killing it mid-save;
+    // the reader ends with the process, so it is detached rather than joined.
+    drop(stdin);
     drop(rx);
-    let _ = reader.join();
+    process::retire(child);
+    drop(reader);
     result
 }
 

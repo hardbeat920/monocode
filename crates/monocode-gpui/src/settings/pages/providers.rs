@@ -1,6 +1,6 @@
 use crate::{
     settings::{
-        SettingsView,
+        ModelChoice, SettingsView,
         widgets::{note, secondary_button},
     },
     theme::*,
@@ -273,6 +273,78 @@ impl SettingsView {
         if self.discovery_loading {
             clis.insert(0, note("Checking installed CLIs…"));
         }
+        // Any installed harness that can write one-off text, with the models
+        // its sessions have listed; the harness default when none are loaded.
+        let mut background = vec![(
+            "auto".to_owned(),
+            SharedString::from("Automatic"),
+            None::<AnyElement>,
+        )];
+        for kind in Kind::ALL {
+            let installed = binaries.iter().any(|(k, p)| *k == kind && p.is_some());
+            if !installed || !monocode_core::session_title::supports(kind) {
+                continue;
+            }
+            match self.ctx.catalogs.get(kind.id()).filter(|m| !m.is_empty()) {
+                Some(models) => background.extend(models.iter().map(|(id, name)| {
+                    (
+                        format!("{}:{id}", kind.id()),
+                        SharedString::from(format!("{} · {name}", kind.label())),
+                        Some(provider_icon(kind.id(), 14.).into_any_element()),
+                    )
+                })),
+                None => background.push((
+                    format!("{}:", kind.id()),
+                    SharedString::from(format!("{} · Default model", kind.label())),
+                    Some(provider_icon(kind.id(), 14.).into_any_element()),
+                )),
+            }
+        }
+        let background_value = p
+            .background_model
+            .as_ref()
+            .map(|c| format!("{}:{}", c.provider, c.model.as_deref().unwrap_or_default()))
+            .unwrap_or_else(|| "auto".into());
+        if !background.iter().any(|(v, _, _)| *v == background_value) {
+            // A saved pick whose catalog is not loaded keeps its own label.
+            let choice = p.background_model.clone().unwrap_or(ModelChoice {
+                provider: String::new(),
+                model: None,
+            });
+            background.push((
+                background_value.clone(),
+                SharedString::from(format!(
+                    "{} · {}",
+                    Kind::from_id(&choice.provider).label(),
+                    choice.model.as_deref().unwrap_or("Default model")
+                )),
+                Some(provider_icon(&choice.provider, 14.).into_any_element()),
+            ));
+        }
+        let background = vec![self.row(
+            Some("background-model"),
+            true,
+            "Background model",
+            Some("Writes session titles, worktree branch names, commit messages and pull requests. Automatic uses each session's provider and its quick model.".into()),
+            vec![self.select(
+                "background-model",
+                "Background model",
+                &background_value,
+                background,
+                Some(240.),
+                cx,
+                |this, value, cx| {
+                    this.update(cx, |p| {
+                        p.background_model = value.split_once(':').map(|(provider, model)| {
+                            ModelChoice {
+                                provider: provider.into(),
+                                model: (!model.is_empty()).then(|| model.into()),
+                            }
+                        });
+                    })
+                },
+            )],
+        )];
         let advanced=vec![
             self.row(Some("idle-agents"),true,"Keep idle agents ready",Some("Keep up to this many idle agents running for faster follow-ups. Uses additional memory.".into()),vec![self.segmented("idle-agents","Keep idle agents ready",&p.idle_agents.to_string(),&[("0","None"),("1","1"),("2","2"),("3","3"),("5","5")],cx,|this,value,cx|if let Ok(value)=value.parse(){this.update(cx,|p|p.idle_agents=value)})]),
             self.row(Some("claude-hooks"),false,"Claude Code hooks",Some("Run your configured Claude Code hooks. Changes apply on the next turn.".into()),vec![self.toggle("claude-hooks","Claude Code hooks",p.claude_hooks,false,cx,|this,on,cx|this.update(cx,|p|p.claude_hooks=on))]),
@@ -294,6 +366,14 @@ impl SettingsView {
                 Some("Choose available agents and default models for new conversations.".into()),
                 Some(action),
                 clis,
+            ),
+            self.group(
+                None,
+                false,
+                "Background tasks",
+                Some("Small jobs Monocode runs with a model on your behalf.".into()),
+                None,
+                background,
             ),
             self.group(None, false, "Advanced", None, None, advanced),
         ]

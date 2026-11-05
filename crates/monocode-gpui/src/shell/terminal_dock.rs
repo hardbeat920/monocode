@@ -1,7 +1,7 @@
 // The dock's tab strip (ProjectTerminalDock.tsx over SurfaceTabs.tsx) and the
 // footer's terminal controls (UsageFooter.tsx's Terminal button and
 // RunningTerminalChip).
-use super::{MenuTarget, Shell, TabShift};
+use super::{DragSource, MenuTarget, PaneDrag, Shell, TabShift};
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EntityId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Role, SharedString, StyleRefinement, Task, Window, div, point,
+    MouseMoveEvent, Pixels, Point, Role, SharedString, StyleRefinement, Task, Window, div, point,
     prelude::*, px, rgb,
 };
 use std::{
@@ -20,6 +20,10 @@ use std::{
 
 /// useAnimatedReorder's drag of one dock tab along the strip.
 pub(super) struct DockTabDrag {
+    /// Where the press landed; pulling far enough off the strip turns the
+    /// drag into a pane drag that can drop the terminal in a split or on
+    /// the title strip.
+    start: Point<Pixels>,
     from: usize,
     to: usize,
     origin: Pixels,
@@ -27,6 +31,10 @@ pub(super) struct DockTabDrag {
     active: bool,
     bounds: Vec<Bounds<Pixels>>,
 }
+
+/// How far off the dock's strip a tab must be pulled before it can leave
+/// the dock.
+const DOCK_PULL: Pixels = px(24.);
 
 /// A terminal whose foreground process is not the shell (listRunningTerminals).
 struct Running {
@@ -182,11 +190,17 @@ impl Shell {
     /// The new layout can host the terminal as the right panel's last tab
     /// instead of the dock, wherever that panel can open.
     pub(super) fn terminal_in_panel(&self, cx: &App) -> bool {
-        self.workspace.preferences.terminal_in_panel
+        self.workspace.preferences.terminal_placement() == "panel"
             && !self.workspace.classic_layout
             && !self.workspace.project.starts_with("remote://")
             && !self.mono_active(cx)
             && self.git.read(cx).available()
+    }
+    /// Terminals open as their own title bar tabs; the dock stays for
+    /// actions and the footer button.
+    pub(super) fn terminal_in_title(&self) -> bool {
+        self.workspace.preferences.terminal_placement() == "title"
+            && !self.workspace.project.starts_with("remote://")
     }
     pub(super) fn panel_terminal_shown(&self, cx: &App) -> bool {
         self.workspace.right_panel_open
@@ -239,7 +253,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project = self.workspace.project.clone();
-        self.ensure_terminals(&project, cx);
+        // Never render the tab without a shell, whatever emptied the dock.
+        self.ensure_panel_terminal(cx);
         let Some(dock) = self.workspace.docks.get(&project).cloned() else {
             return div().into_any_element();
         };
@@ -424,7 +439,7 @@ impl Shell {
         self.dock_skip_click = false;
         self.select_terminal(ix, window, cx);
         let count = self.live_terminals().len();
-        if count < 2 {
+        if count == 0 {
             return;
         }
         let bounds: Vec<_> = (0..count)
@@ -434,6 +449,7 @@ impl Shell {
             return;
         }
         self.dock_drag = Some(DockTabDrag {
+            start: event.position,
             from: ix,
             to: ix,
             origin: event.position.x,
@@ -448,6 +464,22 @@ impl Shell {
         };
         if event.pressed_button != Some(MouseButton::Left) {
             self.dock_drag = None;
+            cx.notify();
+            return;
+        }
+        if (event.position.y - drag.start.y).abs() > DOCK_PULL {
+            let (source, start) = (DragSource::DockTerminal(drag.from), drag.start);
+            self.dock_drag = None;
+            self.dock_skip_click = true;
+            self.tab_drag = None;
+            self.pane_drag = Some(PaneDrag {
+                source,
+                start,
+                position: event.position,
+                active: false,
+                over: None,
+                insert: None,
+            });
             cx.notify();
             return;
         }
@@ -708,8 +740,8 @@ impl Shell {
                                             .flex_1()
                                             .flex()
                                             .items_center()
-                                            .gap(px(6.))
-                                            .px_2()
+                                            .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                                            .pl(px(crate::tab_tile::tab_tile_inset()))
                                             .pr(px(28.))
                                             .rounded_md()
                                             .text_size(px(13.))
@@ -723,18 +755,7 @@ impl Shell {
                                                     d.text_color(content(0.5))
                                                 }
                                             })
-                                            .child(match agent {
-                                                Some(provider) => {
-                                                    provider_icon(provider, 14.).into_any_element()
-                                                }
-                                                None => icon("terminal", 14.)
-                                                    .text_color(if active || hovered {
-                                                        content(1.)
-                                                    } else {
-                                                        content(0.5)
-                                                    })
-                                                    .into_any_element(),
-                                            })
+                                            .child(crate::tab_tile::terminal_tile(agent))
                                             .child(
                                                 div()
                                                     .flex_1()
@@ -829,23 +850,15 @@ impl Shell {
                                                         .w_full()
                                                         .flex()
                                                         .items_center()
-                                                        .gap(px(6.))
-                                                        .px_2()
+                                                        .gap(px(crate::tab_tile::TAB_TILE_GAP))
+                                                        .pl(px(crate::tab_tile::tab_tile_inset()))
+                                                        .pr_2()
                                                         .rounded_md()
                                                         .text_size(px(13.))
                                                         .text_color(content(0.5))
-                                                        .child(
-                                                            match crate::terminal::agent_cli(&ghost)
-                                                            {
-                                                                Some(provider) => {
-                                                                    provider_icon(provider, 14.)
-                                                                        .into_any_element()
-                                                                }
-                                                                None => icon("terminal", 14.)
-                                                                    .text_color(content(0.5))
-                                                                    .into_any_element(),
-                                                            },
-                                                        )
+                                                        .child(crate::tab_tile::terminal_tile(
+                                                            crate::terminal::agent_cli(&ghost),
+                                                        ))
                                                         .child(
                                                             div().min_w_0().truncate().child(ghost),
                                                         ),
@@ -938,6 +951,8 @@ impl Shell {
         let running = self.running_terminals(cx);
         let open = self.dock_open(cx);
         let classic = self.workspace.boxy_layout();
+        let actions = self.actions_button(cx);
+        let has_actions = actions.is_some();
         // The classic footer's own `px-3` and border hold these in place.
         let group = div()
             .flex()
@@ -946,9 +961,10 @@ impl Shell {
             .gap(px(FOOTER_GAP))
             .when(!classic, |d| d.mr(px(6.)).pb(px(2.)))
             .text_size(px(11.))
-            .children(self.actions_button(cx));
-        // The right panel's Terminal tab takes over the footer's terminal controls.
-        if self.terminal_in_panel(cx) {
+            .children(actions);
+        // The right panel's Terminal tab, or title bar terminal tabs, take
+        // over the footer's terminal controls.
+        if self.terminal_in_panel(cx) || self.terminal_in_title() {
             self.live_mark = None;
             return Some(group.into_any_element());
         }
@@ -966,6 +982,7 @@ impl Shell {
             };
             return Some(
                 group
+                    .when(has_actions, |d| d.child(footer_separator()))
                     .child(
                         div()
                             .id("footer-terminal")
@@ -1028,6 +1045,7 @@ impl Shell {
         let anchor = self.terminal_chip_anchor.clone();
         Some(
             group
+                .when(has_actions, |d| d.child(footer_separator()))
                 .child(
                     div()
                         .id("footer-running-terminals")
@@ -1110,6 +1128,18 @@ impl Shell {
 /// The space between the footer's right-hand buttons: the resource chip,
 /// Actions, and Terminal or the running-terminals chip.
 pub(super) const FOOTER_GAP: f32 = 4.;
+
+/// A short hairline between footer controls: High usage, actions, Terminal.
+pub(super) fn footer_separator() -> gpui::Div {
+    div()
+        .debug_selector(|| "footer-separator".into())
+        .flex_shrink_0()
+        .w(px(1.))
+        .h(px(12.))
+        .mx(px(3.))
+        .rounded_full()
+        .bg(content(0.12))
+}
 const NEW_TERMINAL_LABEL: &str = if cfg!(target_os = "macos") {
     "New Terminal (⌘`)"
 } else {
@@ -1135,7 +1165,7 @@ mod tests {
                 shell.workspace.classic_layout = false;
                 shell.workspace.new_layout_boxy = true;
                 shell.layout_changed(cx);
-                shell.workspace.preferences.terminal_in_panel = true;
+                shell.workspace.preferences.set_terminal_placement("panel");
                 shell.toggle_terminal(window, cx);
                 let project = shell.workspace.project.clone();
                 assert!(shell.workspace.right_panel_open);
@@ -1171,7 +1201,7 @@ mod tests {
                 shell.toggle_terminal(window, cx);
                 assert!(!shell.workspace.right_panel_open);
                 // Turned off, the tab goes and the dock is back.
-                shell.workspace.preferences.terminal_in_panel = false;
+                shell.workspace.preferences.set_terminal_placement("bottom");
                 shell.apply_preferences(cx);
                 let panel = shell.right_panel.clone().unwrap();
                 assert_eq!(panel.read(cx).tab(), RightTab::Files);

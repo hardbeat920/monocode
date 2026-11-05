@@ -3,6 +3,7 @@ mod approvals;
 mod attachment_drop;
 mod background_tasks;
 mod btw;
+mod changes_shelf;
 mod commands;
 pub(crate) mod composer_features;
 mod composer_shelf;
@@ -19,6 +20,7 @@ mod response_menu;
 #[cfg(test)]
 mod submission_tests;
 mod title;
+mod worktree_naming;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -40,7 +42,9 @@ use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
     SharedString, StyleRefinement, Subscription, Window, canvas, div, prelude::*, px,
 };
-pub(crate) use mobile::{Waiting as MobileWaiting, mobile_access_modes};
+pub(crate) use mobile::{
+    Waiting as MobileWaiting, mobile_access_modes, usage_state as mobile_usage_state,
+};
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
 use monocode_core::{
@@ -148,6 +152,7 @@ pub(crate) struct Conversation {
     folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     background: background_tasks::BackgroundTasks,
+    changes: changes_shelf::ChangesShelf,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
     attachment_photos: std::collections::HashMap<
@@ -203,6 +208,10 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
+    /// The submit button's morph between square and labelled pill.
+    send_morph: std::cell::RefCell<crate::send_morph::Morph>,
+    /// ⌘ (Ctrl elsewhere) as last seen, which flips Queue and Steer.
+    send_alternate: bool,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -226,9 +235,11 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
+    ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
+    worktree_name_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
     _alternate_submission: Subscription,
     response_events: Option<Subscription>,
@@ -237,6 +248,9 @@ pub(crate) struct Conversation {
 }
 impl Drop for Conversation {
     fn drop(&mut self) {
+        if let Some(cancel) = self.worktree_name_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         if !self.summary.cwd.starts_with("remote://") {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -461,7 +475,7 @@ impl Conversation {
     }
 
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(input::Input::new);
+        let input = cx.new(input::Input::session_composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
         let git = (!summary.has_messages)
@@ -533,17 +547,22 @@ impl Conversation {
                 cx.emit(SessionChanged);
             }
         });
+        // The changes pill and its ledge card read the review's files. Files
+        // the recorded turns changed, also through shell commands, count as
+        // this session's edits for the commit pill.
         let review_observation = cx.observe(&review, |this, review, cx| {
-            let shown = review.read(cx).shown();
-            this.transcript
-                .update(cx, |view, cx| view.set_review_shown(shown, cx));
+            let paths = review.read(cx).paths();
+            let known = this.session_edits.len();
+            this.remember_session_edits(paths);
+            if this.session_edits.len() != known {
+                this.refresh_git_actions(cx);
+            }
             cx.notify();
         });
         let transcript = cx.new(|_| {
             let mut view = TranscriptView::new();
             view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
             view.file_link_base = Some(summary.cwd.clone());
-            view.set_review(review.clone().into());
             view
         });
         let account = crate::accounts::get(cx)
@@ -570,6 +589,7 @@ impl Conversation {
                 }
             })
         });
+        perf_prompt(cx);
         Self {
             editing_last_turn: Default::default(),
             btw: None,
@@ -593,6 +613,7 @@ impl Conversation {
             folder_selected: false,
             follow_ups: Default::default(),
             background: Default::default(),
+            changes: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
             attachment_photos: Default::default(),
@@ -646,6 +667,8 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
+            send_morph: Default::default(),
+            send_alternate: false,
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -664,9 +687,11 @@ impl Conversation {
             narrow: false,
             beside_pane: false,
             arcade: None,
+            ink: None,
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
+            worktree_name_cancel: None,
             _submission: submission,
             _alternate_submission: alternate_submission,
             response_events: None,
@@ -1053,7 +1078,22 @@ impl Conversation {
         }
         self.settings.usage_limit = None;
         self.attach_account(cx);
+        let worktree_message = if prompt.trim().is_empty() {
+            self.settings
+                .attachments
+                .iter()
+                .chain(&self.attachments)
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            prompt.clone()
+        };
         if !self.is_remote() {
+            if !self.summary.has_messages {
+                self.generate_worktree_branch(&worktree_message, cx);
+            }
             self.generate_title(&prompt, cx);
         }
         let model_label = self.model_label();
@@ -1176,6 +1216,11 @@ impl Conversation {
             .detach();
         cx.spawn(async move |this, cx| {
             while let Ok(update) = rx.recv().await {
+                // Land each update on the spinners' 30Hz beat: the reply then
+                // redraws in their frames instead of adding frames of its own.
+                if !update.finished {
+                    crate::pulse::beat(cx).await;
+                }
                 let finished = update.finished;
                 if this
                     .update(cx, |this, cx| {
@@ -1198,7 +1243,15 @@ impl Conversation {
                             this.settings.worktree_cwd = Some(cwd);
                             this.settings.new_worktree = false;
                             this.save_settings(cx);
+                            this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
+                        }
+                        // The host renamed the conversation; it is not sent back.
+                        if let Some(title) = update.title
+                            && this.summary.title != title
+                        {
+                            this.summary.title = title;
+                            cx.emit(SessionChanged);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
@@ -2109,6 +2162,15 @@ impl Conversation {
             })
             .filter(|value| !value.is_empty() && *value != "default")
     }
+    /// The model trigger's fast-mode bolt: shown while fast mode is on,
+    /// unless beside mode already has its own Fast pill.
+    fn trigger_fast(&self, beside: bool) -> bool {
+        self.model_info().is_some_and(|model| {
+            model.fast
+                && self.settings.fast
+                && !(beside && model.efforts.is_empty() && model.tiers.is_empty())
+        })
+    }
     /// Combined ModelPicker trigger; beside mode renders these as separate pills.
     fn trigger_effort_label(&self) -> Option<SharedString> {
         if let Some(model) = self.model_info() {
@@ -2739,6 +2801,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let trigger_fast = self.trigger_fast(beside);
         let controls = if beside {
             self.model_controls(cx)
         } else {
@@ -2779,6 +2842,7 @@ impl Conversation {
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .child(self.changes_shelf(window, cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
@@ -2855,8 +2919,10 @@ impl Conversation {
                     .flex_col()
                     .on_mouse_down(
                         MouseButton::Left,
+                        // Keep a focus-tracking ancestor from taking focus back.
                         cx.listener(|this, _, window, cx| {
-                            window.focus(&this.input.focus_handle(cx), cx)
+                            window.focus(&this.input.focus_handle(cx), cx);
+                            window.prevent_default();
                         }),
                     )
                     .child(self.completion.read(cx).composer_probe())
@@ -2866,7 +2932,7 @@ impl Conversation {
                     .child(
                         div()
                             .px_3()
-                            .pt(px(14.))
+                            .pt(px(10.))
                             .pb(px(14.))
                             .child(self.completion.clone()),
                     )
@@ -2942,6 +3008,9 @@ impl Conversation {
                                                         .text_color(content(0.5))
                                                         .child(effort),
                                                 )
+                                            })
+                                            .when(trigger_fast, |d| {
+                                                d.child(fast_bolt())
                                             })
                                             .child(icon("chevron-down", 12.)),
                                     )
@@ -3215,54 +3284,91 @@ impl Conversation {
             && (!self.preparing_worktree || self.busy || self.stopping)
             && (busy || (has_value && self.loaded))
             && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none()));
-        send_button(
-            "send-or-stop",
-            if busy {
+        // Something to send grows the button into a pill naming the action;
+        // empty or stopping, it rests as a square.
+        let face = crate::send_morph::Face {
+            label: if busy {
                 "Stop"
             } else if draft {
                 "Save draft"
             } else {
                 follow_up.map_or("Send", |(label, _)| label)
             },
-            busy,
-            follow_up.map_or("send", |(_, glyph)| glyph),
-            enabled,
-        )
-        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-            if !enabled {
-                return;
-            }
-            if busy {
-                this.stop(cx);
-            } else {
-                let modifiers = event.modifiers();
-                let alternate = if cfg!(target_os = "macos") {
-                    modifiers.platform
+            glyph: follow_up.map_or("send", |(_, glyph)| glyph),
+            stop: busy,
+            expanded: !busy && has_value,
+        };
+        let frame = self.send_morph.borrow_mut().frame(
+            face,
+            crate::send_morph::expanded_width(face.label, window),
+            !cx.reduce_motion(),
+        );
+        if frame.moving {
+            window.request_animation_frame();
+        }
+        crate::send_morph::button("send-or-stop", face, &frame, enabled)
+            // Holding ⌘ (Ctrl elsewhere) flips Queue and Steer; redraw so the
+            // label rolls to it while the key is down.
+            // Only ⌘'s own changes matter, and only while it changes the action.
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                    let alternate = if cfg!(target_os = "macos") {
+                        event.modifiers.platform
+                    } else {
+                        event.modifiers.control
+                    };
+                    if std::mem::replace(&mut this.send_alternate, alternate) != alternate
+                        && this.follow_up_action(alternate, cx).is_some()
+                    {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if !enabled {
+                    return;
+                }
+                if busy {
+                    this.stop(cx);
                 } else {
-                    modifiers.control
-                };
-                this.send_follow_up(alternate, cx);
-            }
-        }))
+                    let modifiers = event.modifiers();
+                    let alternate = if cfg!(target_os = "macos") {
+                        modifiers.platform
+                    } else {
+                        modifiers.control
+                    };
+                    this.send_follow_up(alternate, cx);
+                }
+            }))
     }
     // EmptySession.tsx: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let games = cx
+        // A chat background replaces the canvas; the ink only lives in motion.
+        let fill = cx
             .try_global::<crate::settings::Preferences>()
-            .is_none_or(|p| p.empty_session_games)
-            && cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.chat_background.is_none());
-        let arcade = if games {
-            Some(
+            .map_or("ink", |p| {
+                if p.chat_background.is_some() {
+                    "none"
+                } else {
+                    p.empty_session.as_str()
+                }
+            });
+        let canvas_fill: Option<AnyElement> = match fill {
+            "games" => Some(
                 self.arcade
                     .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone(),
-            )
-        } else {
-            None
+                    .clone()
+                    .into_any_element(),
+            ),
+            "ink" if !cx.reduce_motion() => Some(
+                self.ink
+                    .get_or_insert_with(|| cx.new(crate::ink_field::InkField::new))
+                    .clone()
+                    .into_any_element(),
+            ),
+            _ => None,
         };
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
@@ -3272,7 +3378,7 @@ impl Conversation {
             .size_full()
             .flex()
             .justify_center()
-            .children(arcade)
+            .children(canvas_fill)
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -3326,6 +3432,48 @@ impl Conversation {
             )
             .into_any()
     }
+}
+
+/// For profiling without clicking: with `MONOCODE_PERF_PROMPT=<text>`, the
+/// first chat created switches to Claude and sends that text once, a few
+/// seconds after launch. scripts/perf/frame-run.sh sets it. It only runs
+/// while `MONOCODE_CLAUDE_BINARY` replaces `claude`, so it never reaches a
+/// real provider.
+fn perf_prompt(cx: &mut Context<Conversation>) {
+    static SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Some(prompt) = std::env::var("MONOCODE_PERF_PROMPT")
+        .ok()
+        .filter(|prompt| !prompt.is_empty())
+    else {
+        return;
+    };
+    if std::env::var_os("MONOCODE_CLAUDE_BINARY").is_none()
+        || SENT.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    cx.spawn(async move |this, cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(3))
+            .await;
+        this.update(cx, |this, cx| {
+            if this.summary.has_messages {
+                return;
+            }
+            let claude = monocode_core::provider::Kind::Claude.id();
+            if this.summary.provider != claude {
+                this.summary.provider = claude.into();
+                this.summary.provider_id = None;
+                this.model = None;
+                this.completion
+                    .update(cx, |completion, cx| completion.set_provider(claude, cx));
+                this.catalog.clear();
+            }
+            this.launch_prompt(prompt, cx);
+        })
+        .ok();
+    })
+    .detach();
 }
 
 /// The access mode the last composer pick left as the default for new chats.
@@ -3482,7 +3630,7 @@ mod composer_motion_tests {
                     } else {
                         composer.top() + px(1.)
                     };
-                    assert_eq!(field.top() - top, px(14.));
+                    assert_eq!(field.top() - top, px(10.));
                     assert_eq!(toolbar.top() - field.bottom(), px(14.));
                     assert_eq!(field.size.height, px(66.));
                     window
@@ -3685,8 +3833,17 @@ impl Render for Conversation {
                 )
             })
             .child({
-                let pill = self.git_action_pill(cx);
-                let beside = pill.is_some();
+                let git = self.git_action_pill(cx);
+                let changes = self.changes_pill(cx);
+                let beside = git.is_some() || changes.is_some();
+                let pill = beside.then(|| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .children(git)
+                        .children(changes)
+                });
                 self.transcript
                     .update(cx, |t, cx| t.set_jump_beside_pill(beside, cx));
                 div()
@@ -4684,4 +4841,11 @@ mod menu_tests {
             .unwrap();
         assert!(input_focused(window, cx));
     }
+}
+
+/// The amber bolt the model trigger carries while fast mode is on.
+pub(crate) fn fast_bolt() -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .child(icon("zap", 12.).text_color(gpui::rgb(0xfbbf24)))
 }

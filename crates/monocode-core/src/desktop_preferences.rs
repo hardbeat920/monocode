@@ -485,6 +485,15 @@ fn merge_projects(old: Option<&Value>, current: &Value, source: &Value) -> Value
         return source.clone();
     };
     let current = current.as_array().cloned().unwrap_or_default();
+    // An unchanged desktop list keeps the native order the user arranged.
+    if Some(old) == source.as_array() {
+        return Value::Array(
+            current
+                .into_iter()
+                .filter(|path| old.contains(path) || path.as_str().is_some_and(project_path))
+                .collect(),
+        );
+    }
     let mut merged: Vec<Value> = source
         .as_array()
         .cloned()
@@ -623,6 +632,14 @@ mod tests {
         workspace["project_appearance"]["/code/a"]["mascot"] = json!("cat");
         initial.apply_workspace(&mut workspace);
         assert_eq!(workspace["projects"], json!(["/code/a", "/code/native"]));
+        workspace["projects"] = json!(["/code/native", "/code/b", "/code/a"]);
+        initial.apply_workspace(&mut workspace);
+        assert_eq!(
+            workspace["projects"],
+            json!(["/code/native", "/code/b", "/code/a"]),
+            "a native reorder survives while the desktop list is unchanged"
+        );
+        workspace["projects"] = json!(["/code/a", "/code/native"]);
         assert_eq!(workspace["project_appearance"]["/code/a"]["name"], "Native");
         assert_eq!(workspace["project_appearance"]["/code/a"]["mascot"], "cat");
         let changed = prefs(&[

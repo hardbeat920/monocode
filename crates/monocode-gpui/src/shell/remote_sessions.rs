@@ -103,6 +103,11 @@ impl Shell {
                                     if !view.busy {
                                         view.summary = summary.clone();
                                         cx.notify();
+                                    } else if view.summary.title != summary.title {
+                                        // A running turn owns the rest; a host title is metadata.
+                                        view.summary.title = summary.title.clone();
+                                        cx.emit(crate::conversation::SessionChanged);
+                                        cx.notify();
                                     }
                                 });
                             }
@@ -130,3 +135,7 @@ impl Shell {
         .detach();
     }
 }
+
+#[cfg(test)]
+#[path = "remote_title_tests.rs"]
+mod remote_title_tests;

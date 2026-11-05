@@ -18,12 +18,24 @@ import { WorkspaceGate } from "@/features/connection/WorkspaceGate";
 import { SessionNotifications } from "@/features/notifications/SessionNotifications";
 import { SessionActivity } from "@/features/sessions/SessionActivity";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
+import { WorkspaceDrawer } from "@/features/workspace/WorkspaceDrawer";
 import { WorkspaceProvider } from "@/features/workspace/WorkspaceProvider";
-import { codeScreenOptions, HEADER_OWN_BLUR } from "@/features/files/codeScreen";
+import { WorkspaceLayout } from "@/features/workspace/WorkspaceLayout";
+import { Timed } from "@/ui/Timed";
+import {
+  codeScreenOptions,
+  HEADER_OWN_BLUR,
+  modalStackOptions,
+} from "@/features/files/codeScreen";
 import { applySavedAppearance } from "@/features/settings/appearance";
+import { modalSheetOptions } from "@/ui/ModalSheet";
+import { useLayoutChanging, useMonoOnlyLayout } from "@/features/settings/monoOnly";
+import { DitherLoading } from "@/ui/DitherLoading";
+import { useState } from "react";
 import { ScenePagerHost } from "@/ui/ScenePager";
 import {
   paletteFor,
+  useAccent,
   useScheme,
   useTheme,
   type Palette,
@@ -72,11 +84,28 @@ const screenOptions = (colors: Palette) => ({
     animation: "default",
     gestureEnabled: true,
   } satisfies NativeStackNavigationOptions,
+  // A Mono's session over its chat: a session's header, presented as a
+  // modal the way a file opens.
+  sessionSheet: {
+    ...nativeHeader(colors),
+    presentation: "modal",
+    animation: "default",
+    gestureEnabled: true,
+  } satisfies NativeStackNavigationOptions,
+  // A modal sheet with its own stack, as ModalSheet draws it.
+  sheet: modalSheetOptions(colors.sheet),
   // Full-screen modals with their own stacks and headers.
   modal: {
     presentation: "modal",
     animation: "default",
     contentStyle: { backgroundColor: colors.sheet },
+  } satisfies NativeStackNavigationOptions,
+  // A modal of one screen, as a modal stack's are: a transparent native
+  // header over the sheet's colour, with the screen's own gradual blur.
+  page: {
+    presentation: "modal",
+    animation: "default",
+    ...modalStackOptions(colors),
   } satisfies NativeStackNavigationOptions,
   code: codeScreenOptions(colors),
   // Changes over a session: a code screen's modal, on the page's own colour
@@ -92,18 +121,19 @@ type NavigationLook = {
   screens: ReturnType<typeof screenOptions>;
 };
 
-// Built the first time a scheme and theme are drawn, and kept, so the
-// navigators see the same objects until either changes.
+// Built the first time a scheme, theme and accent are drawn, and kept, so the
+// navigators see the same objects until any changes.
 const looks = new Map<string, NavigationLook>();
 
 /** The navigation theme and screen options of the scheme and theme in use. */
 function useNavigationLook(): NavigationLook {
   const scheme = useScheme();
   const theme: ThemeName = useTheme();
-  const key = `${theme}.${scheme}`;
+  const accent = useAccent();
+  const key = `${theme}.${scheme}.${accent}`;
   let look = looks.get(key);
   if (!look) {
-    const colors = paletteFor(scheme, theme);
+    const colors = paletteFor(scheme, theme, accent);
     look = {
       navigation: navigationTheme(scheme, colors),
       screens: screenOptions(colors),
@@ -136,35 +166,64 @@ export default function RootLayout() {
 function LinkedWorkspace() {
   const connection = useConnection();
   const { screens } = useNavigationLook();
+  // Monos only: no drawer, and the frame stands aside for the list and for
+  // each chat's own frame.
+  const [monoOnly] = useMonoOnlyLayout();
+  // Switching layouts: covered while the app starts over in the new one.
+  const changing = useLayoutChanging();
+  const [covered, setCovered] = useState(changing);
+  if (changing && !covered) setCovered(true);
   return (
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
       <SessionNotifications />
       <SessionActivity />
-      <ScenePagerHost>
-        <SessionFrame>
-          {/* A native stack: sessions push over their project, and the
-              code screens, Changes, settings, the model picker and the project
-              picker present
-              over the rest as native modals; everything else swaps in place,
-              as a plain slot did. */}
-          <Stack screenOptions={{ headerShown: false, animation: "none" }}>
-            <Stack.Screen name="file" options={screens.code} />
-            <Stack.Screen name="diff" options={screens.code} />
-            <Stack.Screen
-              name="project/[projectId]/index"
-              options={screens.nativeHeader}
-            />
-            <Stack.Screen
-              name="project/[projectId]/session/[sessionId]"
-              options={screens.session}
-            />
-            <Stack.Screen name="projects" options={screens.modal} />
-            <Stack.Screen name="settings" options={screens.modal} />
-            <Stack.Screen name="models" options={screens.modal} />
-            <Stack.Screen name="changes" options={screens.changes} />
-          </Stack>
-        </SessionFrame>
-      </ScenePagerHost>
+      <WorkspaceLayout sidebar={!monoOnly}>
+        <ScenePagerHost drawer={monoOnly ? undefined : <WorkspaceDrawer />}>
+          <Timed id="persistent frame">
+            <SessionFrame standAside={monoOnly}>
+              {/* A native stack: sessions push over their project, and the
+                  code screens, Changes, settings, the model picker and the project
+                  picker present
+                  over the rest as native modals; everything else swaps in place,
+                  as a plain slot did. */}
+              <Stack screenOptions={{ headerShown: false, animation: "none" }}>
+                {/* Monos only: the list and each chat under native headers, a
+                    chat pushing over the list as a session does over its
+                    project, its buttons morphing as it goes. */}
+                <Stack.Screen
+                  name="index"
+                  options={monoOnly ? screens.nativeHeader : {}}
+                />
+                <Stack.Screen
+                  name="mono/[monoId]"
+                  options={monoOnly ? screens.session : {}}
+                />
+                <Stack.Screen name="file" options={screens.code} />
+                <Stack.Screen name="document" options={screens.code} />
+                <Stack.Screen name="diff" options={screens.code} />
+                <Stack.Screen
+                  name="project/[projectId]/index"
+                  options={screens.nativeHeader}
+                />
+                <Stack.Screen
+                  name="project/[projectId]/session/[sessionId]"
+                  options={screens.session}
+                />
+                <Stack.Screen name="session" options={screens.sessionSheet} />
+                <Stack.Screen name="projects" options={screens.modal} />
+                <Stack.Screen name="settings" options={screens.modal} />
+                <Stack.Screen name="mono-new" options={screens.page} />
+                <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
+                <Stack.Screen name="models" options={screens.modal} />
+                <Stack.Screen name="changes" options={screens.changes} />
+              </Stack>
+            </SessionFrame>
+          </Timed>
+        </ScenePagerHost>
+      </WorkspaceLayout>
+      {covered ? (
+        <DitherLoading leaving={!changing} onGone={() => setCovered(false)} />
+      ) : null}
     </WorkspaceProvider>
   );
 }
