@@ -70,6 +70,7 @@ impl AssetSource for Assets {
    "chevron-left"=>include_bytes!("../assets/chevron-left.svg"),
    "chevron-right"=>include_bytes!("../assets/chevron-right.svg"),
    "inbox"=>include_bytes!("../assets/inbox.svg"),
+   "square-plus"=>include_bytes!("../assets/square-plus.svg"),
    "circle-dot"=>include_bytes!("../assets/hugeicons/circle-dot.svg"),
    "inbox-github"=>include_bytes!("../assets/inbox-github.svg"),
    "inbox-linear"=>include_bytes!("../assets/inbox-linear.svg"),

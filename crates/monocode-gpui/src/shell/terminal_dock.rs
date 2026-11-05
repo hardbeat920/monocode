@@ -190,11 +190,17 @@ impl Shell {
     /// The new layout can host the terminal as the right panel's last tab
     /// instead of the dock, wherever that panel can open.
     pub(super) fn terminal_in_panel(&self, cx: &App) -> bool {
-        self.workspace.preferences.terminal_in_panel
+        self.workspace.preferences.terminal_placement() == "panel"
             && !self.workspace.classic_layout
             && !self.workspace.project.starts_with("remote://")
             && !self.mono_active(cx)
             && self.git.read(cx).available()
+    }
+    /// Terminals open as their own title bar tabs; the dock stays for
+    /// actions and the footer button.
+    pub(super) fn terminal_in_title(&self) -> bool {
+        self.workspace.preferences.terminal_placement() == "title"
+            && !self.workspace.project.starts_with("remote://")
     }
     pub(super) fn panel_terminal_shown(&self, cx: &App) -> bool {
         self.workspace.right_panel_open
@@ -247,7 +253,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project = self.workspace.project.clone();
-        self.ensure_terminals(&project, cx);
+        // Never render the tab without a shell, whatever emptied the dock.
+        self.ensure_panel_terminal(cx);
         let Some(dock) = self.workspace.docks.get(&project).cloned() else {
             return div().into_any_element();
         };
@@ -955,8 +962,9 @@ impl Shell {
             .when(!classic, |d| d.mr(px(6.)).pb(px(2.)))
             .text_size(px(11.))
             .children(actions);
-        // The right panel's Terminal tab takes over the footer's terminal controls.
-        if self.terminal_in_panel(cx) {
+        // The right panel's Terminal tab, or title bar terminal tabs, take
+        // over the footer's terminal controls.
+        if self.terminal_in_panel(cx) || self.terminal_in_title() {
             self.live_mark = None;
             return Some(group.into_any_element());
         }
@@ -1157,7 +1165,7 @@ mod tests {
                 shell.workspace.classic_layout = false;
                 shell.workspace.new_layout_boxy = true;
                 shell.layout_changed(cx);
-                shell.workspace.preferences.terminal_in_panel = true;
+                shell.workspace.preferences.set_terminal_placement("panel");
                 shell.toggle_terminal(window, cx);
                 let project = shell.workspace.project.clone();
                 assert!(shell.workspace.right_panel_open);
@@ -1193,7 +1201,7 @@ mod tests {
                 shell.toggle_terminal(window, cx);
                 assert!(!shell.workspace.right_panel_open);
                 // Turned off, the tab goes and the dock is back.
-                shell.workspace.preferences.terminal_in_panel = false;
+                shell.workspace.preferences.set_terminal_placement("bottom");
                 shell.apply_preferences(cx);
                 let panel = shell.right_panel.clone().unwrap();
                 assert_eq!(panel.read(cx).tab(), RightTab::Files);

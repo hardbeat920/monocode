@@ -237,6 +237,18 @@ impl TranscriptView {
             }
             return height;
         }
+        let started = Instant::now();
+        let kind = match (&self.rows[ix].body, retention) {
+            (_, None) if self.motions.contains_key(&key) => "measure:moving",
+            (Body::Markdown(_), _) => "measure:markdown",
+            (Body::Tool { .. }, _) => "measure:tool",
+            (Body::Phase { .. }, _) => "measure:phase",
+            (Body::Plain(_), _) => "measure:plain",
+            (Body::Actions { .. }, _) => "measure:actions",
+            (Body::WorkLine { .. }, _) => "measure:workline",
+            (Body::Reasoning, _) => "measure:reasoning",
+            _ => "measure:other",
+        };
         let mut row = self.row(ix, window, cx);
         let height = row
             .layout_as_root(
@@ -248,6 +260,7 @@ impl TranscriptView {
                 cx,
             )
             .height;
+        gpui::frame_stats::add(kind, started.elapsed().as_micros() as u32);
         #[cfg(test)]
         {
             self.measurements.fresh += 1;

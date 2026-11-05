@@ -44,7 +44,7 @@ impl TranscriptView {
                     div()
                         .w_full()
                         .max_w(px(COLUMN))
-                        .px_4()
+                        .px(px(crate::theme::COLUMN_PAD))
                         .pt_5()
                         .pb_3()
                         .flex()
