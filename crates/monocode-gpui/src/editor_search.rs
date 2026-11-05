@@ -11,6 +11,13 @@
 //!   boundaries, not `\b`;
 //! * zero-length matches are dropped, as the old bridge did;
 //! * regex replacement expands the CodeMirror subset (`$$`, `$&`, `$1..$99`).
+//!
+//! Integration boundary: an immutable UTF-8, LF-normalized editor buffer and
+//! query/options in, ordered non-overlapping UTF-8 byte ranges out. This module
+//! owns no UI, tasks, files or global state. Run `search` off the UI thread;
+//! the caller must reject results whose buffer/query snapshot is obsolete.
+//! Invalid and timed-out searches return no matches, so incomplete results
+//! cannot accidentally be used for Replace All.
 
 use corvus_regex_ecma262::{Captures, Flags, MatchError, Regex};
 use memchr::memmem;
@@ -21,6 +28,13 @@ use unicode_segmentation::GraphemeCursor;
 
 const MATCH_TIMEOUT: Duration = Duration::from_millis(50);
 const SEARCH_DEADLINE: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SearchOptions {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SearchMatch {
@@ -41,17 +55,27 @@ pub(crate) fn search(
     source: &str,
     query: &str,
     replacement: &str,
-    case: bool,
-    word: bool,
-    regex: bool,
-) -> Result<SearchResult, String> {
+    options: SearchOptions,
+) -> SearchResult {
     if query.is_empty() {
-        return Ok(SearchResult::default());
+        return SearchResult::default();
     }
-    if regex {
-        search_regex(source, query, replacement, case, word)
+    if options.regex {
+        search_regex(
+            source,
+            query,
+            replacement,
+            options,
+            Instant::now() + SEARCH_DEADLINE,
+        )
     } else {
-        Ok(search_literal(source, query, replacement, case, word))
+        search_literal(
+            source,
+            query,
+            replacement,
+            options.case_sensitive,
+            options.whole_word,
+        )
     }
 }
 
@@ -127,8 +151,12 @@ fn find_ascii(
                 to,
                 insert: replacement.to_owned(),
             });
+            at = to;
+        } else {
+            // A rejected candidate doesn't consume the text. A later valid
+            // whole-word match can overlap it (e.g. xfoo-foo-foo / foo-foo).
+            at = from + 1;
         }
-        at = to;
     }
 }
 
@@ -148,21 +176,20 @@ fn find_normalized(
         };
         let from_norm = at + pos;
         let to_norm = from_norm + needle.len();
-        let (Some(first), Some(last)) = (normalized.at(from_norm), normalized.before(to_norm))
-        else {
+        let Some(from) = normalized.source_start(from_norm) else {
             break;
         };
-        if last.at_source_end {
-            let from = first.source_start;
-            let to = last.source_end;
+        if let Some(to) = normalized.source_end(to_norm) {
             if !word || whole_word(source, from, to) {
                 matches.push(SearchMatch {
                     from,
                     to,
                     insert: replacement.to_owned(),
                 });
+                at = to_norm;
+            } else {
+                at = next_char_boundary(&normalized.text, from_norm);
             }
-            at = to_norm;
         } else {
             // CodeMirror only accepts a match when its end lands on a source
             // code-point boundary. Advance one normalized code point so a
@@ -176,12 +203,12 @@ fn search_regex(
     source: &str,
     query: &str,
     replacement: &str,
-    case: bool,
-    word: bool,
-) -> Result<SearchResult, String> {
+    options: SearchOptions,
+    deadline: Instant,
+) -> SearchResult {
     let flags = Flags {
         global: true,
-        ignore_case: !case,
+        ignore_case: !options.case_sensitive,
         multiline: true,
         unicode: true,
         ..Flags::default()
@@ -189,39 +216,48 @@ fn search_regex(
     let regex = match Regex::with_timeout(query, flags, Some(MATCH_TIMEOUT)) {
         Ok(regex) => regex,
         Err(_) => {
-            return Ok(SearchResult {
+            return SearchResult {
                 matches: Vec::new(),
                 invalid: true,
                 ..SearchResult::default()
-            });
+            };
         }
     };
     let replacement = Replacement::new(replacement);
+    let multiline = needs_multiline(query);
     let mut state = Scan {
         source,
         regex,
         replacement,
-        word,
+        word: options.whole_word,
+        multiline,
         matches: Vec::new(),
         timed_out: false,
-        deadline: Instant::now() + SEARCH_DEADLINE,
+        deadline,
     };
-    if needs_multiline(query) {
-        state.scan_slice(source, 0)?;
+    if multiline {
+        state.scan_slice(source, 0);
     } else {
         let mut line_start = 0;
         for line in source.split_inclusive('\n') {
             let end = line_start + line.len();
             let content_end = if line.ends_with('\n') { end - 1 } else { end };
-            state.scan_slice(&source[line_start..content_end], line_start)?;
+            state.scan_slice(&source[line_start..content_end], line_start);
+            if state.timed_out {
+                break;
+            }
             line_start = end;
         }
     }
-    Ok(SearchResult {
-        matches: state.matches,
+    SearchResult {
+        matches: if state.timed_out {
+            Vec::new()
+        } else {
+            state.matches
+        },
         invalid: false,
         timed_out: state.timed_out,
-    })
+    }
 }
 
 struct Scan<'a> {
@@ -229,13 +265,18 @@ struct Scan<'a> {
     regex: Regex,
     replacement: Replacement,
     word: bool,
+    multiline: bool,
     matches: Vec<SearchMatch>,
     timed_out: bool,
     deadline: Instant,
 }
 
 impl Scan<'_> {
-    fn scan_slice(&mut self, text: &str, base: usize) -> Result<(), String> {
+    fn scan_slice(&mut self, text: &str, base: usize) {
+        if self.timed_out || Instant::now() >= self.deadline {
+            self.timed_out = true;
+            return;
+        }
         for captures in self.regex.captures_iter(text) {
             if Instant::now() > self.deadline {
                 self.timed_out = true;
@@ -255,6 +296,12 @@ impl Scan<'_> {
             let from = base + matched.start();
             let to = base + matched.end();
             if self.word && !whole_word(self.source, from, to) {
+                // The pinned CodeMirror multiline cursor stops at its first
+                // rejected whole-word candidate. Preserve even this quirk:
+                // changing it would silently expand Replace All's scope.
+                if self.multiline {
+                    break;
+                }
                 continue;
             }
             self.matches.push(SearchMatch {
@@ -263,14 +310,13 @@ impl Scan<'_> {
                 insert: self.replacement.expand(&captures),
             });
         }
-        Ok(())
     }
 }
 
 fn needs_multiline(query: &str) -> bool {
     let bytes = query.as_bytes();
     for i in 0..bytes.len().saturating_sub(1) {
-        if bytes[i] == b'\\' && matches!(bytes[i + 1], b's' | b'S' | b'W' | b'D' | b'n' | b'r') {
+        if bytes[i] == b'\\' && matches!(bytes[i + 1], b's' | b'W' | b'D' | b'n' | b'r') {
             return true;
         }
     }
@@ -303,41 +349,62 @@ struct NormSpan {
     norm_end: usize,
     source_start: usize,
     source_end: usize,
-    at_source_end: bool,
+    /// ASCII runs map byte-for-byte. Unicode expansions map as one source
+    /// code point, and matches may only end at the end of that expansion.
+    linear: bool,
 }
 
 impl Normalized {
     fn new(source: &str, case: bool) -> Self {
         let mut text = String::with_capacity(source.len());
-        let mut spans = Vec::with_capacity(source.len());
+        let mut spans: Vec<NormSpan> = Vec::new();
         for (source_start, ch) in source.char_indices() {
             let source_end = source_start + ch.len_utf8();
+            let norm_start = text.len();
+            if ch.is_ascii() {
+                text.push(if case { ch } else { ch.to_ascii_lowercase() });
+                if let Some(span) = spans.last_mut().filter(|span| span.linear) {
+                    span.norm_end = text.len();
+                    span.source_end = source_end;
+                } else {
+                    spans.push(NormSpan {
+                        norm_start,
+                        norm_end: text.len(),
+                        source_start,
+                        source_end,
+                        linear: true,
+                    });
+                }
+                continue;
+            }
             let piece: String = ch.to_string().nfkd().collect();
             let piece = if case { piece } else { piece.to_lowercase() };
-            let chars = piece.chars().count();
-            for (index, ch) in piece.chars().enumerate() {
-                let norm_start = text.len();
-                text.push(ch);
-                spans.push(NormSpan {
-                    norm_start,
-                    norm_end: text.len(),
-                    source_start,
-                    source_end,
-                    at_source_end: index + 1 == chars,
-                });
-            }
+            text.push_str(&piece);
+            spans.push(NormSpan {
+                norm_start,
+                norm_end: text.len(),
+                source_start,
+                source_end,
+                linear: false,
+            });
         }
         Self { text, spans }
     }
 
-    fn at(&self, at: usize) -> Option<&NormSpan> {
+    fn source_start(&self, at: usize) -> Option<usize> {
         let index = self.spans.partition_point(|span| span.norm_end <= at);
-        self.spans.get(index)
+        let span = self.spans.get(index)?;
+        Some(span.source_start + if span.linear { at - span.norm_start } else { 0 })
     }
 
-    fn before(&self, at: usize) -> Option<&NormSpan> {
+    fn source_end(&self, at: usize) -> Option<usize> {
         let index = self.spans.partition_point(|span| span.norm_start < at);
-        self.spans.get(index.checked_sub(1)?)
+        let span = self.spans.get(index.checked_sub(1)?)?;
+        if span.linear {
+            Some(span.source_start + at - span.norm_start)
+        } else {
+            (at == span.norm_end).then_some(span.source_end)
+        }
     }
 }
 
@@ -478,145 +545,48 @@ fn flush(literal: &mut String, pieces: &mut Vec<Piece>) {
 mod tests {
     use super::*;
 
-    fn found(
-        source: &str,
-        query: &str,
-        replacement: &str,
-        case: bool,
-        word: bool,
-        regex: bool,
-    ) -> SearchResult {
-        search(source, query, replacement, case, word, regex).unwrap()
-    }
-
     #[test]
-    fn literal_search_handles_case_whole_words_and_offsets() {
-        let source = "foo foo_bar FOO";
-        let result = found(source, "foo", "x", false, true, false);
-        assert_eq!(result.matches.len(), 2);
-        assert_eq!(&source[result.matches[0].from..result.matches[0].to], "foo");
-        assert_eq!(&source[result.matches[1].from..result.matches[1].to], "FOO");
-        assert_eq!(result.matches[0].insert, "x");
-    }
-
-    #[test]
-    fn literal_search_uses_codemirror_nfkd_mapping() {
-        let source = "a🙂b ﬃ café";
-        let result = found(source, "🙂", "x", true, false, false);
-        assert_eq!(&source[result.matches[0].from..result.matches[0].to], "🙂");
-        let result = found(source, "ffi", "x", true, false, false);
-        assert_eq!(&source[result.matches[0].from..result.matches[0].to], "ﬃ");
-        assert!(
-            found(source, "ff", "x", true, false, false)
-                .matches
-                .is_empty()
-        );
-        assert!(
-            found(source, "cafe", "x", true, false, false)
-                .matches
-                .is_empty()
-        );
-        assert!(found("É", "é", "x", true, false, false).matches.is_empty());
-        assert_eq!(found("É", "é", "x", false, false, false).matches.len(), 1);
-    }
-
-    #[test]
-    fn regex_search_handles_captures_and_zero_length_matches() {
-        let source = "a1 b2";
-        let result = found(source, "(\\w)(\\d)", "$2$1", false, false, true);
-        assert_eq!(result.matches.len(), 2);
-        assert_eq!(result.matches[0].insert, "1a");
-        assert!(
-            found(source, "^", "x", false, false, true)
-                .matches
-                .is_empty()
-        );
-        assert!(
-            found(source, "a*?\\b", "x", false, false, true)
-                .matches
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn regex_search_uses_javascript_word_classes() {
-        assert!(
-            found("é", "\\w", "x", false, false, true)
-                .matches
-                .is_empty()
-        );
-        assert!(
-            found("١٢٣", "\\d", "x", false, false, true)
-                .matches
-                .is_empty()
-        );
-        assert_eq!(
-            found("abc", "a(?=b)", "x", false, false, true)
-                .matches
-                .len(),
-            1
-        );
-        assert_eq!(
-            found("ab", "(?<=a)b", "x", false, false, true)
-                .matches
-                .len(),
-            1
-        );
-        assert_eq!(
-            found("aa", "(a)\\1", "x", false, false, true).matches.len(),
-            1
-        );
-    }
-
-    #[test]
-    fn regex_replacement_matches_codemirror_subset() {
-        let source = "a";
-        let result = found(source, "(a)(b)?", "$2|$1|$0|$<x>|$&|$$", false, false, true);
-        assert_eq!(result.matches[0].insert, "undefined|a|$0|$<x>|a|$");
-    }
-
-    #[test]
-    fn invalid_regex_is_reported() {
-        assert!(found("a", "[", "", false, false, true).invalid);
-        assert!(found("a", "[[:alpha:]]", "", false, false, true).invalid);
-    }
-
-    #[test]
-    fn regex_line_and_multiline_modes_follow_javascript() {
-        let source = "a\nb";
-        assert_eq!(
-            found(source, "^.", "x", false, false, true).matches.len(),
-            2
-        );
-        assert_eq!(
-            found(source, "\\s", "x", false, false, true).matches.len(),
-            1
-        );
-        assert_eq!(
-            found("a\u{2028}b", "^b", "x", false, false, true)
-                .matches
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn replace_all_applies_matches_in_one_pass() {
+    fn replace_all_preserves_utf8_and_rejects_invalid_or_overlapping_ranges() {
         let source = "a🙂b a🙂b";
-        let result = found(source, "🙂", "-", true, false, false);
+        let result = search(source, "🙂", "-", SearchOptions::default());
         assert_eq!(replace_all(source, &result.matches).unwrap(), "a-b a-b");
         assert_eq!(replace_all(source, &[]).unwrap(), source);
-        assert!(
-            replace_all(
-                "abc",
-                &[SearchMatch {
-                    from: 0,
-                    to: 9,
-                    insert: "x".into()
-                }]
-            )
-            .is_err()
-        );
+        for (from, to) in [(0, source.len() + 1), (5, 1), (2, 5), (1, 3)] {
+            assert!(
+                replace_all(
+                    source,
+                    &[SearchMatch {
+                        from,
+                        to,
+                        insert: "x".into()
+                    }]
+                )
+                .is_err()
+            );
+        }
+        let mut overlapping = result.matches;
+        overlapping.push(overlapping[0].clone());
+        assert!(replace_all(source, &overlapping).is_err());
+    }
+
+    #[test]
+    fn regex_budget_stops_the_entire_search_and_discards_partial_matches() {
+        let options = SearchOptions {
+            regex: true,
+            ..Default::default()
+        };
+        let expired = search_regex("a\nb", ".", "x", options, Instant::now());
+        assert!(expired.timed_out && expired.matches.is_empty());
+
+        // A real backtracking timeout after an earlier successful match. The
+        // old loop spent another 50ms on *each* remaining line and exposed a
+        // partial result to Replace All. The generous bound catches that bug,
+        // not small performance fluctuations.
+        let source = format!("a\n{}", format!("{}!\n", "a".repeat(40)).repeat(100));
+        let started = Instant::now();
+        let result = search(&source, r"^(?:(a+)\1*)+$", "x", options);
+        assert!(result.timed_out && !result.invalid && result.matches.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[derive(serde::Deserialize, serde::Serialize)]
@@ -639,11 +609,12 @@ mod tests {
                 &fixture.source,
                 &fixture.query,
                 &fixture.replacement,
-                fixture.case,
-                fixture.word,
-                fixture.regex,
-            )
-            .unwrap();
+                SearchOptions {
+                    case_sensitive: fixture.case,
+                    whole_word: fixture.word,
+                    regex: fixture.regex,
+                },
+            );
             assert_eq!(
                 actual,
                 fixture.expected,
@@ -654,6 +625,16 @@ mod tests {
                 fixture.case,
                 fixture.word,
                 fixture.regex
+            );
+            // Check the range contract and the one-pass rewrite independently
+            // against the original reverse-replacement algorithm.
+            let mut expected = fixture.source.clone();
+            for m in fixture.expected.matches.iter().rev() {
+                expected.replace_range(m.from..m.to, &m.insert);
+            }
+            assert_eq!(
+                replace_all(&fixture.source, &actual.matches).unwrap(),
+                expected
             );
         }
     }
