@@ -55,17 +55,6 @@ pub(crate) struct Completion {
     pub cursor: usize,
 }
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct SearchMatch {
-    pub from: usize,
-    pub to: usize,
-    pub insert: String,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct SearchResult {
-    pub matches: Vec<SearchMatch>,
-    pub invalid: bool,
-}
-#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Formatted {
     pub formatted: String,
     #[serde(rename = "cursorOffset")]
@@ -116,31 +105,6 @@ pub(crate) fn complete(
         option.cursor = byte(&option.insert, option.cursor);
     }
     Ok(options)
-}
-pub(crate) fn search(
-    source: &str,
-    query: &str,
-    replacement: &str,
-    case: bool,
-    word: bool,
-    regex: bool,
-) -> Result<SearchResult, String> {
-    let (_runtime, context) = runtime()?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
-            let function: Function = ctx.globals().get("monocodeSearch")?;
-            function.call((source, query, replacement, case, word, regex))
-        })
-        .map_err(|e| e.to_string())?;
-    let mut result: SearchResult = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    // Convert all positions in one pass, including large replace-all results.
-    let offsets = byte_offsets(source);
-    for m in &mut result.matches {
-        m.from = offsets[m.from.min(offsets.len() - 1)];
-        m.to = offsets[m.to.min(offsets.len() - 1)];
-    }
-    Ok(result)
 }
 pub(crate) fn chunk_action(
     original: &str,
@@ -455,30 +419,6 @@ mod tests {
 #[cfg(test)]
 mod parity_tests {
     use super::*;
-    #[test]
-    fn search_and_replace_share_codemirror_unicode_captures_and_word_boundaries() {
-        let source = "🙂 café CAFE caféine\nCAFÉ";
-        let found = search(source, "café", "tea", false, true, false).unwrap();
-        assert_eq!(found.matches.len(), 2);
-        assert_eq!(&source[found.matches[0].from..found.matches[0].to], "café");
-        assert_eq!(&source[found.matches[1].from..found.matches[1].to], "CAFÉ");
-        let found = search(source, "(caf)(é)", "$2$1", false, true, true).unwrap();
-        assert_eq!(found.matches[0].insert, "écaf");
-        assert!(search(source, "[", "", false, false, true).unwrap().invalid);
-        assert!(
-            search(source, "^", "x", false, false, true)
-                .unwrap()
-                .matches
-                .is_empty()
-        );
-        assert_eq!(
-            search("a\\nb", "a\\nb", "$1", true, false, false)
-                .unwrap()
-                .matches[0]
-                .insert,
-            "$1"
-        );
-    }
     #[test]
     fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
         let source = "const emoji='🙂';const value={x:1}";

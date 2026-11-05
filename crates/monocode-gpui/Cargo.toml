@@ -50,6 +50,12 @@ tree-sitter-ruby = "0.23"
 tree-sitter-zig = "1.1"
 # Settings → Mobile draws the pairing code from the module matrix.
 qrcode = { version = "0.14", default-features = false }
+# Native find/replace uses the same ECMAScript regex grammar as the old
+# CodeMirror bundle. Pin it because the crate is new and its Unicode tables
+# are part of the search behavior.
+corvus-regex-ecma262 = "=0.2.7"
+unicode-normalization = "0.1.26"
+memchr = "2.8.3"
 
 [build-dependencies]
 embed-resource = "3"

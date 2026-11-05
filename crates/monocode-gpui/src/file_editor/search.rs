@@ -4,6 +4,8 @@ impl FileEditor {
     pub(super) fn search_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = if self.search_invalid {
             "Invalid regex".into()
+        } else if self.search_timed_out {
+            "Timed out".into()
         } else if self.search.read(cx).content.is_empty() {
             String::new()
         } else if self.matches.is_empty() {
@@ -17,6 +19,7 @@ impl FileEditor {
             )
         };
         let bad = self.search_invalid
+            || self.search_timed_out
             || (!self.search.read(cx).content.is_empty() && self.matches.is_empty());
         let query = div()
             .h(px(26.))

@@ -41,8 +41,6 @@ if (!largeAnalysis.tokens.some(token => token.to > largeSource.length - 1024)) t
 if (!largeAnalysis.changes.some(change => change.original.includes("previousHighlightTail") && change.tokens.some(token => token.kind === "var(--syntax-string)"))) throw new Error("Large-file baseline highlighting stops before its final change");
 const completion = JSON.parse(await sandbox.monocodeComplete("test.js", "cons", 4, true));
 if (!completion.some(option => option.label === "const")) throw new Error("Completion smoke check failed");
-const search = JSON.parse(sandbox.monocodeSearch("hello HELLO", "(hello)", "$1!", false, false, true));
-if (search.matches.length !== 2 || search.matches[0].insert !== "hello!") throw new Error("Search smoke check failed");
 const formatter = vm.createContext({});
 vm.runInContext(await readFile(asset.replace("native-editor.js", "native-format.js"), "utf8"), formatter);
 if (JSON.parse(await formatter.monocodeFormat("a.json", '{"a":1}', 0)).formatted !== '{ "a": 1 }\n') throw new Error("Format smoke check failed");
