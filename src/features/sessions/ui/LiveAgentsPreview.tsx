@@ -179,11 +179,11 @@ function LiveAgentCard({
       aria-current={selected ? "true" : undefined}
       data-live-agent-card={agent.id}
       onClick={() => onSelect?.(agent.id)}
-      className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
+      className={`relative flex w-full min-w-0 flex-col overflow-hidden rounded-md px-2 py-1.5 text-left ${
         selected ? "bg-selection" : "hover:bg-content/8"
       }`}
     >
-      <span className="flex min-w-0 items-center gap-2">
+      <span className="flex w-full min-w-0 items-center gap-2">
         <ProjectMascot
           project={seed}
           color={color}
@@ -202,7 +202,7 @@ function LiveAgentCard({
         )}
       </span>
       <span
-        className={`mt-1 flex min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight ${
+        className={`mt-1 flex w-full min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight ${
           agent.needsApproval
             ? "text-amber-400"
             : agent.done
@@ -219,7 +219,7 @@ function LiveAgentCard({
         )}
         <span className="min-w-0 truncate">{activity}</span>
       </span>
-      <span className="mt-1 flex min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight text-content/45">
+      <span className="mt-1 flex w-full min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight text-content/45">
         <HarnessIcon harness={agent.harness} className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{project}</span>
         {elapsed ? (
