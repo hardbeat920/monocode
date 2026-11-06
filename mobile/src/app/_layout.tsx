@@ -15,6 +15,7 @@ import {
 } from "@/features/connection/ConnectionProvider";
 import { WorkspaceGate } from "@/features/connection/WorkspaceGate";
 
+import { InboxProvider } from "@/features/inbox/InboxProvider";
 import { SessionNotifications } from "@/features/notifications/SessionNotifications";
 import { SessionActivity } from "@/features/sessions/SessionActivity";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
@@ -175,6 +176,7 @@ function LinkedWorkspace() {
   if (changing && !covered) setCovered(true);
   return (
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
+      <InboxProvider>
       <SessionNotifications />
       <SessionActivity />
       <WorkspaceLayout sidebar={!monoOnly}>
@@ -215,6 +217,8 @@ function LinkedWorkspace() {
                 <Stack.Screen name="mono-new" options={screens.page} />
                 <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
                 <Stack.Screen name="models" options={screens.modal} />
+                <Stack.Screen name="inbox" options={screens.modal} />
+                <Stack.Screen name="inbox-list" options={screens.session} />
                 <Stack.Screen name="changes" options={screens.changes} />
               </Stack>
             </SessionFrame>
@@ -224,6 +228,7 @@ function LinkedWorkspace() {
       {covered ? (
         <DitherLoading leaving={!changing} onGone={() => setCovered(false)} />
       ) : null}
+      </InboxProvider>
     </WorkspaceProvider>
   );
 }

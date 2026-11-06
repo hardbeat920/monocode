@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
 
@@ -50,9 +50,19 @@ const APP_METHODS: &[&str] = &[
     "mono.create",
     "mono.file",
     "mono.saveFile",
+    "inbox.list",
+    "inbox.item",
+    "inbox.diff",
+    "inbox.checks",
+    "inbox.mark",
+    "inbox.start",
+    "inbox.media",
 ];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);
+/// A phone that listed the workspace this recently counts as open. It polls
+/// every few seconds while in the foreground.
+const FOLLOW_WINDOW: Duration = Duration::from_secs(30);
 const MAX_PENDING: usize = 16;
 const MAX_WATCHES_PER_DEVICE: usize = 4;
 
@@ -132,6 +142,11 @@ impl Request {
     pub fn reply(self, result: Result<Value, String>) {
         let _ = self.reply.send(result);
     }
+    /// The same request, answered the same way, asking with `params`: for a
+    /// method the app builds from another one's input.
+    pub fn with_params(self, params: Value) -> Self {
+        Self { params, ..self }
+    }
 }
 
 /// A phone starts following a conversation. The app accepts or refuses it
@@ -182,6 +197,8 @@ struct Inner {
     invitations: HashMap<String, Invitation>,
     catalog: Value,
     watches: HashMap<String, Watcher>,
+    /// When a phone last listed the workspace.
+    listed_at: Option<Instant>,
     router_address: Option<Address>,
     router_status: String,
     router_started: bool,
@@ -261,6 +278,7 @@ impl MobileHost {
                 invitations: HashMap::new(),
                 catalog: json!({"projects":[],"monos":[],"sessions":[]}),
                 watches: HashMap::new(),
+                listed_at: None,
                 router_address: None,
                 router_status: "Off".into(),
                 router_started: false,
@@ -406,6 +424,16 @@ impl MobileHost {
     }
 
     /// The app's workspace: `projects`, `monos` and `sessions` (newest first).
+    /// Whether a phone is reading the workspace now: it is open on the phone,
+    /// so what only a phone's reading kept fresh should stay fresh.
+    pub fn followed(&self) -> bool {
+        self.inner.lock().is_ok_and(|inner| {
+            inner
+                .listed_at
+                .is_some_and(|at| at.elapsed() < FOLLOW_WINDOW)
+        })
+    }
+
     pub fn publish(&self, catalog: Value) -> Result<(), String> {
         if !catalog["projects"].is_array()
             || !catalog["monos"].is_array()
@@ -668,6 +696,7 @@ impl MobileHost {
                     return Ok(Value::Null);
                 }
                 "workspace.list" => {
+                    inner.listed_at = Some(Instant::now());
                     let mut catalog = inner.catalog.clone();
                     catalog["sessions"] = json!(recent_sessions(&catalog["sessions"]));
                     catalog["addresses"] = json!(addresses(&inner));
@@ -1051,6 +1080,7 @@ mod tests {
             json!({"projects":[{"id":"p"}],"monos":[],"sessions":[{"id":"s","projectId":"p"}]}),
         )
         .unwrap();
+        assert!(!host.followed());
         let catalog = host
             .handle(
                 &peer,
@@ -1058,6 +1088,7 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(host.followed(), "a phone that just listed is open");
         assert_eq!(catalog["sessions"][0]["id"], "s");
         assert!(catalog["addresses"].is_array());
         assert!(host.publish(json!({"projects":[]})).is_err());

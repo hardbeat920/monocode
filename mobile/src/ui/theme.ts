@@ -22,6 +22,8 @@ const dark = {
   accent: "#4c9ef5",
   additions: "#6ee7b7",
   deletions: "#f87171",
+  /** Violet, for a merged pull request or a closed issue, as on GitHub. */
+  merged: "#a78bfa",
   /** Amber, for warnings and full access. */
   caution: "#fbbf24",
   /** A file named in a transcript, apart from prose, code and links. */
@@ -62,6 +64,7 @@ const light: Palette = {
   accent: "#1f7ae0",
   additions: "#047857",
   deletions: "#be123c",
+  merged: "#7c3aed",
   caution: "#b45309",
   fileRef: "#6d28d9",
   inverse: "#fafafa",

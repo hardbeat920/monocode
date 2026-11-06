@@ -39,11 +39,19 @@ export type Catalog = {
   /** The desktop answers Mono profiles, editing, reset, delete and create;
    *  the older desktop app sends no such flag. */
   monoTools?: boolean;
+  /** Moves when the Inbox has something new to read; absent or null, the
+   *  phone polls it instead. */
+  inboxRev?: string | null;
   /** The desktop sends this phone push notifications once it registers;
    *  the older desktop app doesn't, and the phone posts its own. */
   push?: boolean;
   /** The desktop reads and saves a Mono's soul and memory for the phone. */
   monoFiles?: boolean;
+  /** The desktop serves the Inbox (`inbox.*`); the older desktop app doesn't,
+   *  and the phone leaves the Inbox out. */
+  inbox?: boolean;
+  /** The desktop answers `inbox.readAll`, `inbox.action` and `inbox.comment`. */
+  inboxActions?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";

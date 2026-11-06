@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The phone has an Inbox: pull requests and issues from your desktop's GitHub and Linear accounts, with filters, comments, merge and pull request actions, and inline review.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added
