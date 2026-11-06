@@ -9,21 +9,7 @@ impl Shell {
         if self.archive_shortcut_held {
             return;
         }
-        if self.app_view_open()
-            || self.settings.is_some()
-            || self.app_search.is_some()
-            || self.mono_active(cx)
-            || self.quick_open.is_some()
-            || self.image_lightbox.is_some()
-            || self.menu.is_some()
-            || self.renaming.is_some()
-            || self.link_dialog.is_some()
-            || self.action_dialog.is_some()
-            || self.background_dialog.is_some()
-            || self.resources.read(cx).is_open()
-            || self.review_focused
-            || self.dock_focused(window, cx).is_some()
-        {
+        if self.session_shortcut_blocked(window, cx) {
             cx.propagate();
             return;
         }
@@ -41,6 +27,24 @@ impl Shell {
         }
         self.archive_shortcut_held = true;
         self.toggle_archive(id, cx);
+    }
+
+    /// An overlay, another view or a focused side surface owns the keyboard.
+    pub(super) fn session_shortcut_blocked(&self, window: &Window, cx: &App) -> bool {
+        self.app_view_open()
+            || self.settings.is_some()
+            || self.app_search.is_some()
+            || self.mono_active(cx)
+            || self.quick_open.is_some()
+            || self.image_lightbox.is_some()
+            || self.menu.is_some()
+            || self.renaming.is_some()
+            || self.link_dialog.is_some()
+            || self.action_dialog.is_some()
+            || self.background_dialog.is_some()
+            || self.resources.read(cx).is_open()
+            || self.review_focused
+            || self.dock_focused(window, cx).is_some()
     }
 }
 
