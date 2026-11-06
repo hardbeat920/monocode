@@ -13,6 +13,7 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+mod perf_scroll;
 pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
@@ -154,10 +155,6 @@ enum Body {
     Pending(usize),
     /// LaunchedSessionCard for a session the run started.
     Launch(i64),
-    /// SessionReview, the latest settled turn's recorded changes.
-    Review {
-        turn: usize,
-    },
     /// A commit pill turn's status line, then its card.
     GitAction(Arc<git_turns::GitCard>),
     Tool {
@@ -715,10 +712,6 @@ pub(crate) struct TranscriptView {
     taken: Vec<TakenMessage>,
     pending_entrances: HashMap<String, Instant>,
     launches: HashMap<i64, LaunchView>,
-    /// The session's latestTurnAccessory card.
-    review: Option<gpui::AnyView>,
-    /// The card has changes or an error to show, so it takes a row.
-    review_shown: bool,
     /// A clock for the tool and task shimmers.
     started_at: Instant,
     /// One clock per frame for row motion. The list measures rows and the
@@ -730,6 +723,7 @@ pub(crate) struct TranscriptView {
     messages: Vec<Message>,
     rows: Vec<UiRow>,
     streaming: bool,
+    perf_scroll: perf_scroll::PerfScroll,
     chat_layout: bool,
     anchor_prompts: bool,
     smooth_reveal: bool,
@@ -1233,6 +1227,8 @@ impl TranscriptView {
         let Some((mascot, color, name)) = self.mono_look.clone() else {
             return div().into_any_element();
         };
+        // As a model's "Worked for" line: the Mono's mascot on a tile, then
+        // its name.
         let pill = div()
             .debug_selector(|| "mono-signature-pill".into())
             .flex()
@@ -1240,28 +1236,16 @@ impl TranscriptView {
             .flex_shrink_0()
             .max_w(px(320.))
             .items_center()
-            .gap_1p5()
-            .rounded_full()
-            .bg(content(0.07))
-            .py(px(2.))
-            .pl_2()
-            .pr_3()
+            .gap(px(8.))
             .child(
-                div()
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .child(crate::monos::avatar::avatar(
-                        &mascot, color, "idle", 14., true,
-                    )),
+                crate::tab_tile::mark_tile(
+                    &crate::tab_tile::ACTIVITY_TILE,
+                    crate::tab_tile::Face::Neutral,
+                    crate::monos::avatar::avatar(&mascot, color, "idle", 14., true),
+                )
+                .flex_shrink_0(),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(content(0.8))
-                    .child(name),
-            );
+            .child(div().min_w_0().truncate().child(name));
         div()
             .id(("mono-turn-header", turn))
             .flex()
@@ -1911,7 +1895,7 @@ impl TranscriptView {
                     .relative()
                     .w_full()
                     .max_w(px(COLUMN))
-                    .px_4()
+                    .px(px(COLUMN_PAD))
                     .pt(px(top))
                     .pb(px(bottom))
                     .child(crate::monos::cards::launch(id, view.as_ref(), cx)),
@@ -1933,55 +1917,6 @@ impl TranscriptView {
             _ => 12.,
         };
         (top, bottom)
-    }
-    /// The session's review card, under the latest settled turn only.
-    pub(crate) fn set_review(&mut self, review: gpui::AnyView) {
-        self.review = Some(review);
-    }
-    /// The card gained or lost its content; the latest turn makes room for it.
-    pub(crate) fn set_review_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
-        if self.review_shown == shown {
-            return;
-        }
-        self.review_shown = shown;
-        if !self.messages.is_empty() {
-            let start = self
-                .source
-                .iter()
-                .rposition(|r| r.is_prompt())
-                .map_or(0, |i| i + 1);
-            self.rebuild(start, cx);
-        }
-        cx.notify();
-    }
-    fn review_row(&self, turn: usize) -> gpui::AnyElement {
-        let latest = self
-            .source
-            .iter()
-            .rposition(|r| r.is_prompt())
-            .map_or(0, |i| i + 1);
-        let Some(review) = self
-            .review
-            .clone()
-            .filter(|_| !self.streaming && turn == latest)
-        else {
-            return div().into_any_element();
-        };
-        div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .max_w(px(COLUMN))
-                    .px_4()
-                    .pt_1()
-                    .pb_2()
-                    .child(review),
-            )
-            .into_any_element()
     }
     /// A queued message's bubble, as UserMessageBlock draws one, with its
     /// delivery line when it could not be sent.
@@ -2035,7 +1970,7 @@ impl TranscriptView {
                     .max_w(px(COLUMN))
                     .min_w_0()
                     .pl(px(56.))
-                    .pr(px(16.))
+                    .pr(px(COLUMN_PAD))
                     .pt_1()
                     .pb(px(if stacked { 0. } else { 20. }))
                     .flex()
@@ -2146,7 +2081,7 @@ impl TranscriptView {
                         .w_full()
                         .max_w(px(COLUMN))
                         .min_w_0()
-                        .px_4()
+                        .px(px(COLUMN_PAD))
                         .child(self.mono_header(self.source.len(), Some("Thinking…".into()), cx)),
                 )
             })
@@ -2557,8 +2492,6 @@ impl TranscriptView {
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
             launches: HashMap::new(),
-            review: None,
-            review_shown: false,
             started_at: Instant::now(),
             frame_now: Instant::now(),
             measurements: Default::default(),
@@ -2566,6 +2499,7 @@ impl TranscriptView {
             messages: Vec::new(),
             rows: Vec::new(),
             streaming: false,
+            perf_scroll: Default::default(),
             chat_layout: true,
             anchor_prompts: true,
             smooth_reveal: true,
@@ -3810,7 +3744,14 @@ impl TranscriptView {
                 parser,
                 markdown_blocks,
                 user_link,
-                under_line: has_work && final_answer == Some(at),
+                // Only a settled turn folds its work under the receipt line.
+                // While it streams, the newest reply is the answer so far but
+                // still follows open tool rows, so it keeps prose's 12px gap
+                // instead of jumping when the next tool or the end arrives.
+                under_line: has_work
+                    && final_answer == Some(at)
+                    && self.fold_work
+                    && !(self.streaming && turn_end == self.source.len()),
                 turn: if self.mono {
                     self.mono_group_start(turn)
                 } else {
@@ -3885,22 +3826,6 @@ impl TranscriptView {
                 && end == turn_end
                 && !(self.mono && self.mono_next_run_continues(turn, turn_end))
             {
-                if !self.mono
-                    && self.review_shown
-                    && self.review.is_some()
-                    && turn_end == self.source.len()
-                {
-                    self.rows.push(UiRow {
-                        key: (at, usize::MAX - 2),
-                        body: Body::Review { turn },
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
                 self.rows.push(UiRow {
                     key: (at, usize::MAX - 1),
                     body: Body::Actions {
@@ -4245,7 +4170,6 @@ impl TranscriptView {
                     | Body::MonoDivider
                     | Body::Pending(_)
                     | Body::Launch(_)
-                    | Body::Review { .. }
                     | Body::SavedDraft
             ) {
                 return false;
@@ -4707,7 +4631,6 @@ impl TranscriptView {
             Body::SavedDraft => return self.saved_draft_row(cx),
             Body::Pending(i) => return self.pending_row(i, cx),
             Body::Launch(id) => return self.launch_row(ix, id, cx),
-            Body::Review { turn } => return self.review_row(turn),
             _ => {}
         }
         let group = self.motions.get(&self.rows[ix].key).and_then(|m| m.group);
@@ -4949,9 +4872,7 @@ impl TranscriptView {
                 crate::monos::cards::render(value, chosen.as_deref(), cx)
             }
             Body::MonoDivider => mono_divider::render(),
-            Body::Pending(_) | Body::Launch(_) | Body::Review { .. } | Body::SavedDraft => {
-                div().into_any_element()
-            }
+            Body::Pending(_) | Body::Launch(_) | Body::SavedDraft => div().into_any_element(),
             Body::Actions { turn, complete } => {
                 // Tighten only a visible Mono reply followed by a user bubble;
                 // stacked user messages keep their existing spacing.
@@ -5640,7 +5561,7 @@ impl TranscriptView {
                             .w_full()
                             .max_w(px(COLUMN))
                             .min_w_0()
-                            .px_4()
+                            .px(px(COLUMN_PAD))
                             .pt(px(if card && self.mono {
                                 card_top
                             } else if first && !is_tool && !prose {
@@ -5669,7 +5590,7 @@ impl TranscriptView {
                             .when(user && self.chat_layout, |d| {
                                 d.pl(px(56.)).flex().justify_end()
                             })
-                            .when(user && self.mono, |d| d.pr(px(16.)))
+                            .when(user && self.mono, |d| d.pr(px(COLUMN_PAD)))
                             .child(
                                 div()
                                     .relative()
@@ -5874,12 +5795,13 @@ impl TranscriptView {
     /// Wrapped lines of a user message's text at the bubble's text width.
     fn prompt_lines(&self, text: &str, window: &Window) -> usize {
         let column = self.viewport.size.width.min(px(COLUMN));
-        // Row padding (`pl-14 pr-4` in the chat layout, `px-4` otherwise),
-        // the bubble's 36rem cap and its `px-3`.
+        // Row padding (`pl-14` and `COLUMN_PAD` in the chat layout,
+        // `COLUMN_PAD` both sides otherwise), the bubble's 36rem cap and its
+        // `px-3`.
         let bubble = if self.chat_layout {
-            (column - px(72.)).min(PROMPT_BUBBLE_MAX)
+            (column - px(56. + COLUMN_PAD)).min(PROMPT_BUBBLE_MAX)
         } else {
-            column - px(32.)
+            column - px(2. * COLUMN_PAD)
         };
         let text = SharedString::from(text.trim_end().to_owned());
         measurements::shape_prompt(text, Some(bubble - PROMPT_PAD_X), window)
@@ -5903,6 +5825,7 @@ impl TranscriptView {
 impl gpui::EventEmitter<ResponseRequest> for TranscriptView {}
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.perf_scroll(window, cx);
         let top = self.list.logical_scroll_top();
         // Rows that don't fill the viewport can't scroll, so their top being
         // on screen asks for older turns too. Layout must have run first.
@@ -6076,7 +5999,7 @@ impl Render for TranscriptView {
                             div()
                                 .w_full()
                                 .max_w(px(crate::theme::COLUMN))
-                                .px(px(16.))
+                                .px(px(COLUMN_PAD))
                                 .flex()
                                 .map(|d| {
                                     if beside_pill {
