@@ -322,6 +322,7 @@ impl QuickComposer {
     fn apply_choice(&mut self, choice: Launch, cx: &mut Context<Self>) {
         self.kind = choice.kind;
         self.model = choice.model;
+        self.access = choice.access;
         self.effort = choice
             .effort
             .or_else(|| crate::conversation::preferred_effort(self.kind.id(), cx));
@@ -370,6 +371,15 @@ impl QuickComposer {
         self.update_placeholder(cx);
     }
     fn set_model(&mut self, kind: Kind, model: Option<String>, cx: &mut Context<Self>) {
+        if kind != self.kind || model != self.model {
+            crate::conversation::remember_access(
+                self.kind.id(),
+                self.model.as_deref(),
+                self.access,
+                cx,
+            );
+            self.access = crate::conversation::preferred_access(kind.id(), model.as_deref(), cx);
+        }
         if kind != self.kind {
             self.effort = crate::conversation::preferred_effort(kind.id(), cx);
             self.fast = false;
@@ -720,6 +730,12 @@ impl QuickComposer {
     fn choose_permission(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((mode, ..)) = self.offered_permissions(cx).get(ix) {
             self.access = *mode;
+            crate::conversation::remember_access(
+                self.kind.id(),
+                self.model.as_deref(),
+                self.access,
+                cx,
+            );
         }
         self.close_picker(window, cx);
     }
@@ -2213,6 +2229,36 @@ mod tests {
         });
         cx.run_until_parked();
         window
+    }
+
+    #[gpui::test]
+    fn access_choices_follow_the_quick_composers_model(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.set_model(Kind::Codex, Some("gpt-a".into()), cx);
+                let ix = view
+                    .offered_permissions(cx)
+                    .iter()
+                    .position(|(mode, ..)| *mode == AccessMode::Auto)
+                    .unwrap();
+                view.choose_permission(ix, window, cx);
+                view.set_model(Kind::Cursor, Some("cursor-a".into()), cx);
+                assert_eq!(view.access, AccessMode::Supervised);
+                let ix = view
+                    .offered_permissions(cx)
+                    .iter()
+                    .position(|(mode, ..)| *mode == AccessMode::FullAccess)
+                    .unwrap();
+                view.choose_permission(ix, window, cx);
+                view.set_model(Kind::Codex, Some("gpt-a".into()), cx);
+                assert_eq!(view.access, AccessMode::Auto);
+                view.set_model(Kind::Cursor, Some("cursor-a".into()), cx);
+                assert_eq!(view.access, AccessMode::FullAccess);
+                view.set_model(Kind::Cursor, Some("cursor-b".into()), cx);
+                assert_eq!(view.access, AccessMode::Supervised);
+            })
+            .unwrap();
     }
 
     #[gpui::test]

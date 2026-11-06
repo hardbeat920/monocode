@@ -12888,13 +12888,15 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
-    fn a_split_session_starts_with_the_default_access(cx: &mut TestAppContext) {
+    fn a_split_session_starts_with_the_models_remembered_access(cx: &mut TestAppContext) {
         let (window, _, b) = window(cx);
         cx.update(|cx| {
             bind_keys(cx);
             cx.set_reduce_motion(true);
             cx.set_global(crate::settings::Preferences::default());
             crate::conversation::remember_access(
+                "claude",
+                None,
                 monocode_core::agent::AccessMode::from_id("auto"),
                 cx,
             );

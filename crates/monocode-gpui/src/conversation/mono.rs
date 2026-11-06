@@ -385,7 +385,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.settings.access = mode;
-        super::remember_access(mode, cx);
+        super::remember_access(&self.summary.provider, self.model.as_deref(), mode, cx);
         self.save_settings(cx);
         cx.notify();
     }
@@ -538,12 +538,25 @@ impl Conversation {
         if self.busy || self.stopping {
             return Err("Wait for the current reply before changing models".into());
         }
+        let changed = self.summary.provider != provider.id() || self.model != model;
+        if changed {
+            super::remember_access(
+                &self.summary.provider,
+                self.model.as_deref(),
+                self.settings.access,
+                cx,
+            );
+        }
         if self.summary.provider != provider.id() {
             self.summary.provider = provider.id().into();
             self.summary.provider_id = None;
             self.catalog.clear();
         }
         self.model = model;
+        if changed {
+            self.settings.access =
+                super::preferred_access(provider.id(), self.model.as_deref(), cx);
+        }
         self.settings.effort = super::preferred_effort(provider.id(), cx);
         self.settings.fast = false;
         self.settings.thinking = None;
@@ -856,6 +869,7 @@ impl Conversation {
     /// The session composer's box: the field, then a toolbar with the model
     /// picker, its settings, access and send.
     fn mono_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let access = self.supported_access();
         let radius = COMPOSER_RADIUS;
         let has_value = self.input.read(cx).has_message_text() || !self.attachments.is_empty();
         // As the session composer: setting pills only with controls beside
@@ -968,7 +982,7 @@ impl Conversation {
                             .children(controls)
                             .child(
                                 tool_pill("mono-access", "Access")
-                                    .aria_label(format!("Access, {}", self.settings.access.label()))
+                                    .aria_label(format!("Access, {}", access.label()))
                                     .aria_expanded(self.menu_is(ComposerMenu::Access))
                                     .child(self.access_anchor.probe())
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -976,7 +990,7 @@ impl Conversation {
                                     }))
                                     .child(
                                         icon(
-                                            match self.settings.access {
+                                            match access {
                                                 AccessMode::FullAccess => "shield-alert",
                                                 AccessMode::AutoAcceptEdits => "pencil-edit",
                                                 AccessMode::Auto => "sparkles",
@@ -985,14 +999,14 @@ impl Conversation {
                                             14.,
                                         )
                                         .text_color(
-                                            if self.settings.access == AccessMode::FullAccess {
+                                            if access == AccessMode::FullAccess {
                                                 tint(AMBER_400, 0.9)
                                             } else {
                                                 content(1.)
                                             },
                                         ),
                                     )
-                                    .child(pill_label(self.settings.access.label()))
+                                    .child(pill_label(access.label()))
                                     .child(icon("chevron-down", 12.)),
                             ),
                     )
