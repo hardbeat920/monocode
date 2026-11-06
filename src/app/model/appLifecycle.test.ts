@@ -10,6 +10,7 @@ import {
   closeBusyWindow,
   commitQuit,
   confirmReload,
+  handleQuitRequested,
   reportQuitPoll,
   setQuitWorkspace,
 } from "./appLifecycle";
@@ -298,6 +299,34 @@ describe("coordinated quit", () => {
       .mocked(invoke)
       .mock.calls.find(([name]) => name === command)?.[1];
   }
+
+  it("refuses coordinated quit if the Soul save fails or throws", async () => {
+    for (const beforeQuit of [
+      vi.fn().mockResolvedValue(false),
+      vi.fn().mockRejectedValue(new Error("disk")),
+    ]) {
+      const abort = vi.fn();
+      const release = setQuitWorkspace(
+        () => [],
+        () => [],
+        () => "",
+        () => "~",
+        () => [],
+        () => new Map(),
+        vi.fn(),
+        undefined,
+        undefined,
+        beforeQuit,
+        abort,
+      );
+      try {
+        expect(await handleQuitRequested()).toBe(false);
+        expect(beforeQuit).toHaveBeenCalledOnce();
+      } finally {
+        release();
+      }
+    }
+  });
 
   it("reports this window's live turns to the coordinator", async () => {
     const release = busyWorkspace();
