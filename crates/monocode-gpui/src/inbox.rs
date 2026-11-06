@@ -5,7 +5,7 @@ mod diff;
 mod document;
 mod ui;
 pub(crate) use avatar::image as avatar_image;
-pub(crate) use ui::relative_time;
+pub(crate) use ui::{provider_mark, relative_time};
 
 use crate::{
     diff_view::{DiffEvent, DiffView},
@@ -26,6 +26,13 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+
+/// The latest Inbox rows, for the composer's `#` picker.
+pub(crate) struct Catalog {
+    pub items: std::sync::Arc<Vec<Item>>,
+    pub at: Instant,
+}
+impl gpui::Global for Catalog {}
 
 pub(crate) enum Event {
     Close,
@@ -471,6 +478,10 @@ impl Inbox {
                 this.state.seen.seed(&snapshot.items);
                 this.snapshot = snapshot;
                 this.sessions = sessions;
+                cx.set_global(Catalog {
+                    items: this.snapshot.items.clone().into(),
+                    at: Instant::now(),
+                });
                 if this.active
                     && let Some(item) = this.item()
                 {
