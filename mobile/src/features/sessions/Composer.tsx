@@ -1,7 +1,8 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
-import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
+import { Button } from "@expo/ui/swift-ui";
+import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { useNavigation } from "expo-router";
-import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, {
@@ -11,13 +12,15 @@ import Animated, {
   interpolate,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from "react-native-reanimated";
 
 import { PulsingDot, useOffline } from "@/features/connection/ConnectionNotice";
 import type { Harness } from "@/features/workspace/types";
 import { FileTypeIcon } from "@/features/files/FileTypeIcon";
-import { Icon, type IconName } from "@/ui/Icon";
+import { GlassBacking } from "@/ui/GlassBacking";
+import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 import { themedStyles, useColors, useScheme } from "@/ui/theme";
 
@@ -29,10 +32,11 @@ import {
   pickPhotos,
   type Attachment,
 } from "./attachments";
+import { ComposerAction } from "./ComposerAction";
+import { ComposerPills } from "./ComposerPills";
 import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
 import { TypingPostureFocus } from "./TypingPostureFocus";
-import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
@@ -64,6 +68,11 @@ const MARGIN_COLLAPSED = 20;
 const MARGIN_EXPANDED = 12;
 const MORPH = { duration: 280, easing: Easing.out(Easing.cubic) };
 const DICTATION_FADE = { duration: 180, easing: Easing.out(Easing.cubic) };
+/** The mic drawing out into the recording's capsule, and the add button's turn to a cross. */
+const DICTATION_STRETCH = { duration: 380, dampingRatio: 0.8 };
+/** The capsule leads; what's in it follows, and leaves before it closes. */
+const DICTATION_CONTENT_DELAY = 90;
+const DICTATION_CONTENT_OUT = 70;
 
 /**
  * The prompt field. At rest it's a single glass pill: add, the field and the
@@ -124,6 +133,7 @@ export function Composer({
   const scheme = useScheme();
   const colors = useColors();
   const styles = useStyles();
+  const glass = isLiquidGlassAvailable();
   const offline = useOffline();
   // Losing the desktop holds back only what needs it, Send and Stop; the
   // person can keep writing. An error waits until it's back.
@@ -212,7 +222,7 @@ export function Composer({
       bottom: interpolate(p, [0, 1], [EDGE, BOTTOM_ROW]),
     };
   });
-  // Dictation takes over the bottom row: its buttons, and the pill's field.
+  // Dictation takes over the bottom row: the model, and the pill's field.
   const dictation = useSharedValue(0);
   // Android still hit-tests transparent views. These absolute rows overlap the
   // collapsed input, so only their children may receive touches once the card
@@ -227,15 +237,11 @@ export function Composer({
         : "none" as const,
     } : {}),
   }));
+  const stretch = useSharedValue(0);
   useEffect(() => {
     dictation.set(withTiming(dictating ? 1 : 0, DICTATION_FADE));
-  }, [dictating, dictation]);
-  const undictated = useAnimatedStyle(() => ({
-    opacity: 1 - dictation.get(),
-    ...(Platform.OS === "android" ? {
-      pointerEvents: dictation.get() === 0 && !blocked ? "auto" as const : "none" as const,
-    } : {}),
-  }));
+    stretch.set(withSpring(dictating ? 1 : 0, DICTATION_STRETCH));
+  }, [dictating, dictation, stretch]);
   const fieldShown = useAnimatedStyle(() => ({
     opacity: 1 - dictation.get() * (1 - progress.get()),
   }));
@@ -327,7 +333,10 @@ export function Composer({
       ) : null}
 
       {reply ? (
-        <Animated.View style={[styles.reply, { top: topRow - 2 }, expandedOnly]}>
+        <Animated.View
+          style={[styles.reply, !glass && styles.replyOutline, { top: topRow - 2 }, expandedOnly]}
+        >
+          {glass ? <GlassBacking /> : null}
           <Text style={styles.replyText} numberOfLines={1}>
             {reply.replace(/\s+/g, " ").trim()}
           </Text>
@@ -420,14 +429,32 @@ export function Composer({
         ) : null}
       </Animated.View>
 
+      {compact ? null : (
+        <ComposerPills
+          progress={progress}
+          dictation={dictation}
+          written={expandedOnly}
+          size={BUTTON}
+          edge={EDGE}
+          model={model}
+          effort={effort}
+          harness={harness}
+          onModelPress={onModelPress}
+        />
+      )}
+
       {/* Bottom row, shared by both layouts: the buttons stay put as the card grows. */}
       <Animated.View
+        // Under a recording this is the cancel area's cross, which speaks for itself.
+        accessibilityElementsHidden={dictating}
+        importantForAccessibility={dictating ? "no-hide-descendants" : "auto"}
         pointerEvents={blocked ? "none" : "auto"}
-        style={[styles.button, styles.leading, undictated, blocked && styles.disabled]}
+        style={[styles.button, styles.leading, blocked && styles.disabled]}
       >
         <AddMenu
           onPhotos={() => void attach(pickPhotos)}
           onFiles={() => void attach(pickFiles)}
+          turned={dictating}
         />
       </Animated.View>
 
@@ -443,59 +470,50 @@ export function Composer({
         </Text>
       ) : null}
 
-      {compact ? null : (
-      <Animated.View
-        style={[styles.modelChip, expandedOnly]}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Model: ${model || "Desktop default"}${effort ? `, ${effort} effort` : ""}`}
-          accessibilityHint="Choose the model, account, effort and permissions"
-          onPress={onModelPress}
-          style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
+      <View pointerEvents="box-none" style={styles.actionLane}>
+        <ComposerAction
+          // A draft mid-turn sends; without one the button stops the turn.
+          primary={
+            dictating
+              ? null
+              : canSend
+                ? {
+                    kind: "send",
+                    label: "Send",
+                    hint: offline ? "Available once your desktop reconnects" : undefined,
+                    disabled: offline,
+                    onPress: () => void send(),
+                  }
+                : busy && onStop
+                  ? {
+                      kind: "stop",
+                      label: "Stop",
+                      disabled: offline,
+                      onPress: () => {
+                        void onStop().catch((reason) => Alert.alert("Could not stop", String(reason)));
+                      },
+                    }
+                  : null
+          }
+          dictating={dictating}
+          stretch={stretch}
+          blocked={blocked}
+          size={BUTTON}
+          onDictate={dictate}
         >
-          {harness ? <ProviderLogo harness={harness} size={16} color={colors.content} /> : null}
-          <Text style={styles.model} numberOfLines={1}>
-            {model || "Desktop default"}
-            {effort ? <Text style={styles.effort}> {effort}</Text> : null}
-          </Text>
-          <Icon name="chevronDown" size={14} color={colors.muted} />
-        </Pressable>
-      </Animated.View>
-      )}
-
-      <Animated.View
-        pointerEvents={blocked ? "none" : "auto"}
-        style={[styles.button, styles.trailing, undictated, blocked && styles.disabled]}
-      >
-        {/* A draft mid-turn sends; without one the button stops the turn. */}
-        {canSend ? (
-          <RoundButton
-            icon="send"
-            label="Send"
-            hint={offline ? "Available once your desktop reconnects" : undefined}
-            onPress={() => void send()}
-            primary
-            disabled={offline}
-          />
-        ) : busy && onStop ? (
-          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary disabled={offline}>
-            <View style={styles.stop} />
-          </RoundButton>
-        ) : (
-          <RoundButton icon="mic" label="Dictate" onPress={dictate} />
-        )}
-        {offline && canSend ? (
-          <View pointerEvents="none" style={styles.sendStatus}>
-            <PulsingDot />
-          </View>
-        ) : null}
-      </Animated.View>
+          {/* The placeholder says why until there's a draft over it. */}
+          {offline && canSend ? (
+            <View pointerEvents="none" style={styles.sendStatus}>
+              <PulsingDot />
+            </View>
+          ) : null}
+        </ComposerAction>
+      </View>
 
       {dictating ? (
         <Animated.View
-          entering={FadeIn.duration(DICTATION_FADE.duration)}
-          exiting={FadeOut.duration(DICTATION_FADE.duration)}
+          entering={FadeIn.delay(DICTATION_CONTENT_DELAY).duration(DICTATION_FADE.duration)}
+          exiting={FadeOut.duration(DICTATION_CONTENT_OUT)}
           style={styles.dictation}
         >
           <DictationBar onClose={endDictation} />
@@ -506,11 +524,19 @@ export function Composer({
 }
 
 /**
- * The add button: a native menu to attach photos or files. The menu lies
- * over the button, its label an invisible box of the button's size, as in
- * SessionFilterMenu.
+ * The add button: a native menu to attach photos or files. The menu grows
+ * out of the button (see GlassMenuButton).
  */
-function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => void }) {
+function AddMenu({
+  onPhotos,
+  onFiles,
+  turned,
+}: {
+  onPhotos: () => void;
+  onFiles: () => void;
+  /** Dictating, which needs iOS 26: the plus turns into the recording's cross. */
+  turned: boolean;
+}) {
   const styles = useStyles();
   const colors = useColors();
   if (Platform.OS === "android") return (
@@ -518,33 +544,16 @@ function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => v
       { label: "Photo Library", icon: "image", onPress: onPhotos },
       { label: "Files", icon: "folder", onPress: onFiles },
     ]}>
-      <View style={styles.round}><Icon name="add" size={18} color={colors.content} /></View>
+      <LiquidView borderRadius={BUTTON / 2} innerStyle={styles.addSurface}>
+        <Icon name="add" size={18} color={colors.content} />
+      </LiquidView>
     </ChoiceMenu>
   );
   return (
-    <View>
-      <View style={styles.round}>
-        <Icon name="add" size={18} color={colors.content} />
-      </View>
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel("Add photos or files")]}
-          label={
-            <HStack
-              modifiers={[
-                frame({ width: BUTTON, height: BUTTON }),
-                contentShape(shapes.circle()),
-              ]}
-            >
-              <Spacer />
-            </HStack>
-          }
-        >
-          <Button label="Photo Library" systemImage="photo.on.rectangle" onPress={onPhotos} />
-          <Button label="Files" systemImage="folder" onPress={onFiles} />
-        </Menu>
-      </Host>
-    </View>
+    <GlassMenuButton icon="add" symbol="plus" label="Add photos or files" size={BUTTON} turned={turned}>
+      <Button label="Photo Library" systemImage="photo.on.rectangle" onPress={onPhotos} />
+      <Button label="Files" systemImage="folder" onPress={onFiles} />
+    </GlassMenuButton>
   );
 }
 
@@ -559,8 +568,10 @@ function AttachmentChip({
   const styles = useStyles();
   const colors = useColors();
   const image = isImage(attachment);
+  const glass = isLiquidGlassAvailable();
   return (
-    <View style={image ? styles.thumb : styles.fileChip}>
+    <View style={image ? styles.thumb : [styles.fileChip, !glass && styles.fileFill]}>
+      {!image && glass ? <GlassBacking radius={10} /> : null}
       {image ? (
         <Image source={{ uri: attachment.uri }} style={styles.thumbImage} resizeMode="cover" />
       ) : (
@@ -576,64 +587,20 @@ function AttachmentChip({
         accessibilityLabel={`Remove ${attachment.name}`}
         hitSlop={8}
         onPress={onRemove}
-        style={({ pressed }) => [styles.remove, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.remove,
+          !glass && styles.removeFill,
+          pressed && styles.pressed,
+        ]}
       >
+        {glass ? <GlassBacking round /> : null}
         <Icon name="close" size={10} color={colors.content} />
       </Pressable>
     </View>
   );
 }
 
-function RoundButton({
-  icon,
-  label,
-  hint,
-  onPress,
-  primary = false,
-  disabled = false,
-  children,
-}: {
-  icon?: IconName;
-  label: string;
-  hint?: string;
-  onPress?: () => void;
-  primary?: boolean;
-  disabled?: boolean;
-  children?: ReactNode;
-}) {
-  const colors = useColors();
-  const styles = useStyles();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={hint}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      hitSlop={4}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.round,
-        primary && styles.roundPrimary,
-        pressed && styles.pressed,
-        disabled && styles.disabled,
-      ]}
-    >
-      {children ??
-        (icon ? (
-          <Icon name={icon} size={18} color={primary ? colors.inverse : colors.content} />
-        ) : null)}
-    </Pressable>
-  );
-}
-
 const useStyles = themedStyles((colors) => ({
-  stop: {
-    width: 12,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: colors.inverse,
-  },
   contextRow: {
     position: "absolute",
     top: 12,
@@ -674,6 +641,8 @@ const useStyles = themedStyles((colors) => ({
     paddingRight: 14,
     borderRadius: (REPLY_ROW - 8) / 2,
     borderCurve: "continuous",
+  },
+  replyOutline: {
     borderWidth: StyleSheet.hairlineWidth * 2,
     borderColor: colors.stroke,
   },
@@ -712,6 +681,8 @@ const useStyles = themedStyles((colors) => ({
     paddingLeft: 10,
     paddingRight: 14,
     borderRadius: 10,
+  },
+  fileFill: {
     backgroundColor: colors.fill,
   },
   fileName: {
@@ -729,6 +700,8 @@ const useStyles = themedStyles((colors) => ({
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
+  },
+  removeFill: {
     backgroundColor: colors.surfaceRaised,
   },
   input: {
@@ -755,8 +728,13 @@ const useStyles = themedStyles((colors) => ({
   leading: {
     left: EDGE,
   },
-  trailing: {
+  // From past the add button to the composer's end: where the mic can reach.
+  actionLane: {
+    position: "absolute",
+    left: EDGE + BUTTON + 8,
     right: EDGE,
+    bottom: EDGE,
+    height: BUTTON,
   },
   // Over the bottom row, edge to edge between the pill's ends.
   dictation: {
@@ -766,44 +744,9 @@ const useStyles = themedStyles((colors) => ({
     bottom: EDGE,
     height: BUTTON,
   },
-  modelChip: {
-    position: "absolute",
-    bottom: EDGE,
-    left: EDGE + BUTTON + 8,
-    right: EDGE + BUTTON + 8,
-    flexDirection: "row",
-  },
-  // Shaped like the round buttons beside it: their height, tint and full rounding.
-  modelPill: {
-    flexShrink: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    height: BUTTON,
-    paddingHorizontal: 12,
-    borderRadius: BUTTON / 2,
-    backgroundColor: colors.fill,
-  },
-  model: {
-    flexShrink: 1,
-    color: colors.content,
-    fontSize: 15,
-    fontWeight: "500",
-  },
-  effort: {
-    color: colors.muted,
-    fontWeight: "400",
-  },
-  round: {
+  addSurface: {
     width: BUTTON,
     height: BUTTON,
-    borderRadius: BUTTON / 2,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.fill,
-  },
-  roundPrimary: {
-    backgroundColor: colors.inverseSurface,
   },
   pressed: {
     opacity: 0.6,

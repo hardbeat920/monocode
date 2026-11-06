@@ -48,7 +48,7 @@ export function FileSearchBar({
     <Animated.View style={[styles.dock, { bottom: dockBottom }, lift]}>
       {/* No onPress: it would wrap the glass in a Pressable that doesn't
           stretch across the row. The field inside takes the taps instead. */}
-      <LiquidView fill style={styles.field} innerStyle={styles.fieldInner}>
+      <LiquidView interactive fill style={styles.field} innerStyle={styles.fieldInner}>
         <Icon name="search" size={20} color={colors.muted} />
         <TextInput
           ref={input}

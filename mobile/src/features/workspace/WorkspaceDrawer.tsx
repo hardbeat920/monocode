@@ -1,12 +1,5 @@
-import { Host, HStack, Label, Menu, Picker, Spacer } from "@expo/ui/swift-ui";
-import {
-  accessibilityLabel,
-  contentShape,
-  frame,
-  pickerStyle,
-  shapes,
-  tag,
-} from "@expo/ui/swift-ui/modifiers";
+import { Label, Picker } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { router, useGlobalSearchParams, usePathname } from "expo-router";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -23,6 +16,7 @@ import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { CircleButton } from "@/ui/CircleButton";
 import { useWarmDitherLoading } from "@/ui/DitherLoading";
 import { GradualBlur } from "@/ui/GradualBlur";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
 import { Icon, type IconName } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 import { isModalRoute } from "@/ui/SceneFade";
@@ -226,7 +220,7 @@ export function WorkspaceDrawer() {
         <Animated.View style={[styles.foot, { bottom: footerBottom }, lift]}>
           <View style={styles.footer}>
           <CircleButton icon="settings" label="Settings" onPress={openSettings} size={FOOTER_HEIGHT} />
-          <LiquidView borderRadius={FOOTER_HEIGHT / 2} style={styles.searchFrame} innerStyle={styles.search}>
+          <LiquidView interactive borderRadius={FOOTER_HEIGHT / 2} style={styles.searchFrame} innerStyle={styles.search}>
             <Icon name="search" size={18} color={colors.muted} />
             <TextInput
               value={query}
@@ -271,7 +265,7 @@ const SHOWS: {
 ];
 
 /** The round button beside a new Mono: a native menu of which kinds to show
- *  and which of them. Lit while either narrows the list. */
+ *  and which of them. */
 function FilterMenu({
   filter,
   onFilter,
@@ -283,7 +277,6 @@ function FilterMenu({
   show: Show;
   onShow: (value: Show) => void;
 }) {
-  const colors = useColors();
   const on = filter !== "all" || show !== "both";
   // The SwiftUI menu has no Android view, so Android groups the same choices in a sheet.
   if (Platform.OS === "android") return (
@@ -302,47 +295,37 @@ function FilterMenu({
       })),
     ]}>
       <LiquidView borderRadius={HEADER_HEIGHT / 2} innerStyle={filterStyles.round}>
-        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
+        <Icon name="filter" size={20} />
       </LiquidView>
     </ChoiceMenu>
   );
   return (
-    <View>
-      <LiquidView borderRadius={HEADER_HEIGHT / 2} innerStyle={filterStyles.round}>
-        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
-      </LiquidView>
-      {/* The native menu lies over the glass, its label an invisible box of
-          the button's size, as in SessionFilterMenu. */}
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel(on ? "Filter, on" : "Filter")]}
-          label={
-            <HStack modifiers={[frame({ width: HEADER_HEIGHT, height: HEADER_HEIGHT }), contentShape(shapes.circle())]}>
-              <Spacer />
-            </HStack>
-          }
-        >
-          <Picker
-            selection={show}
-            onSelectionChange={(next) => onShow(next as Show)}
-            modifiers={[pickerStyle("inline")]}
-          >
-            {SHOWS.map((option) => (
-              <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
-            ))}
-          </Picker>
-          <Picker
-            selection={filter}
-            onSelectionChange={(next) => onFilter(next as Filter)}
-            modifiers={[pickerStyle("inline")]}
-          >
-            {FILTERS.map((option) => (
-              <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
-            ))}
-          </Picker>
-        </Menu>
-      </Host>
-    </View>
+    <GlassMenuButton
+      icon="filter"
+      symbol="slider.horizontal.3"
+      label="Filter"
+      size={HEADER_HEIGHT}
+      on={on}
+    >
+      <Picker
+        selection={show}
+        onSelectionChange={(next) => onShow(next as Show)}
+        modifiers={[pickerStyle("inline")]}
+      >
+        {SHOWS.map((option) => (
+          <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
+        ))}
+      </Picker>
+      <Picker
+        selection={filter}
+        onSelectionChange={(next) => onFilter(next as Filter)}
+        modifiers={[pickerStyle("inline")]}
+      >
+        {FILTERS.map((option) => (
+          <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
+        ))}
+      </Picker>
+    </GlassMenuButton>
   );
 }
 

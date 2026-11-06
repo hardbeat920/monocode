@@ -440,14 +440,15 @@ describe("new session composer workspace", () => {
     expect(active()).toBe("false");
   });
 
-  it("keeps circular Android project/settings controls after switching projects", () => {
+  it("keeps the circular Android drawer button after switching projects", () => {
     desktop.os = "android";
     render();
     // The drawer's button, where the project switcher was.
-    for (const label of ["Projects and monos", "Settings"]) {
-      expect(button(label).style.borderRadius).toBe("22px");
-      expect(button(label).hasAttribute("data-glass")).toBe(true);
-    }
+    expect(button("Projects and monos").style.borderRadius).toBe("22px");
+    expect(button("Projects and monos").hasAttribute("data-glass")).toBe(true);
+    // Settings lives in the drawer, not on the project's header.
+    expect(container.querySelector('[aria-label="Settings"]')).toBeNull();
+    expect(desktop.header.headerRight).toBeUndefined();
     act(() =>
       root.render(
         <ProjectScreen
@@ -457,7 +458,7 @@ describe("new session composer workspace", () => {
       ),
     );
     expect(button("Projects and monos").style.borderRadius).toBe("22px");
-    expect(button("Settings").hasAttribute("data-glass")).toBe(true);
+    expect(button("Projects and monos").hasAttribute("data-glass")).toBe(true);
     expect(desktop.header.headerTitleAlign).toBe("center");
   });
 
