@@ -132,27 +132,39 @@ export function matchesFacets(item: InboxItem, facets: InboxFacets, now: number)
   );
 }
 
-/** Filter options from a list's own items, for a desktop that sends none. */
-export function optionsFrom(items: InboxItem[]): InboxOptions {
+/**
+ * Filter options from a list's own items, for a desktop that sends none. Each
+ * list follows every filter but its own, as the desktop's `options` does.
+ */
+export function optionsFrom(
+  items: InboxItem[],
+  facets: InboxFacets = {},
+  now = 0,
+): InboxOptions {
+  const without = (filter: "authors" | "places" | "sources") =>
+    items.filter((item) => matchesFacets(item, { ...facets, [filter]: undefined }, now));
   const authors = new Map<string, InboxOptions["authors"][number]>();
   const places = new Map<string, InboxOptions["places"][number]>();
   const place = (id: string, name: string, kind: InboxOptions["places"][number]["kind"]) => {
     const entry = places.get(id) ?? { id, name, kind, count: 0 };
     places.set(id, { ...entry, count: entry.count + 1 });
   };
-  for (const item of items) {
+  for (const item of without("places")) {
     place(item.projectId ?? `repo:${item.repo}`, item.repo, item.projectId ? "project" : "tracker");
+  }
+  const people = without("authors");
+  for (const item of people) {
     if (item.mine || !item.author.name) continue;
     const id = item.author.name.toLowerCase();
     const entry = authors.get(id) ?? { ...item.author, itemKey: item.key, count: 0 };
     authors.set(id, { ...entry, count: entry.count + 1 });
   }
-  const mine = items.filter((item) => item.mine).length;
+  const mine = people.filter((item) => item.mine).length;
   return {
     authors: [...authors.values()].sort((a, b) => b.count - a.count),
     ...(mine > 0 ? { me: mine } : {}),
     places: [...places.values()].sort((a, b) => b.count - a.count),
-    sources: sourcesIn(items),
+    sources: sourcesIn(without("sources")),
   };
 }
 

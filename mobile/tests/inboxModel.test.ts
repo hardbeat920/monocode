@@ -295,4 +295,26 @@ describe("facets", () => {
     ]);
     expect(optionsFrom([list[0]]).me).toBeUndefined();
   });
+
+  it("narrows each filter's options by the others, never by itself", () => {
+    const person = (key: string, name: string, projectId: string): InboxItem => ({
+      ...item({ key }),
+      author: { name },
+      projectId,
+    });
+    const items = [person("1", "ana", "p1"), person("2", "ben", "p1"), person("3", "cat", "p2")];
+    const names = (options: ReturnType<typeof optionsFrom>) =>
+      options.authors.map((author) => author.name);
+    const places = (options: ReturnType<typeof optionsFrom>) =>
+      options.places.map((place) => place.id);
+
+    const inProject = optionsFrom(items, { places: ["p1"] }, NOW);
+    expect(names(inProject)).toEqual(["ana", "ben"]);
+    // The other project can still be picked alongside it.
+    expect(places(inProject)).toEqual(["p1", "p2"]);
+
+    const byAuthor = optionsFrom(items, { authors: ["cat"] }, NOW);
+    expect(places(byAuthor)).toEqual(["p2"]);
+    expect(names(byAuthor)).toEqual(["ana", "ben", "cat"]);
+  });
 });

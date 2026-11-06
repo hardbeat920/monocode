@@ -379,7 +379,11 @@ export function createFixtureClient(options: {
             needsMe: open.filter(needsMe).length,
             done: items.filter((item) => item.done).length,
           },
-          options: optionsFrom(unfiltered),
+          options: optionsFrom(
+            unfiltered.filter((item) => !params.updatedSince || item.updatedAt >= params.updatedSince),
+            params,
+            at,
+          ),
         };
       }),
     item: (key) =>

@@ -82,9 +82,10 @@ Catalog sessions a Mono launched carry `monoId`.
   items that are not done or snoozed; `done` counts done items. `inbox.readAll`
   takes the same filters.
 - `options` is what the filter sheets list: the scope's items in the
-  `source`/`projectId` slice, ignoring the filters and `q`, so picking one
-  author leaves the others on the sheet. `authors` leaves out the signed-in
-  user, whose count is `me`, and stops at 30, most items first.
+  `source`/`projectId` slice, ignoring `q`. Each list follows every filter but
+  its own, so with a project picked `authors` holds that project's people, and
+  picking one author leaves the others on the sheet. `authors` leaves out the
+  signed-in user, whose count is `me`, and stops at 30, most items first.
 - `cursor` is opaque. It names the last item of the previous page, so items
   appearing or leaving between pages never repeat or skip one. An invalid
   cursor is an error.

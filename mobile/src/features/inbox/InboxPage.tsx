@@ -107,7 +107,10 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
       visibleItems(feed.items, { scope, chips, facets, query: search }, now),
     [feed.items, scope, chips, facets, search, now],
   );
-  const options = useMemo(() => feed.options ?? optionsFrom(feed.items), [feed.options, feed.items]);
+  const options = useMemo(
+    () => feed.options ?? optionsFrom(feed.items, facets, now),
+    [feed.options, feed.items, facets, now],
+  );
   const names = useProjectNames();
   const entries = useMemo<Entry[]>(
     () =>

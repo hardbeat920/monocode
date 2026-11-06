@@ -317,24 +317,37 @@ impl ListFilters {
         }
     }
     fn matches(&self, item: &Item, view: &View) -> bool {
-        (self.authors.is_empty()
+        self.matches_author(item, view)
+            && self.matches_place(item, view)
+            && self.matches_source(item)
+            && self.matches_rest(item, view)
+    }
+    fn matches_author(&self, item: &Item, view: &View) -> bool {
+        self.authors.is_empty()
             || self.authors.iter().any(|author| {
                 if author == ME {
                     mine(item, view)
                 } else {
                     item.author.login.eq_ignore_ascii_case(author)
                 }
-            }))
-            && (self.places.is_empty()
-                || places(item, view)
-                    .iter()
-                    .any(|place| self.places.contains(place)))
-            && (self.statuses.is_empty() || self.statuses.iter().any(|name| name == status(item)))
+            })
+    }
+    fn matches_place(&self, item: &Item, view: &View) -> bool {
+        self.places.is_empty()
+            || places(item, view)
+                .iter()
+                .any(|place| self.places.contains(place))
+    }
+    fn matches_source(&self, item: &Item) -> bool {
+        self.sources.is_empty() || self.sources.contains(&item.provider)
+    }
+    /// The filters that have no list of options of their own.
+    fn matches_rest(&self, item: &Item, view: &View) -> bool {
+        (self.statuses.is_empty() || self.statuses.iter().any(|name| name == status(item)))
             && self
                 .kind
                 .as_deref()
                 .is_none_or(|kind| kind == kind_of(item))
-            && (self.sources.is_empty() || self.sources.contains(&item.provider))
             && self
                 .updated_since
                 .is_none_or(|since| item.updated_ms() >= since)
@@ -799,6 +812,9 @@ fn by_count<T>(options: &mut [T], key: impl Fn(&T) -> (usize, String)) {
     });
 }
 
+/// What the filter sheets list. Each list follows every filter but its own: the
+/// authors are those of the chosen projects, and picking one author leaves the
+/// others there to add.
 pub fn options(
     items: &[Item],
     params: &ListParams,
@@ -813,36 +829,46 @@ pub fn options(
         .values()
         .any(|login| !login.trim().is_empty())
         .then_some(0);
+    let filters = &params.filters;
     for item in unfiltered(items, params, view)
         .into_iter()
         .filter(|item| in_scope(item, &params.scope, view))
+        .filter(|item| filters.matches_rest(item, view))
     {
-        if !sources.contains(&item.provider) {
+        let in_author = filters.matches_author(item, view);
+        let in_place = filters.matches_place(item, view);
+        let in_source = filters.matches_source(item);
+        if in_author && in_place && !sources.contains(&item.provider) {
             sources.push(item.provider.clone());
         }
-        let label = repo_label(item);
-        let mut place = |id: String, name: String, kind| {
-            spots
-                .entry(id.clone())
-                .or_insert(PlaceOption {
-                    id,
-                    name,
-                    kind,
-                    count: 0,
-                })
-                .count += 1;
-        };
-        match project_for(item, view.projects) {
-            Some(id) => place(id, label.clone(), "project"),
-            None => place(format!("repo:{label}"), label.clone(), "tracker"),
-        }
-        if let Some(id) = linear_project(item) {
-            let name = if item.project_name.is_empty() {
-                "No project".to_owned()
-            } else {
-                item.project_name.clone()
+        if in_author && in_source {
+            let label = repo_label(item);
+            let mut place = |id: String, name: String, kind| {
+                spots
+                    .entry(id.clone())
+                    .or_insert(PlaceOption {
+                        id,
+                        name,
+                        kind,
+                        count: 0,
+                    })
+                    .count += 1;
             };
-            place(format!("linear:{id}"), name, "linearProject");
+            match project_for(item, view.projects) {
+                Some(id) => place(id, label.clone(), "project"),
+                None => place(format!("repo:{label}"), label.clone(), "tracker"),
+            }
+            if let Some(id) = linear_project(item) {
+                let name = if item.project_name.is_empty() {
+                    "No project".to_owned()
+                } else {
+                    item.project_name.clone()
+                };
+                place(format!("linear:{id}"), name, "linearProject");
+            }
+        }
+        if !(in_place && in_source) {
+            continue;
         }
         if mine(item, view) {
             me = me.map(|count| count + 1);
@@ -1708,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_narrow_the_list_and_its_counts_but_not_the_options() {
+    fn filters_narrow_the_list_and_its_counts() {
         let mut mine_item = item(1, 1, "mentioned");
         mine_item.author.login = "Me".into();
         let mut assigned_item = item(2, 2, "");
@@ -1756,30 +1782,78 @@ mod tests {
 
         let narrowed = params(json!({"authors": ["ana"]}));
         assert_eq!(counts(&items, &narrowed, &view).needs_me, 0);
+    }
 
-        let options = options(&items, &narrowed, &view, &AvatarBook::default());
-        assert_eq!(options.me, Some(1));
-        assert_eq!(
+    #[test]
+    fn each_filters_options_follow_the_other_filters() {
+        let authored = |number: i64, login: &str, path: &str, provider: &str| {
+            let mut one = item(number, number, "");
+            one.author.login = login.into();
+            one.project_path = path.into();
+            one.provider = provider.into();
+            one
+        };
+        let items = vec![
+            authored(1, "ana", "/work/app", "github"),
+            authored(2, "ben", "/work/app", "github"),
+            authored(3, "me", "/work/app", "github"),
+            authored(4, "cat", "/work/other", "github"),
+            authored(5, "dan", "/work/other", "gitlab"),
+        ];
+        let (seen, triage) = (Seen::default(), Triage::default());
+        let projects = vec![
+            ProjectRef {
+                id: "app".into(),
+                path: "/work/app".into(),
+            },
+            ProjectRef {
+                id: "other".into(),
+                path: "/work/other".into(),
+            },
+        ];
+        let viewers = BTreeMap::from([("github".to_owned(), "me".to_owned())]);
+        let view = View {
+            viewers: &viewers,
+            ..view(&seen, &triage, &projects)
+        };
+        let listed = |value: Value| options(&items, &params(value), &view, &AvatarBook::default());
+        let authors = |options: &ListOptions| {
             options
                 .authors
                 .iter()
-                .map(|a| (a.name.as_str(), a.count))
-                .collect::<Vec<_>>(),
-            [("ana", 1), ("sam", 1)]
-        );
-        assert_eq!(options.sources, ["github", "linear"]);
-        assert_eq!(
+                .map(|author| (author.name.clone(), author.count))
+                .collect::<Vec<_>>()
+        };
+        let places = |options: &ListOptions| {
             options
                 .places
                 .iter()
-                .map(|p| (p.id.as_str(), p.kind, p.count))
-                .collect::<Vec<_>>(),
-            [
-                ("%2Fwork%2Fapp", "project", 3),
-                ("repo:Core", "tracker", 1),
-                ("linear:p1", "linearProject", 1),
-            ]
-        );
+                .map(|place| (place.id.clone(), place.count))
+                .collect::<Vec<_>>()
+        };
+        let pair = |name: &str, count: usize| (name.to_owned(), count);
+
+        // The filter's own list stays whole, so a second choice can be added.
+        let in_app = listed(json!({"places": ["app"]}));
+        assert_eq!(authors(&in_app), [pair("ana", 1), pair("ben", 1)]);
+        assert_eq!(in_app.me, Some(1));
+        assert_eq!(in_app.sources, ["github"]);
+        assert_eq!(places(&in_app), [pair("app", 3), pair("other", 2)]);
+
+        let by_cat = listed(json!({"authors": ["cat"]}));
+        assert_eq!(places(&by_cat), [pair("other", 1)]);
+        assert_eq!(by_cat.sources, ["github"]);
+        assert_eq!(authors(&by_cat).len(), 4);
+
+        let gitlab = listed(json!({"sources": ["gitlab"]}));
+        assert_eq!(authors(&gitlab), [pair("dan", 1)]);
+        assert_eq!(gitlab.me, Some(0));
+        assert_eq!(places(&gitlab), [pair("other", 1)]);
+        assert_eq!(gitlab.sources, ["github", "gitlab"]);
+
+        // The filters with no list of their own narrow every list.
+        let old_ones = listed(json!({"updatedSince": NOW - 2 * HOUR - 1}));
+        assert_eq!(authors(&old_ones), [pair("ana", 1), pair("ben", 1)]);
     }
 
     #[test]
