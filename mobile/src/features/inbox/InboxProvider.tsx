@@ -187,7 +187,6 @@ const IDLE_FEED = (key: string): Feed => ({
   key,
   items: [],
   loaded: false,
-  loading: false,
   loadingMore: false,
   fromCache: false,
   offline: false,

@@ -1,6 +1,15 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -37,7 +46,7 @@ import { CONTROL_TEXT_MAX, useTextScale } from "@/ui/textScale";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { Chip, FilterChips, FilterSheet, placeName, type FilterKind } from "./InboxFilters";
-import { useInbox, useInboxActionsSupported, useInboxFeed } from "./InboxProvider";
+import { useInbox, useInboxFeed } from "./InboxProvider";
 import { GroupMenu } from "./GroupMenu";
 import { InboxRow, type RowHandlers } from "./InboxRow";
 import { SOURCE_NAMES } from "./ProviderMark";
@@ -67,6 +76,11 @@ type Entry =
   | { type: "header"; id: string; title: string; count: number; projectId?: string }
   | { type: "row"; id: string; item: InboxItem };
 
+// Made once: a row is memoized on what it is handed, and a new one per render
+// would draw every row again each time the page did.
+const ROW_EXIT = FadeOut.duration(140).reduceMotion(ReduceMotion.System);
+const ROW_MOVE = LinearTransition.duration(220).reduceMotion(ReduceMotion.System);
+
 /** The gaps around the scope switch, under the header and over the list. */
 const SCOPE_ABOVE = 4;
 const SCOPE_BELOW = 12;
@@ -77,9 +91,20 @@ export const SCOPE_SPACE = SCOPE_ABOVE + HEADER_HEIGHT + SCOPE_BELOW;
  * The Inbox: review requests, mentions, assignments and failing checks from
  * the connected sources, for every project. The scope switch sits under the
  * header and the list scrolls under both. The chips open the desktop's filters
- * in partial sheets; `project`, the one it was opened from, heads the picker.
+ * in partial sheets; `pinned`, the project it was opened from, heads the picker.
+ *
+ * What it needs from the catalog comes as props: the catalog moves with every
+ * agent's session, and reading it here would draw the page each time.
  */
-export function InboxPage({ project }: { project?: { id: string; name: string } }) {
+export const InboxPage = memo(function InboxPage({
+  pinned,
+  names,
+  canReadAll,
+}: {
+  pinned?: string;
+  names: Map<string, string>;
+  canReadAll: boolean;
+}) {
   const colors = useColors();
   const styles = useStyles();
   const reduced = useReducedMotion();
@@ -98,20 +123,21 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
 
   const { feed: live, refresh, loadMore } = useInboxFeed({ scope, facets });
   const feed = useHeldFeed(live, scope);
-  const canReadAll = useInboxActionsSupported();
   const now = useNow();
   const [pulling, setPulling] = useState(false);
 
+  // A tick in a sheet and a letter in the search answer first; the list follows.
+  const listFacets = useDeferredValue(facets);
+  const query = useDeferredValue(search);
   const shown = useMemo(
     () =>
-      visibleItems(feed.items, { scope, chips, facets, query: search }, now),
-    [feed.items, scope, chips, facets, search, now],
+      visibleItems(feed.items, { scope, chips, facets: listFacets, query }, now),
+    [feed.items, scope, chips, listFacets, query, now],
   );
   const options = useMemo(
     () => feed.options ?? optionsFrom(feed.items, facets, now),
     [feed.options, feed.items, facets, now],
   );
-  const names = useProjectNames();
   const entries = useMemo<Entry[]>(
     () =>
       groupItems(shown, grouping, now, (id, repo) => (id ? (names.get(id) ?? repo) : repo)).flatMap(
@@ -161,7 +187,24 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
   const filtered = chips.length > 0 || hasFacets(others) || !!search.trim();
   const onePlace = places?.length === 1 ? places[0] : undefined;
   const banner = bannerFor(live);
-  const exiting = reduced ? undefined : FadeOut.duration(140).reduceMotion(ReduceMotion.System);
+  const exiting = reduced ? undefined : ROW_EXIT;
+  const closeSheet = useCallback(() => setSheet(null), []);
+  const keyOf = useCallback((entry: Entry) => `${textScale}:${entry.id}`, [textScale]);
+  const renderEntry = useCallback(
+    ({ item: entry }: { item: Entry }) =>
+      entry.type === "header" ? (
+        <GroupHeader entry={entry} />
+      ) : (
+        <InboxRow
+          item={entry.item}
+          handlers={handlers}
+          now={now}
+          exiting={exiting}
+          scoped={!wide}
+        />
+      ),
+    [handlers, now, exiting, wide],
+  );
 
   // React Native draws a live text size change into the old boxes, clipping it
   // until each is measured again, so everything with text takes the size as
@@ -210,23 +253,9 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
     <View style={styles.page}>
         <Animated.FlatList
           data={feed.loaded ? entries : []}
-          keyExtractor={(entry) => `${textScale}:${entry.id}`}
-          itemLayoutAnimation={
-            reduced ? undefined : LinearTransition.duration(220).reduceMotion(ReduceMotion.System)
-          }
-          renderItem={({ item: entry }) =>
-            entry.type === "header" ? (
-              <GroupHeader entry={entry} />
-            ) : (
-              <InboxRow
-                item={entry.item}
-                handlers={handlers}
-                now={now}
-                exiting={exiting}
-                scoped={!wide}
-              />
-            )
-          }
+          keyExtractor={keyOf}
+          itemLayoutAnimation={reduced ? undefined : ROW_MOVE}
+          renderItem={renderEntry}
           ListHeaderComponent={header}
           ListEmptyComponent={
             feed.loaded ? (
@@ -269,7 +298,7 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
           }
           scrollIndicatorInsets={{ top: pageTop, bottom }}
           contentContainerStyle={[styles.list, { paddingTop: pageTop, paddingBottom: bottom }]}
-          initialNumToRender={12}
+          initialNumToRender={10}
           windowSize={7}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
@@ -310,17 +339,17 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
         />
         <FilterSheet
           open={sheet}
-          onClose={() => setSheet(null)}
+          onClose={closeSheet}
           facets={facets}
           onChange={setFacets}
           options={options}
           names={names}
-          pinned={project?.id}
+          pinned={pinned}
           client={client}
         />
     </View>
   );
-}
+});
 
 /**
  * The list to show. A new filter is a new list that hasn't been read yet; the
@@ -334,11 +363,10 @@ function useHeldFeed(live: Feed, scope: InboxScope) {
 }
 
 /** Phone project ids to their names, for the project grouping. */
-function useProjectNames() {
+export function useProjectNames() {
   const { projects } = useConnection().catalog;
   return useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
 }
-
 
 function GroupHeader({ entry }: { entry: Extract<Entry, { type: "header" }> }) {
   const colors = useColors();

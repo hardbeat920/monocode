@@ -1,3 +1,5 @@
+import { deepEqual } from "@/features/connection/deepEqual";
+
 import {
   applyMark,
   facetParams,
@@ -41,8 +43,6 @@ export type Feed = {
   items: InboxItem[];
   /** Something has been read, from the desktop or the phone's cache. */
   loaded: boolean;
-  /** A read is in flight. */
-  loading: boolean;
   loadingMore: boolean;
   /** What shows came from the phone's cache and the desktop hasn't answered yet. */
   fromCache: boolean;
@@ -141,7 +141,6 @@ export function createInboxStore(options: InboxStoreOptions) {
       value = {
         items: cached?.items ?? [],
         loaded: !!cached,
-        loading: false,
         loadingMore: false,
         fromCache: !!cached,
         offline: false,
@@ -227,7 +226,6 @@ export function createInboxStore(options: InboxStoreOptions) {
       update(key, { offline: true });
       return;
     }
-    update(key, { loading: true });
     try {
       const page = await client.list(params(query, undefined, force));
       if (disposed) return;
@@ -242,31 +240,32 @@ export function createInboxStore(options: InboxStoreOptions) {
         items = [...items, ...more.items.filter((item) => !have.has(item.key))];
         cursor = more.nextCursor;
       }
+      const previous = raws.get(key)!;
       const next: Raw = {
-        ...raws.get(key)!,
-        items,
+        ...previous,
+        items: sameItems(previous.items, items),
         loaded: true,
-        loading: false,
         fromCache: false,
         offline: false,
         error: null,
         nextCursor: cursor,
         stale: page.stale,
         fetchedAt: page.fetchedAt,
-        providers: page.providers,
-        counts: page.counts,
-        options: page.options,
+        providers: same(previous.providers, page.providers),
+        counts: same(previous.counts, page.counts),
+        options: same(previous.options, page.options),
       };
+      const shown = views.get(key);
       raws.set(key, next);
       generations.set(key, (generations.get(key) ?? 0) + 1);
+      for (const item of next.items) known.set(item.key, item);
+      // Most reads find what was there: the screens and the disk hear of none of those.
+      if (view(key) === shown) return;
       if (kept(query)) remember(key, { ...next, items: page.items, nextCursor: page.nextCursor });
-      for (const item of items) known.set(item.key, item);
-      view(key);
       emit();
     } catch (reason) {
       if (disposed) return;
       update(key, {
-        loading: false,
         offline: true,
         error: reason instanceof Error ? reason.message : String(reason),
       });
@@ -505,10 +504,27 @@ export function createInboxStore(options: InboxStoreOptions) {
 
 export type InboxStore = ReturnType<typeof createInboxStore>;
 
+/** `next`, or `previous` when they say the same, so nothing downstream sees a change. */
+function same<T>(previous: T, next: T): T {
+  return deepEqual(previous, next) ? previous : next;
+}
+
+/**
+ * The items of a read, each still the object it was unless it changed. Every
+ * reply arrives as new objects, and a row is only spared a redraw by being
+ * handed the same one.
+ */
+function sameItems(previous: InboxItem[], next: InboxItem[]) {
+  const known = new Map(previous.map((item) => [item.key, item]));
+  return next.map((item) => {
+    const before = known.get(item.key);
+    return before && deepEqual(before, item) ? before : item;
+  });
+}
+
 function sameMeta(feed: Feed, value: Raw) {
   return (
     feed.loaded === value.loaded &&
-    feed.loading === value.loading &&
     feed.loadingMore === value.loadingMore &&
     feed.fromCache === value.fromCache &&
     feed.offline === value.offline &&

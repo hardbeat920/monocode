@@ -1,6 +1,6 @@
 import { BottomSheet, RNHostView } from "@expo/ui";
 import * as Haptics from "expo-haptics";
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import {
   Pressable,
   ScrollView,
@@ -321,7 +321,7 @@ type SheetSection = { title?: string; rows: SheetRow[] };
  * A filter that takes several stays up while they're ticked; one that takes a
  * single choice closes on it.
  */
-export function FilterSheet({
+export const FilterSheet = memo(function FilterSheet({
   open,
   onClose,
   facets,
@@ -438,7 +438,7 @@ export function FilterSheet({
       </RNHostView>
     </BottomSheet>
   );
-}
+});
 
 function sheetSections(
   kind: FilterKind,

@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { memo, useRef } from "react";
+import { memo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
@@ -23,8 +23,9 @@ import { ItemMark } from "./ItemMark";
 import { snoozeOptions } from "./model";
 import type { InboxItem } from "./protocol";
 
-/** Three buttons and the gaps around them: how far the row slides to show them. */
-const ACTIONS_WIDTH = ACTION_SIZE * 3 + ACTION_GAP * 3 + 4;
+/** The buttons and the gaps around them: how far the row slides to show them. */
+const actionsWidth = (buttons: number) => ACTION_SIZE * buttons + ACTION_GAP * buttons + 4;
+const ACTIONS_WIDTH = actionsWidth(3);
 /** How much farther past the buttons a swipe commits Done. */
 const COMMIT_PAST = 64;
 /** Above the row's top edge to its mark, and the mark's size at each fit. */
@@ -119,6 +120,9 @@ export const InboxRow = memo(function InboxRow({
   const swipeable = useRef<SwipeableMethods>(null);
   const opened = useRef(false);
   const armed = useSharedValue(false);
+  // The buttons cost more to mount than the row they hide behind, and few rows
+  // are ever swiped: until one is, an empty space holds their width.
+  const [swiped, setSwiped] = useState(false);
   const textScale = useTextScale();
   const fit = rowFit(textScale);
   const markSize = fit === "stacked" ? MARK_STACKED : MARK;
@@ -205,6 +209,7 @@ export const InboxRow = memo(function InboxRow({
         dragOffsetFromLeftEdge={Number.MAX_SAFE_INTEGER}
         onSwipeableOpenStartDrag={() => {
           armed.set(false);
+          setSwiped(true);
         }}
         onSwipeableWillOpen={() => {
           opened.current = true;
@@ -220,22 +225,26 @@ export const InboxRow = memo(function InboxRow({
         onSwipeableWillClose={() => {
           opened.current = false;
         }}
-        renderRightActions={(progress, translation) => (
-          <RowActions
-            progress={progress}
-            translation={translation}
-            armed={armed}
-            item={item}
-            onUndone={act(() => handlers.undone(item))}
-            onDone={act(commitDone)}
-            onStart={act(() => handlers.startAgent(item))}
-            onSnooze={(until) => {
-              close();
-              handlers.snooze(item, until);
-            }}
-            now={now}
-          />
-        )}
+        renderRightActions={(progress, translation) =>
+          swiped ? (
+            <RowActions
+              progress={progress}
+              translation={translation}
+              armed={armed}
+              item={item}
+              onUndone={act(() => handlers.undone(item))}
+              onDone={act(commitDone)}
+              onStart={act(() => handlers.startAgent(item))}
+              onSnooze={(until) => {
+                close();
+                handlers.snooze(item, until);
+              }}
+              now={now}
+            />
+          ) : (
+            <View style={{ width: actionsWidth(item.done ? 2 : 3) }} />
+          )
+        }
       >
         <Pressable
           accessibilityRole="button"

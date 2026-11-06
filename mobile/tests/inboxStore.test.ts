@@ -6,6 +6,7 @@ import {
   createInboxClient,
   type InboxClient,
   type InboxItem,
+  type InboxList,
   type InboxListParams,
 } from "@/features/inbox/protocol";
 
@@ -192,6 +193,68 @@ describe("the store", () => {
     const store = createInboxStore({ client: fixture(), storage: memory(), namespace: "d" });
     await store.refresh({ scope: "all" });
     expect(store.getFeed({ scope: "all" })).toBe(store.getFeed({ scope: "all" }));
+  });
+});
+
+describe("a read that changes nothing", () => {
+  /** A desktop whose every reply arrives as new objects, as over the link. */
+  function linked() {
+    const client = fixture();
+    const list = client.list;
+    return {
+      ...client,
+      list: (params: InboxListParams) =>
+        list(params).then((page) => ({
+          ...(JSON.parse(JSON.stringify(page)) as InboxList),
+          fetchedAt: NOW,
+        })),
+    };
+  }
+  const query = { scope: "all" as const };
+
+  it("leaves the feed as the same object, during the read and after it", async () => {
+    const store = createInboxStore({ client: linked(), storage: memory(), namespace: "d" });
+    await store.refresh(query);
+    const feed = store.getFeed(query);
+    const reading = store.refresh(query);
+    expect(store.getFeed(query)).toBe(feed);
+    await reading;
+    expect(store.getFeed(query)).toBe(feed);
+  });
+
+  it("gives only the item that changed a new object", async () => {
+    const client = linked();
+    const store = createInboxStore({ client, storage: memory(), namespace: "d" });
+    await store.refresh(query);
+    const [one, two, ...rest] = store.getFeed(query).items;
+    const list = client.list;
+    client.list = (params) =>
+      list(params).then((page) => ({
+        ...page,
+        items: page.items.map((item) =>
+          item.key === one.key ? { ...item, title: "Renamed" } : item,
+        ),
+      }));
+    await store.refresh(query);
+    const items = store.getFeed(query).items;
+    expect(items[0]).not.toBe(one);
+    expect(items[0].title).toBe("Renamed");
+    expect(items[1]).toBe(two);
+    expect(items.slice(2)).toEqual(rest);
+    expect(items[2]).toBe(rest[0]);
+  });
+
+  it("doesn't tell the screens or write the phone's cache", async () => {
+    const storage = memory();
+    const set = vi.spyOn(storage, "set");
+    const store = createInboxStore({ client: linked(), storage, namespace: "d" });
+    await store.refresh(query);
+    const told = vi.fn();
+    store.subscribe(told);
+    set.mockClear();
+    await store.refresh(query);
+    expect(told).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
   });
 });
 

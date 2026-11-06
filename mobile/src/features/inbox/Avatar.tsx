@@ -12,7 +12,10 @@ function toneOf(name: string) {
   return TONES[hash % TONES.length];
 }
 
-/** Avatars fetched from the desktop, by item and avatar key, kept for the app's life. */
+/**
+ * Avatars fetched from the desktop, by avatar key, kept for the app's life.
+ * Not by item: the item an author is listed through changes with the filters.
+ */
 const pictures = new Map<string, string | null>();
 
 /**
@@ -31,23 +34,25 @@ export function Avatar({
   client?: InboxClient;
   size?: number;
 }) {
-  const cacheKey = `${itemKey}\n${person.avatarKey}`;
-  const [uri, setUri] = useState<string | null>(pictures.get(cacheKey) ?? null);
+  const { avatarKey } = person;
+  const [uri, setUri] = useState<string | null>(
+    avatarKey ? (pictures.get(avatarKey) ?? null) : null,
+  );
   useEffect(() => {
-    if (!client || !person.avatarKey || pictures.has(cacheKey)) return;
+    if (!client || !avatarKey || pictures.has(avatarKey)) return;
     let cancelled = false;
-    client.media(itemKey, { avatarKey: person.avatarKey }).then(
+    client.media(itemKey, { avatarKey }).then(
       (media) => {
         const value = `data:${media.mime};base64,${media.base64}`;
-        pictures.set(cacheKey, value);
+        pictures.set(avatarKey, value);
         if (!cancelled) setUri(value);
       },
-      () => pictures.set(cacheKey, null),
+      () => pictures.set(avatarKey, null),
     );
     return () => {
       cancelled = true;
     };
-  }, [client, itemKey, person.avatarKey, cacheKey]);
+  }, [client, itemKey, avatarKey]);
 
   if (uri) {
     return (

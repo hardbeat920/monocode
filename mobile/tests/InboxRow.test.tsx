@@ -18,6 +18,7 @@ const NOW = new Date("2026-11-01T14:00:00").getTime();
 const captured = vi.hoisted(() => ({
   accessibility: undefined as undefined | ((event: { nativeEvent: { actionName: string } }) => void),
   fontScale: 1,
+  startDrag: undefined as undefined | (() => void),
 }));
 
 vi.mock("react-native", () => ({
@@ -48,11 +49,14 @@ vi.mock("react-native-gesture-handler/ReanimatedSwipeable", () => ({
   default: ({
     children,
     renderRightActions,
+    onSwipeableOpenStartDrag,
   }: {
     children?: ReactNode;
     renderRightActions: (progress: unknown, translation: unknown) => ReactNode;
+    onSwipeableOpenStartDrag: () => void;
   }) => {
     const value = { get: () => 0, set: () => {} };
+    captured.startDrag = onSwipeableOpenStartDrag;
     return (
       <div>
         {children}
@@ -151,6 +155,7 @@ describe("an inbox row", () => {
   };
   const render = (value: InboxItem = item) =>
     act(() => root.render(<InboxRow item={value} handlers={handlers} now={NOW} />));
+  const swipe = () => act(() => captured.startDrag?.());
   const button = (label: string) => {
     const found = Array.from(container.querySelectorAll("button")).find(
       (entry) => entry.getAttribute("aria-label") === label,
@@ -205,8 +210,16 @@ describe("an inbox row", () => {
     expect(handlers.open).toHaveBeenCalledWith(item);
   });
 
+  it("leaves its buttons unmounted until it is first swiped", () => {
+    render();
+    expect(container.querySelector("button[aria-label='Done']")).toBeNull();
+    swipe();
+    expect(container.querySelector("button[aria-label='Done']")).not.toBeNull();
+  });
+
   it("offers Snooze, Start agent and Done behind it", () => {
     render();
+    swipe();
     act(() => button("Done").click());
     expect(handlers.done).toHaveBeenCalledWith(item);
     act(() => button("Start agent").click());
@@ -219,6 +232,7 @@ describe("an inbox row", () => {
 
   it("offers a way back instead of Done in the Done list", () => {
     render({ ...item, done: true });
+    swipe();
     expect(container.querySelector("button[aria-label='Done']")).toBeNull();
     act(() => button("Back to inbox").click());
     expect(handlers.undone).toHaveBeenCalled();
