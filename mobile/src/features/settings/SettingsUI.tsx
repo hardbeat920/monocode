@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon, type IconName } from "@/ui/Icon";
+import { HorizontalSafeArea } from "@/ui/HorizontalSafeArea";
 import { radii, themedStyles, useColors } from "@/ui/theme";
 
 /**
@@ -38,27 +39,29 @@ export function SettingsPage({
   const headerHeight = useHeaderHeight();
   const contentTop = top ?? (Platform.OS === "android" ? headerHeight + 12 : undefined);
   return (
-    <ScrollView
-      refreshControl={
-        onRefresh ? (
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.muted}
-            colors={[colors.muted]}
-          />
-        ) : undefined
-      }
-      contentInsetAdjustmentBehavior={contentTop === undefined ? "automatic" : "never"}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={[
-        styles.page,
-        contentTop === undefined ? null : { paddingTop: contentTop },
-        { paddingBottom: bottom + 40 },
-      ]}
-    >
-      {children}
-    </ScrollView>
+    <HorizontalSafeArea>
+      <ScrollView
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.muted}
+              colors={[colors.muted]}
+            />
+          ) : undefined
+        }
+        contentInsetAdjustmentBehavior={contentTop === undefined ? "automatic" : "never"}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.page,
+          contentTop === undefined ? null : { paddingTop: contentTop },
+          { paddingBottom: bottom + 40 },
+        ]}
+      >
+        {children}
+      </ScrollView>
+    </HorizontalSafeArea>
   );
 }
 
