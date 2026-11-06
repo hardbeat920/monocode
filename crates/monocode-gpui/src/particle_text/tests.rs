@@ -33,11 +33,35 @@ fn particles_wait_for_the_edge_then_drift_shrink_and_expire() {
     assert_eq!(particle.frame(1.26, 200.), (false, None));
 }
 
+#[test]
+fn a_dissolve_sweeps_in_from_the_right_and_clears_the_title() {
+    assert_eq!(dissolve_edge(0., 200.), 218.);
+    assert_eq!(dissolve_edge(DISSOLVE_SWEEP / 2., 200.), 100.);
+    assert_eq!(dissolve_edge(DISSOLVE_SWEEP, 200.), -18.);
+    let particle = |x| Particle {
+        x,
+        y: 9.,
+        alpha: 1.,
+        vx: -6.,
+        vy: -8.,
+        life: DISSOLVE_LIFE,
+        born: None,
+    };
+    let (mut left, mut right) = (particle(10.), particle(190.));
+    let halfway = DISSOLVE_SWEEP / 2.;
+    let edge = dissolve_edge(halfway, 200.);
+    assert_eq!(left.advance(halfway, left.x >= edge), (true, None));
+    assert!(right.advance(halfway, right.x >= edge).1.is_some());
+    assert_eq!(right.born, Some(halfway));
+    assert!(left.born.is_none());
+}
+
 #[cfg(target_os = "macos")]
 struct Preview {
     text: String,
     width: f32,
     visible: bool,
+    dissolve: Option<Dissolve>,
 }
 #[cfg(target_os = "macos")]
 impl Render for Preview {
@@ -46,7 +70,9 @@ impl Render for Preview {
             .w(px(self.width))
             .h(px(20.))
             .text_size(px(14.))
-            .when(self.visible, |d| d.child(particle_text(self.text.clone())))
+            .when(self.visible, |d| {
+                d.child(particle_text(self.text.clone(), self.dissolve.clone()))
+            })
     }
 }
 
@@ -59,6 +85,7 @@ fn mount_remount_same_title_zero_width_and_reduced_motion_do_not_replay(cx: &mut
                 text: "New session".into(),
                 width: 220.,
                 visible: true,
+                dissolve: None,
             })
         })
         .unwrap()
@@ -281,4 +308,41 @@ fn real_glyph_sampling_uses_alpha_not_text_rectangles_at_both_display_scales() {
                 && (0.595..=1.02).contains(&p.life)
         }));
     }
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn a_dissolving_title_is_captured_once_and_leaves_its_label(cx: &mut TestAppContext) {
+    let dissolve = Dissolve::default();
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|_| Preview {
+                text: "New session".into(),
+                width: 220.,
+                visible: true,
+                dissolve: Some(dissolve.clone()),
+            })
+        })
+        .unwrap()
+    });
+    cx.refresh().unwrap();
+    let captured = || {
+        let captured = dissolve.0.borrow();
+        let title = captured.as_ref().expect("the label hands over its title");
+        (title.line.text.to_string(), title.bounds)
+    };
+    let first = captured();
+    assert_eq!(first.0, "New session");
+    window
+        .update(cx, |view, _, cx| {
+            view.text = "Renamed while leaving".into();
+            cx.notify();
+        })
+        .unwrap();
+    cx.refresh().unwrap();
+    assert_eq!(captured(), first, "the title that left is the one painted");
+    let painted = window
+        .update(cx, |_, window, _| window.painted_quads().len())
+        .unwrap();
+    assert_eq!(painted, 0, "the label itself draws nothing");
 }
