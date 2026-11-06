@@ -8,6 +8,8 @@ const runtime = vi.hoisted(() => ({
   clipboardListener: null as null | ((event: { contentTypes: string[] }) => void),
   appListener: null as null | ((state: string) => void),
   removed: [] as string[],
+  deleted: [] as string[],
+  failRender: false,
   manipulated: [] as { uri: string; resize: unknown }[],
 }));
 
@@ -37,6 +39,12 @@ vi.mock("expo-file-system", () => {
     write(content: string, options: unknown) {
       runtime.written.push({ uri: this.uri, content, options });
     }
+    get exists() {
+      return runtime.written.some((item) => item.uri === this.uri);
+    }
+    delete() {
+      runtime.deleted.push(this.uri);
+    }
     get size() {
       return runtime.fileSize;
     }
@@ -57,9 +65,12 @@ vi.mock("expo-image-manipulator", () => ({
           entry.resize = size;
           return context;
         },
-        renderAsync: async () => ({
-          saveAsync: async () => ({ uri: "file:///cache/out.jpg", base64: "SlBFRw==" }),
-        }),
+        renderAsync: async () => {
+          if (runtime.failRender) throw new Error("Could not decode");
+          return {
+            saveAsync: async () => ({ uri: "file:///cache/out.jpg", base64: "SlBFRw==" }),
+          };
+        },
       };
       return context;
     },
@@ -76,6 +87,8 @@ beforeEach(() => {
   runtime.fileSize = 0;
   runtime.removed = [];
   runtime.manipulated = [];
+  runtime.deleted = [];
+  runtime.failRender = false;
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -93,6 +106,8 @@ it("holds a small pasted screenshot as the PNG it is", async () => {
     data: "UE5H",
   });
   expect(runtime.manipulated).toEqual([]);
+  // Kept: it is the attachment's thumbnail.
+  expect(runtime.deleted).toEqual([]);
 });
 
 it("scales and re-encodes a large pasted image as picked photos are", async () => {
@@ -106,6 +121,16 @@ it("scales and re-encodes a large pasted image as picked photos are", async () =
     uri: "file:///cache/out.jpg",
     data: "SlBFRw==",
   });
+  // The pasted PNG gives way to the re-encoded JPEG rather than lingering in the cache.
+  expect(runtime.deleted).toEqual([runtime.written[0].uri]);
+});
+
+it("leaves no pasted file behind when it can't be attached", async () => {
+  runtime.image = { data: "data:image/png;base64,QklH", size: { width: 3000, height: 4000 } };
+  runtime.fileSize = 5 * 1024 * 1024;
+  runtime.failRender = true;
+  await expect(pasteImage(10)).rejects.toThrow("Could not decode");
+  expect(runtime.deleted).toEqual([runtime.written[0].uri]);
 });
 
 it("says so when there is no image to paste, or the paste was refused", async () => {

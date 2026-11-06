@@ -100,16 +100,29 @@ export async function pasteImage(room: number): Promise<Attachment[]> {
   const file = new File(Paths.cache, `pasted-${makeId()}.png`);
   // Arrives as a data URI; the file takes the bytes after its prefix.
   file.write(image.data.slice(image.data.indexOf(",") + 1), { encoding: "base64" });
-  return [
-    await fromPhoto({
+  const discard = () => {
+    try {
+      if (file.exists) file.delete();
+    } catch {
+      // Only a cache file; the OS clears the cache in time anyway.
+    }
+  };
+  try {
+    const attachment = await fromPhoto({
       uri: file.uri,
       width: image.size.width,
       height: image.size.height,
       mimeType: "image/png",
       fileName: "Pasted image.png",
       fileSize: file.size,
-    }),
-  ];
+    });
+    // Re-encoded to its own file: the pasted PNG is no longer the thumbnail.
+    if (attachment.uri !== file.uri) discard();
+    return [attachment];
+  } catch (reason) {
+    discard();
+    throw reason;
+  }
 }
 
 /**
