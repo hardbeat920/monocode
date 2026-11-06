@@ -1,6 +1,6 @@
 //! The composer's submit button as one morphing control. Empty, it is a
 //! small raised square holding its glyph; with something to send it grows
-//! into a wider button that names what will happen (Send, Queue, Steer, Save draft),
+//! into a wider button that names what will happen (Send, Queue, Steer),
 //! and while a turn runs it settles back into a square with a stop mark.
 //! When the action changes, say a held modifier turns Queue into Steer, the
 //! glyph and label roll to the new one, as the title tabs roll their pane.
@@ -43,7 +43,6 @@ impl Face {
             (true, _) => 4,
             (_, "Queue") => 1,
             (_, "Steer") => 2,
-            (_, "Save draft") => 3,
             _ => 0,
         }
     }
