@@ -22,6 +22,26 @@ pub(crate) struct LinkMenu {
     pub position: Point<Pixels>,
 }
 
+/// A `#heading` link, for the view showing the document to scroll to.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = markdown, no_json)]
+pub(crate) struct OpenAnchor(pub String);
+
+/// GitHub's heading anchor: lowercase, spaces as hyphens, other punctuation
+/// dropped. Repeated headings take `-1`, `-2`… in the caller.
+pub(crate) fn heading_slug(text: &str) -> String {
+    text.trim()
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            '-' | '_' => Some(c),
+            c if c.is_alphanumeric() => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(crate) fn link_menu(url: &str, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
     window.dispatch_action(
         Box::new(LinkMenu {
@@ -703,7 +723,11 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
 fn open_link(url: &str, window: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
         cx.open_url(url);
-    } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
+    } else if let Some(anchor) = url.strip_prefix('#') {
+        if !anchor.is_empty() {
+            window.dispatch_action(Box::new(OpenAnchor(anchor.into())), cx);
+        }
+    } else if !url.contains("://") || url.starts_with("file://") {
         window.dispatch_action(Box::new(crate::file_editor::OpenPath(url.into())), cx);
     }
 }
