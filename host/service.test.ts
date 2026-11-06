@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  ensureLinger,
   launchAgent,
   startDetached,
   systemdBooted,
@@ -192,4 +193,45 @@ it("unregisters only this user's Windows task", async () => {
   expect(scripts[0]).toContain('"MonoCode Host-$sid"');
   expect(scripts[0]).toContain("Unregister-ScheduledTask");
   expect(scripts[0]).not.toMatch(/Remove-Item|\.monocode-host/);
+});
+
+it("skips enabling linger when it is already on", async () => {
+  const calls: string[][] = [];
+  await ensureLinger("developer", async (command, args) => {
+    calls.push([command, ...args]);
+    if (args[0] === "enable-linger") throw new Error("Access denied");
+    return { stdout: "yes\n" };
+  });
+  expect(calls).toEqual([
+    ["loginctl", "show-user", "developer", "--property=Linger", "--value"],
+  ]);
+});
+
+it("enables linger when it is off", async () => {
+  let linger = "no";
+  await ensureLinger("developer", async (_command, args) => {
+    if (args[0] === "enable-linger") linger = "yes";
+    return { stdout: linger };
+  });
+  expect(linger).toBe("yes");
+});
+
+it("asks for an administrator when linger cannot be enabled", async () => {
+  await expect(
+    ensureLinger("developer", async (_command, args) => {
+      if (args[0] === "enable-linger") throw new Error("Access denied");
+      return { stdout: "no" };
+    }),
+  ).rejects.toThrow("sudo loginctl enable-linger developer");
+});
+
+it("keeps the error when linger status cannot be read after enabling", async () => {
+  let checks = 0;
+  await expect(
+    ensureLinger("developer", async (_command, args) => {
+      if (args[0] === "show-user" && checks++ > 0)
+        throw new Error("Failed to get user");
+      return { stdout: "no" };
+    }),
+  ).rejects.toThrow("Failed to get user");
 });
