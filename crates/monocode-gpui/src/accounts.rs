@@ -159,6 +159,7 @@ struct SignIn {
     complete: bool,
     error: Option<String>,
     adding: Option<Account>,
+    started: Instant,
 }
 struct Picker {
     kind: Kind,
@@ -697,6 +698,7 @@ impl Accounts {
             complete: false,
             error: None,
             adding,
+            started: Instant::now(),
         });
         if self.has_modal_auth() {
             cx.emit(AccountEvent::AuthStarted);
@@ -826,6 +828,37 @@ impl Accounts {
                 })
                 .detach();
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+impl Accounts {
+    /// Monocode came back to the front while a browser sign-in is still
+    /// waiting. A finished login reaches the CLI within a second or two, so if
+    /// it is still waiting after a short grace the browser was closed or
+    /// abandoned: reset to Sign in instead of waiting out the CLI's 10 minutes.
+    pub(crate) fn app_reactivated(&mut self, cx: &mut Context<Self>) {
+        let Some(signin) = &self.signin else {
+            return;
+        };
+        if signin.complete
+            || signin.error.is_some()
+            || signin.action != AuthAction::SignIn
+            || signin.started.elapsed() < Duration::from_secs(2)
+        {
+            return;
+        }
+        let attempt = signin.cancel.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+            let _ = this.update(cx, |this, cx| {
+                let waiting = this.signin.as_ref().is_some_and(|s| {
+                    Arc::ptr_eq(&s.cancel, &attempt) && !s.complete && s.error.is_none()
+                });
+                if waiting {
+                    this.cancel_auth(cx);
+                }
             });
         })
         .detach();

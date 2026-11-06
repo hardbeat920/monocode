@@ -269,6 +269,53 @@ release workflow. No live-provider requests, companion device tests, or manual
 packaged upgrade checks were performed in this preflight. Existing platform
 runtime limitations remain as recorded above and in [preview limitations](parity.md).
 
+## Preview 14 candidate — November 5, 2026
+
+Source revision
+[`da39885e`](https://github.com/hardbeat920/monocode/commit/da39885e5503a924647bd19b2a2376bc15eea0c0)
+passed every native-check stage locally on macOS Apple Silicon with Rust 1.97.1
+and Node 26.9.0:
+
+- Native development, dependency-guard, packaging, and release script tests: 29 passed.
+- Native workspace formatting: passed.
+- Strict Clippy for core and GPUI, all targets, `native-dev` profile: passed.
+- Native core tests: 671 passed, 2 ignored.
+- GPUI tests, run serially: 843 passed, 11 ignored.
+- Wheel-scroll integration tests: 3 passed.
+
+The initial `npm run native:check` passed its script, formatting, and Clippy
+stages, then encountered sandbox denials in core fixtures that open loopback
+sockets or inspect processes. Rerunning the Rust stage with the required host
+permissions completed successfully:
+
+```sh
+npm run native:test
+```
+
+The machine was also low on disk space during compilation. Removing the older
+debug-profile incremental compiler cache made room for the test build; the
+`native-dev` artifacts used for this check were retained.
+
+The [candidate native workflow](https://github.com/hardbeat920/monocode/actions/runs/42036909502)
+passed all jobs: core checks on macOS, Linux, and Windows, plus the macOS desktop
+formatting, strict Clippy, tests, and build. The desktop job completed after the
+local results above were first recorded.
+
+The [preview 14 release workflow](https://github.com/hardbeat920/monocode/actions/runs/42040307219)
+built all platform packages and passed macOS signing and notarization. Its native
+client verifier checked the signed manifest and all six updater packages before
+publication. [Preview 14](https://github.com/hardbeat920/monocode/releases/tag/native-v0.16.0-preview.14)
+was published on November 5 at 14:34 UTC, with all 14 download and signature
+assets uploaded. The public native update feed was checked afterward: it served
+`0.16.0-preview.14`, its notes matched the release notes, and all six versioned
+updater downloads returned HTTP 200. The GitHub release is marked as a prerelease;
+the production channel is unchanged.
+
+These results cover automated fixtures and publication checks. No live-provider
+requests, performance benchmarks, companion device tests, or manual packaged
+upgrade tests were performed in this preflight. Existing platform runtime
+limitations remain as recorded above and in [preview limitations](parity.md).
+
 ## Local checks
 
 Run the complete native check from the repository root:

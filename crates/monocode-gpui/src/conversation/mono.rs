@@ -831,102 +831,157 @@ impl Conversation {
         }
         ("Model setting", items, 210., MenuStyle::Explorer)
     }
-    /// The form's box: the field and send, as `MonoComposer` lays them out
-    /// when it has controls.
+    /// The session composer's box: the field, then a toolbar with the model
+    /// picker, its settings, access and send.
     fn mono_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let runner = self.composer_runner(cx);
-        let focused = self.input.focus_handle(cx).contains_focused(window, cx);
-        let ready = self.loaded
-            && !self.attaching
-            && (!self.input.read(cx).content.trim().is_empty() || !self.attachments.is_empty());
-        let border = if self.file_drag {
-            accent_color().opacity(0.6)
+        let radius = COMPOSER_RADIUS;
+        let has_value = self.input.read(cx).has_message_text() || !self.attachments.is_empty();
+        // As the session composer: setting pills only with controls beside
+        // the model, otherwise the effort rides inside the model pill.
+        let beside = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside");
+        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let trigger_fast = self.trigger_fast(beside);
+        let controls = if beside {
+            self.model_controls(cx)
         } else {
-            content(if focused { 0.2 } else { 0.1 })
+            Vec::new()
         };
+        let models_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.mono_ui.models.is_some();
+        let kind = Kind::from_id(&self.summary.provider);
         div()
             .id("mono-composer")
             .debug_selector(|| "mono-composer".into())
             .relative()
-            .p(px(1.))
+            .rounded(px(radius))
+            .border_1()
+            .border_color(composer_border(
+                self.input.focus_handle(cx).is_focused(window),
+            ))
+            .shadow(composer_shadow())
+            .when(self.file_drag, |d| {
+                d.border_color(accent_color().opacity(0.6))
+            })
             .flex()
             .flex_col()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
-            )
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        // One line is 18px plus 8px field padding, 10px row
-                        // padding and 2px border. Decide after text wraps.
-                        let radius = if bounds.size.height <= px(38.) {
-                            bounds.size.height / 2.
-                        } else {
-                            px(COMPOSER_RADIUS)
-                        };
-                        window.paint_quad(
-                            gpui::fill(bounds, content(0.03))
-                                .corner_radii(radius)
-                                .border_widths(px(1.))
-                                .border_color(border),
-                        );
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
+                // Keep a focus-tracking ancestor from taking focus back.
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                    window.prevent_default();
+                }),
             )
             .child(self.composer_anchor.probe())
-            .children(runner)
+            .child(composer_surface(radius))
             .children(self.attachment_chips(cx))
             .child(
-                // Even padding centres send beside one line, and keeps it at
-                // the bottom as the text grows.
                 div()
+                    .px_3()
+                    .pt(px(10.))
+                    .pb(px(14.))
+                    .child(self.input.clone()),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "mono-composer-toolbar".into())
                     .flex()
-                    .items_end()
-                    .gap_1p5()
-                    .p(px(5.))
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .pb(px(10.))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .self_center()
-                            .px_1p5()
-                            .py_1()
-                            .child(self.input.clone()),
+                            .overflow_hidden()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                tool_pill("mono-model", "Model")
+                                    .debug_selector(|| "mono-model".into())
+                                    .min_w_0()
+                                    .max_w(px(220.))
+                                    .flex_shrink(1.)
+                                    .aria_label(format!(
+                                        "{}, {}{}",
+                                        kind.label(),
+                                        self.model_label(),
+                                        trigger_effort
+                                            .as_ref()
+                                            .map(|effort| format!(", effort {effort}"))
+                                            .unwrap_or_default()
+                                    ))
+                                    .aria_expanded(models_open)
+                                    .child(self.model_anchor.probe())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.mono_ui.models = None;
+                                        this.toggle_menu(ComposerMenu::Model, window, cx)
+                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.open_recent_models(window, cx)
+                                        }),
+                                    )
+                                    .child(provider_icon(&self.summary.provider, 16.))
+                                    .child(pill_label(self.model_label()))
+                                    .when_some(trigger_effort, |d, effort| {
+                                        d.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(11.))
+                                                .text_color(content(0.5))
+                                                .child(effort),
+                                        )
+                                    })
+                                    .when(trigger_fast, |d| d.child(fast_bolt()))
+                                    .child(icon("chevron-down", 12.)),
+                            )
+                            .children(controls)
+                            .child(
+                                tool_pill("mono-access", "Access")
+                                    .aria_label(format!("Access, {}", self.settings.access.label()))
+                                    .aria_expanded(self.menu_is(ComposerMenu::Access))
+                                    .child(self.access_anchor.probe())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_menu(ComposerMenu::Access, window, cx)
+                                    }))
+                                    .child(
+                                        icon(
+                                            match self.settings.access {
+                                                AccessMode::FullAccess => "shield-alert",
+                                                AccessMode::AutoAcceptEdits => "pencil-edit",
+                                                AccessMode::Auto => "sparkles",
+                                                _ => "square-lock",
+                                            },
+                                            14.,
+                                        )
+                                        .text_color(
+                                            if self.settings.access == AccessMode::FullAccess {
+                                                tint(AMBER_400, 0.9)
+                                            } else {
+                                                content(1.)
+                                            },
+                                        ),
+                                    )
+                                    .child(pill_label(self.settings.access.label()))
+                                    .child(icon("chevron-down", 12.)),
+                            ),
                     )
                     .child(
                         div()
-                            .id("mono-send")
                             .debug_selector(|| "mono-send".into())
-                            .role(Role::Button)
-                            .aria_label("Send")
                             .flex_shrink_0()
-                            .size(px(26.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(white(if ready { 1. } else { 0.3 }))
-                            .when(ready, |d| d.hover(|s| s.bg(white(0.9))))
-                            .child(icon("mono-arrow-up", 14.).text_color(black(if ready {
-                                1.
-                            } else {
-                                0.4
-                            })))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if ready {
-                                    this.send(cx)
-                                }
-                            })),
+                            .child(self.action(has_value, window, cx)),
                     ),
             )
-            .children(self.attachment_drop_overlay(8.))
+            .children(self.attachment_drop_overlay(12.))
             .into_any_element()
     }
     pub(super) fn model_controls(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1062,8 +1117,8 @@ impl Conversation {
         }
         pills
     }
-    /// Under the box: attach and emoji on the left, the model, its settings
-    /// and the context meter on the right, the last lined up under send.
+    /// Under the box: attach and emoji on the left, the context meter on the
+    /// right.
     fn mono_composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let tool = |id: &'static str, label: &'static str| {
             div()
@@ -1079,26 +1134,6 @@ impl Conversation {
                 .justify_center()
                 .hover(|s| s.bg(content(0.08)))
         };
-        let text_control = |id: SharedString, open: bool| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .flex_shrink_0()
-                .h(px(26.))
-                .min_w_0()
-                .px(px(10.))
-                .gap_1p5()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .text_color(content(if open { 1. } else { 0.55 }))
-                .when(open, |d| d.bg(content(0.08)))
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        let pills = self.model_controls(cx);
-        let models_open = self.mono_ui.models.is_some();
         let ratio = self.context.and_then(|usage| usage.ratio());
         let headline = ratio
             .map(|r| format!("{:.0}% context used", r * 100.))
@@ -1117,7 +1152,9 @@ impl Conversation {
             .gap(px(2.))
             .pt_1()
             .pl_1()
-            .pr_1p5()
+            // The box's 1px border plus its toolbar's 8px: the meter sits
+            // straight under send.
+            .pr(px(9.))
             .child(
                 tool("mono-attach", "Attach files")
                     .debug_selector(|| "mono-attach".into())
@@ -1178,30 +1215,11 @@ impl Conversation {
                     .items_center()
                     .gap_1()
                     .child(
-                        text_control("mono-model".into(), models_open)
-                            .min_w_0()
-                            .max_w(px(220.))
-                            .flex_shrink(1.)
-                            .debug_selector(|| "mono-model".into())
-                            .aria_label(format!(
-                                "{}, {}",
-                                Kind::from_id(&self.summary.provider).label(),
-                                self.model_label()
-                            ))
-                            .aria_expanded(models_open)
-                            .child(self.model_anchor.probe())
-                            .child(provider_icon(&self.summary.provider, 14.))
-                            .child(div().min_w_0().truncate().child(self.model_label()))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_mono_models(window, cx)
-                            })),
-                    )
-                    .children(pills)
-                    .child(
                         // A Mono is one long conversation; this is how full its
                         // current thread is. It rotates threads itself.
                         div()
                             .id("mono-context-meter")
+                            .debug_selector(|| "mono-context-meter".into())
                             .role(Role::Image)
                             .aria_label(format!(
                                 "{headline}{}",
