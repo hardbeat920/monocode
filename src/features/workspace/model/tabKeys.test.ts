@@ -1,8 +1,11 @@
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from "vitest";
 import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingProjectNavigationSurface,
+  hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
@@ -195,6 +198,44 @@ describe("tabCommand", () => {
     ).toBe(true);
   });
 
+  it("allows only project navigation from an empty Mono composer", () => {
+    const monoComposer = {
+      blockedTarget: true,
+      emptyComposerTarget: false,
+      monoComposerEmptyTarget: true,
+      surfaceOpen: false,
+    };
+    for (const [keyName, expected] of [
+      ["ArrowLeft", "prev-project"],
+      ["ArrowRight", "next-project"],
+    ] as const) {
+      const command = tabCommand(
+        key({ key: keyName, metaKey: true, shiftKey: true }),
+      );
+      expect(command).toBe(expected);
+      expect(
+        shouldHandleListNavigation({
+          ...monoComposer,
+          projectNavigation:
+            command === "prev-project" || command === "next-project",
+        }),
+      ).toBe(true);
+    }
+    expect(
+      tabCommand(key({ key: "ArrowRight", ctrlKey: true, shiftKey: true })),
+    ).toBe("next-project");
+    expect(
+      shouldHandleListNavigation({ ...monoComposer, projectNavigation: false }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        ...monoComposer,
+        projectNavigation: true,
+        surfaceOpen: true,
+      }),
+    ).toBe(false);
+  });
+
   it("blocks list navigation while another text or app surface owns focus", () => {
     expect(
       shouldHandleListNavigation({
@@ -224,6 +265,98 @@ describe("tabCommand", () => {
         surfaceOpen: true,
       }),
     ).toBe(false);
+  });
+
+  it("blocks project navigation after focus leaves a portalled emoji picker", () => {
+    const picker = document.createElement("div");
+    picker.dataset.emojiPicker = "";
+    const toggle = document.createElement("button");
+    const composer = document.createElement("textarea");
+    composer.dataset.monoComposerEmpty = "true";
+    document.body.append(picker);
+    document.body.append(toggle, composer);
+
+    for (const target of [toggle, composer]) {
+      expect(hasBlockingProjectNavigationSurface(target)).toBe(true);
+      expect(
+        shouldHandleListNavigation({
+          blockedTarget: target === composer,
+          emptyComposerTarget: false,
+          monoComposerEmptyTarget: target === composer,
+          projectNavigation: true,
+          projectNavigationSurfaceOpen:
+            hasBlockingProjectNavigationSurface(target),
+          surfaceOpen: false,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: false,
+        projectNavigationSurfaceOpen: true,
+        surfaceOpen: hasBlockingListNavigationSurface(toggle),
+      }),
+    ).toBe(true);
+
+    picker.remove();
+    toggle.remove();
+    composer.remove();
+  });
+
+  it("blocks project navigation from a pending composer attachment button", () => {
+    const composer = document.createElement("div");
+    composer.dataset.monoComposerPending = "true";
+    const button = document.createElement("button");
+    composer.append(button);
+    document.body.append(composer);
+
+    expect(hasBlockingProjectNavigationSurface(button)).toBe(true);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        monoComposerEmptyTarget: false,
+        projectNavigation: true,
+        projectNavigationSurfaceOpen:
+          hasBlockingProjectNavigationSurface(button),
+        surfaceOpen: false,
+      }),
+    ).toBe(false);
+    composer.remove();
+  });
+
+  it("blocks project navigation while an active Mono read is pending after focus leaves it", () => {
+    const composer = document.createElement("div");
+    composer.dataset.monoComposerPending = "true";
+    const outside = document.createElement("button");
+    document.body.append(composer, outside);
+
+    const projectNavigationSurfaceOpen =
+      hasBlockingProjectNavigationSurface(outside);
+    expect(projectNavigationSurfaceOpen).toBe(true);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: true,
+        projectNavigationSurfaceOpen,
+        surfaceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: false,
+        projectNavigationSurfaceOpen,
+        surfaceOpen: false,
+      }),
+    ).toBe(true);
+
+    composer.remove();
+    outside.remove();
   });
 });
 
