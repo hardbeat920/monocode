@@ -56,7 +56,16 @@ pub(crate) fn window_overlay(window: &Window, overlay: impl IntoElement) -> impl
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.), px(0.)))
-            .child(div().relative().w(size.width).h(size.height).child(overlay)),
+            .child(
+                div()
+                    .relative()
+                    .w(size.width)
+                    .h(size.height)
+                    // Descendant scroll containers stay interactive; lower surfaces do not.
+                    .occlude()
+                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                    .child(overlay),
+            ),
     )
     .with_priority(30)
 }

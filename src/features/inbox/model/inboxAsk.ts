@@ -5,7 +5,7 @@ export type InboxAskContext = {
   key: string;
   title: string;
   url: string;
-  provider: "github" | "linear" | "jira" | "gitlab" | "azuredevops";
+  provider: "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "sonar";
   description?: string;
 };
 
@@ -13,6 +13,8 @@ export function inboxAskKey(item: InboxItem): string {
   if (item.provider === "linear" || item.provider === "jira") {
     return `${item.provider}:${item.id}`;
   }
+  if (item.provider === "sonar")
+    return `sonar:${JSON.stringify([item.repo, item.branch, item.id])}`;
   // Items without a usable link (e.g. a provider that omitted the URL) must
   // still produce a stable key: this runs during render, so it cannot throw.
   try {

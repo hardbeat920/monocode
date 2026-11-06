@@ -1,12 +1,13 @@
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import { looksLikeProject } from "../../projects/model/recents";
 import type { InboxItem } from "../../inbox/model/githubTasks";
+import { INBOX_PROVIDER_LABELS } from "../../inbox/model/inboxProviders";
 
 export type NotificationProject = {
   id: string;
   name: string;
   detail: string;
-  kind: "repository" | "local" | "linear" | "jira";
+  kind: "repository" | "local" | "linear" | "jira" | "sonar";
   paths: string[];
 };
 
@@ -74,7 +75,9 @@ export function loadNotificationProjects(): NotificationProject[] {
         typeof value.id === "string" &&
         typeof value.name === "string" &&
         typeof value.detail === "string" &&
-        ["repository", "local", "linear", "jira"].includes(value.kind) &&
+        ["repository", "local", "linear", "jira", "sonar"].includes(
+          value.kind,
+        ) &&
         Array.isArray(value.paths) &&
         value.paths.every((path: unknown) => typeof path === "string"),
     );
@@ -138,18 +141,25 @@ type NotificationWorkItem = Pick<InboxItem, "provider" | "repo" | "url"> &
 export function inboxNotificationProject(
   item: NotificationWorkItem,
 ): NotificationProject {
-  if (item.provider === "jira") {
+  if (item.provider === "jira" || item.provider === "sonar") {
     let site = "unknown";
     try {
       site = new URL(item.url).host.toLowerCase();
     } catch {
       // Preserve a usable project identity even if a provider omits the URL.
     }
+    const project =
+      item.provider === "sonar"
+        ? item.repo
+        : item.teamId || item.repo.toLowerCase();
     return {
-      id: `jira:${site}:project:${item.teamId || item.repo.toLowerCase() || "unknown"}`,
-      name: item.teamName || item.repo || "Jira project",
-      detail: `Jira · ${site}`,
-      kind: "jira",
+      id: `${item.provider}:${site}:project:${project || "unknown"}`,
+      name:
+        (item.provider === "sonar" ? item.projectName : item.teamName) ||
+        item.repo ||
+        `${INBOX_PROVIDER_LABELS[item.provider]} project`,
+      detail: `${INBOX_PROVIDER_LABELS[item.provider]} · ${site}`,
+      kind: item.provider,
       paths: [],
     };
   }

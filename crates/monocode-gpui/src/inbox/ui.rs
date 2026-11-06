@@ -232,6 +232,7 @@ fn error(text: impl Into<SharedString>) -> Div {
 }
 fn provider_mark(provider: &str) -> gpui::Svg {
     let (path, color) = match provider {
+        "sonar" => ("inbox-sonar", rgb(0x4c9bd6).into()),
         "linear" => ("inbox-linear", content(0.8)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
         "gitlab" => ("inbox-gitlab", rgb(0xfc6d26).into()),
@@ -679,7 +680,8 @@ impl Inbox {
             .filter(|s| {
                 s.work_item.as_ref().is_some_and(|work| {
                     (!work.url.is_empty() && work.url == work_item.url)
-                        || (work.kind == work_item.kind
+                        || (item.provider != "sonar"
+                            && work.kind == work_item.kind
                             && work.number == work_item.number
                             && work.repo.eq_ignore_ascii_case(&work_item.repo))
                 })
@@ -939,26 +941,39 @@ impl Inbox {
                                         })),
                                 )
                             })
-                            .when(!is_pr && item.project_path.is_empty(), |d| {
+                            .when(item.provider == "sonar", |d| {
                                 d.child(
-                                    icon_action(
-                                        "inbox-choose-project",
-                                        &self.project_label(&self.start_project.to_string_lossy()),
-                                        "folder",
-                                    )
-                                    .relative()
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .child(icon("chevron-down", 12.))
-                                    .child(self.project_anchor.probe())
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.project_picker = !this.project_picker;
-                                            cx.notify();
-                                        },
-                                    )),
+                                    action("sonar-discuss", "Discuss").on_click(
+                                        cx.listener(|this, _, _, cx| this.discuss_sonar(cx)),
+                                    ),
                                 )
                             })
+                            .when(
+                                !is_pr
+                                    && (item.project_path.is_empty() || item.provider == "sonar"),
+                                |d| {
+                                    d.child(
+                                        icon_action(
+                                            "inbox-choose-project",
+                                            &self.project_label(
+                                                &self.start_project.to_string_lossy(),
+                                            ),
+                                            "folder",
+                                        )
+                                        .relative()
+                                        .border_1()
+                                        .border_color(content(0.1))
+                                        .child(icon("chevron-down", 12.))
+                                        .child(self.project_anchor.probe())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.project_picker = !this.project_picker;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    )
+                                },
+                            )
                             .when(is_pr && item.provider == "github", |d| {
                                 d.child(self.pr_actions(&item, cx))
                             })
@@ -984,12 +999,19 @@ impl Inbox {
                                 }),
                             ),
                     )
-                    .when(is_pr, |d| {
+                    .when(item.provider == "sonar", |d| {
+                        d.child(self.sonar_status_controls(cx))
+                    })
+                    .when(is_pr || item.provider == "sonar", |d| {
                         d.child(
                             div()
                                 .id("inbox-pr-tabs")
                                 .role(Role::TabList)
-                                .aria_label("Pull request details")
+                                .aria_label(if item.provider == "sonar" {
+                                    "Finding details"
+                                } else {
+                                    "Pull request details"
+                                })
                                 .h(px(36.))
                                 .flex()
                                 .items_stretch()
@@ -1886,7 +1908,12 @@ impl Inbox {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let can_post = !self.posting && !self.comment.read(cx).content.trim().is_empty();
-        let body = if ix == 0 {
+        let body = if item.provider == "sonar" && ix + 1 == count {
+            div()
+                .py(px(16.))
+                .child(self.sonar_comment_controls(cx))
+                .into_any_element()
+        } else if ix == 0 {
             div()
                 .pt(px(20.))
                 .pb(px(20.))
@@ -2039,6 +2066,10 @@ impl Inbox {
             .flex_col()
             .when(self.extra_loading, |d| d.child(message("Loading changes…")))
             .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
+            .when(self.item().is_some_and(|item| item.provider == "sonar"), |d| {
+                d.child(message("Latest analyzed branch source compared with main. Rule example diffs are reference examples, not changes to your file."))
+                    .when(self.diff.as_ref().is_some_and(|diff| diff.files.is_empty()), |d| d.child(message("No analyzed source comparison or paired rule examples are available.")))
+            })
             .when(self.diff.is_some(), |d| {
                 d.child(div().flex_1().min_h_0().child(self.diff_view.clone()))
             })
@@ -2096,6 +2127,7 @@ impl Inbox {
             || f.status.merged
             || (self.state.source == "linear" && !self.state.hidden_linear_teams.is_empty())
             || (self.state.source == "jira" && !self.state.hidden_jira_projects.is_empty())
+            || (self.state.source == "sonar" && !f.hidden_sonar_branches.is_empty())
     }
     fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
         self.save();
@@ -2221,7 +2253,45 @@ impl Inbox {
         } else {
             &self.snapshot.jira_projects
         };
-        if tracker && !provider_options.is_empty() {
+        if self.state.source == "sonar" {
+            rows.push(caption("SONAR PROJECT").into_any_element());
+            for (ix, project) in self.snapshot.sonar_projects.iter().enumerate() {
+                let key = project.key.clone();
+                rows.push(
+                    menu_row(
+                        format!("sonar-project-{ix}"),
+                        project.name.clone(),
+                        project.key == self.snapshot.sonar_selected_project,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.manage_sonar(super::sonar::Manage::Select(key.clone()), cx)
+                    }))
+                    .into_any_element(),
+                );
+            }
+            rows.push(caption("SCANNED BRANCHES").into_any_element());
+            for (ix, branch) in self.snapshot.sonar_branches.iter().enumerate() {
+                let key = model::sonar::branch_key(&branch.project_key, &branch.name);
+                rows.push(
+                    menu_row(
+                        format!("sonar-branch-{ix}"),
+                        format!(
+                            "{} / {}{}",
+                            branch.repository_name,
+                            branch.name,
+                            if branch.is_main { " (main)" } else { "" }
+                        ),
+                        !f.hidden_sonar_branches.contains(&key),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        toggle(&mut this.state.filters.hidden_sonar_branches, key.clone());
+                        this.filters_changed(false, cx);
+                    }))
+                    .into_any_element(),
+                );
+            }
+        }
+        if self.state.source != "sonar" && tracker && !provider_options.is_empty() {
             rows.push(
                 caption(if self.state.source == "linear" {
                     "TEAMS"
@@ -2380,6 +2450,9 @@ impl Inbox {
     }
 
     fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.connect_provider.as_deref() == Some("sonar") {
+            return self.sonar_connection_dialog(cx);
+        }
         let provider = self.connect_provider.clone().unwrap_or_default();
         let connected = self
             .snapshot
@@ -2394,6 +2467,9 @@ impl Inbox {
         let hint = match provider.as_str() {
             "github" => {
                 "Install GitHub CLI, then run gh auth login in a terminal. Check again when signed in."
+            }
+            "sonar" => {
+                "Use a personal token with Browse permission. Connect first, then choose an organization and watched projects. Source access requires See Source Code permission."
             }
             "linear" => "Create a personal API key in Linear → Settings → Security & Access.",
             "jira" => "Connect your Jira Cloud site with your Atlassian email and an API token.",
@@ -2417,6 +2493,9 @@ impl Inbox {
                     .relative()
                     .w(px(440.))
                     .max_w_full()
+                    .max_h_full()
+                    .id("inbox-connect-card-scroll")
+                    .overflow_y_scroll()
                     .p(px(24.))
                     .rounded(px(crate::modal::RADIUS))
                     .border_1()
@@ -2491,6 +2570,9 @@ impl Inbox {
                                 .border_color(content(0.1))
                                 .child(self.connect_token.clone()),
                         )
+                    })
+                    .when(provider == "sonar" && connected, |d| {
+                        d.child(self.sonar_connection_controls(cx))
                     })
                     .when_some(self.connect_error.clone(), |d, text| d.child(error(text)))
                     .child(
@@ -2829,7 +2911,9 @@ impl gpui::Render for Inbox {
             .flex_col()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
-                    if this.connect_provider.is_some() && !this.connecting {
+                    if this.connect_provider.as_deref() == Some("sonar") {
+                        this.close_sonar_connection(cx);
+                    } else if this.connect_provider.is_some() && !this.connecting {
                         this.connect_provider = None;
                     } else if this.confirm_action.is_some() && !this.acting {
                         this.confirm_action = None;
@@ -2916,9 +3000,13 @@ mod tests {
     struct Fixture {
         inbox: Entity<Inbox>,
         item: Item,
+        full_view: bool,
     }
     impl Render for Fixture {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if self.full_view {
+                return div().size_full().child(self.inbox.clone());
+            }
             self.inbox.update(cx, |inbox, cx| {
                 div()
                     .size_full()
@@ -2948,7 +3036,7 @@ mod tests {
                 view.thread = Some(Thread { comments, ..Default::default() });
                 view.rebuild_activity(); view
             });
-            Fixture { inbox, item }
+            Fixture { inbox, item, full_view: false }
         })).unwrap());
         draw(window, cx);
         window
@@ -3244,5 +3332,668 @@ mod tests {
             let bytes = crate::assets::Assets.load(name).unwrap().unwrap();
             assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
         }
+    }
+    fn sonar_test_content() -> model::sonar::SonarIssueContent {
+        model::sonar::SonarIssueContent {
+            repository_name: "app".into(),
+            issue: serde_json::json!({"key":"one", "rule":"rust:S1", "transitions":["accept"]}),
+            rule: None,
+            rule_html: "<p>Use a guard.</p>".into(),
+            rule_url: "https://sonar.example/rules".into(),
+            reference_documentation: false,
+            source: vec![],
+            comparison: None,
+            errors: vec![],
+        }
+    }
+
+    #[gpui::test]
+    fn sonar_project_switch_discards_late_details_and_keeps_other_providers(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let sonar = Item {
+                        provider: "sonar".into(),
+                        kind: "sonar".into(),
+                        id: "one".into(),
+                        sonar_project: "app".into(),
+                        sonar_branch: "main".into(),
+                        ..Default::default()
+                    };
+                    let github = inbox.snapshot.items[0].clone();
+                    inbox.snapshot.items.push(sonar.clone());
+                    inbox.state.source = "sonar".into();
+                    inbox.selected = Some(sonar.key());
+                    inbox.detail_loading = true;
+                    inbox.loading = true;
+                    let generation = inbox.detail_generation;
+                    let list_generation = inbox.generation;
+                    inbox.invalidate_sonar(cx);
+                    assert!(
+                        inbox.selected.is_none()
+                            && inbox.details.is_none()
+                            && inbox.document.is_none()
+                    );
+                    assert_eq!(inbox.snapshot.items.len(), 1);
+                    assert_eq!(inbox.snapshot.items[0].key(), github.key());
+                    assert!(inbox.generation > list_generation);
+                    assert!(inbox.detail_generation > generation);
+                    inbox.complete_sonar_detail(
+                        &sonar.key(),
+                        generation,
+                        Ok(sonar_test_content()),
+                        cx,
+                    );
+                    assert!(inbox.sonar_content.is_none() && inbox.document.is_none());
+                    assert!(!inbox.detail_loading);
+                })
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn sonar_detail_completion_preserves_manual_project_and_supplies_session_context(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let item = Item {
+                        provider: "sonar".into(),
+                        kind: "sonar".into(),
+                        id: "one".into(),
+                        sonar_project: "app".into(),
+                        sonar_branch: "main".into(),
+                        project_path: "/auto/matched".into(),
+                        ..Default::default()
+                    };
+                    inbox.snapshot.items = vec![item.clone()];
+                    inbox.selected = Some(item.key());
+                    inbox.start_project = PathBuf::from("/manual/selection");
+                    inbox.detail_loading = true;
+                    inbox.complete_sonar_detail(
+                        &item.key(),
+                        inbox.detail_generation,
+                        Ok(sonar_test_content()),
+                        cx,
+                    );
+                    assert_eq!(inbox.start_project, PathBuf::from("/manual/selection"));
+                    assert!(!inbox.detail_loading);
+                    assert!(
+                        inbox
+                            .details
+                            .as_ref()
+                            .unwrap()
+                            .body
+                            .contains("Use a guard.")
+                    );
+                    assert!(inbox.document.is_some() && inbox.diff.is_some());
+                    assert!(!inbox.sonar_feedback, "analyzer feedback must default off");
+                    assert!(
+                        item.prompt(&inbox.details.as_ref().unwrap().body, true)
+                            .contains("Use a guard.")
+                    );
+                    inbox.sonar_transition = "accept".into();
+                    inbox.sonar_feedback = true;
+                    inbox.reset_detail(cx);
+                    assert!(
+                        inbox.sonar_transition.is_empty()
+                            && !inbox.sonar_feedback
+                            && inbox.sonar_content.is_none()
+                    );
+                })
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn sonar_related_sessions_match_the_finding_url_instead_of_number_zero(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, _| {
+                    let item = Item {
+                        provider: "sonar".into(),
+                        kind: "sonar".into(),
+                        repo: "app".into(),
+                        url: "https://sonar.example/issue?one".into(),
+                        ..Default::default()
+                    };
+                    let mut other = item.work_item();
+                    other.url = "https://sonar.example/issue?two".into();
+                    inbox.sessions = vec![
+                        Session {
+                            id: 1,
+                            work_item: Some(other),
+                            title: String::new(),
+                            provider: "codex".into(),
+                            cwd: "/repo".into(),
+                            provider_id: None,
+                            has_messages: false,
+                            updated_at: 0,
+                            archived: false,
+                            pinned: false,
+                        },
+                        Session {
+                            id: 2,
+                            work_item: Some(item.work_item()),
+                            title: String::new(),
+                            provider: "codex".into(),
+                            cwd: "/repo".into(),
+                            provider_id: None,
+                            has_messages: false,
+                            updated_at: 0,
+                            archived: false,
+                            pinned: false,
+                        },
+                    ];
+                    assert_eq!(
+                        inbox
+                            .related_sessions(&item)
+                            .iter()
+                            .map(|session| session.id)
+                            .collect::<Vec<_>>(),
+                        vec![2]
+                    );
+                })
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn sonar_native_surfaces_render_with_connected_projects_branches_and_guidance(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.full_view = true;
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.reset_detail(cx);
+                    let item = Item {
+                        provider: "sonar".into(),
+                        kind: "sonar".into(),
+                        id: "one".into(),
+                        title: "Use a guard".into(),
+                        sonar_project: "app".into(),
+                        sonar_branch: "main".into(),
+                        ..Default::default()
+                    };
+                    inbox.state.source = "sonar".into();
+                    inbox.selected = Some(item.key());
+                    inbox.snapshot.items = vec![item.clone()];
+                    inbox.snapshot.connections.insert(
+                        "sonar".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                    let project = model::sonar::SonarProject {
+                        key: "app".into(),
+                        name: "Application".into(),
+                    };
+                    inbox.snapshot.sonar_projects = vec![project.clone()];
+                    inbox.snapshot.sonar_selected_project = "app".into();
+                    inbox.snapshot.sonar_branches = vec![model::sonar::SonarBranch {
+                        project_key: "app".into(),
+                        repository_name: "Application".into(),
+                        name: "main".into(),
+                        is_main: true,
+                        analysis_date: "2026-10-29".into(),
+                    }];
+                    inbox.sonar_status = Some(model::sonar::SonarStatus {
+                        connected: true,
+                        site: "https://sonar.example".into(),
+                        organization: "acme".into(),
+                        projects: vec![project.clone()],
+                        selected_project: "app".into(),
+                    });
+                    inbox.sonar_projects = vec![project];
+                    inbox.sonar_organizations = vec![model::sonar::SonarOrganization {
+                        key: "acme".into(),
+                        name: "Acme".into(),
+                    }];
+                    inbox.complete_sonar_detail(
+                        &item.key(),
+                        inbox.detail_generation,
+                        Ok(sonar_test_content()),
+                        cx,
+                    );
+                });
+            })
+            .unwrap();
+        draw(window, cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.filters_open = true;
+                    cx.notify();
+                })
+            })
+            .unwrap();
+        draw(window, cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.filters_open = false;
+                    inbox.connect_provider = Some("sonar".into());
+                    cx.notify();
+                })
+            })
+            .unwrap();
+        draw(window, cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.connect_provider = None;
+                    inbox.set_tab(Tab::Code, cx);
+                })
+            })
+            .unwrap();
+        draw(window, cx);
+    }
+    #[gpui::test]
+    fn sonar_empty_or_failed_organization_discovery_never_starts_a_project_request(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.sonar_status = Some(model::sonar::SonarStatus {
+                        connected: true,
+                        site: "https://sonarcloud.io".into(),
+                        organization: String::new(),
+                        projects: vec![],
+                        selected_project: String::new(),
+                    });
+                    let generation = inbox.sonar_connection_generation;
+                    inbox.sonar_loading = Some("Loading your organizations…".into());
+                    inbox.complete_sonar_organizations(generation, Ok(vec![]), cx);
+                    assert!(
+                        inbox.sonar_loading.is_none(),
+                        "empty memberships must wait for explicit organization selection"
+                    );
+                    assert!(inbox.sonar_projects.is_empty());
+                    inbox.complete_sonar_organizations(generation, Err("Invalid token".into()), cx);
+                    assert!(inbox.sonar_loading.is_none());
+                    assert!(
+                        inbox
+                            .connect_error
+                            .as_ref()
+                            .unwrap()
+                            .contains("Invalid token")
+                    );
+                    assert!(inbox.sonar_projects.is_empty());
+                })
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn sonar_failed_page_preserves_results_and_closed_dialog_discards_late_replies(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let generation = inbox.sonar_connection_generation;
+                    inbox.complete_sonar_project_page(
+                        generation,
+                        1,
+                        Ok(model::sonar::SonarProjectPage {
+                            projects: vec![model::sonar::SonarProject {
+                                key: "mine".into(),
+                                name: "My application".into(),
+                            }],
+                            has_more: true,
+                        }),
+                        cx,
+                    );
+                    inbox.complete_sonar_project_page(
+                        generation,
+                        2,
+                        Err("Rate limit reached".into()),
+                        cx,
+                    );
+                    assert_eq!(inbox.sonar_projects.len(), 1);
+                    assert_eq!(inbox.sonar_project_page, 1);
+                    assert!(inbox.sonar_projects_more && inbox.sonar_loading.is_none());
+                    assert!(inbox.connect_error.as_ref().unwrap().contains("Rate limit"));
+                    inbox.connect_provider = Some("sonar".into());
+                    inbox.sonar_loading = Some("Loading projects · page 2…".into());
+                    inbox.close_sonar_connection(cx);
+                    inbox.complete_sonar_project_page(
+                        generation,
+                        2,
+                        Ok(model::sonar::SonarProjectPage {
+                            projects: vec![],
+                            has_more: false,
+                        }),
+                        cx,
+                    );
+                    inbox.complete_sonar_organizations(generation, Err("late failure".into()), cx);
+                    assert!(inbox.connect_provider.is_none() && inbox.sonar_loading.is_none());
+                    assert_eq!(inbox.sonar_projects.len(), 1);
+                    assert!(
+                        !inbox
+                            .connect_error
+                            .as_ref()
+                            .unwrap()
+                            .contains("late failure")
+                    );
+                    assert!(
+                        !inbox
+                            .sonar_connect_current
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                    );
+                })
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn sonar_large_project_lists_keep_header_and_footer_visible_and_can_close_while_loading(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.full_view = true;
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.connect_provider = Some("sonar".into());
+                    inbox.snapshot.connections.insert(
+                        "sonar".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                    inbox.sonar_status = Some(model::sonar::SonarStatus {
+                        connected: true,
+                        site: "https://sonarcloud.io".into(),
+                        organization: "mine".into(),
+                        projects: vec![],
+                        selected_project: String::new(),
+                    });
+                    inbox.sonar_projects = (0..5000)
+                        .map(|ix| model::sonar::SonarProject {
+                            key: format!("my-organization-project-{ix}"),
+                            name: format!("An application with a long human readable title {ix}"),
+                        })
+                        .collect();
+                    inbox.sonar_loading = Some("Loading projects · page 51…".into());
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        draw(window, cx);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        let header = visual.debug_bounds("sonar-connection-header").unwrap();
+        let footer = visual.debug_bounds("sonar-connection-footer").unwrap();
+        assert!(header.top() >= px(0.) && footer.bottom() <= px(700.));
+        assert!(footer.top() > header.bottom());
+        assert!(visual.debug_bounds("sonar-connection-progress").is_some());
+        assert!(
+            visual.debug_bounds("sonar-project-row-4999").is_none(),
+            "offscreen projects must not be materialized"
+        );
+        if let Some(row) = visual.debug_bounds("sonar-project-row-0") {
+            assert_eq!(row.size.height, px(52.));
+        }
+        visual.simulate_resize(size(px(500.), px(460.)));
+        visual.refresh().unwrap();
+        let header = visual.debug_bounds("sonar-connection-header").unwrap();
+        let footer = visual.debug_bounds("sonar-connection-footer").unwrap();
+        assert!(
+            header.top() >= px(0.) && footer.bottom() <= px(460.),
+            "small windows keep the controls inside their bounds"
+        );
+        let close = visual.debug_bounds("sonar-close-connection").unwrap();
+        visual.simulate_click(close.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, _| {
+                    assert!(inbox.connect_provider.is_none() && inbox.sonar_loading.is_none())
+                })
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn sonar_disconnected_dialog_fits_its_fields_without_the_project_list_gap(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.full_view = true;
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.connect_provider = Some("sonar".into());
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        draw(window, cx);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        let card = visual.debug_bounds("sonar-connection-card").unwrap();
+        let body = visual.debug_bounds("sonar-connection-body").unwrap();
+        let footer = visual.debug_bounds("sonar-connection-footer").unwrap();
+        assert!(
+            body.size.height > px(120.),
+            "both credential fields must remain visible"
+        );
+        assert!(
+            card.size.height < px(420.),
+            "disconnected form should fit its content: {card:?}"
+        );
+        assert!(
+            footer.top() - body.bottom() < px(4.),
+            "no empty list area before the footer"
+        );
+    }
+
+    #[gpui::test]
+    fn sonar_modal_gestures_scroll_projects_without_moving_the_active_inbox_page(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.full_view = true;
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.connect_provider = Some("sonar".into());
+                    inbox.snapshot.connections.insert(
+                        "github".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                    inbox.snapshot.connections.insert(
+                        "sonar".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                    inbox.sonar_status = Some(model::sonar::SonarStatus {
+                        connected: true,
+                        site: "https://internal.example".into(),
+                        organization: String::new(),
+                        projects: vec![],
+                        selected_project: String::new(),
+                    });
+                    inbox.sonar_projects = (0..100)
+                        .map(|ix| model::sonar::SonarProject {
+                            key: format!("project-{ix}"),
+                            name: format!("Application {ix}"),
+                        })
+                        .collect();
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        draw(window, cx);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        let before = window
+            .update(&mut visual, |fixture, _, cx| {
+                fixture.inbox.read(cx).summary_scroll.logical_scroll_top()
+            })
+            .unwrap();
+        let projects = visual.debug_bounds("sonar-project-results").unwrap();
+        let wheel = |visual: &mut gpui::VisualTestContext, position, delta, phase| {
+            visual.simulate_mouse_move(position, None, Default::default());
+            visual.simulate_event(gpui::ScrollWheelEvent {
+                position,
+                delta: gpui::ScrollDelta::Pixels(point(px(0.), px(delta))),
+                modifiers: Default::default(),
+                touch_phase: phase,
+            });
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+        };
+        wheel(
+            &mut visual,
+            projects.center(),
+            -120.,
+            gpui::TouchPhase::Started,
+        );
+        wheel(
+            &mut visual,
+            projects.center(),
+            -180.,
+            gpui::TouchPhase::Moved,
+        );
+        window
+            .update(&mut visual, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, _| {
+                    assert!(
+                        inbox
+                            .sonar_projects_scroll
+                            .0
+                            .borrow()
+                            .base_handle
+                            .offset()
+                            .y
+                            < px(0.),
+                        "the modal's project list must actually scroll"
+                    );
+                })
+            })
+            .unwrap();
+        wheel(
+            &mut visual,
+            projects.center(),
+            -10000.,
+            gpui::TouchPhase::Moved,
+        );
+        wheel(
+            &mut visual,
+            projects.center(),
+            -10000.,
+            gpui::TouchPhase::Ended,
+        );
+        // Unconsumed boundary gestures and gestures on the scrim must also stay above the page.
+        wheel(
+            &mut visual,
+            point(px(1000.), px(400.)),
+            -180.,
+            gpui::TouchPhase::Moved,
+        );
+        window
+            .update(&mut visual, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let after = inbox.summary_scroll.logical_scroll_top();
+                    assert_eq!(after.item_ix, before.item_ix);
+                    assert_eq!(after.offset_in_item, before.offset_in_item);
+                    inbox.close_sonar_connection(cx);
+                })
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        wheel(
+            &mut visual,
+            point(px(1000.), px(400.)),
+            -180.,
+            gpui::TouchPhase::Moved,
+        );
+        window
+            .update(&mut visual, |fixture, _, cx| {
+                let after = fixture.inbox.read(cx).summary_scroll.logical_scroll_top();
+                assert!(
+                    after.item_ix != before.item_ix
+                        || after.offset_in_item != before.offset_in_item,
+                    "the underlying page must scroll again after closing the modal"
+                );
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn sonar_connected_view_gives_projects_six_visible_rows_and_toggles_connection_editing(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.full_view = true;
+                fixture.inbox.update(cx, |inbox, cx| {
+                    inbox.connect_provider = Some("sonar".into());
+                    inbox.snapshot.connections.insert(
+                        "sonar".into(),
+                        model::Status {
+                            connected: true,
+                            ..Default::default()
+                        },
+                    );
+                    inbox.sonar_status = Some(model::sonar::SonarStatus {
+                        connected: true,
+                        site: "https://sonarcloud.io".into(),
+                        organization: "my-organization".into(),
+                        projects: vec![],
+                        selected_project: String::new(),
+                    });
+                    inbox.sonar_projects = (0..55)
+                        .map(|ix| model::sonar::SonarProject {
+                            key: format!("project-{ix}"),
+                            name: format!("Project {ix}"),
+                        })
+                        .collect();
+                    inbox.sonar_organizations = (0..3)
+                        .map(|ix| model::sonar::SonarOrganization {
+                            key: format!("organization-{ix}"),
+                            name: format!("Organization {ix}"),
+                        })
+                        .collect();
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        draw(window, cx);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        let projects = visual.debug_bounds("sonar-project-results").unwrap();
+        let body = visual.debug_bounds("sonar-connection-body").unwrap();
+        assert_eq!(projects.size.height, px(6. * 52.));
+        assert!(
+            projects.top() >= body.top() && projects.bottom() <= body.bottom(),
+            "all six rows must fit without scrolling the dialog: {projects:?} {body:?}"
+        );
+        let edit = visual.debug_bounds("sonar-edit-connection").unwrap();
+        visual.simulate_click(edit.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("sonar-project-results").is_none());
+        let back = visual.debug_bounds("sonar-edit-connection").unwrap();
+        visual.simulate_click(back.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("sonar-project-results").is_some());
     }
 }

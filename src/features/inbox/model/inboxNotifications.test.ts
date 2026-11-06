@@ -67,3 +67,32 @@ it("does not announce history exposed by a changed query or repeat items after a
     appeared: [],
   });
 });
+
+it("tracks the same Sonar issue separately on each branch", () => {
+  const tracker = new InboxNotificationTracker();
+  const main: InboxItem = {
+    ...item("org_app", "2026-10-14T10:00:00Z"),
+    provider: "sonar",
+    kind: "sonar",
+    id: "issue-1",
+    branch: "main",
+    number: 0,
+    projectPath: "",
+    url: "https://sonarcloud.io/project/issues?id=org_app",
+  };
+  const feature = { ...main, branch: "feature" };
+  expect(tracker.observe([main, feature], "all")).toEqual({
+    changed: [],
+    appeared: [],
+  });
+  const changed = { ...feature, updatedAt: "2026-10-14T10:01:00Z" };
+  expect(tracker.observe([main, changed], "all")).toEqual({
+    changed: [changed],
+    appeared: [],
+  });
+  const added = { ...changed, branch: "new" };
+  expect(tracker.observe([main, changed, added], "all")).toEqual({
+    changed: [added],
+    appeared: [added],
+  });
+});
