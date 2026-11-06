@@ -15,8 +15,8 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
-    ListState, Pixels, Subscription, px,
+    App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    ListAlignment, ListState, Pixels, Subscription, Window, px,
 };
 use monocode_core::{
     inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
@@ -26,6 +26,51 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+
+/// Ask the shell to show a work-item link in the Inbox.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = inbox_link, no_json)]
+pub(crate) struct OpenWorkLink(pub String);
+
+/// A click on a link to a work item: the Inbox shows it when this window has
+/// one, otherwise (or with Cmd) the browser does.
+pub(crate) fn follow_link(url: &str, event: &ClickEvent, window: &mut Window, cx: &mut App) {
+    if event.modifiers().secondary() || !open_in_inbox(url, window, cx) {
+        cx.open_url(url);
+    }
+}
+
+/// Hand `url` to this window's shell. False when the window has no inbox to
+/// show it in, such as a window that is not the main one.
+pub(crate) fn open_in_inbox(url: &str, window: &mut Window, cx: &mut App) -> bool {
+    let action = OpenWorkLink(url.into());
+    if !window.is_action_available(&action, cx) {
+        return false;
+    }
+    window.dispatch_action(Box::new(action), cx);
+    true
+}
+
+/// For code that has no window in hand: the first window with an inbox shows
+/// the link once the current update has finished, or the browser does.
+pub(crate) fn open_link_later(url: &str, cx: &mut App) {
+    let url = url.to_owned();
+    cx.defer(move |cx| {
+        let mut windows = cx.windows();
+        if let Some(active) = cx.active_window() {
+            windows.retain(|window| *window != active);
+            windows.insert(0, active);
+        }
+        let shown = windows.into_iter().any(|window| {
+            window
+                .update(cx, |_, window, cx| open_in_inbox(&url, window, cx))
+                .unwrap_or(false)
+        });
+        if !shown {
+            cx.open_url(&url);
+        }
+    });
+}
 
 pub(crate) enum Event {
     Close,
@@ -40,6 +85,15 @@ enum Tab {
     Code,
     Checks,
 }
+
+/// Progress of a link that points at an item the list does not hold.
+enum LinkNotice {
+    Loading(String),
+    Failed { url: String, message: String },
+}
+
+/// Links followed from item to item stop growing after this many steps.
+const BACK_LIMIT: usize = 20;
 
 pub(crate) struct Inbox {
     store: Database,
@@ -60,6 +114,14 @@ pub(crate) struct Inbox {
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
     focus_comment: bool,
     selected: Option<String>,
+    /// The item opened from a link when the list does not contain it.
+    pinned: Option<Item>,
+    /// The current row was picked by the inbox, not the reader, so following a
+    /// link from it leaves nothing to go back to.
+    auto_selected: bool,
+    back: Vec<Item>,
+    link_notice: Option<LinkNotice>,
+    link_request: u64,
     /// The address last copied and the press that copied it, until the tick fades.
     copied_link: Option<(String, u64)>,
     details: Option<Details>,
@@ -265,6 +327,11 @@ impl Inbox {
             summary_rows: Default::default(),
             focus_comment: false,
             selected: None,
+            pinned: None,
+            auto_selected: false,
+            back: vec![],
+            link_notice: None,
+            link_request: 0,
             copied_link: None,
             details: None,
             thread: None,
@@ -328,6 +395,7 @@ impl Inbox {
             projects.push(cwd.clone());
         }
         if self.projects != projects || self.service.cwd != cwd {
+            self.cancel_link();
             let switched = self.service.cwd != cwd;
             if switched {
                 self.state.filters.hidden_projects = other_projects(&projects, &cwd);
@@ -379,7 +447,7 @@ impl Inbox {
                 self.state.seen.mark(&item);
                 self.save();
             } else if let Some(item) = self.visible_items(cx).first() {
-                self.select(item.key(), cx);
+                self.auto_select(item.key(), cx);
             }
         }
         cx.notify();
@@ -503,7 +571,7 @@ impl Inbox {
                     && this.selected.is_none()
                     && let Some(item) = this.visible_items(cx).first()
                 {
-                    this.select(item.key(), cx);
+                    this.auto_select(item.key(), cx);
                 }
                 if std::mem::take(&mut this.refresh_queued) {
                     this.refresh(cx);
@@ -546,9 +614,159 @@ impl Inbox {
             .items
             .iter()
             .find(|item| Some(item.key()) == self.selected)
+            .or(self
+                .pinned
+                .as_ref()
+                .filter(|item| Some(item.key()) == self.selected))
             .cloned()
     }
+    /// A row the reader picks replaces any link still loading.
     fn select(&mut self, key: String, cx: &mut Context<Self>) {
+        self.cancel_link();
+        self.pick(key, cx);
+    }
+    /// The inbox picks a row itself, such as the first one once the list
+    /// loads. A link still loading replaces it when it arrives.
+    fn auto_select(&mut self, key: String, cx: &mut Context<Self>) {
+        self.pick(key, cx);
+        self.auto_selected = true;
+    }
+    /// A row picked from the rail starts a fresh trail of linked items.
+    fn pick(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.selected.as_ref() == Some(&key) {
+            return;
+        }
+        self.back.clear();
+        self.auto_selected = false;
+        if self.pinned.as_ref().is_some_and(|item| item.key() != key) {
+            self.pinned = None;
+        }
+        self.show(key, cx);
+    }
+    /// Whether `open_url` would show `url` here rather than leave it to the
+    /// browser.
+    pub(crate) fn can_open(&self, url: &str) -> bool {
+        model::link_target(url).is_some()
+            || model::find_linked(&self.snapshot.items, url).is_some()
+            || self
+                .pinned
+                .as_ref()
+                .is_some_and(|item| model::find_linked(std::slice::from_ref(item), url).is_some())
+    }
+    /// Follow a link to a work item. Items the list holds open directly;
+    /// GitHub and Linear items it does not hold are fetched and shown without
+    /// joining the list. Returns false for links that belong to the browser.
+    pub(crate) fn open_url(&mut self, url: &str, cx: &mut Context<Self>) -> bool {
+        self.cancel_link();
+        let target = model::link_target(url);
+        let tab = match &target {
+            Some(model::LinkTarget::GitHub(work)) if work.kind == "pr" => {
+                let lower = url.to_ascii_lowercase();
+                if lower.contains("/files") {
+                    Tab::Code
+                } else if lower.contains("/checks") {
+                    Tab::Checks
+                } else {
+                    Tab::Summary
+                }
+            }
+            _ => Tab::Summary,
+        };
+        let known = model::find_linked(&self.snapshot.items, url)
+            .or(self
+                .pinned
+                .as_ref()
+                .filter(|item| model::find_linked(std::slice::from_ref(*item), url).is_some()))
+            .cloned();
+        if let Some(item) = known {
+            self.go_to(item, tab, cx);
+            return true;
+        }
+        let Some(target) = target else {
+            return false;
+        };
+        let label = match &target {
+            model::LinkTarget::GitHub(work) => format!("{}#{}", work.repo, work.number),
+            model::LinkTarget::Linear { identifier, .. } => identifier.clone(),
+        };
+        let service = self.service.clone();
+        let projects = self.projects.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { service.linked_item(&target, &projects) });
+        self.await_link(url.to_owned(), label, tab, task, cx);
+        true
+    }
+    /// Show the item `task` looks up once it arrives, unless the reader has
+    /// moved on by then.
+    fn await_link(
+        &mut self,
+        url: String,
+        label: String,
+        tab: Tab,
+        task: gpui::Task<Result<Item, String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let request = self.link_request;
+        self.link_notice = Some(LinkNotice::Loading(label));
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.link_request != request {
+                    return;
+                }
+                match result {
+                    Ok(item) => {
+                        this.link_notice = None;
+                        this.go_to(item, tab, cx);
+                    }
+                    Err(message) => this.link_notice = Some(LinkNotice::Failed { url, message }),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    /// Forget any lookup still in flight, so it cannot replace a selection
+    /// made after it started.
+    fn cancel_link(&mut self) {
+        self.link_request += 1;
+        self.link_notice = None;
+    }
+    fn go_to(&mut self, item: Item, tab: Tab, cx: &mut Context<Self>) {
+        if self.selected.as_ref() == Some(&item.key()) {
+            self.set_tab(tab, cx);
+            return;
+        }
+        let automatic = std::mem::take(&mut self.auto_selected);
+        if let Some(current) = self.item().filter(|_| !automatic) {
+            self.back.push(current);
+            if self.back.len() > BACK_LIMIT {
+                self.back.remove(0);
+            }
+        }
+        self.follow(item, tab, cx);
+    }
+    fn go_back(&mut self, cx: &mut Context<Self>) {
+        self.cancel_link();
+        if let Some(item) = self.back.pop() {
+            self.follow(item, Tab::Summary, cx);
+        }
+    }
+    fn follow(&mut self, item: Item, tab: Tab, cx: &mut Context<Self>) {
+        let key = item.key();
+        self.pinned = (!self.snapshot.items.iter().any(|i| i.key() == key)).then_some(item.clone());
+        if item.provider != self.state.source {
+            self.state.source = item.provider.clone();
+            self.save();
+        }
+        self.show(key, cx);
+        if tab != Tab::Summary {
+            self.set_tab(tab, cx);
+        }
+    }
+    fn show(&mut self, key: String, cx: &mut Context<Self>) {
         if self.selected.as_ref() == Some(&key) {
             return;
         }
@@ -568,6 +786,8 @@ impl Inbox {
     }
     fn deselect(&mut self, cx: &mut Context<Self>) {
         self.selected = None;
+        self.pinned = None;
+        self.back.clear();
         self.reset_detail(cx);
         cx.notify();
     }
@@ -606,8 +826,11 @@ impl Inbox {
             .update(cx, |input, cx| input.set_text(String::new(), cx));
     }
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
+        self.cancel_link();
         self.state.source = source;
         self.selected = None;
+        self.pinned = None;
+        self.back.clear();
         self.details = None;
         self.document = None;
         self.comments.clear();
@@ -642,6 +865,7 @@ impl Inbox {
                 if this.detail_generation != generation {
                     return;
                 }
+                let inbox = cx.weak_entity();
                 this.detail_loading = false;
                 match details {
                     Ok(details) => {
@@ -651,9 +875,10 @@ impl Inbox {
                             .is_none_or(|old| old.body != details.body)
                         {
                             this.document = Some(cx.new(|cx| {
-                                document::InboxDocument::new(
+                                document::InboxDocument::linked(
                                     details.body.clone(),
                                     this.document_cwd(),
+                                    inbox.clone(),
                                     cx,
                                 )
                             }));
@@ -673,9 +898,10 @@ impl Inbox {
                                 .map(|(_, document)| document.clone())
                                 .unwrap_or_else(|| {
                                     cx.new(|cx| {
-                                        document::InboxDocument::new(
+                                        document::InboxDocument::linked(
                                             comment.body.clone(),
                                             this.document_cwd(),
+                                            inbox.clone(),
                                             cx,
                                         )
                                     })
@@ -689,9 +915,10 @@ impl Inbox {
                                     .map(|(_, document)| document.clone())
                                     .unwrap_or_else(|| {
                                         cx.new(|cx| {
-                                            document::InboxDocument::new(
+                                            document::InboxDocument::linked(
                                                 reply.body.clone(),
                                                 this.document_cwd(),
+                                                inbox.clone(),
                                                 cx,
                                             )
                                         })
@@ -944,9 +1171,7 @@ impl Inbox {
                         this.action_notice = (merging
                             && !item.state.eq_ignore_ascii_case("merged"))
                         .then(|| "Merge queued or auto-merge enabled.".into());
-                        if let Some(old) = this.snapshot.items.iter_mut().find(|i| i.key() == key) {
-                            *old = item;
-                        }
+                        this.replace_item(&key, item);
                         this.confirm_action = None;
                         this.load_detail(false, cx);
                         this.refresh(cx);
@@ -958,5 +1183,15 @@ impl Inbox {
         })
         .detach();
         cx.notify();
+    }
+    /// Puts an item an action returned in place of the one it was run on,
+    /// whether that sits in the list or is pinned from outside it.
+    fn replace_item(&mut self, key: &str, item: Item) {
+        if let Some(pinned) = self.pinned.as_mut().filter(|i| i.key() == key) {
+            *pinned = item.clone();
+        }
+        if let Some(old) = self.snapshot.items.iter_mut().find(|i| i.key() == key) {
+            *old = item;
+        }
     }
 }
