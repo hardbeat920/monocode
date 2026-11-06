@@ -44,6 +44,7 @@ mod shortcuts;
 mod sidebar_list;
 mod sidebar_peek;
 mod space_reorder;
+mod tab_switcher;
 mod terminal_dock;
 mod terminal_panes;
 use terminal_panes::terminal_drag_ghost;
@@ -196,6 +197,7 @@ pub(crate) struct ActivateTab(pub isize);
 pub(crate) fn bind_keys(cx: &mut App) {
     session_groups::bind(cx);
     session_folders::bind(cx);
+    tab_switcher::bind(cx);
     let modifier = if cfg!(target_os = "macos") {
         "cmd"
     } else {
@@ -608,6 +610,11 @@ struct SessionPreview {
 pub(crate) struct Shell {
     monos: Option<Entity<crate::monos::Monos>>,
     quick_open: Option<quick_open::Open>,
+    tab_switcher: Option<tab_switcher::Open>,
+    tab_switcher_scroll: ScrollHandle,
+    /// Sessions by when they were last focused, newest first, for ⌥Tab.
+    switcher_recent: Vec<i64>,
+    switcher_thumbs: tab_switcher::Thumbs,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
     app_bridge: Option<monocode_core::mono::bridge::Server>,
     mobile: mobile_host::Mobile,
@@ -1012,6 +1019,10 @@ impl Shell {
         let mut this = Self {
             monos: None,
             quick_open: None,
+            tab_switcher: None,
+            tab_switcher_scroll: ScrollHandle::new(),
+            switcher_recent: Vec::new(),
+            switcher_thumbs: Default::default(),
             image_lightbox: None,
             app_bridge: None,
             mobile: mobile_host::Mobile::default(),
@@ -3519,6 +3530,7 @@ impl Shell {
         }
         self.navigation_revision += 1;
         self.history.record(id);
+        tab_switcher::touch(&mut self.switcher_recent, id);
         self.workspace.open(id);
         if let Some(view) = self.sessions.get(&id) {
             self.workspace.project = view.read(cx).summary.cwd.clone();
@@ -4263,6 +4275,14 @@ impl Shell {
         }
     }
     fn activate_session(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        // The chat being left is still the frame on screen: keep its picture
+        // for the ⌥Tab switcher, at most once a minute unless it is working.
+        if let Some(previous) = self.workspace.active.filter(|previous| *previous != id) {
+            let busy = self.session_summaries.contains_key(&previous)
+                && self.session_metadata(previous, cx).busy;
+            let fresh = if busy { 10 } else { 60 };
+            self.capture_thumb(previous, std::time::Duration::from_secs(fresh), window, cx);
+        }
         if self.workspace.review_owners.contains_key(&id) {
             self.open_file_pane(id, window, cx);
             return;
@@ -4286,6 +4306,7 @@ impl Shell {
             return;
         };
         self.history.record(id);
+        tab_switcher::touch(&mut self.switcher_recent, id);
         self.workspace.open(id);
         self.workspace.project = view.read(cx).summary.cwd.clone();
         self.workspace
@@ -8792,6 +8813,17 @@ impl Render for Shell {
             .role(Role::Application)
             .aria_label("Monocode Native")
             .key_context("Workspace")
+            .on_action(
+                cx.listener(|this, _: &tab_switcher::StepSwitcher, window, cx| {
+                    this.step_switcher(1, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &tab_switcher::StepSwitcherBack, window, cx| {
+                    this.step_switcher(-1, window, cx)
+                }),
+            )
+            .on_modifiers_changed(cx.listener(Self::switcher_modifiers))
             .track_focus(&self.focus)
             .capture_key_up(cx.listener(|this, _, _, _| this.archive_shortcut_held = false))
             .on_action(cx.listener(|this, _: &ArchiveSession, window, cx| {
@@ -9264,6 +9296,7 @@ impl Render for Shell {
             .children(self.action_modal(window, cx))
             .children(self.resource_modal(window, cx))
             .children(self.quick_open_modal(window, cx))
+            .children(self.tab_switcher_overlay(window, cx))
             .children(self.search_modal(window, cx))
             .children(self.remote_project_modal(window, cx))
             .children(self.notice_modals(window, cx))
