@@ -240,7 +240,7 @@ impl Conversation {
     }
     /// Everything the pill needs except work to act on: `/stage` and
     /// `/commit` may still ask, and the agent says when it changed nothing.
-    fn git_actions_ready(&self) -> bool {
+    pub(super) fn git_actions_ready(&self) -> bool {
         self.history_loaded()
             && !self.busy
             && !self.stopping
