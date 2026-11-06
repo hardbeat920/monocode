@@ -494,96 +494,29 @@ fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     let mut statuses: HashMap<String, &'static str> = HashMap::new();
 
-    if let Some(text) = git_run(
-        root,
-        &[
+    // One pass reads both counts and statuses: each `git diff` against the
+    // working tree stats every tracked file.
+    let diff = |extra: &[&str]| {
+        let mut args = vec![
             "diff",
             "-z",
             "--relative",
             "--no-ext-diff",
+            "--raw",
             "--numstat",
-            "HEAD",
-            "--",
-            ".",
-        ],
-    ) {
-        add_numstat_map(&text, &mut files);
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "HEAD",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
-        }
+        ];
+        args.extend_from_slice(extra);
+        args.extend(["--", "."]);
+        git_run(root, &args)
+    };
+    if let Some(text) = diff(&["HEAD"]) {
+        add_raw_numstat(&text, &mut files, &mut statuses);
     } else {
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
+        // Without HEAD, the staged status wins over the working tree's.
+        for side in [&[][..], &["--cached"][..]] {
+            if let Some(text) = diff(side) {
+                add_raw_numstat(&text, &mut files, &mut statuses);
+            }
         }
     }
     add_untracked_map(root, &mut files);
@@ -638,35 +571,85 @@ fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
 }
 
 fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
-    // `git diff -z --numstat` ends each record with NUL. A rename is
-    // `add <TAB> del <TAB> <NUL> old <NUL> new <NUL>`; every other record is
-    // `add <TAB> del <TAB> path <NUL>`.
     let mut fields = text.split('\0');
     while let Some(record) = fields.next() {
-        if record.is_empty() {
-            continue;
+        add_numstat_record(record, &mut fields, files);
+    }
+}
+
+/// `git diff -z --numstat` ends each record with NUL. A rename is
+/// `add <TAB> del <TAB> <NUL> old <NUL> new <NUL>`; every other record is
+/// `add <TAB> del <TAB> path <NUL>`.
+fn add_numstat_record<'a>(
+    record: &str,
+    fields: &mut impl Iterator<Item = &'a str>,
+    files: &mut HashMap<String, FileAcc>,
+) {
+    if record.is_empty() {
+        return;
+    }
+    let mut parts = record.splitn(3, '\t');
+    let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+        return;
+    };
+    let path = if path.is_empty() {
+        let _previous = fields.next();
+        match fields.next() {
+            Some(destination) if !destination.is_empty() => destination,
+            _ => return,
         }
-        let mut parts = record.splitn(3, '\t');
-        let Some(add) = parts.next() else { continue };
-        let Some(del) = parts.next() else { continue };
-        let Some(path) = parts.next() else { continue };
-        let path = if path.is_empty() {
-            let _previous = fields.next();
-            match fields.next() {
-                Some(destination) if !destination.is_empty() => destination,
-                _ => continue,
-            }
-        } else {
-            path
+    } else {
+        path
+    };
+    let relative = literal_diff_path(path);
+    if relative.is_empty() {
+        return;
+    }
+    let entry = files.entry(relative).or_default();
+    if add != "-" && del != "-" {
+        entry.additions += add.parse::<i64>().unwrap_or(0);
+        entry.deletions += del.parse::<i64>().unwrap_or(0);
+    }
+}
+
+/// `git diff -z --raw --numstat` prints every raw record, then every numstat
+/// record. A raw record is `:modes ids STATUS <NUL> path <NUL>`, with a second
+/// path for a rename or copy. Statuses match `--name-status --no-renames`: a
+/// rename's source is deleted and its destination added.
+fn add_raw_numstat(
+    text: &str,
+    files: &mut HashMap<String, FileAcc>,
+    statuses: &mut HashMap<String, &'static str>,
+) {
+    let mut fields = text.split('\0');
+    while let Some(record) = fields.next() {
+        let Some(raw) = record.strip_prefix(':') else {
+            add_numstat_record(record, &mut fields, files);
+            continue;
         };
-        let relative = literal_diff_path(path);
-        if relative.is_empty() {
-            continue;
-        }
-        let entry = files.entry(relative).or_default();
-        if add != "-" && del != "-" {
-            entry.additions += add.parse::<i64>().unwrap_or(0);
-            entry.deletions += del.parse::<i64>().unwrap_or(0);
+        let code = raw.rsplit(' ').next().unwrap_or_default();
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let mut set = |path: &str, status| {
+            let relative = literal_diff_path(path);
+            if !relative.is_empty() {
+                statuses.insert(relative, status);
+            }
+        };
+        match code.as_bytes().first() {
+            Some(b'A') => set(path, "added"),
+            Some(b'D') => set(path, "deleted"),
+            Some(b'M' | b'T') => set(path, "modified"),
+            Some(kind @ (b'R' | b'C')) => {
+                if *kind == b'R' {
+                    set(path, "deleted");
+                }
+                if let Some(destination) = fields.next() {
+                    set(destination, "added");
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1261,10 +1244,12 @@ fn sync_for(root: &Path) -> Sync {
     } else {
         (0, 0)
     };
-    let ahead_of_default = if let Some(base) = default_ref.as_deref() {
-        git_ahead_behind(root, base).0
-    } else {
-        ahead
+    // Without an upstream, or tracking the default branch, that count is it.
+    let ahead_of_default = match default_ref.as_deref() {
+        Some(base) if upstream.is_some() && upstream.as_deref() != Some(base) => {
+            git_ahead_behind(root, base).0
+        }
+        _ => ahead,
     };
     let head_pushed = git_stdout(
         root,
