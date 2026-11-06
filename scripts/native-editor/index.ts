@@ -1,9 +1,8 @@
-// The React editor's parsers, completions, folding and search run without a DOM
-// in a bounded QuickJS worker. All offsets at this boundary are UTF-16.
+// The React editor's parsers, completions and folding run without a DOM in a
+// bounded QuickJS worker. All offsets at this boundary are UTF-16.
 import { EditorState, Text } from "@codemirror/state";
 import { ensureSyntaxTree, foldable } from "@codemirror/language";
 import { CompletionContext, completeFromList } from "@codemirror/autocomplete";
-import { SearchQuery } from "@codemirror/search";
 import { highlightTree } from "@lezer/highlight";
 import { syntaxTree } from "@codemirror/language";
 import { languageForPath, syntaxTagHighlighter } from "../../src/features/files/editor/editorLanguage";
@@ -99,19 +98,6 @@ globalThis.monocodeEmmet = async (path: string, source: string, pos: number) => 
     result = { formatted: tr.newDoc.toString(), cursorOffset: tr.newSelection.main.head };
   } } as any);
   return JSON.stringify(result);
-};
-
-globalThis.monocodeSearch = (source: string, query: string, replacement: string, caseSensitive: boolean, wholeWord: boolean, regexp: boolean) => {
-  const state = EditorState.create({ doc: source });
-  const search = new SearchQuery({ search: query, replace: replacement, caseSensitive, wholeWord, regexp, literal: true });
-  if (!search.valid) return JSON.stringify({ matches: [], invalid: !!query });
-  const cursor = search.getCursor(state);
-  const matches = [];
-  while (!cursor.next().done) {
-    const { from, to } = cursor.value;
-    if (to > from) matches.push({ from, to, insert: (search as any).create().getReplacement(cursor.value) });
-  }
-  return JSON.stringify({ matches, invalid: false });
 };
 
 globalThis.monocodeChunkAction = (original: string, current: string, pos: number, start: number, end: number, stage: boolean) => JSON.stringify(

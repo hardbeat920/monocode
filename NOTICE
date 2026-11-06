@@ -13,6 +13,11 @@ Source: https://github.com/zed-industries/zed/blob/93d745668805029476e6d7fbb1965
 License: https://www.apache.org/licenses/LICENSE-2.0
 License text: docs/native/LICENSE-GPUI-APACHE
 
+Native editor search uses corvus-regex-ecma262 0.2.7, licensed under
+Apache-2.0.
+Source: https://github.com/corvus-dotnet/corvus-regex-ecma262-rs
+License text: docs/native/LICENSE-CORVUS-APACHE
+
 Native Mermaid previews use mermaid-rs-renderer 0.3.1, licensed under MIT.
 Copyright (c) 2026 mermaid-rs-renderer contributors.
 Source: https://github.com/1jehuang/mermaid-rs-renderer
