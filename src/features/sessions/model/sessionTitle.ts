@@ -8,6 +8,7 @@ Also identify one GitHub issue or pull request only when the user explicitly ref
 Return JSON with exactly two keys: title and workItem.
 workItem must be null or an object with exactly two keys: kind ("issue" or "pr") and number (a positive integer copied from the user message).
 Never invent a work item number. If the reference is ambiguous or has no number, return null.
+A ticket key such as ENG-42 or SW-29 is not a GitHub number; return null for it.
 Do not call tools. Reply with JSON only.
 
 Before answering, silently reduce the request to:
@@ -63,8 +64,14 @@ export function sanitizeThreadTitle(raw: string): string {
   return `${normalized.slice(0, TITLE_LIMIT - 3).trimEnd()}...`;
 }
 
-function referencedNumber(message: string, number: number): boolean {
-  return new RegExp(`(^|\\D)${number}(?=\\D|$)`).test(message);
+/** True when the number stands alone somewhere, not only as the tail of a ticket key such as `SW-29`. */
+export function numberStandsAlone(message: string, number: number): boolean {
+  const occurrences = new RegExp(`(^|\\D)${number}(?=\\D|$)`, "g");
+  for (const match of message.matchAll(occurrences)) {
+    const before = message.slice(0, match.index + match[1].length);
+    if (!/[A-Z][A-Z0-9]{0,9}-$/.test(before)) return true;
+  }
+  return false;
 }
 
 export function parseGeneratedSessionTitle(
@@ -92,7 +99,7 @@ export function parseGeneratedSessionTitle(
             typeof number === "number" &&
             Number.isSafeInteger(number) &&
             number > 0 &&
-            referencedNumber(message, number)
+            numberStandsAlone(message, number)
               ? { kind, number }
               : null;
           return { title, workItem: validWorkItem };
