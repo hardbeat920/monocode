@@ -23,6 +23,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 mod work;
+mod work_item;
 use crate::{
     conversation::{Conversation, MonoSubmitted, SessionChanged},
     input::{self, Input},
@@ -132,6 +133,7 @@ pub(crate) struct Monos {
     visual_documents: HashMap<String, Entity<crate::visuals::VisualView>>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
+    work_item: Option<work_item::Page>,
     activity: Option<(String, Entity<crate::transcript::TranscriptView>)>,
     activity_turn: Option<usize>,
     rail_ids: Vec<String>,
@@ -365,6 +367,7 @@ impl Monos {
             visual_documents: HashMap::new(),
             project_changes: Default::default(),
             review: None,
+            work_item: None,
             activity: None,
             activity_turn: None,
             rail_ids: Vec::new(),
@@ -1616,6 +1619,13 @@ impl gpui::Render for Monos {
                     cx.notify();
                 }
             }))
+            .on_action(
+                cx.listener(|this, link: &crate::inbox::OpenWorkLink, _, cx| {
+                    if !this.open_work_item(&link.0, cx) {
+                        cx.propagate();
+                    }
+                }),
+            )
             .capture_any_mouse_down(|_, window, _| {
                 #[cfg(target_os = "macos")]
                 crate::traffic_lights::focus_content(window);

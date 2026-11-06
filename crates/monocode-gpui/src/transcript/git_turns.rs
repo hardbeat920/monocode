@@ -443,7 +443,9 @@ impl TranscriptView {
                         .child(icon(glyph, 13.).text_color(content(0.6)))
                         .child(label)
                         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                        .on_click(move |event, window, cx| {
+                            crate::inbox::follow_link(&url, event, window, cx)
+                        }),
                 )
             });
 

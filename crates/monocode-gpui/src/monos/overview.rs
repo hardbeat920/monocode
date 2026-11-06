@@ -151,6 +151,17 @@ impl Render for Overview {
             .role(Role::Complementary)
             .aria_label("Mono details")
             .track_focus(&self.focus)
+            .on_action(
+                cx.listener(|this, link: &crate::inbox::OpenWorkLink, _, cx| {
+                    let shown = this
+                        .manager
+                        .update(cx, |monos, cx| monos.open_work_item(&link.0, cx))
+                        .unwrap_or(false);
+                    if !shown {
+                        cx.propagate();
+                    }
+                }),
+            )
             .size_full()
             .min_w_0()
             .min_h_0()
