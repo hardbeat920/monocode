@@ -1296,10 +1296,13 @@ impl Menu {
                     .items_center()
                     .gap_3()
                     .rounded(px(8.))
-                    .line_height(px(13.))
+                    // Not 13px: `truncate` clips to the line box, and Windows'
+                    // Segoe UI lost the bottom of g/y/p at the font's own size.
+                    .line_height(px(16.))
                     .map(|d| {
                         if action.description.is_some() {
-                            d.py(px(6.))
+                            // The 16px line (above) eats 1.5px a side.
+                            d.py(px(4.5))
                         } else {
                             d.h(px(if in_submenu && self.style == MenuStyle::Settings {
                                 32.

@@ -168,17 +168,17 @@ impl SettingsView {
             )],
         ));
         workspace.push(self.row(
-            Some("terminal-in-panel"),
+            Some("terminal-placement"),
             false,
-            "Terminal in side panel",
-            Some("In the Focused layout, open the terminal as a tab in the right panel instead of below the chat.".into()),
-            vec![self.toggle(
-                "terminal-in-panel",
-                "Terminal in side panel",
-                p.terminal_in_panel,
-                false,
+            "Terminal",
+            Some("Where new terminals open: docked below the chat, as a tab in the right panel (Focused layout), or as their own tabs in the title bar.".into()),
+            vec![self.segmented(
+                "terminal-placement",
+                "Terminal",
+                p.terminal_placement(),
+                &[("bottom", "Bottom"), ("panel", "Side panel"), ("title", "Title bar")],
                 cx,
-                |this, on, cx| this.update(cx, |p| p.terminal_in_panel = on),
+                |this, v, cx| this.update(cx, |p| p.set_terminal_placement(v)),
             )],
         ));
         if cfg!(target_os = "windows") {
