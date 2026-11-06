@@ -2,7 +2,11 @@
 //! record what changed. Shared reviews require successful edit evidence for
 //! each displayed file, without inferring which process owns individual lines.
 use super::*;
+use sha2::{Digest, Sha256};
+use std::fs::TryLockError;
 use std::io::Write;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 mod tests;
@@ -55,6 +59,14 @@ struct Change {
 }
 
 impl CheckpointStore {
+    /// One index per worktree, kept so its stat cache survives between turns.
+    /// Linked worktrees have distinct roots and must not share the cache.
+    fn index_dir(&self) -> Result<PathBuf, String> {
+        let dir = self.root.join("indexes");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        Ok(dir)
+    }
+
     pub(super) fn begin_turn(&self, session_id: &str, cwd: &str, id: &str) -> Result<(), String> {
         let root = std::fs::canonicalize(project_root(cwd)?).map_err(|e| e.to_string())?;
         let discovered = run_git(&root, &["rev-parse", "--show-toplevel"]);
@@ -109,10 +121,8 @@ impl CheckpointStore {
         review.active = Some(turn.clone());
         write_review(&dir, &review)?;
         let capture = (|| {
-            review.repo = String::from_utf8(discovered?)
-                .map_err(|e| e.to_string())?
-                .trim_end_matches(['\r', '\n'])
-                .to_string();
+            let discovered = String::from_utf8(discovered?).map_err(|e| e.to_string())?;
+            review.repo = discovered.trim_end_matches(['\r', '\n']).to_string();
             // Shared checkouts can include another session's writes. Keep the
             // recorded diff exact, but never offer to restore those turns.
             for (other_dir, mut other) in self.active_turns(&root, session_id)? {
@@ -127,7 +137,9 @@ impl CheckpointStore {
                 run_git(&root, &["update-ref", &reference, before])?;
                 Ok(before.clone())
             } else {
-                capture_workspace(&root, &reference)
+                let repo = std::fs::canonicalize(&review.repo).map_err(|e| e.to_string())?;
+                let indexes = self.index_dir()?;
+                capture_workspace(&root, &repo, &reference, &indexes)
             }
         })();
         match capture {
@@ -151,7 +163,14 @@ impl CheckpointStore {
             return Ok(());
         };
         if turn.before.is_some() {
-            match capture_workspace(Path::new(&review.cwd), &turn_ref(session_id, id, "after")) {
+            let root = Path::new(&review.cwd);
+            let captured = std::fs::canonicalize(&review.repo)
+                .map_err(|e| e.to_string())
+                .and_then(|repo| {
+                    let indexes = self.index_dir()?;
+                    capture_workspace(root, &repo, &turn_ref(session_id, id, "after"), &indexes)
+                });
+            match captured {
                 Ok(oid) => turn.after = Some(oid),
                 Err(error) => turn.error = Some(error),
             }
@@ -630,38 +649,318 @@ fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     checked_output(&mut git_command(root, args))
 }
 
-struct PrivateIndex(PathBuf);
-impl Drop for PrivateIndex {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("lock"));
+fn index_command(dir: &Path, index: &Path, args: &[&str]) -> Command {
+    let mut command = git_command(dir, args);
+    command
+        .env("GIT_INDEX_FILE", index)
+        .env("GIT_AUTHOR_NAME", "MonoCode")
+        .env("GIT_AUTHOR_EMAIL", "checkpoint@monocode.local")
+        .env("GIT_COMMITTER_NAME", "MonoCode")
+        .env("GIT_COMMITTER_EMAIL", "checkpoint@monocode.local");
+    command
+}
+
+// Git's NUL-delimited listings already contain literal paths. Never trim them
+// or interpret quoting: those bytes can be part of a filename.
+fn nul_records(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+}
+
+fn entry_path(entry: &[u8]) -> Result<&[u8], String> {
+    entry
+        .iter()
+        .position(|byte| *byte == b'\t')
+        .map(|tab| &entry[tab + 1..])
+        .ok_or_else(|| "Invalid checkpoint index entry".into())
+}
+
+fn run_with_input(mut command: Command, input: Vec<u8>) -> Result<(i32, Vec<u8>, Vec<u8>), String> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to open checkpoint input")?;
+    // Write on a separate thread: a large listing can fill the stdout pipe
+    // while Git still waits for stdin, which would deadlock a serial writer.
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let code = output.status.code().unwrap_or(-1);
+    if code == 0 {
+        writer
+            .join()
+            .map_err(|_| "Checkpoint input thread failed".to_string())?
+            .map_err(|e| e.to_string())?;
+    } else {
+        let _ = writer.join();
+    }
+    Ok((code, output.stdout, output.stderr))
+}
+
+fn stdin_failure(code: i32, stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("Checkpoint index update failed (status {code})")
+    } else {
+        stderr
     }
 }
 
-fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
-    if run_git(root, &["config", "--bool", "core.sparseCheckout"])
+fn capture_workspace(
+    root: &Path,
+    repo: &Path,
+    reference: &str,
+    indexes: &Path,
+) -> Result<String, String> {
+    let key = index_key(repo);
+    // One guard per worktree, never per generation: it has to be the same file
+    // whichever generation is current, or two captures stop excluding each
+    // other exactly when they both retry.
+    let _guard = CaptureGuard::acquire(&indexes.join(format!("{key}.capture")))?;
+    // Read the generation only after the guard: another process may have
+    // published a newer one while this capture waited.
+    let generation = index_generation(indexes, &key)?;
+    let index = index_file(indexes, &key, generation);
+    match capture_workspace_once(root, repo, reference, &index) {
+        Err(error) if lost_index_lock(&error) || corrupt_index(&error) => {
+            // Abandoning the path is the only safe recovery. A `git` child of
+            // a killed app renames `<index>.lock` by path, so reusing the name
+            // would let it replace whatever this capture had just written.
+            let next = bump_generation(indexes, &key, generation)?;
+            capture_workspace_once(root, repo, reference, &index_file(indexes, &key, next))
+        }
+        result => result,
+    }
+}
+
+fn index_key(repo: &Path) -> String {
+    format!("{:x}", Sha256::digest(path_to_js(repo).as_bytes()))
+}
+
+fn index_file(indexes: &Path, key: &str, generation: u64) -> PathBuf {
+    indexes.join(format!("{key}.{generation}.index"))
+}
+
+/// Missing means the first capture for this worktree. Anything else is an
+/// error: guessing a generation would write to a path another capture owns.
+fn index_generation(indexes: &Path, key: &str) -> Result<u64, String> {
+    let path = indexes.join(format!("{key}.gen"));
+    match std::fs::read_to_string(&path) {
+        Ok(text) => text.trim().parse().map_err(|e| {
+            format!(
+                "Invalid checkpoint index generation {}: {e}",
+                path.display()
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(format!("Could not read {}: {error}", path.display())),
+    }
+}
+
+fn bump_generation(indexes: &Path, key: &str, generation: u64) -> Result<u64, String> {
+    let next = generation
+        .checked_add(1)
+        .ok_or("Checkpoint index generation overflow")?;
+    let path = indexes.join(format!("{key}.gen"));
+    // Published atomically, so a reader never sees half a number, and synced
+    // so a machine that loses power right after the rename does not read back
+    // an empty file and fail every later capture.
+    let staged = indexes.join(format!("{key}.gen.tmp"));
+    let mut file = std::fs::File::create(&staged).map_err(|e| e.to_string())?;
+    file.write_all(next.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    std::fs::rename(&staged, &path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    std::fs::File::open(indexes)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
+/// Longest a capture waits for another process's capture of the same
+/// workspace. The slowest cold capture here takes about 90s, so this never
+/// cuts a real capture short; past it the other owner is wedged.
+const CAPTURE_GUARD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CAPTURE_GUARD_POLL: Duration = Duration::from_millis(50);
+
+/// Held for a whole capture, so cooperating captures of one workspace run one
+/// at a time across app processes. Closing the file releases it, and the
+/// kernel does so when this process exits or dies, so a crash costs one failed
+/// capture rather than blocking the worktree until a lock file ages out.
+///
+/// It does not cover a `git` child that outlives a killed app: that child can
+/// still hold, and later rename, `Git`'s own lock. See `lost_index_lock`.
+struct CaptureGuard {
+    _file: std::fs::File,
+}
+
+impl CaptureGuard {
+    fn acquire(guard: &Path) -> Result<Self, String> {
+        Self::acquire_within(guard, CAPTURE_GUARD_TIMEOUT)
+    }
+
+    fn acquire_within(path: &Path, timeout: Duration) -> Result<Self, String> {
+        // The sidecar outlives each capture on purpose: removing it while an
+        // owner holds the old inode would let the next capture lock a new
+        // one.
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| format!("Could not open the capture guard {}: {e}", path.display()))?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(CAPTURE_GUARD_POLL)
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err(format!(
+                        "Another MonoCode instance is capturing this workspace: {}",
+                        path.display()
+                    ))
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(format!(
+                        "Could not lock the capture guard {}: {error}",
+                        path.display()
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Git could not take, or lost, the lock it writes the index through.
+fn lost_index_lock(error: &str) -> bool {
+    [
+        "index.lock",
+        // Git renames by path: a dead writer that finished first takes this
+        // capture's lock, so the rename that follows has no source file.
+        "unable to write new index file",
+    ]
+    .iter()
+    .any(|message| error.contains(message))
+}
+
+fn corrupt_index(error: &str) -> bool {
+    [
+        "index file corrupt",
+        "bad index file",
+        "index file smaller than expected",
+        "unknown index entry format",
+        "Unable to read index",
+    ]
+    .iter()
+    .any(|message| error.contains(message))
+}
+
+fn capture_workspace_once(
+    root: &Path,
+    repo: &Path,
+    reference: &str,
+    index: &Path,
+) -> Result<String, String> {
+    if run_git(repo, &["config", "--bool", "core.sparseCheckout"])
         .ok()
         .is_some_and(|bytes| bytes.starts_with(b"true"))
     {
         return Err("Workspace checkpoints are unavailable for sparse checkouts".into());
     }
-    let index = PrivateIndex(
-        std::env::temp_dir().join(format!("monocode-checkpoint-{}", uuid::Uuid::new_v4())),
-    );
-    let run = |args: &[&str]| {
-        checked_output(
-            git_command(root, args)
-                .env("GIT_INDEX_FILE", &index.0)
-                .env("GIT_AUTHOR_NAME", "MonoCode")
-                .env("GIT_AUTHOR_EMAIL", "checkpoint@monocode.local")
-                .env("GIT_COMMITTER_NAME", "MonoCode")
-                .env("GIT_COMMITTER_EMAIL", "checkpoint@monocode.local"),
-        )
-    };
-    if run_git(root, &["rev-parse", "--verify", "HEAD"]).is_ok() {
-        run(&["read-tree", "HEAD"])?;
+    let run = |dir: &Path, args: &[&str]| checked_output(&mut index_command(dir, index, args));
+    let has_head = run_git(repo, &["rev-parse", "--verify", "HEAD"]).is_ok();
+    if !index.exists() {
+        run(
+            repo,
+            if has_head {
+                &["read-tree", "HEAD"]
+            } else {
+                &["read-tree", "--empty"]
+            },
+        )?;
+    }
+    let head = if has_head {
+        run(
+            repo,
+            &["ls-tree", "-r", "-z", "--full-name", "HEAD", "--", "."],
+        )?
     } else {
-        run(&["read-tree", "--empty"])?;
+        Vec::new()
+    };
+    let listing = run(
+        repo,
+        &["ls-files", "-z", "--stage", "--full-name", "--", "."],
+    )?;
+    let indexed = nul_records(&listing)
+        .map(entry_path)
+        .collect::<Result<Vec<_>, String>>()?;
+    let present: HashSet<&[u8]> = indexed.iter().copied().collect();
+    let mut head_paths: HashSet<&[u8]> = HashSet::new();
+    let mut align = Vec::new();
+    for entry in nul_records(&head) {
+        let path = entry_path(entry)?;
+        head_paths.insert(path);
+        if !present.contains(path) {
+            // Keep the recorded mode and object id, including symlinks and
+            // submodules, and never rewrite an entry that still has stat data.
+            align.extend_from_slice(entry);
+            align.push(0);
+        }
+    }
+    if !align.is_empty() {
+        let (code, _, stderr) = run_with_input(
+            index_command(repo, index, &["update-index", "-z", "--index-info"]),
+            align,
+        )?;
+        if code != 0 {
+            return Err(stdin_failure(code, &stderr));
+        }
+    }
+    // Git applies no ignore rule to a path already in the index, so an entry
+    // Git stopped tracking would be captured again and its bytes written into
+    // the object database. Drop those before the add: a file HEAD tracks can
+    // legitimately match a rule, and those stay.
+    let ignored = run(
+        repo,
+        &[
+            "ls-files",
+            "-c",
+            "-i",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+        ],
+    )?;
+    let mut removals = Vec::new();
+    for path in nul_records(&ignored) {
+        if !head_paths.contains(path) {
+            removals.extend_from_slice(path);
+            removals.push(0);
+        }
+    }
+    if !removals.is_empty() {
+        let (code, _, stderr) = run_with_input(
+            index_command(
+                repo,
+                index,
+                &["update-index", "--force-remove", "-z", "--stdin"],
+            ),
+            removals,
+        )?;
+        if code != 0 {
+            return Err(stdin_failure(code, &stderr));
+        }
     }
     let durable = [
         "-c",
@@ -669,25 +968,34 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
         "-c",
         "core.fsyncMethod=fsync",
     ];
-    run(&[durable.as_slice(), &["add", "-A", "--", "."]].concat())?;
-    let tree = String::from_utf8(run(&[durable.as_slice(), &["write-tree"]].concat())?)
+    run(
+        root,
+        &[durable.as_slice(), &["add", "-A", "--", "."]].concat(),
+    )?;
+    let tree = String::from_utf8(run(repo, &[durable.as_slice(), &["write-tree"]].concat())?)
         .map_err(|e| e.to_string())?;
-    let commit = String::from_utf8(run(&[
-        durable.as_slice(),
+    let commit = String::from_utf8(run(
+        repo,
         &[
-            "commit-tree",
-            tree.trim(),
-            "-m",
-            "MonoCode workspace checkpoint",
-        ],
-    ]
-    .concat())?)
+            durable.as_slice(),
+            &[
+                "commit-tree",
+                tree.trim(),
+                "-m",
+                "MonoCode workspace checkpoint",
+            ],
+        ]
+        .concat(),
+    )?)
     .map_err(|e| e.to_string())?;
-    run(&[
-        durable.as_slice(),
-        &["update-ref", reference, commit.trim()],
-    ]
-    .concat())?;
+    run(
+        repo,
+        &[
+            durable.as_slice(),
+            &["update-ref", reference, commit.trim()],
+        ]
+        .concat(),
+    )?;
     Ok(commit.trim().to_string())
 }
 
