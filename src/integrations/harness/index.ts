@@ -108,6 +108,16 @@ export {
   respondAntigravityApproval,
   bindAntigravitySession,
 } from "./providers/antigravity/antigravity";
+export {
+  sendOpenCrabsTurn,
+  steerOpenCrabsTurn,
+  cancelOpenCrabsTurn,
+  respondOpenCrabsApproval,
+  stopOpenCrabsSession,
+  forgetOpenCrabsSession,
+  bindOpenCrabsSession,
+  compactOpenCrabsContext,
+} from "./providers/opencrabs/opencrabs";
 export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";
@@ -117,6 +127,7 @@ export {
   generateOmpSessionTitle,
 } from "./providers/pi/piTitle";
 export { generateGrokSessionTitle } from "./providers/grok/grokTitle";
+export { generateOpenCrabsSessionTitle } from "./providers/opencrabs/opencrabsTitle";
 export {
   generateCursorCommitMessage,
   generateCursorPrContent,
@@ -138,6 +149,10 @@ export {
   generateGrokCommitMessage,
   generateGrokPrContent,
 } from "./providers/grok/grokGit";
+export {
+  generateOpenCrabsCommitMessage,
+  generateOpenCrabsPrContent,
+} from "./providers/opencrabs/opencrabsGit";
 export {
   generateCommitMessage,
   generatePrContent,
