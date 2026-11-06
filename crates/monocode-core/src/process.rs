@@ -203,10 +203,16 @@ pub(crate) fn register(pid: u32) -> Registration {
         pid,
         identity: crate::resources::identity(pid),
     });
-    active()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(pid, agent);
+    let late = {
+        let mut processes = active().lock().unwrap_or_else(|e| e.into_inner());
+        processes.insert(pid, agent);
+        CHILDREN_KILLED.load(Ordering::SeqCst)
+    };
+    // It started after the quit's last look, so nothing else will stop it. It
+    // only just started, so it has no credential write to protect.
+    if late {
+        kill_group(pid);
+    }
     Registration(pid)
 }
 impl Drop for Registration {
@@ -237,6 +243,8 @@ pub fn shutdown_all() {
 pub const INTERRUPTED_BY_QUIT: &str = "Interrupted when MonoCode quit.";
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
+/// Set under the `active` lock when the quit takes its final list of children.
+static CHILDREN_KILLED: AtomicBool = AtomicBool::new(false);
 /// True once the app has begun quitting. A provider that fails now was killed
 /// by the quit, so its turn is interrupted rather than failed or finished.
 pub fn shutting_down() -> bool {
@@ -251,13 +259,13 @@ pub struct TurnRegistration(u64);
 pub fn register_turn(cancel: Arc<AtomicBool>) -> TurnRegistration {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    // Check under the lock: `cancel_turns` either sees this entry, or held the
+    // lock first and QUITTING is already visible here.
+    let mut registry = turns().lock().unwrap_or_else(|e| e.into_inner());
     if shutting_down() {
         cancel.store(true, Ordering::SeqCst);
     }
-    turns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id, cancel);
+    registry.insert(id, cancel);
     TurnRegistration(id)
 }
 impl Drop for TurnRegistration {
@@ -301,20 +309,15 @@ fn kill_children() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    let pids = registered();
+    // Past this point `register` stops a late child itself, since it can't be in
+    // this list. The flag and the list share the lock, so no child misses both.
+    let pids: Vec<_> = {
+        let processes = active().lock().unwrap_or_else(|e| e.into_inner());
+        CHILDREN_KILLED.store(true, Ordering::SeqCst);
+        processes.keys().copied().collect()
+    };
     for pid in pids {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-        #[cfg(windows)]
-        {
-            let mut c = Command::new("taskkill");
-            c.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(CREATE_NO_WINDOW);
-            let _ = c.status();
-        }
+        kill_group(pid);
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while !active()
@@ -324,6 +327,21 @@ fn kill_children() {
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn kill_group(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("taskkill");
+        c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(CREATE_NO_WINDOW);
+        let _ = c.status();
     }
 }
 
@@ -390,6 +408,65 @@ mod tests {
         drain_turns(std::time::Duration::from_secs(5));
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         worker.join().unwrap();
+    }
+    /// Quitting is process-wide and one-way, so a test that quits runs alone in
+    /// a fresh copy of this binary. True in that copy; the parent checks it.
+    fn runs_alone(test: &str) -> bool {
+        const ALONE: &str = "MONOCODE_QUIT_TEST_ALONE";
+        if std::env::var_os(ALONE).is_some() {
+            return true;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(ALONE, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+    #[test]
+    fn a_turn_registering_while_the_quit_cancels_turns_is_cancelled() {
+        if !runs_alone(
+            "process::tests::a_turn_registering_while_the_quit_cancels_turns_is_cancelled",
+        ) {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        // Holding the registry stops the worker at its lock, the point where a
+        // check made before locking has already seen no quit.
+        let registry = turns().lock().unwrap();
+        let worker = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || register_turn(cancel)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        // The quit's cancel pass runs now and cannot see this turn.
+        QUITTING.store(true, Ordering::SeqCst);
+        assert!(registry.is_empty());
+        drop(registry);
+        let _registration = worker.join().unwrap();
+        assert!(cancel.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn a_child_registering_after_the_quit_listed_children_is_killed() {
+        if !runs_alone(
+            "process::tests::a_child_registering_after_the_quit_listed_children_is_killed",
+        ) {
+            return;
+        }
+        let mut child = spawn("sleep 5");
+        shutdown_all();
+        let _registration = register(child.id());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the late child kept running");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     #[test]
     fn provider_child_does_not_inherit_executor_signal_mask() {
