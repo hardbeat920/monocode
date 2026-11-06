@@ -98,6 +98,7 @@ enum Choice {
     Time(String),
     Minute(String),
     Weekday(String),
+    Interval(String),
     ModelSetting(String),
 }
 struct ChoiceMenu {
