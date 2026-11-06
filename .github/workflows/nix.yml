@@ -1,0 +1,74 @@
+name: Nix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-hashes:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: nix-dependency-hashes
+      cancel-in-progress: false
+    outputs:
+      revision: ${{ steps.commit.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test scripts/update-nix-hashes.test.mjs
+      - run: node --test scripts/update-nix-hashes.integration.test.mjs
+        env:
+          MONOCODE_NIX_INTEGRATION: "1"
+      - run: node scripts/update-nix-hashes.mjs
+      - name: Commit refreshed hashes
+        id: commit
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- nix/dependency-hashes.json; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add nix/dependency-hashes.json
+            git commit -m 'nix(chore): Refresh dependency hashes'
+            git push origin HEAD:main
+          fi
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: update-hashes
+    if: always() && (needs.update-hashes.result == 'success' || needs.update-hashes.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.update-hashes.outputs.revision || github.sha }}
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test scripts/update-nix-hashes.test.mjs
+      - run: nix fmt -- --check flake.nix nix/package.nix
+      - run: node --test scripts/update-nix-hashes.integration.test.mjs
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          MONOCODE_NIX_INTEGRATION: "1"
+      - run: nix flake check --print-build-logs
