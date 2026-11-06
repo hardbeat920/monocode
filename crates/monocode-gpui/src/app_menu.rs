@@ -117,6 +117,7 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
             MenuItem::action("Notes", OpenNotes),
             MenuItem::action("Toggle Terminal", ToggleTerminal),
             MenuItem::action("Switch Model…", SwitchModel),
+            MenuItem::action("Change Effort…", ChangeEffort),
             MenuItem::separator(),
             MenuItem::action("Previous Session", PreviousSession),
             MenuItem::action("Next Session", NextSession),

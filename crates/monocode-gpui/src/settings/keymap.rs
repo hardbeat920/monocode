@@ -49,7 +49,7 @@ pub(crate) fn apply(prefs: &Preferences, cx: &mut App) {
     cx.bind_keys(bindings);
     cx.global_mut::<Defaults>().applied = prefs.keybindings.clone();
 }
-fn command(binding: &KeyBinding) -> Option<&'static str> {
+pub(super) fn command(binding: &KeyBinding) -> Option<&'static str> {
     let keys = binding.keystrokes().first()?.unparse();
     Some(match binding.action().name() {
         "workspace::GoToFile" => "App: Go to File",
@@ -60,6 +60,7 @@ fn command(binding: &KeyBinding) -> Option<&'static str> {
         "workspace::ToggleSidebar" => "App: Toggle Sidebar",
         "workspace::ToggleRightPanel" => "App: Toggle Session Sidebar",
         "workspace::SwitchModel" => "App: Switch Model",
+        "workspace::ChangeEffort" => "App: Change Effort",
         "workspace::NewCodex" if keys.ends_with("-t") => "Tab: New",
         "workspace::CloseOtherTabs" => "Tab: Close Others",
         "workspace::CloseAllTabs" => "Tab: Close All",
