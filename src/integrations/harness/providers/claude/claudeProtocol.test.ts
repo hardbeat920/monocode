@@ -154,6 +154,18 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).not.toContain("--permission-prompt-tool");
   });
 
+  it("disallows tools when disallowTools is true", () => {
+    const args = buildClaudeSpawnArgs({
+      isolated: true,
+      permissionMode: "plan",
+      maxTurns: 1,
+      disallowTools: true,
+    });
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "plan", "--max-turns", "1", "--tools", ""]),
+    );
+  });
+
   it("locks isolated read-only prompts to plan mode", () => {
     const args = buildClaudeSpawnArgs({
       isolated: true,
