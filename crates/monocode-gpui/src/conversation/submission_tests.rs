@@ -90,6 +90,46 @@ fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut
 }
 
 #[gpui::test]
+fn a_quit_stops_mono_dispatch_from_starting_or_steering_a_turn(cx: &mut TestAppContext) {
+    if !crate::runtime::runs_alone(
+        "conversation::submission_tests::a_quit_stops_mono_dispatch_from_starting_or_steering_a_turn",
+    ) {
+        return;
+    }
+    let window = conversation(cx);
+    let (send, receive) = std::sync::mpsc::channel();
+    monocode_core::process::shutdown_all();
+    window
+        .update(cx, |view, _, cx| {
+            view.configure_mono(
+                monocode_core::mono::Mono::default(),
+                "/tmp".into(),
+                Default::default(),
+                cx,
+            );
+            let message = monocode_core::mono::Message {
+                id: "next".into(),
+                text: "Next".into(),
+                sent_at: None,
+                internal: false,
+                error: None,
+                attachments: Vec::new(),
+            };
+            assert!(!view.mono_dispatch(&message, cx), "no new turn");
+            assert!(!view.busy);
+            assert!(view.settings.mono_message_id.is_none());
+
+            view.summary.provider = "codex".into();
+            view.busy = true;
+            view.follow_ups.ready = true;
+            view.controls = Some(send);
+            assert!(!view.mono_dispatch(&message, cx), "no steer");
+            assert!(receive.try_recv().is_err());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &mut TestAppContext) {
     for text in [
         "First message".to_owned(),
