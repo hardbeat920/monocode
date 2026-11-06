@@ -25,7 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_void, OsStr};
 use std::path::{Component, Path};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use objc2::rc::Retained;
@@ -67,7 +67,9 @@ const FLOATING_CORNER_RADIUS: f64 = 16.0;
 
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
-static PINNED: AtomicBool = AtomicBool::new(false);
+/// Labels of windows whose traffic lights are pinned. Per window, since every
+/// workspace window (⌘N, Dock reopen) gets its own AppKit buttons.
+static PINNED_WINDOWS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static BLUR_RADIUS: AtomicU8 = AtomicU8::new(BLUR_DEFAULT);
 static WINDOW_BADGES: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
 static GLASS_WINDOWS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -96,7 +98,17 @@ pub fn install(window: &WebviewWindow) {
     // Opaque for the dock bounce so the first frames are a solid field,
     // not a frosted desktop. Glass turns on after the first UI paint.
     prepare_launch(window);
-    let _ = pin(window);
+    // Later windows are built off the main thread (e.g. the async
+    // `open_new_window` command), and AppKit constraints are main-thread only.
+    let pin_window = window.clone();
+    let apply = move || {
+        pin(&pin_window);
+    };
+    if MainThreadMarker::new().is_some() {
+        apply();
+    } else {
+        let _ = window.app_handle().run_on_main_thread(apply);
+    }
 
     let event_window = window.clone();
     window.on_window_event(move |event| match event {
@@ -107,6 +119,10 @@ pub fn install(window: &WebviewWindow) {
             stretch_titlebar(&event_window);
         }
         WindowEvent::Destroyed => {
+            pinned_windows()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(event_window.label());
             set_window_badge(&event_window, 0);
             set_glass_enabled(&event_window, false);
         }
@@ -608,13 +624,32 @@ fn apply_blur(window: &WebviewWindow, radius: u8) {
     }
 }
 
+fn pinned_windows() -> &'static Mutex<HashSet<String>> {
+    PINNED_WINDOWS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 fn pin(window: &WebviewWindow) -> bool {
+    let label = window.label();
+    let pinned = || {
+        pinned_windows()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .contains(label)
+    };
     let Some(ns_window) = ns_window(window) else {
-        return PINNED.load(Ordering::Relaxed);
+        return pinned();
     };
     unsafe {
-        if !PINNED.load(Ordering::Relaxed) && !pin_ns_window(&ns_window) {
-            return false;
+        // Don't hold the lock across AppKit calls; activating constraints can
+        // deliver window events that re-enter `pin`.
+        if !pinned() {
+            if !pin_ns_window(&ns_window) {
+                return false;
+            }
+            pinned_windows()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .insert(label.to_string());
         }
         stretch_ns_window(&ns_window);
     }
@@ -686,7 +721,6 @@ unsafe fn pin_ns_window(window: &NSWindow) -> bool {
         top.setActive(true);
     }
 
-    PINNED.store(true, Ordering::Relaxed);
     true
 }
 
