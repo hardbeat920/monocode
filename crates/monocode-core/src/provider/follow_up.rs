@@ -308,6 +308,7 @@ for line in sys.stdin:
                     match event {
                         Event::Ready => controls
                             .send(Control {
+                                approval_instance: None,
                                 id: "test".into(),
                                 decision: Decision::Steer(Message {
                                     id: "test".into(),

@@ -278,7 +278,7 @@ struct Protocol {
     /// Streaming tool id and its partial input JSON, by content block index.
     claude_tools: HashMap<u64, (String, String)>,
     text_key: Option<String>,
-    approvals: HashMap<String, (Value, String, Value)>,
+    approvals: HashMap<String, (Value, String, Value, u64)>,
     metrics: TurnMetrics,
     usage_total: u64,
     acp: acp::State,
@@ -1055,11 +1055,13 @@ impl Protocol {
                 .and_then(|p| serde_json::to_string_pretty(p).ok())
                 .unwrap_or_else(|| "The agent is requesting permission to continue.".into());
         }
+        let instance = crate::agent::next_approval_instance();
         self.approvals
-            .insert(id.clone(), (wire, kind.into(), request));
+            .insert(id.clone(), (wire, kind.into(), request, instance));
         if self.request.settings.plan || self.request.settings.access == AccessMode::ReadOnly {
             return self.respond(
                 Control {
+                    approval_instance: None,
                     id,
                     decision: Decision::Deny,
                 },
@@ -1081,6 +1083,7 @@ impl Protocol {
         {
             return self.respond(
                 Control {
+                    approval_instance: None,
                     id,
                     decision: Decision::Allow,
                 },
@@ -1088,6 +1091,7 @@ impl Protocol {
             );
         }
         events.push(Event::Approval(Approval {
+            instance,
             id,
             title,
             detail,
@@ -1096,6 +1100,15 @@ impl Protocol {
         Ok(())
     }
     fn respond(&mut self, control: Control, stdin: &mut impl Write) -> Result<(), String> {
+        // A provider may replace an ID before its new event reaches the UI.
+        // Check the reviewed instance before consuming any pending request.
+        if control.approval_instance.is_some_and(|instance| {
+            self.approvals
+                .get(&control.id)
+                .is_none_or(|pending| pending.3 != instance)
+        }) {
+            return Ok(());
+        }
         if matches!(control.decision, Decision::KeepOpen) {
             if let Some((_, _, _, question)) = self.questions.get_mut(&control.id) {
                 question.auto_resolve_at = None;
@@ -1132,7 +1145,7 @@ impl Protocol {
             }
             return questions::respond(stdin, wire, &kind, &request, &question, control.decision);
         }
-        let Some((wire, kind, request)) = self.approvals.remove(&control.id) else {
+        let Some((wire, kind, request, _)) = self.approvals.remove(&control.id) else {
             return Ok(());
         };
         let allow = matches!(control.decision, Decision::Allow | Decision::Session);
@@ -1760,6 +1773,7 @@ fn run_operation(
                             if let Event::Approval(approval) = &event {
                                 protocol.respond(
                                     Control {
+                                        approval_instance: None,
                                         id: approval.id.clone(),
                                         decision: Decision::Deny,
                                     },
@@ -1769,6 +1783,7 @@ fn run_operation(
                             if let Event::Question(question) = &event {
                                 protocol.respond(
                                     Control {
+                                        approval_instance: None,
                                         id: question.id.clone(),
                                         decision: Decision::Deny,
                                     },
@@ -2076,6 +2091,100 @@ mod tests {
             .contains("Resume failed"));
     }
     #[test]
+    fn stale_approval_decisions_cannot_answer_reused_provider_ids() {
+        for (kind, frame) in [
+            (
+                Kind::Codex,
+                json!({"id":"same", "method":"item/commandExecution/requestApproval", "params":{"command":"git status"}}),
+            ),
+            (
+                Kind::Claude,
+                json!({"type":"control_request", "request_id":"same", "request":{"subtype":"can_use_tool", "tool_name":"Bash", "input":{"command":"git status"}}}),
+            ),
+            (
+                Kind::Pi,
+                json!({"type":"extension_ui_request", "id":"same", "method":"confirm", "title":"Run?", "message":"git status"}),
+            ),
+            (
+                Kind::Codex,
+                json!({"id":"same", "method":"mcpServer/elicitation/request", "params":{"mode":"form", "requestedSchema":{"type":"object", "properties":{}}}}),
+            ),
+        ] {
+            let mut p = protocol(kind);
+            let mut out = Vec::new();
+            let first = p
+                .frame(frame.clone(), &mut out)
+                .unwrap()
+                .into_iter()
+                .find_map(|event| {
+                    if let Event::Approval(approval) = event {
+                        Some(approval)
+                    } else {
+                        None
+                    }
+                })
+                .expect("first approval");
+            // Even an identical request is a new instance. The UI still shows `first`.
+            let replacement = p
+                .frame(frame, &mut out)
+                .unwrap()
+                .into_iter()
+                .find_map(|event| {
+                    if let Event::Approval(approval) = event {
+                        Some(approval)
+                    } else {
+                        None
+                    }
+                })
+                .expect("replacement approval");
+            assert_eq!(first.id, replacement.id);
+            assert_ne!(first.instance, replacement.instance);
+            assert!(out.is_empty());
+            for decision in [Decision::Allow, Decision::Session, Decision::Deny] {
+                p.respond(
+                    Control {
+                        id: first.id.clone(),
+                        approval_instance: Some(first.instance),
+                        decision,
+                    },
+                    &mut out,
+                )
+                .unwrap();
+                assert!(
+                    out.is_empty(),
+                    "a stale decision must never reach the provider"
+                );
+                assert!(p.approvals.contains_key(&replacement.id));
+            }
+            p.respond(
+                Control {
+                    id: replacement.id.clone(),
+                    approval_instance: Some(replacement.instance),
+                    decision: Decision::Allow,
+                },
+                &mut out,
+            )
+            .unwrap();
+            assert!(!out.is_empty(), "the current instance remains answerable");
+            assert!(!p.approvals.contains_key(&replacement.id));
+            out.clear();
+            p.respond(
+                Control {
+                    id: replacement.id,
+                    approval_instance: Some(replacement.instance),
+                    decision: Decision::Allow,
+                },
+                &mut out,
+            )
+            .unwrap();
+            assert!(
+                out.is_empty(),
+                "duplicate delivery is ignored after resolution"
+            );
+        }
+    }
+
+    #[test]
     fn approvals_wait_for_a_decision_and_keep_the_requested_input() {
         let mut codex = protocol(Kind::Codex);
         let mut out = Vec::new();
@@ -2090,6 +2199,7 @@ mod tests {
         codex
             .respond(
                 Control {
+                    approval_instance: Some(approval.instance),
                     id: approval.id.clone(),
                     decision: Decision::Deny,
                 },
@@ -2110,6 +2220,7 @@ mod tests {
         claude
             .respond(
                 Control {
+                    approval_instance: Some(approval.instance),
                     id: approval.id.clone(),
                     decision: Decision::Allow,
                 },

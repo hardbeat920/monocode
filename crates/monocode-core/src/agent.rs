@@ -214,11 +214,19 @@ impl TurnMetrics {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Approval {
+    /// Provider-created identity, distinct from the provider's reusable request ID.
+    pub instance: u64,
     pub id: String,
     pub title: String,
     pub detail: String,
     pub can_remember: bool,
 }
+pub fn next_approval_instance() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 #[derive(Clone, Debug)]
 pub enum Decision {
     Steer(crate::follow_up::Message),
@@ -250,6 +258,9 @@ pub struct Question {
     pub auto_resolve_at: Option<u64>,
 }
 pub struct Control {
+    /// Bind a displayed approval decision to the instance the user reviewed.
+    /// Protocol-owned actions and question responses do not bind an approval.
+    pub approval_instance: Option<u64>,
     pub id: String,
     pub decision: Decision,
 }

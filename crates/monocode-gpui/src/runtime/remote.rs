@@ -429,6 +429,8 @@ pub(crate) fn approvals(snapshot: &Value) -> Vec<Approval> {
                 return None;
             }
             Some(Approval {
+                // Remote delivery uses the bridge request ID rather than the native protocol.
+                instance: 0,
                 id: approval["requestId"].as_i64()?.to_string(),
                 title: block["tool"]["title"]
                     .as_str()

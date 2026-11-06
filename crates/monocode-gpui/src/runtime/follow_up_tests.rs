@@ -103,6 +103,7 @@ for line in sys.stdin:
         if update.turn_ready {
             controls
                 .send(Control {
+                    approval_instance: None,
                     id: message.id.clone(),
                     decision: Decision::Steer(message.clone()),
                 })

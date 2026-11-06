@@ -214,6 +214,7 @@ impl Conversation {
             if self.controls.as_ref().is_some_and(|controls| {
                 controls
                     .send(Control {
+                        approval_instance: None,
                         id: message.id.clone(),
                         decision: Decision::Steer(steer),
                     })

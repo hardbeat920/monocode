@@ -198,6 +198,7 @@ impl Protocol {
         if let Some(id) = expired {
             self.respond(
                 Control {
+                    approval_instance: None,
                     id: id.clone(),
                     decision: Decision::Deny,
                 },
@@ -345,6 +346,7 @@ mod tests {
         let mut out = Vec::new();
         p.respond(
             Control {
+                approval_instance: None,
                 id: question.id.clone(),
                 decision: Decision::Answer(answers),
             },
