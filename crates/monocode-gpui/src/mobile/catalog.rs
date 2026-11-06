@@ -142,6 +142,9 @@ pub(crate) fn session(
     if let Some(waiting) = live.and_then(|live| live.waiting) {
         value["waiting"] = json!(waiting);
     }
+    if let Some(item) = &summary.work_item {
+        value["workItem"] = json!({"kind": item.kind, "number": item.number});
+    }
     value
 }
 
@@ -255,6 +258,34 @@ mod tests {
         assert_eq!(changed["runtimeMode"], "full-access");
         assert_eq!(changed["waiting"], "approval");
         assert_eq!(changed["busy"], true);
+    }
+
+    #[test]
+    fn a_linked_pull_request_reaches_the_phone_row() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let mut summary = store.create("claude", "/project").unwrap();
+        let card = |summary: &Session| {
+            let saved = MobileSessionMetadata::default();
+            session(
+                summary,
+                "id",
+                "project",
+                &metadata(&saved, None),
+                None,
+                "main",
+            )
+        };
+        assert!(card(&summary).get("workItem").is_none());
+        summary.work_item = Some(monocode_core::session_groups::WorkItem {
+            kind: "pr".into(),
+            repo: "owner/repo".into(),
+            number: 1330,
+            url: "https://github.com/owner/repo/pull/1330".into(),
+        });
+        assert_eq!(
+            card(&summary)["workItem"],
+            json!({"kind":"pr","number":1330})
+        );
     }
 
     #[test]

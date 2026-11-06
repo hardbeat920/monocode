@@ -167,6 +167,19 @@ function SessionDetails({ session }: { session: SessionSummary }) {
             {session.branch || "No branch"}
           </Text>
         </View>
+        {session.workItem ? (
+          <View
+            style={styles.workItem}
+            accessibilityLabel={`${session.workItem.kind === "pr" ? "Pull request" : "Issue"} ${session.workItem.number}`}
+          >
+            <Icon
+              name={session.workItem.kind === "pr" ? "pullRequest" : "circle"}
+              size={13}
+              color={colors.accent}
+            />
+            <Text style={styles.workItemLabel}>#{session.workItem.number}</Text>
+          </View>
+        ) : null}
         <View style={styles.model}>
           {model ? (
             <Text style={styles.meta} numberOfLines={1}>
@@ -329,6 +342,16 @@ const useStyles = themedStyles((colors) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
+  },
+  workItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  workItemLabel: {
+    color: colors.accent,
+    fontSize: 13,
+    fontVariant: ["tabular-nums"],
   },
   model: {
     flexShrink: 1,
