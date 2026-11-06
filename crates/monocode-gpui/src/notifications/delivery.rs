@@ -135,12 +135,25 @@ pub fn clip_body(text: &str) -> String {
     clipped
 }
 
-/// Count sessions that need input, never individual requests. The badge is
-/// independent of notification opt-in, project muting, and visible sessions.
+/// Count sessions that need attention, never individual requests. One session
+/// counts once whether it waits for input, finished unseen, or both. The badge
+/// is independent of notification opt-in, project muting, and visible sessions.
 pub fn dock_badge_count(sessions: impl IntoIterator<Item = (i64, bool)>) -> usize {
     sessions
         .into_iter()
-        .filter_map(|(id, needs_input)| needs_input.then_some(id))
+        .filter_map(|(id, needs_attention)| needs_attention.then_some(id))
         .collect::<HashSet<_>>()
         .len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dock_badge_count;
+
+    #[test]
+    fn badge_counts_sessions_once_and_skips_quiet_ones() {
+        assert_eq!(dock_badge_count([(1, true), (1, true), (2, false)]), 1);
+        assert_eq!(dock_badge_count([(1, false), (2, false)]), 0);
+        assert_eq!(dock_badge_count([(1, true), (2, true)]), 2);
+    }
 }

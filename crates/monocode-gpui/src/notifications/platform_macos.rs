@@ -104,6 +104,14 @@ pub fn initialize() -> bool {
     true
 }
 
+/// The badge has its own switch: alerts can be off while badges are allowed.
+fn map_badge_settings(settings: &UNNotificationSettings) -> Permission {
+    match settings.badgeSetting() {
+        UNNotificationSetting::Enabled | UNNotificationSetting::NotSupported => Permission::Granted,
+        _ => Permission::Denied,
+    }
+}
+
 fn map_settings(settings: &UNNotificationSettings) -> Permission {
     match settings.authorizationStatus() {
         UNAuthorizationStatus::NotDetermined => Permission::Prompt,
@@ -202,14 +210,54 @@ pub fn drain_clicks() -> Vec<Target> {
         .unwrap_or_default()
 }
 
+/// Paint the Dock tile. Call on the main thread; a count of zero clears it.
 pub fn set_dock_badge(count: usize) {
     let Some(main) = MainThreadMarker::new() else {
         return;
     };
+    let tile = NSApplication::sharedApplication(main).dockTile();
+    tile.setShowsApplicationBadge(count > 0);
     let label = (count > 0).then(|| NSString::from_str(&count.to_string()));
-    NSApplication::sharedApplication(main)
-        .dockTile()
-        .setBadgeLabel(label.as_deref());
+    tile.setBadgeLabel(label.as_deref());
+    tile.display();
+}
+
+/// Since macOS 12, `NSDockTile` badge updates are ignored until the app holds
+/// the badge authorization. Only re-request once the user already answered the
+/// prompt: the one-time dialog stays reserved for the Notifications toggle.
+/// Returns the settings after the request, so the caller can repaint the badge
+/// it drew while the grant was still missing.
+pub fn request_badge_authorization() -> Option<Receiver<Permission>> {
+    MainThreadMarker::new()?;
+    let center = center()?;
+    let (sender, receiver) = mpsc::channel();
+    let handler = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+        if unsafe { settings.as_ref() }.authorizationStatus()
+            == UNAuthorizationStatus::NotDetermined
+        {
+            let _ = sender.send(Permission::Prompt);
+            return;
+        }
+        let sender = sender.clone();
+        let done = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
+            let Some(center) = self::center() else {
+                return;
+            };
+            let sender = sender.clone();
+            let query = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+                let _ = sender.send(map_badge_settings(unsafe { settings.as_ref() }));
+            });
+            center.getNotificationSettingsWithCompletionHandler(&query);
+        });
+        if let Some(center) = self::center() {
+            center.requestAuthorizationWithOptions_completionHandler(
+                UNAuthorizationOptions::Badge,
+                &done,
+            );
+        }
+    });
+    center.getNotificationSettingsWithCompletionHandler(&handler);
+    Some(receiver)
 }
 
 pub fn dismiss(tag: &str) {

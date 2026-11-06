@@ -119,6 +119,8 @@ impl Shell {
                                 view.update(cx, |v, _| v.summary.archived = true);
                             }
                             this.refresh_session_mark(id, cx);
+                            // Dropping the session must drop its badge count now.
+                            this.reconcile_dock_badge(cx);
                             if this.workspace.tab_of(id).is_some() {
                                 this.close_pane(id, window, cx);
                             }

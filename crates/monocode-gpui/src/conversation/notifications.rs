@@ -7,6 +7,10 @@ impl Conversation {
     pub(crate) fn notification_was_cancelled(&self) -> bool {
         self.notification_cancelled
     }
+    /// Cheap badge check: the badge only needs emptiness, not the labels.
+    pub(crate) fn has_pending_notification_inputs(&self) -> bool {
+        !self.approvals.is_empty() || !self.questions.is_empty()
+    }
     pub(crate) fn pending_notification_inputs(&self, cx: &gpui::App) -> Vec<PendingInput> {
         self.approvals
             .iter()
