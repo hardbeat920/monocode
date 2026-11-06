@@ -222,6 +222,12 @@ impl<'a, T: 'static> Context<'a, T> {
         self.app.notify(self.entity_state.entity_id);
     }
 
+    /// Like [`Self::notify`], for a change that keeps every element's size,
+    /// such as an animation step. See [`Window::view_layout_dirty`].
+    pub fn notify_paint(&mut self) {
+        self.app.notify_paint(self.entity_state.entity_id);
+    }
+
     /// Spawn the future returned by the given function.
     /// The function is provided a weak handle to the entity owned by this context and a context that can be held across await points.
     /// The returned task must be held or detached.

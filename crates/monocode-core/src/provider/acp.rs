@@ -97,6 +97,18 @@ pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), 
 }
 
 impl Protocol {
+    /// The native visual tools, plus a Mono's app tool.
+    fn mcp_servers(&self) -> Value {
+        let settings = &self.request.settings;
+        let mut servers = crate::visual_bridge::acp_servers(&settings.environment);
+        if let (Some(list), Some(app)) = (
+            servers.as_array_mut(),
+            crate::mono::bridge::acp_server(settings.mono.as_ref(), &settings.environment),
+        ) {
+            list.push(app);
+        }
+        servers
+    }
     pub(super) fn acp_cancel(&mut self, stdin: &mut impl Write) -> Result<(), String> {
         self.acp.cancelling = true;
         self.acp.deadline = None;
@@ -237,7 +249,7 @@ impl Protocol {
         self.acp_send(Stage::Initialize, "initialize", params, stdin)
     }
     fn acp_session(&mut self, stdin: &mut impl Write) -> Result<(), String> {
-        let mut params = json!({"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)});
+        let mut params = json!({"cwd":self.request.cwd,"mcpServers":self.mcp_servers()});
         if let Some(id) = &self.request.provider_id {
             params["sessionId"] = id.clone().into();
             if matches!(self.request.kind, Kind::Grok | Kind::Fx | Kind::Antigravity) {
@@ -251,7 +263,7 @@ impl Protocol {
         self.acp_new(stdin)
     }
     fn acp_new(&mut self, stdin: &mut impl Write) -> Result<(), String> {
-        let mut params = json!({"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)});
+        let mut params = json!({"cwd":self.request.cwd,"mcpServers":self.mcp_servers()});
         if self.request.kind == Kind::Grok {
             if self.request.settings.access == AccessMode::FullAccess {
                 params["_meta"] = json!({"yoloMode":true});
@@ -448,9 +460,6 @@ impl Protocol {
     fn acp_settings(&mut self, setup: &Value) {
         let kind = self.request.kind;
         let settings = &self.request.settings;
-        if kind == Kind::Hermes {
-            return;
-        }
         let mut selected = settings.model_settings.clone();
         if let Some(effort) = &settings.effort {
             selected
@@ -464,6 +473,9 @@ impl Protocol {
             selected
                 .entry("thinking".into())
                 .or_insert_with(|| thinking.to_string());
+        }
+        if kind == Kind::Hermes {
+            selected.retain(|id, _| id == "effort");
         }
         if kind == Kind::Grok {
             if let Some(effort) = selected
@@ -556,7 +568,7 @@ impl Protocol {
                 return self.acp_session(stdin);
             }
             Stage::Resume if !(kind == Kind::Antigravity && timed_out) => {
-                return self.acp_send(Stage::Load, "session/load", json!({"sessionId":self.request.provider_id,"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)}), stdin);
+                return self.acp_send(Stage::Load, "session/load", json!({"sessionId":self.request.provider_id,"cwd":self.request.cwd,"mcpServers":self.mcp_servers()}), stdin);
             }
             Stage::Load => {
                 let lower = detail.to_lowercase();
@@ -1450,6 +1462,27 @@ mod tests {
             }
             assert!(p.done);
         }
+    }
+    #[test]
+    fn hermes_sends_only_an_advertised_reasoning_effort() {
+        let mut p = protocol(Kind::Hermes);
+        p.request.settings.effort = Some("high".into());
+        p.request.settings.fast = true;
+        let setup = json!({"configOptions":[
+            {"id":"reasoning_effort","category":"thought_level","currentValue":"default","options":[{"value":"low"},{"value":"high"}]},
+            {"id":"fast","currentValue":"false","options":[{"value":"false"},{"value":"true"}]}
+        ]});
+        p.acp_settings(&setup);
+        assert_eq!(p.acp.options.len(), 1);
+        assert_eq!(p.acp.options[0].0, "session/set_config_option");
+        assert_eq!(p.acp.options[0].1["configId"], "reasoning_effort");
+        assert_eq!(p.acp.options[0].1["value"], "high");
+        p.acp.options.clear();
+        p.acp_settings(&json!({}));
+        assert!(p.acp.options.is_empty());
+        p.request.settings.effort = None;
+        p.acp_settings(&setup);
+        assert!(p.acp.options.is_empty());
     }
     #[test]
     fn resuming_mutes_replay_and_replaces_missing_sessions_like_the_desktop() {

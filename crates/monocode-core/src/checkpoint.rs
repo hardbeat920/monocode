@@ -1,5 +1,7 @@
 //! Git-backed recordings of workspace changes during a turn, ported from
 //! src-tauri/src/checkpoint/turn.rs. These snapshots record what changed.
+//! A turn's baseline keeps the previous turn's pending files as they were
+//! before it, so the latest recording covers the session's outstanding work.
 //! Shared reviews require successful edit evidence for each displayed file,
 //! without inferring which process owns individual lines. Synchronous: callers
 //! run these on a background executor.
@@ -210,6 +212,14 @@ impl Store {
             self.finish_turn(session_id, cwd, &pending.id)?;
             review = read_review(&dir)?.ok_or("Missing continued turn review")?;
         }
+        // Work the previous turn left pending keeps its original contents in
+        // this turn's baseline, so the review covers the session until it is
+        // kept, undone or committed. Every other file starts fresh.
+        let carried = if pending.is_none() {
+            self.pending_baseline(session_id, cwd, &review)
+        } else {
+            Carried::default()
+        };
         let mut turn = RecordedTurn {
             id: id.into(),
             before: pending.as_ref().and_then(|turn| turn.before.clone()),
@@ -221,14 +231,14 @@ impl Store {
                     .ok()
                     .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
             },
-            shared: pending.as_ref().is_some_and(|turn| turn.shared),
+            shared: pending.as_ref().is_some_and(|turn| turn.shared) || carried.shared,
             owner: Some(TurnOwner::current()),
             error: None,
             dismissed: BTreeSet::new(),
             edited: pending
                 .as_ref()
                 .map(|turn| turn.edited.clone())
-                .unwrap_or_default(),
+                .unwrap_or_else(|| carried.edited.clone()),
         };
         // Publish the pending state first. A failed baseline must not leave the
         // previous turn's card underneath the new response.
@@ -253,7 +263,12 @@ impl Store {
                 run_git(&root, &["update-ref", &reference, before])?;
                 Ok(before.clone())
             } else {
-                capture_workspace(&root, &reference)
+                let fresh = capture_workspace(&root, &reference)?;
+                if carried.files.is_empty() {
+                    Ok(fresh)
+                } else {
+                    overlay_baseline(&root, &fresh, &carried.files, &reference)
+                }
             }
         })();
         match capture {
@@ -298,6 +313,36 @@ impl Store {
         match error {
             Some(error) => Err(error),
             None => Ok(()),
+        }
+    }
+
+    /// The previous turn's still-pending files with their contents before it,
+    /// as its review shows them: not kept, undone or committed.
+    fn pending_baseline(&self, session_id: &str, cwd: &str, review: &TurnReview) -> Carried {
+        let Some(previous) = review.latest.as_ref().filter(|_| review.active.is_none()) else {
+            return Carried::default();
+        };
+        let Ok(Some(status)) = self.turn_status_inner(session_id, cwd, false) else {
+            return Carried::default();
+        };
+        let pending: HashSet<_> = status.files.iter().map(|f| f.relative.as_str()).collect();
+        let Ok(recorded) = changes(Path::new(&review.cwd), previous) else {
+            return Carried::default();
+        };
+        let files: Vec<_> = recorded
+            .into_iter()
+            .filter(|change| pending.contains(change.relative.as_str()))
+            .map(|change| (change.relative, change.before))
+            .collect();
+        Carried {
+            shared: previous.shared && !files.is_empty(),
+            edited: previous
+                .edited
+                .iter()
+                .filter(|path| pending.contains(path.as_str()))
+                .cloned()
+                .collect(),
+            files,
         }
     }
 
@@ -483,7 +528,20 @@ impl Store {
             .ok()
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
         let recorded = changes(&root, turn)?;
-        let resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
+        let mut resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
+        // Discarded outside the app, as from the changes panel: the file is
+        // back to its contents before the session, so nothing is pending.
+        resolved.extend(
+            recorded
+                .iter()
+                .filter(|change| {
+                    !turn.dismissed.contains(&change.relative)
+                        && !resolved.contains(&change.relative)
+                        && reverted(&root, change)
+                })
+                .map(|change| change.relative.clone())
+                .collect::<Vec<_>>(),
+        );
         if !resolved.is_empty() {
             // Dismiss accepted work durably so later edits cannot resurrect
             // this turn's card. Its saved snapshots remain available to review.
@@ -925,6 +983,73 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     Ok(commit.trim().to_string())
 }
 
+/// Files carried into a new turn's baseline from the turn before it.
+#[derive(Default)]
+struct Carried {
+    files: Vec<(String, Option<Blob>)>,
+    edited: BTreeSet<String>,
+    shared: bool,
+}
+
+/// `fresh` with each carried file put back as it was before the session's
+/// pending work: its earlier blob, or absent when the session created it.
+fn overlay_baseline(
+    root: &Path,
+    fresh: &str,
+    files: &[(String, Option<Blob>)],
+    reference: &str,
+) -> Result<String, String> {
+    let index =
+        PrivateIndex(std::env::temp_dir().join(format!("monocode-checkpoint-{}", unique_id())));
+    let run = |args: &[&str]| {
+        checked_output(
+            git_command(root, args)
+                .env("GIT_INDEX_FILE", &index.0)
+                .env("GIT_AUTHOR_NAME", "MonoCode")
+                .env("GIT_AUTHOR_EMAIL", "checkpoint@monocode.local")
+                .env("GIT_COMMITTER_NAME", "MonoCode")
+                .env("GIT_COMMITTER_EMAIL", "checkpoint@monocode.local"),
+        )
+    };
+    run(&["read-tree", fresh])?;
+    for (relative, blob) in files {
+        match blob {
+            Some(blob) => run(&[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("{},{},{relative}", blob.mode, blob.oid),
+            ])?,
+            None => run(&["update-index", "--force-remove", "--", relative])?,
+        };
+    }
+    let durable = [
+        "-c",
+        "core.fsync=objects,reference",
+        "-c",
+        "core.fsyncMethod=fsync",
+    ];
+    let tree = String::from_utf8(run(&[durable.as_slice(), &["write-tree"]].concat())?)
+        .map_err(|e| e.to_string())?;
+    let commit = String::from_utf8(run(&[
+        durable.as_slice(),
+        &[
+            "commit-tree",
+            tree.trim(),
+            "-m",
+            "MonoCode workspace checkpoint",
+        ],
+    ]
+    .concat())?)
+    .map_err(|e| e.to_string())?;
+    run(&[
+        durable.as_slice(),
+        &["update-ref", reference, commit.trim()],
+    ]
+    .concat())?;
+    Ok(commit.trim().to_string())
+}
+
 fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
     let before = turn.before.as_deref().ok_or("Missing turn baseline")?;
     let after = turn.after.as_deref().ok_or("Missing turn result")?;
@@ -1060,6 +1185,39 @@ fn git_paths(root: &Path, args: &[&str]) -> Result<HashSet<String>, String> {
         .collect()
 }
 
+/// The file is back to its recorded baseline: absent when the session
+/// created it, or a regular file with the earlier blob and mode.
+fn reverted(root: &Path, change: &Change) -> bool {
+    if path_contains_symlink(root, &change.relative) {
+        return false;
+    }
+    workspace_matches(root, &change.relative, change.before.as_ref())
+}
+
+fn workspace_matches(root: &Path, relative: &str, blob: Option<&Blob>) -> bool {
+    let path = root.join(relative);
+    match (blob, std::fs::symlink_metadata(&path)) {
+        (None, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
+        (Some(blob), Ok(meta)) if meta.is_file() => {
+            if !matches!(blob.mode.as_str(), "100644" | "100755") {
+                return false;
+            }
+            let mode = if file_mode(&path).is_some_and(|mode| mode & 0o111 != 0) {
+                "100755"
+            } else {
+                "100644"
+            };
+            mode == blob.mode
+                && run_git(
+                    root,
+                    &["hash-object", &format!("--path={relative}"), "--", relative],
+                )
+                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).trim() == blob.oid)
+        }
+        _ => false,
+    }
+}
+
 fn restorable(root: &Path, change: &Change) -> bool {
     if path_contains_symlink(root, &change.relative)
         || [change.before.as_ref(), change.after.as_ref()]
@@ -1069,29 +1227,7 @@ fn restorable(root: &Path, change: &Change) -> bool {
     {
         return false;
     }
-    let path = root.join(&change.relative);
-    match (&change.after, std::fs::symlink_metadata(&path)) {
-        (None, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
-        (Some(after), Ok(meta)) if meta.is_file() => {
-            let mode = if file_mode(&path).is_some_and(|mode| mode & 0o111 != 0) {
-                "100755"
-            } else {
-                "100644"
-            };
-            mode == after.mode
-                && run_git(
-                    root,
-                    &[
-                        "hash-object",
-                        &format!("--path={}", change.relative),
-                        "--",
-                        &change.relative,
-                    ],
-                )
-                .is_ok_and(|bytes| String::from_utf8_lossy(&bytes).trim() == after.oid)
-        }
-        _ => false,
-    }
+    workspace_matches(root, &change.relative, change.after.as_ref())
 }
 
 fn read_blob(root: &Path, blob: Option<&Blob>) -> Result<FileState, String> {

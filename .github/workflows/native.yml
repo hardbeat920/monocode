@@ -2,7 +2,7 @@ name: Monocode Native Preview
 
 on:
   push:
-    branches: [mc/migrate-monocode-to-gpui]
+    branches: [main, mc/migrate-monocode-to-gpui]
   workflow_dispatch:
   pull_request:
     paths:

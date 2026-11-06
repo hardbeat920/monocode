@@ -41,7 +41,7 @@ approval for every edit. Native Supervised mode does not add that guarantee.
 | Inbox | Runtime/visual checks, inline video, linked-update notices and richer CI evidence/repair progress |
 | Notes | Runtime/visual checks and composer note-card presentation |
 | Automations | Scheduler, provider and recovery checks; current implementation has source review only |
-| Monos | Existing-data checks, HTML accessibility, floating-document interactions and durable orchestration recovery |
+| Monos | Existing-data checks, live heartbeat and background delegation checks, native visual/document accessibility, floating-document interactions and durable orchestration recovery |
 | Remote connections | Real-machine installation/update, existing-data restoration and cross-platform checks; the existing host's feature limits still apply |
 | Integrations | Completion/approval notifications, sounds and Dock badges; Quick Composer attachments/shortcut checks, MCP/skills checks and remaining app-control endpoints. macOS reminder delivery and click routing passed on Oct 22 |
 | Shared data | Concurrent Tauri/native use with active scheduled tasks or phone connections remains unverified and deferred |
@@ -55,8 +55,10 @@ packaged upgrades.
 On October 25, a Linux ARM64 source build was launched and exercised in an
 Ubuntu 24.04 Noodle VM using Rust 1.98 and a VM-specific graphics workaround.
 This covered launch and basic UI interaction, not live provider requests or
-installation/upgrades of the downloadable Linux x64 packages. Windows GUI
-execution remains unverified.
+installation/upgrades of the downloadable Linux x64 packages. On October 27,
+a Windows 10 x64 source build passed manual title-bar interaction checks;
+broader Windows GUI behavior and the downloadable packages still need runtime
+testing.
 
 On Linux and Windows, HTML panels currently use a text fallback, native
 notification delivery is unavailable, and media hosting still needs platform support.
@@ -64,8 +66,8 @@ Windows close-to-tray behavior also needs implementation/verification.
 Desktop webview preferences (theme, projects, model defaults, and related
 settings) are read from the installed app on Linux as well as macOS. The Windows
 WebView2 reader has synthetic fixture coverage on Linux; real Windows profile
-compatibility and Windows execution remain unverified. The reader opens only a
-temporary copy; copying an actively written profile is best-effort.
+compatibility remains unverified. The reader opens only a temporary copy;
+copying an actively written profile is best-effort.
 
 The preview workflow checks core on macOS, Linux and Windows, but checks/builds
 the GUI only on macOS.

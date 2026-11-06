@@ -1378,13 +1378,12 @@ fn blur() -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             // Keep the tint on the blur quad itself. GPUI treats a fully
             // transparent fill as border-only and strips its interior.
-            let quad = gpui::fill(bounds, content(0.02)).border_color(
-                gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
-            );
-            #[cfg(not(target_os = "macos"))]
+            let quad = gpui::fill(bounds, content(0.02))
+                .border_color(gpui::backdrop_blur_marker(24. * window.scale_factor()));
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let quad = gpui::fill(bounds, rgb(CHAT));
             window.paint_quad(quad);
         },
@@ -1540,7 +1539,7 @@ impl Render for DiffView {
                             .rounded_lg()
                             .border_1()
                             .border_color(content(0.1))
-                            .bg(rgb(crate::right_panel::BACKGROUND_BASE).opacity(0.7))
+                            .bg(crate::theme::background_base().opacity(0.7))
                             .px(px(10.))
                             .py_2()
                             .text_size(px(13.))
@@ -1575,12 +1574,12 @@ impl Render for DiffView {
                                     .bg(content(1.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(crate::right_panel::BACKGROUND_BASE))
+                                    .text_color(crate::theme::background_base())
                                     .when(!can_add, |d| d.opacity(0.4))
                                     .when(can_add, |d| d.hover(|s| s.opacity(0.8)))
                                     .child(
                                         icon("comment-add", 14.)
-                                            .text_color(rgb(crate::right_panel::BACKGROUND_BASE)),
+                                            .text_color(crate::theme::background_base()),
                                     )
                                     .child("Add to chat")
                                     .when(can_add, |d| {
@@ -1879,8 +1878,7 @@ mod tests {
         cx.refresh().unwrap();
         window
             .update(cx, |_, window, _| {
-                let marker =
-                    gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor());
+                let marker = gpui::backdrop_blur_marker(24. * window.scale_factor());
                 let quads = window.painted_quads();
                 let glass = quads.iter().find(|q| q.border_color == marker).expect(
                     "the sticky header's blur must survive GPUI's transparent-quad culling",

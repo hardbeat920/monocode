@@ -3,18 +3,21 @@
 use gpui::{
     App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element,
     ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, GlobalElementId, Hsla, InspectorElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString, Style,
-    TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
-    point, prelude::*, px, relative, rgb, size,
+    Focusable, GlobalElementId, Hsla, ImgResourceLoader, InspectorElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Resource, Role,
+    SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
+    actions, div, fill, point, prelude::*, px, relative, rgb, size,
 };
 use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod code;
 mod command;
+mod context_menu;
+mod mention;
 mod spelling;
 pub(crate) use command::{Command, CommandRemoved};
+use mention::{DisplayLayout, MentionIcon};
 
 const MAX_BYTES: usize = 64 * 1024;
 const LINE_HEIGHT: f32 = 22.;
@@ -72,6 +75,9 @@ actions!(
     ]
 );
 pub struct Submitted;
+/// Cmd/Ctrl+Enter in a composer that sends either way, asking for the
+/// opposite of its usual follow-up behavior.
+pub struct AlternateSubmitted;
 pub struct Changed;
 pub(crate) enum CodeAction {
     Stage(usize),
@@ -195,6 +201,7 @@ pub fn bind(cx: &mut App) {
 }
 
 pub struct Input {
+    context_menu: Option<context_menu::EditingMenu>,
     code: Option<code::Code>,
     focus: FocusHandle,
     height: f32,
@@ -212,6 +219,8 @@ pub struct Input {
     max_height: f32,
     /// A textarea that takes Enter as a newline and submits on Cmd/Ctrl+Enter.
     secondary_submit: bool,
+    /// Emit [`AlternateSubmitted`] on Cmd/Ctrl+Enter instead of ignoring it.
+    alternate_submit: bool,
     pub content: SharedString,
     selection: Range<usize>,
     reversed: bool,
@@ -231,6 +240,7 @@ pub struct Input {
     autoscroll: Option<gpui::Task<()>>,
 }
 impl EventEmitter<Submitted> for Input {}
+impl EventEmitter<AlternateSubmitted> for Input {}
 impl EventEmitter<Changed> for Input {}
 impl EventEmitter<Rejected> for Input {}
 impl EventEmitter<CodeAction> for Input {}
@@ -246,6 +256,7 @@ impl Input {
     }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            context_menu: None,
             code: None,
             focus: cx.focus_handle(),
             height: MIN_HEIGHT,
@@ -262,6 +273,7 @@ impl Input {
             min_height: MIN_HEIGHT,
             max_height: MAX_HEIGHT,
             secondary_submit: false,
+            alternate_submit: false,
             content: "".into(),
             selection: 0..0,
             reversed: false,
@@ -303,6 +315,21 @@ impl Input {
         input.placeholder_alpha = Some(placeholder_color.a);
         // Picker search fields are `text-[13px]`.
         input.font_size = 13.;
+        input
+    }
+    /// The large single-line field heading a command panel.
+    pub fn command_field(
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut input = Self::search(cx);
+        input.label = label.into();
+        input.placeholder = placeholder.into();
+        input.placeholder_alpha = Some(0.38);
+        input.font_size = 17.;
+        input.line_height = 24.;
+        input.height = 24.;
         input
     }
     /// GitChangesPanel's commit message: a one-row `text-[13px] leading-5`
@@ -376,15 +403,23 @@ impl Input {
         input.height = 25.;
         input
     }
+    /// The session composer: one line tall until the text grows.
+    pub fn session_composer(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.min_height = LINE_HEIGHT;
+        input.height = LINE_HEIGHT;
+        input
+    }
+    /// The Mono chat's composer, as tall as the session composer.
     pub(crate) fn mono_composer(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.min_height != 18. {
-            self.height = 18.;
+        if self.min_height != LINE_HEIGHT {
+            self.height = LINE_HEIGHT;
         }
         self.label = format!("Message {name}").into();
         self.placeholder = self.label.clone();
         self.font_size = 13.;
-        self.line_height = 18.;
-        self.min_height = 18.;
+        self.line_height = LINE_HEIGHT;
+        self.min_height = LINE_HEIGHT;
         self.max_height = 144.;
         self.height = self.height.clamp(self.min_height, self.max_height);
         cx.notify();
@@ -421,6 +456,9 @@ impl Input {
             self.placeholder = text;
             cx.notify();
         }
+    }
+    pub(crate) fn set_alternate_submit(&mut self, value: bool) {
+        self.alternate_submit = value;
     }
     pub(crate) fn set_read_only(&mut self, value: bool) {
         self.read_only = value;
@@ -765,9 +803,7 @@ impl Input {
         if self.code.is_some() {
             return self.code_position(at);
         }
-        let at = self
-            .command_layout()
-            .map_or(at, |command| command.to_display(at));
+        let at = self.display_layout().to_display(at);
         let mut base = 0;
         let mut y = px(0.);
         for line in &self.lines {
@@ -799,9 +835,7 @@ impl Input {
                     + line
                         .closest_index_for_position(point(p.x, y.max(px(0.))), self.line_height())
                         .unwrap_or_else(|ix| ix);
-                let at = self
-                    .command_layout()
-                    .map_or(at, |command| command.to_source(at));
+                let at = self.display_layout().to_source(at);
                 return self.clip_offset(at);
             }
             y -= h;
@@ -1001,10 +1035,16 @@ impl Input {
         }
     }
     fn submit_secondary(&mut self, _: &SubmitSecondary, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.secondary_submit {
+        if self.secondary_submit {
+            if self.marked.is_none() {
+                cx.emit(Submitted);
+            }
+        } else if self.alternate_submit {
+            if self.marked.is_none() {
+                cx.emit(AlternateSubmitted);
+            }
+        } else {
             cx.propagate();
-        } else if self.marked.is_none() {
-            cx.emit(Submitted);
         }
     }
     fn paste(&mut self, _: &Paste, w: &mut Window, cx: &mut Context<Self>) {
@@ -1024,6 +1064,10 @@ impl Input {
         self.replace_text_in_range(None, "", w, cx);
     }
     fn mouse_down(&mut self, e: &MouseDownEvent, w: &mut Window, cx: &mut Context<Self>) {
+        if cfg!(target_os = "macos") && e.modifiers.control {
+            self.open_context_menu(e, w, cx);
+            return;
+        }
         #[cfg(target_os = "macos")]
         crate::traffic_lights::focus_content(w);
         if self.code_fold_down(e, cx) || self.code_scrollbar_down(e, w, cx) {
@@ -1408,7 +1452,7 @@ struct InputElement {
 struct PaintState {
     lines: Vec<WrappedLine>,
     scroll: Point<Pixels>,
-    command: Option<command::CommandLayout>,
+    layout: DisplayLayout,
 }
 impl IntoElement for InputElement {
     type Element = Self;
@@ -1486,7 +1530,8 @@ impl Element for InputElement {
         let i = self.input.read(cx);
         let style = w.text_style();
         let placeholder = i.content.is_empty();
-        let (text, command) = i.display_text();
+        let (text, layout) = i.display_text();
+        let command = layout.command;
         let run = TextRun {
             len: text.len(),
             font: style.font(),
@@ -1502,7 +1547,8 @@ impl Element for InputElement {
             underline: None,
             strikethrough: None,
         };
-        let to_display = |at| command.map_or(at, |command| command.to_display(at));
+        let to_display = |at| layout.to_display(at);
+        // Mentions read as plain ink beside their icon; other tokens take the accent.
         let highlights: Vec<_> = if placeholder {
             Vec::new()
         } else {
@@ -1513,7 +1559,10 @@ impl Element for InputElement {
                         && i.content.is_char_boundary(range.start)
                         && i.content.is_char_boundary(range.end)
                 })
-                .map(|range| to_display(range.start)..to_display(range.end))
+                .map(|range| {
+                    let mention = layout.mentions.iter().any(|(at, _)| *at == range.start);
+                    (to_display(range.start)..to_display(range.end), mention)
+                })
                 .collect()
         };
         let marked = i
@@ -1521,7 +1570,11 @@ impl Element for InputElement {
             .as_ref()
             .map(|range| to_display(range.start)..to_display(range.end));
         let mut boundaries = vec![0, text.len()];
-        for range in highlights.iter().chain(marked.iter()) {
+        for range in highlights
+            .iter()
+            .map(|(range, _)| range)
+            .chain(marked.iter())
+        {
             boundaries.extend([range.start, range.end]);
         }
         if let Some(command) = command {
@@ -1538,8 +1591,14 @@ impl Element for InputElement {
                     crate::theme::content(0.)
                 } else if let Some(command) = command.filter(|c| c.name_range().contains(&at)) {
                     command.mode.color()
-                } else if highlights.iter().any(|range| range.contains(&at)) {
-                    crate::theme::accent_color()
+                } else if let Some((_, mention)) =
+                    highlights.iter().find(|(range, _)| range.contains(&at))
+                {
+                    if *mention {
+                        crate::theme::content(1.)
+                    } else {
+                        crate::theme::accent_color()
+                    }
                 } else {
                     run.color
                 };
@@ -1625,7 +1684,7 @@ impl Element for InputElement {
         PaintState {
             lines,
             scroll: point(scroll_x, scroll_y),
-            command,
+            layout,
         }
     }
     fn paint(
@@ -1641,7 +1700,7 @@ impl Element for InputElement {
         paint_drag_listener(&self.input, w, cx);
         let i = self.input.read(cx);
         let focus = i.focus.clone();
-        let to_display = |at| state.command.map_or(at, |command| command.to_display(at));
+        let to_display = |at| state.layout.to_display(at);
         let selection = to_display(i.selection.start)..to_display(i.selection.end);
         let cursor = to_display(i.cursor());
         let line_height = i.line_height();
@@ -1693,6 +1752,54 @@ impl Element for InputElement {
                         }
                     }
                     let _ = line.paint(point(x, y), line_height, TextAlign::Left, None, w, cx);
+                    for (source, icon) in &state.layout.mentions {
+                        let at = to_display(*source);
+                        if at < base || at >= base + line.len() {
+                            continue;
+                        }
+                        // Centered in the em blank; the thin blank after it is the gap.
+                        let (Some(a), Some(b)) = (
+                            line.position_for_index(at - base, line_height),
+                            line.position_for_index(at + mention::ICON_LEN - base, line_height),
+                        ) else {
+                            continue;
+                        };
+                        let side = px(mention::ICON_SIDE);
+                        let icon_bounds = Bounds::new(
+                            point(
+                                x + (a.x + b.x.max(a.x)) / 2. - side / 2.,
+                                y + a.y + (line_height - side) / 2.,
+                            ),
+                            size(side, side),
+                        );
+                        match icon {
+                            MentionIcon::File(asset) => {
+                                if let Some(Ok(image)) = w.use_asset::<ImgResourceLoader>(
+                                    &Resource::Embedded(asset.clone()),
+                                    cx,
+                                ) {
+                                    let _ = w.paint_image(
+                                        bounds,
+                                        icon_bounds,
+                                        Default::default(),
+                                        image,
+                                        0,
+                                        false,
+                                    );
+                                }
+                            }
+                            MentionIcon::Note => {
+                                let _ = w.paint_svg(
+                                    icon_bounds,
+                                    "note".into(),
+                                    None,
+                                    Default::default(),
+                                    crate::theme::accent_color(),
+                                    cx,
+                                );
+                            }
+                        }
+                    }
                     if focus.is_focused(w)
                         && selection.is_empty()
                         && cursor >= base
@@ -1710,7 +1817,7 @@ impl Element for InputElement {
                 base += line.len() + 1;
                 y += height;
             }
-            if let Some(command) = state.command {
+            if let Some(command) = state.layout.command {
                 let icon_bounds = Bounds::new(
                     bounds.origin
                         + point(
@@ -1818,6 +1925,7 @@ impl Render for Input {
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::submit_secondary))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::open_context_menu))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
@@ -1829,12 +1937,44 @@ impl Render for Input {
             .children(self.code_tooltip())
             .children(self.completion_popup(cx))
             .children(self.hunk_actions(cx))
+            .children(self.editing_menu(cx))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[::core::prelude::v1::test]
+    fn mention_tokens_pick_their_file_icon() {
+        let asset = |token| match MentionIcon::of(token) {
+            Some(MentionIcon::File(asset)) => asset.to_string(),
+            Some(MentionIcon::Note) => "note".into(),
+            None => String::new(),
+        };
+        assert_eq!(asset("@src/main.rs"), "mi/rust.svg");
+        assert_eq!(asset("@\"docs/My Notes.md\""), "mi/markdown.svg");
+        assert_eq!(asset("@note/todo"), "note");
+        assert_eq!(asset("/plan"), "");
+    }
+    #[::core::prelude::v1::test]
+    fn mention_slots_map_offsets_both_ways() {
+        let source = "see @a.rs and @b.md";
+        let layout = DisplayLayout {
+            command: None,
+            mentions: vec![(4, MentionIcon::Note), (14, MentionIcon::Note)],
+        };
+        let display = layout.apply(source.into());
+        assert_eq!(
+            display.as_ref(),
+            "see \u{2003}\u{2009}a.rs and \u{2003}\u{2009}b.md"
+        );
+        for at in 0..=source.len() {
+            assert_eq!(layout.to_source(layout.to_display(at)), at);
+        }
+        // Clicking inside a blank lands on the nearer side of its `@`.
+        assert_eq!(layout.to_source(4 + 3), 4);
+        assert_eq!(layout.to_source(4 + 6), 5);
+    }
     #[::core::prelude::v1::test]
     fn utf16_and_bounded_paste_respect_unicode() {
         assert_eq!(from16("a🙂漢", 1), 1);
@@ -1852,6 +1992,7 @@ mod native_input_tests {
     fn field(cx: &mut TestAppContext, single_line: bool) -> WindowHandle<Input> {
         let window = cx.update(|cx| {
             bind(cx);
+            crate::popover::bind(cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -1876,6 +2017,106 @@ mod native_input_tests {
         cx.refresh().unwrap();
         window
     }
+    #[gpui::test]
+    fn context_menu_preserves_selection_copies_pastes_and_restores_focus(cx: &mut TestAppContext) {
+        let window = field(cx, false);
+        replace(window, "hello world", cx);
+        window
+            .update(cx, |input, _, cx| input.select_range(0..5, cx))
+            .unwrap();
+        cx.refresh().unwrap();
+        let position = window
+            .update(cx, |input, _, _| input.position(2) + point(px(0.), px(8.)))
+            .unwrap();
+        cx.update_window(window.into(), |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::MouseDown(MouseDownEvent {
+                    position,
+                    button: MouseButton::Right,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        window
+            .update(cx, |input, _, _| {
+                assert!(input.context_menu.is_some());
+                assert_eq!(input.selection, 0..5);
+                assert!(!input.selecting);
+            })
+            .unwrap();
+        // Cut is first, Copy second. Exercise the real menu's keyboard path.
+        cx.simulate_keystrokes(window.into(), "down enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, cx| {
+                assert!(input.context_menu.is_none());
+                assert!(input.focus.is_focused(w));
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some("hello")
+                );
+                assert_eq!(input.content.as_ref(), "hello world");
+                cx.write_to_clipboard(ClipboardItem::new_string("replacement".into()));
+                input.open_context_menu(
+                    &MouseDownEvent {
+                        position,
+                        button: MouseButton::Right,
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window.into(), "down down enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, _| {
+                assert_eq!(input.content.as_ref(), "replacement world");
+                assert!(input.focus.is_focused(w));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn context_menu_moves_caret_outside_selection_and_escape_preserves_text(
+        cx: &mut TestAppContext,
+    ) {
+        let window = field(cx, true);
+        replace(window, "hello world", cx);
+        window
+            .update(cx, |input, w, cx| {
+                input.select_range(0..2, cx);
+                input.open_context_menu(
+                    &MouseDownEvent {
+                        position: input.position(8) + point(px(0.), px(8.)),
+                        button: MouseButton::Right,
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert_eq!(input.selection, 8..8);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, _| {
+                assert!(input.context_menu.is_none());
+                assert!(input.focus.is_focused(w));
+                assert_eq!(input.content.as_ref(), "hello world");
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn bounded_textarea_wheel_scroll_survives_repaint_and_typing_reveals_caret(
         cx: &mut TestAppContext,

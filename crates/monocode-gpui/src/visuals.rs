@@ -16,7 +16,7 @@ use std::{
 };
 
 mod charts;
-mod dither;
+pub(crate) mod dither;
 mod scene;
 #[cfg(test)]
 mod tests;

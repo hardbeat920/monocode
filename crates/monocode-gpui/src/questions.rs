@@ -119,10 +119,23 @@ impl QuestionCard {
     pub(crate) fn id(&self) -> &str {
         &self.request.id
     }
+    /// What the agent asked, for a paired phone to show.
+    pub(crate) fn request(&self) -> &Question {
+        &self.request
+    }
+    /// A phone's reply, as though given here: the same answer event, so the
+    /// conversation sends and clears it as for the card's own.
+    pub(crate) fn reply(&mut self, answers: Option<Vec<Vec<String>>>, cx: &mut Context<Self>) {
+        cx.emit(Answered {
+            id: self.request.id.clone(),
+            answers,
+        });
+    }
     pub(crate) fn blocks_steering(&self) -> bool {
         self.request.auto_resolve_at.is_none()
     }
-    fn keep_open(&mut self, cx: &mut Context<Self>) {
+    /// Stops a timed question from resolving itself while it is answered.
+    pub(crate) fn keep_open(&mut self, cx: &mut Context<Self>) {
         if self.request.auto_resolve_at.take().is_some() {
             cx.emit(KeptOpen {
                 id: self.request.id.clone(),
@@ -647,15 +660,15 @@ impl Render for QuestionCard {
                     |_, _, _| {},
                     move |bounds, _, window, _| {
                         let surface = gpui::fill(bounds, fill).corner_radii(px(RADIUS - 1.));
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
                         let surface = if blur > 0. {
-                            surface.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
+                            surface.border_color(gpui::backdrop_blur_marker(
                                 blur * window.scale_factor(),
                             ))
                         } else {
                             surface
                         };
-                        #[cfg(not(target_os = "macos"))]
+                        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                         let _ = blur;
                         window.paint_quad(surface);
                     },

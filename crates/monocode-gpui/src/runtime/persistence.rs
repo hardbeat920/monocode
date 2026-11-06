@@ -318,6 +318,44 @@ mod tests {
     }
 
     #[test]
+    fn a_message_launched_as_the_app_quits_stays_queued_and_undelivered() {
+        if !crate::runtime::runs_alone(
+            "runtime::persistence::tests::a_message_launched_as_the_app_quits_stays_queued_and_undelivered",
+        ) {
+            return;
+        }
+        let (store, id, transcript) = conversation();
+        let summary = locked(&store).unwrap().sessions().unwrap().pop().unwrap();
+        let (tx, rx) = async_channel::bounded(2);
+        let (_control, controls) = std::sync::mpsc::channel();
+        monocode_core::process::shutdown_all();
+        run_turn(
+            summary,
+            "Next".into(),
+            Settings {
+                mono_message_id: Some("queued".into()),
+                ..Default::default()
+            },
+            controls,
+            store.clone(),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+        );
+        let store = locked(&store).unwrap();
+        assert_eq!(
+            store
+                .setting(&format!("mono-delivered:{id}:queued"))
+                .unwrap(),
+            None
+        );
+        assert_eq!(store.load(id).unwrap().rows, transcript.rows);
+        let result = rx.try_recv().unwrap();
+        assert!(result.finished);
+        assert_eq!(result.status, "Ready");
+        assert!(result.delivered.is_none());
+    }
+
+    #[test]
     fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_final_update() {
         let root = std::env::temp_dir().join(format!(
             "monocode-optimistic-worktree-{}",

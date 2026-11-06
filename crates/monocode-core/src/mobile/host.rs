@@ -34,10 +34,22 @@ const APP_METHODS: &[&str] = &[
     "project.gitAction",
     "session.start",
     "conversation.send",
+    "session.resumeUsage",
+    "session.resumeUsageAtReset",
+    "session.answerQuestion",
+    "session.keepQuestionOpen",
     "session.cancel",
     "session.rename",
     "session.delete",
     "session.archive",
+    "mono.document",
+    "mono.profile",
+    "mono.update",
+    "mono.reset",
+    "mono.delete",
+    "mono.create",
+    "mono.file",
+    "mono.saveFile",
 ];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);
@@ -50,6 +62,18 @@ pub struct Device {
     pub id: String,
     pub name: String,
     pub fingerprint: String,
+    /// Where the phone is notified while its app is closed, once it asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<PushRegistration>,
+}
+
+/// A phone's Expo push token and the notification categories it turned off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushRegistration {
+    pub token: String,
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,12 +195,46 @@ pub struct MobileHost {
     path: PathBuf,
     events: async_channel::Sender<Event>,
     runtime: Arc<OnceLock<tokio::runtime::Runtime>>,
+    /// Serializes keyring access without holding `inner`, which the UI reads.
+    identity_load: Arc<Mutex<()>>,
     pending: Arc<AtomicUsize>,
     shut_down: Arc<AtomicBool>,
 }
 
 fn unavailable<T>(_: T) -> String {
     "Mobile service unavailable".into()
+}
+
+/// `{"token": "ExponentPushToken[…]", "disabled": [category…]}`, or a null
+/// token to stop notifying the phone.
+fn push_registration(params: &Value) -> Result<Option<PushRegistration>, String> {
+    let token = match &params["token"] {
+        Value::Null => return Ok(None),
+        Value::String(token) => token,
+        _ => return Err("Invalid push token".into()),
+    };
+    let valid = token.len() <= 256
+        && token.ends_with(']')
+        && (token.starts_with("ExponentPushToken[") || token.starts_with("ExpoPushToken["));
+    if !valid {
+        return Err("Invalid push token".into());
+    }
+    let disabled = params["disabled"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| value.len() <= 64)
+                .take(16)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Some(PushRegistration {
+        token: token.clone(),
+        disabled,
+    }))
 }
 
 impl MobileHost {
@@ -212,13 +270,24 @@ impl MobileHost {
             path,
             events,
             runtime: Arc::default(),
+            identity_load: Arc::default(),
             pending: Arc::default(),
             shut_down: Arc::default(),
         };
+        // The keyring read can wait on securityd or an access prompt, and the
+        // app opens the host while launching.
         if enabled {
-            if let Err(error) = host.start() {
-                host.inner.lock().map_err(unavailable)?.error = Some(error);
-            }
+            let starting = host.clone();
+            std::thread::Builder::new()
+                .name("monocode-mobile-start".into())
+                .spawn(move || {
+                    if let Err(error) = starting.start() {
+                        if let Ok(mut inner) = starting.inner.lock() {
+                            inner.error = Some(error);
+                        }
+                    }
+                })
+                .map_err(|e| format!("Mobile service could not start: {e}"))?;
         }
         Ok((host, receiver))
     }
@@ -348,6 +417,47 @@ impl MobileHost {
         Ok(())
     }
 
+    /// The push tokens of paired phones that take `category`.
+    pub fn push_tokens(&self, category: &str) -> Vec<String> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        if !inner.config.enabled {
+            return Vec::new();
+        }
+        inner
+            .config
+            .devices
+            .iter()
+            .filter_map(|device| device.push.as_ref())
+            .filter(|push| !push.disabled.iter().any(|off| off == category))
+            .map(|push| push.token.clone())
+            .collect()
+    }
+
+    /// Drops tokens Expo says no longer reach a phone, as when the app was
+    /// removed; the phone registers again the next time it connects.
+    pub fn forget_push_tokens(&self, tokens: &[String]) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(unavailable)?;
+        let mut config = inner.config.clone();
+        let mut changed = false;
+        for device in &mut config.devices {
+            if device
+                .push
+                .as_ref()
+                .is_some_and(|push| tokens.contains(&push.token))
+            {
+                device.push = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save(&config)?;
+            inner.config = config;
+        }
+        Ok(())
+    }
+
     /// The watch's next frame.
     pub fn push(&self, id: &str, update: Value) -> Result<(), Push> {
         let mut inner = self.inner.lock().map_err(|_| Push::Gone)?;
@@ -390,7 +500,10 @@ impl MobileHost {
         let identity = self.identity()?;
         let runtime = self.runtime()?;
         let mut inner = self.inner.lock().map_err(unavailable)?;
-        if inner.endpoint.is_some() {
+        if !inner.config.enabled
+            || self.shut_down.load(Ordering::SeqCst)
+            || inner.endpoint.is_some()
+        {
             return Ok(());
         }
         let endpoint = {
@@ -445,17 +558,21 @@ impl MobileHost {
     /// The desktop's long-lived identity, kept in the OS keyring under the same
     /// entry the earlier desktop app used, so paired phones stay paired.
     fn identity(&self) -> Result<Identity, String> {
-        let mut inner = self.inner.lock().map_err(unavailable)?;
-        if let Some(identity) = &inner.identity {
-            return Ok(identity.clone());
-        }
+        let _loading = self.identity_load.lock().map_err(unavailable)?;
+        let paired = {
+            let inner = self.inner.lock().map_err(unavailable)?;
+            if let Some(identity) = &inner.identity {
+                return Ok(identity.clone());
+            }
+            !inner.config.devices.is_empty()
+        };
         let entry = keyring::Entry::new("com.monocode.mobile", &keyring_account(&self.path))
             .map_err(|e| e.to_string())?;
         let identity = match entry.get_password() {
             Ok(value) => serde_json::from_str(&value)
                 .map_err(|_| "Saved desktop mobile identity is invalid")?,
             Err(keyring::Error::NoEntry) => {
-                if !inner.config.devices.is_empty() {
+                if paired {
                     return Err("Desktop mobile identity is missing. Remove paired devices before creating a new identity.".into());
                 }
                 let identity = Identity::generate()?;
@@ -466,7 +583,7 @@ impl MobileHost {
             }
             Err(error) => return Err(format!("Cannot read desktop mobile identity: {error}")),
         };
-        inner.identity = Some(identity.clone());
+        self.inner.lock().map_err(unavailable)?.identity = Some(identity.clone());
         Ok(identity)
     }
 
@@ -499,6 +616,7 @@ impl MobileHost {
             id: id.clone(),
             name,
             fingerprint: fingerprint.clone(),
+            push: None,
         });
         self.save(&config)?;
         inner.config = config;
@@ -556,6 +674,16 @@ impl MobileHost {
                     return Ok(catalog);
                 }
                 "sessions.list" => return Ok(session_page(&inner.catalog["sessions"], &params)),
+                "device.push" => {
+                    let push = push_registration(&params)?;
+                    let mut config = inner.config.clone();
+                    if let Some(entry) = config.devices.iter_mut().find(|v| v.id == device.id) {
+                        entry.push = push;
+                    }
+                    self.save(&config)?;
+                    inner.config = config;
+                    return Ok(Value::Null);
+                }
                 _ => {}
             }
             if !APP_METHODS.contains(&method) {
@@ -785,6 +913,43 @@ mod tests {
         (host, events, join, phone)
     }
 
+    fn check_pending_start_stays_stopped(shutdown: bool) {
+        let (host, _events, _join, _phone) = fixture();
+        host.inner.lock().unwrap().config.open_router = false;
+        let loading = host.identity_load.lock().unwrap();
+        let starting = host.clone();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            starting.start()
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        if shutdown {
+            host.shutdown();
+        } else {
+            host.configure(false, false, "").unwrap();
+        }
+        drop(loading);
+        let result = worker.join().unwrap();
+        let listening = host.status().listening;
+        host.shutdown();
+        if host.path.exists() {
+            std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+        }
+        result.unwrap();
+        assert!(!listening, "listener started after shutdown={shutdown}");
+    }
+
+    #[test]
+    fn pending_start_does_not_listen_after_disable() {
+        check_pending_start_stays_stopped(false);
+    }
+
+    #[test]
+    fn pending_start_does_not_listen_after_shutdown() {
+        check_pending_start_stays_stopped(true);
+    }
+
     #[test]
     fn invitation_is_consumed_once_and_only_public_device_metadata_is_persisted() {
         let (host, _events, join, phone) = fixture();
@@ -823,6 +988,26 @@ mod tests {
         host.enroll(&mut host.inner.lock().unwrap(), &key, &params)
             .unwrap();
         (host, events, phone.fingerprint().unwrap())
+    }
+
+    #[tokio::test]
+    async fn usage_continuation_commands_reach_the_desktop_with_their_state_tokens() {
+        let (host, events, peer) = paired();
+        let answering = tokio::spawn(async move {
+            for method in ["session.resumeUsage", "session.resumeUsageAtReset"] {
+                let Ok(Event::Request(request)) = events.recv().await else {
+                    panic!("expected a request");
+                };
+                assert_eq!(request.method, method);
+                assert_eq!(request.params["token"], "paused");
+                request.reply(Ok(json!({"sessionId":"s"})));
+            }
+        });
+        for method in ["session.resumeUsage", "session.resumeUsageAtReset"] {
+            let result = host.handle(&peer, json!({"version":VERSION,"id":method,"method":method,"params":{"conversationId":"s", "token":"paused", "enabled":true}})).await.unwrap();
+            assert_eq!(result["sessionId"], "s");
+        }
+        answering.await.unwrap();
     }
 
     #[tokio::test]
@@ -876,6 +1061,31 @@ mod tests {
         assert_eq!(catalog["sessions"][0]["id"], "s");
         assert!(catalog["addresses"].is_array());
         assert!(host.publish(json!({"projects":[]})).is_err());
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_phone_registers_its_push_token_and_turns_categories_off() {
+        let (host, _events, peer) = paired();
+        let register = |params: Value| {
+            host.handle(
+                &peer,
+                json!({"version":VERSION,"id":"p","method":"device.push","params":params}),
+            )
+        };
+        assert!(register(json!({"token":"https://example.com"}))
+            .await
+            .is_err());
+        register(json!({"token":"ExponentPushToken[abc]","disabled":["agentFinished"]}))
+            .await
+            .unwrap();
+        assert_eq!(host.push_tokens("agentInput"), ["ExponentPushToken[abc]"]);
+        assert!(host.push_tokens("agentFinished").is_empty());
+        let saved = std::fs::read_to_string(&host.path).unwrap();
+        assert!(saved.contains("ExponentPushToken[abc]"));
+        host.forget_push_tokens(&["ExponentPushToken[abc]".into()])
+            .unwrap();
+        assert!(host.push_tokens("agentInput").is_empty());
         std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
     }
 }

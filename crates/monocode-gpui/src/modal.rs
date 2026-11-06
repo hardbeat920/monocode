@@ -81,15 +81,14 @@ pub(crate) fn surface(radius: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let quad = if light {
                 gpui::fill(bounds, opaque)
             } else {
-                gpui::fill(bounds, tint).border_color(
-                    gpui_apple::metal_renderer::backdrop_blur_marker(BLUR * window.scale_factor()),
-                )
+                gpui::fill(bounds, tint)
+                    .border_color(gpui::backdrop_blur_marker(BLUR * window.scale_factor()))
             };
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let quad = {
                 let _ = (light, tint);
                 gpui::fill(bounds, opaque)

@@ -237,6 +237,13 @@ fn executable(path: &Path) -> bool {
     }
 }
 
+/// On resume, Claude Code replays a background-task notification from the
+/// earlier session and answers it with an empty result before the real turn.
+fn claude_turn_result(value: &Value) -> bool {
+    value["type"] == "result"
+        && !(value["origin"]["kind"] == "task-notification" && value["num_turns"] == 0)
+}
+
 fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
     let mut frame = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
     frame.push(b'\n');
@@ -506,6 +513,30 @@ impl Protocol {
                         let (policy, sandbox, sandbox_policy, reviewer) = self.codex_access();
                         let mut params = json!({"cwd":self.request.cwd,"approvalPolicy":policy,"sandbox":sandbox,"sandboxPolicy":sandbox_policy,"approvalsReviewer":reviewer,
                             "developerInstructions":format!("You are the coding agent in Monocode. Use the available tools to inspect and work in the supplied cwd. Do not ask the user to paste files or git output you can inspect yourself. Respect the selected access policy and request approval when required. {}", if self.request.settings.plan { "This is a planning turn: inspect and propose a plan without changing files." } else { "" })});
+                        if let Some(instructions) = crate::visual_bridge::instructions(
+                            &self.request.settings.environment,
+                            false,
+                        ) {
+                            params["developerInstructions"] = format!(
+                                "{}\n\n{instructions}",
+                                params["developerInstructions"].as_str().unwrap_or_default()
+                            )
+                            .into();
+                        }
+                        if let Some(mono) = self
+                            .request
+                            .settings
+                            .mono
+                            .as_ref()
+                            .filter(|_| !self.request.settings.text_only)
+                        {
+                            params["developerInstructions"] = format!(
+                                "{}\n\n{}",
+                                params["developerInstructions"].as_str().unwrap_or_default(),
+                                crate::mono::instructions(&mono.mono, &mono.executable)
+                            )
+                            .into();
+                        }
                         if self.request.settings.text_only {
                             params["ephemeral"] = true.into();
                             params["developerInstructions"] = "Answer the supplied text request directly. Do not call tools or inspect the workspace.".into();
@@ -884,7 +915,7 @@ impl Protocol {
                             }
                         }
                     }
-                    "result" => {
+                    "result" if claude_turn_result(&v) => {
                         if self.compact && !self.compact_confirmed && v["is_error"] != true {
                             return Err("Claude Code did not confirm context compaction".into());
                         }
@@ -948,6 +979,8 @@ impl Protocol {
                             events.push(Event::Status("Waiting for background tasks…".into()));
                         }
                     }
+                    // A limit reported for the replay must not carry over to the real turn.
+                    "result" => self.claude_usage_limit = None,
                     "control_request" => {
                         let request = &v["request"];
                         if request["subtype"] == "can_use_tool" {
@@ -1384,6 +1417,11 @@ fn run_operation(
         Kind::Codex => {
             command.arg("app-server");
             crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            crate::mono::bridge::configure_codex(
+                &mut command,
+                request.settings.mono.as_ref(),
+                &request.settings.environment,
+            );
             if let Some(mono) = &request.settings.mono {
                 if let Some(home) =
                     crate::mono::codex_home(&mono.root, &request.settings.account.id)?
@@ -1425,16 +1463,46 @@ fn run_operation(
                     "--mcp-config",
                     "{\"mcpServers\":{}}",
                 ]);
-            } else if settings.access == AccessMode::ReadOnly {
-                command.args(["--tools", "Read,Glob,Grep,Bash", "--allowedTools", "Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)"]);
             }
-            if !settings.text_only {
-                if let Some(server) = crate::visual_bridge::mcp_server(&settings.environment) {
-                    command.args([
-                        "--mcp-config",
-                        &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
-                    ]);
+            let visual_server = (!settings.text_only)
+                .then(|| crate::visual_bridge::mcp_server(&settings.environment))
+                .flatten();
+            let mut allowed = Vec::new();
+            if !settings.text_only && settings.access == AccessMode::ReadOnly {
+                command.args(["--tools", "Read,Glob,Grep,Bash"]);
+                allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)");
+            }
+            let app_server = (!settings.text_only)
+                .then(|| {
+                    crate::mono::bridge::mcp_server(settings.mono.as_ref(), &settings.environment)
+                })
+                .flatten();
+            let mut servers = serde_json::Map::new();
+            if let Some(server) = app_server {
+                servers.insert(crate::mono::bridge::MCP_SERVER.into(), server);
+                allowed.push(crate::mono::bridge::CLAUDE_ALLOWED_TOOLS);
+            }
+            let mut system = Vec::new();
+            if let Some(mono) = settings.mono.as_ref().filter(|_| !settings.text_only) {
+                system.push(crate::mono::instructions(&mono.mono, &mono.executable));
+            }
+            if let Some(server) = visual_server {
+                servers.insert("monocode_visual".into(), server);
+                allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
+                if let Some(instructions) =
+                    crate::visual_bridge::instructions(&settings.environment, true)
+                {
+                    system.push(instructions);
                 }
+            }
+            if !system.is_empty() {
+                command.args(["--append-system-prompt", &system.join("\n\n")]);
+            }
+            if !servers.is_empty() {
+                command.args(["--mcp-config", &json!({"mcpServers":servers}).to_string()]);
+            }
+            if !allowed.is_empty() {
+                command.args(["--allowedTools", &allowed.join(",")]);
             }
             if mode == "bypassPermissions" {
                 command.arg("--allow-dangerously-skip-permissions");
@@ -1677,7 +1745,7 @@ fn run_operation(
                             && (reply_id.is_some() && reply_id == protocol.interrupt_id.as_deref()
                                 || terminal);
                         let claude_end =
-                            protocol.request.kind == Kind::Claude && value["type"] == "result";
+                            protocol.request.kind == Kind::Claude && claude_turn_result(&value);
                         if codex_ack || claude_end {
                             stop_confirmed = value.get("error").is_none_or(Value::is_null);
                             if terminal || claude_end {
@@ -1860,6 +1928,29 @@ mod tests {
         assert_eq!(input["paths"], json!(["/repo/a.rs", "/repo/b.rs"]));
     }
     #[test]
+    fn a_monos_rules_reach_codex_as_developer_instructions() {
+        let mut p = protocol(Kind::Codex);
+        p.request.settings.mono = Some(crate::agent::MonoContext {
+            mono: crate::mono::Mono {
+                projects: vec!["/repo".into()],
+                ..Default::default()
+            },
+            root: "/monos".into(),
+            executable: "/bin/monocode-gpui".into(),
+        });
+        let mut out = Vec::new();
+        p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
+        let started: Value = String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|message| message["method"] == "thread/start")
+            .unwrap();
+        let instructions = started["params"]["developerInstructions"].as_str().unwrap();
+        assert!(instructions.starts_with("You are the coding agent in Monocode."));
+        assert!(instructions.contains("## Be quick"));
+        assert!(instructions.contains("- /repo"));
+    }
+    #[test]
     fn operator_thread_access_keeps_the_codex_app_bridge_reachable_on_later_turns() {
         for plan in [false, true] {
             let mut p = protocol(Kind::Codex);
@@ -1908,6 +1999,31 @@ mod tests {
             used: Some(2050),
             window: Some(200000)
         }));
+    }
+    #[test]
+    fn claude_replayed_task_notification_result_does_not_end_the_turn() {
+        let mut claude = protocol(Kind::Claude);
+        let replayed = json!({"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"","origin":{"kind":"task-notification"}});
+        assert!(!claude_turn_result(&replayed));
+        let events = claude.frame(replayed, &mut Vec::new()).unwrap();
+        assert!(!events.contains(&Event::Done));
+        assert!(!claude.done);
+        // A task that finishes during the session wakes a real turn, which ends.
+        let woken = json!({"type":"result","num_turns":1,"result":"Done.","origin":{"kind":"task-notification"}});
+        assert!(claude
+            .frame(woken, &mut Vec::new())
+            .unwrap()
+            .contains(&Event::Done));
+    }
+    #[test]
+    fn claude_replayed_task_notification_result_drops_its_usage_limit() {
+        let mut claude = protocol(Kind::Claude);
+        claude.frame(json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1}}), &mut Vec::new()).unwrap();
+        assert!(claude.claude_usage_limit.is_some());
+        claude.frame(json!({"type":"result","num_turns":0,"result":"","origin":{"kind":"task-notification"}}), &mut Vec::new()).unwrap();
+        assert!(claude.claude_usage_limit.is_none());
+        let error = claude.frame(json!({"type":"result","is_error":true,"num_turns":1,"result":"Something else went wrong"}), &mut Vec::new()).unwrap_err();
+        assert_eq!(error, "Something else went wrong");
     }
     #[test]
     fn codex_handshake_stream_snapshot_and_resume() {
@@ -2177,6 +2293,53 @@ mod process_tests {
                 kind.label()
             );
         }
+    }
+    #[test]
+    fn perf_replay_streams_a_whole_claude_turn() {
+        // scripts/perf/fake-claude-stream.py stands in for `claude` when
+        // profiling; it has to keep speaking the protocol this parser reads.
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/perf/fake-claude-stream.py");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut request = Request {
+            kind: Kind::Claude,
+            binary: script,
+            cwd: tmp.path().into(),
+            prompt: "stream".into(),
+            provider_id: None,
+            model: None,
+            settings: Default::default(),
+        };
+        request
+            .settings
+            .environment
+            .insert("REPLAY_SECONDS".into(), "0.4".into());
+        request
+            .settings
+            .environment
+            .insert("REPLAY_INTERVAL_MS".into(), "10".into());
+        let (mut text, mut done) = (String::new(), false);
+        run(request, Arc::new(AtomicBool::new(false)), |events| {
+            for event in events {
+                match event {
+                    Event::Text(t) => text.push_str(&t),
+                    Event::Done => done = true,
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(done, "the replay's result must end the turn");
+        assert_eq!(text.chars().count(), 40 * 16);
+        assert!(text.starts_with("## Step 1: tighten the frame loop"));
     }
     #[test]
     fn crash_preserves_coalesced_partial_text() {

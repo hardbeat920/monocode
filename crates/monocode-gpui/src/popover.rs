@@ -211,8 +211,13 @@ impl AnchorSlot {
     }
     pub(crate) fn probe(&self) -> impl IntoElement {
         let slot = self.clone();
+        // Pinned to the corner: an absolute child left at its static
+        // position starts inside the trigger's padding, which would shift
+        // every popover by it.
         canvas(move |bounds, _, _| slot.set(Some(bounds)), |_, _, _, _| {})
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
     }
     /// A probe for sizes the next render lays out from: a change of size
@@ -230,6 +235,8 @@ impl AnchorSlot {
             |_, _, _, _| {},
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
 }
@@ -276,7 +283,7 @@ const MENU_TRAVEL: f32 = 8.;
 const SUBMENU_GAP: f32 = 4.;
 const RADIUS: f32 = 12.;
 // GlassBackdrop's backdrop-blur-xl.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const BLUR: f32 = 24.;
 
 fn entrance(elapsed: f32, reduced: bool) -> f32 {
@@ -535,15 +542,14 @@ pub(crate) fn paint_glass(
 ) {
     let opaque = crate::theme::floating_fill();
     let light = crate::theme::is_light();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let quad = if light {
         gpui::fill(bounds, opaque)
     } else {
-        gpui::fill(bounds, tint).border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
-            BLUR * window.scale_factor(),
-        ))
+        gpui::fill(bounds, tint)
+            .border_color(gpui::backdrop_blur_marker(BLUR * window.scale_factor()))
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let quad = {
         let _ = (light, tint);
         gpui::fill(bounds, opaque)
@@ -1290,10 +1296,13 @@ impl Menu {
                     .items_center()
                     .gap_3()
                     .rounded(px(8.))
-                    .line_height(px(13.))
+                    // Not 13px: `truncate` clips to the line box, and Windows'
+                    // Segoe UI lost the bottom of g/y/p at the font's own size.
+                    .line_height(px(16.))
                     .map(|d| {
                         if action.description.is_some() {
-                            d.py(px(6.))
+                            // The 16px line (above) eats 1.5px a side.
+                            d.py(px(4.5))
                         } else {
                             d.h(px(if in_submenu && self.style == MenuStyle::Settings {
                                 32.

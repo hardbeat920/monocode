@@ -259,7 +259,6 @@ pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
     cached_style: Option<StyleRefinement>,
-    #[cfg(feature = "profiler")]
     view_type_name: &'static str,
     #[cfg(debug_assertions)]
     source: &'static core::panic::Location<'static>,
@@ -275,13 +274,11 @@ impl<V: View> ViewElement<V> {
     /// Wraps a view whose draw time profiling attributes to `view_type_name`,
     /// such as an entity's type rather than [`Entity`]'s.
     #[track_caller]
-    #[cfg_attr(not(feature = "profiler"), expect(unused_variables))]
     pub(crate) fn with_type_name(view: V, view_type_name: &'static str) -> Self {
         let entity_id = view.entity_id();
         ViewElement {
             entity_id,
             cached_style: None,
-            #[cfg(feature = "profiler")]
             view_type_name,
             view: Some(view),
             #[cfg(debug_assertions)]
@@ -353,12 +350,18 @@ impl<V: View> Element for ViewElement<V> {
             #[cfg(feature = "profiler")]
             let start = window.window_profiler.begin_view();
             let view = &mut self.view;
+            let view_type_name = self.view_type_name;
             let layout = request_layout_view(
                 entity_id,
                 self.cached_style.as_ref(),
                 window,
                 cx,
-                &mut |window, cx| view.take().unwrap().render(window, cx).into_any_element(),
+                &mut |window, cx| {
+                    if crate::frame_stats::enabled() {
+                        crate::frame_stats::view_rendered(entity_id, view_type_name);
+                    }
+                    view.take().unwrap().render(window, cx).into_any_element()
+                },
             );
             #[cfg(feature = "profiler")]
             window.window_profiler.end_view(
@@ -400,6 +403,9 @@ impl<V: View> Element for ViewElement<V> {
                 window,
                 cx,
                 &mut |window, cx| {
+                    if crate::frame_stats::enabled() {
+                        crate::frame_stats::view_rendered(entity_id, self.view_type_name);
+                    }
                     self.view
                         .take()
                         .unwrap()
@@ -534,6 +540,9 @@ fn prepaint_view(
                     && !window.dirty_views.contains(&entity_id)
                     && !window.refreshing
                 {
+                    if crate::frame_stats::enabled() {
+                        crate::frame_stats::view_reused();
+                    }
                     let prepaint_start = window.prepaint_index();
                     window.reuse_prepaint(element_state.prepaint_range.clone());
                     cx.entities

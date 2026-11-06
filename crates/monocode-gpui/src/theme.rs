@@ -1,4 +1,4 @@
-use gpui::{Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
+use gpui::{AnyElement, Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
 // Shared appearance tokens. Interaction fills use translucent content ink
 // rather than opaque replacement greys.
 pub(crate) const CHAT: u32 = 0x141414;
@@ -6,6 +6,10 @@ pub(crate) const TEXT: u32 = 0xebebeb;
 pub(crate) const MUTED: u32 = 0x969696;
 pub(crate) const ACCENT: u32 = 0x4da3f5;
 pub(crate) const COLUMN: f32 = 832.;
+/// The transcript's side padding inside `COLUMN`: the docked composer's
+/// 10px inset, 1px border and 12px text padding, so prose lines up with the
+/// composer's text as it scrolls past.
+pub(crate) const COLUMN_PAD: f32 = 23.;
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 40.;
 pub(crate) const TITLE_TAB_TEXT_SIZE: f32 = 13.;
 pub(crate) const TITLE_TAB_MAX_WIDTH: f32 = 224.;
@@ -48,19 +52,56 @@ struct Tokens {
     diff: [u32; 4],
     diff_strong: bool,
 }
-thread_local! { static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) }; }
+thread_local! {
+    /// What views paint with: the target, or a step of the tween toward it.
+    static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) };
+    static TARGET: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) };
+    static TWEEN: std::cell::Cell<Option<(Tokens, std::time::Instant)>> = const { std::cell::Cell::new(None) };
+}
+/// Switching to a project with other colors blends into them over this long.
+const TWEEN_LENGTH: std::time::Duration = std::time::Duration::from_millis(360);
+
+#[cfg(test)]
 pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) -> bool {
+    configure_project(p, None, system_light, false)
+}
+/// Paint with `project`'s colors in place of the app-wide ones. With
+/// `animate`, a change of colors blends from what is on screen; call again
+/// each frame while [`tweening`] so the blend advances. Returns whether the
+/// painted colors changed.
+pub(crate) fn configure_project(
+    p: &crate::settings::Preferences,
+    project: Option<&monocode_core::project_appearance::ProjectTheme>,
+    system_light: bool,
+    animate: bool,
+) -> bool {
     let light = p.theme == "light" || (p.theme == "system" && system_light);
-    let palette = crate::settings::palette(&p.workspace_theme, light);
+    let (workspace_theme, accent_color, hue, saturation, dark_lightness) = match project {
+        Some(t) => (
+            t.workspace_theme.as_str(),
+            t.accent_color.as_deref(),
+            t.hue,
+            t.saturation,
+            t.dark_lightness,
+        ),
+        None => (
+            p.workspace_theme.as_str(),
+            p.accent_color.as_deref(),
+            p.theme_hue,
+            p.theme_saturation,
+            p.theme_dark_lightness,
+        ),
+    };
+    let palette = crate::settings::palette(workspace_theme, light);
     let glass = window_glass(p, system_light);
     // Both layouts derive their surface roles from the same saved settings.
     let shell = gpui::hsla(
-        p.theme_hue.min(360) as f32 / 360.,
-        p.theme_saturation.min(100) as f32 / 100.,
+        hue.min(360) as f32 / 360.,
+        saturation.min(100) as f32 / 100.,
         if light {
             0.97
         } else {
-            p.theme_dark_lightness.min(30) as f32 / 100.
+            dark_lightness.min(30) as f32 / 100.
         },
         if glass {
             p.sidebar_opacity.clamp(15, 100) as f32 / 100.
@@ -76,11 +117,9 @@ pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) ->
     let mut inset_pane = shell;
     inset_pane.l = if light { 1. } else { shell.l * 0.45 };
     inset_pane.a = if glass && p.body_glass { 0. } else { 1. };
-    let custom = p
-        .accent_color
-        .as_deref()
-        .and_then(|s| u32::from_str_radix(s.trim_start_matches('#'), 16).ok())
-        .filter(|_| p.accent_color.as_ref().is_some_and(|s| s.len() == 7));
+    let custom = accent_color
+        .filter(|s| s.len() == 7)
+        .and_then(|s| u32::from_str_radix(s.trim_start_matches('#'), 16).ok());
     let tokens = Tokens {
         light,
         ink: rgb(palette.content).into(),
@@ -91,13 +130,74 @@ pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) ->
         inset_pane,
         diff: diff_palette(&p.diff_palette, light),
         diff_strong: p.diff_palette == "high-contrast",
-        syntax: syntax_palette(&p.workspace_theme, light),
+        syntax: syntax_palette(workspace_theme, light),
     };
-    TOKENS.with(|current| {
-        let changed = *current.borrow() != Some(tokens);
-        *current.borrow_mut() = Some(tokens);
-        changed
-    })
+    let now = std::time::Instant::now();
+    if TARGET.with(|t| t.replace(Some(tokens))) != Some(tokens) {
+        let shown = TOKENS.with(|t| *t.borrow());
+        // A light/dark flip repaints too much at once to blend well.
+        TWEEN.set(
+            shown
+                .filter(|shown| animate && shown.light == light)
+                .map(|shown| (shown, now)),
+        );
+    }
+    let painted = match TWEEN.get() {
+        Some((from, start)) => {
+            let t = (now - start).as_secs_f32() / TWEEN_LENGTH.as_secs_f32();
+            if t >= 1. {
+                TWEEN.set(None);
+                tokens
+            } else {
+                // Ease out: quick to respond, gentle to settle.
+                from.mix(&tokens, 1. - (1. - t).powi(3))
+            }
+        }
+        None => tokens,
+    };
+    TOKENS.with(|current| current.replace(Some(painted)) != Some(painted))
+}
+/// Whether colors are still blending toward a project's theme.
+pub(crate) fn tweening() -> bool {
+    TWEEN.get().is_some()
+}
+impl Tokens {
+    fn mix(&self, to: &Self, t: f32) -> Self {
+        let color = |a: Hsla, b: Hsla| -> Hsla {
+            let (a, b) = (a.to_rgb(), b.to_rgb());
+            gpui::Rgba {
+                r: a.r + (b.r - a.r) * t,
+                g: a.g + (b.g - a.g) * t,
+                b: a.b + (b.b - a.b) * t,
+                a: a.a + (b.a - a.a) * t,
+            }
+            .into()
+        };
+        let hex = |a: u32, b: u32| -> u32 {
+            [16, 8, 0].iter().fold(0, |out, shift| {
+                let (a, b) = (((a >> shift) & 0xff) as f32, ((b >> shift) & 0xff) as f32);
+                out | (((a + (b - a) * t).round() as u32) << shift)
+            })
+        };
+        Self {
+            ink: color(self.ink, to.ink),
+            accent: color(self.accent, to.accent),
+            // Going to or from the theme's own accent blends through it.
+            user_accent: match (self.user_accent, to.user_accent) {
+                (None, None) => None,
+                (from, to_accent) => Some(color(
+                    from.unwrap_or(self.accent),
+                    to_accent.unwrap_or(to.accent),
+                )),
+            },
+            shell: color(self.shell, to.shell),
+            pane: color(self.pane, to.pane),
+            inset_pane: color(self.inset_pane, to.inset_pane),
+            syntax: std::array::from_fn(|i| hex(self.syntax[i], to.syntax[i])),
+            diff: std::array::from_fn(|i| hex(self.diff[i], to.diff[i])),
+            ..*to
+        }
+    }
 }
 
 /// Platforms whose compositor blurs the desktop behind the window: macOS
@@ -253,11 +353,13 @@ pub(crate) fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
 
 /// The plate for session tabs in the title bar.
 /// Headline ink owns inactive dimming; the plate never fades its children.
+/// Its icon tile sits as far from the left edge as from the top and bottom.
 pub(crate) fn title_tab_plate(selected: bool, hovered: bool) -> Div {
     div()
         .h(px(TAB_PLATE_HEIGHT))
         .rounded_md()
-        .px_2()
+        .pl(px(crate::tab_tile::tab_tile_inset()))
+        .pr_2()
         .flex()
         .items_center()
         .bg(title_tab_fill(selected, hovered))
@@ -282,6 +384,27 @@ pub(crate) fn pane_fill() -> Hsla {
     } else {
         rgb(CHAT).into()
     }
+}
+/// `--color-background-base`: the theme's opaque surface, also the ink on
+/// solid `bg-content` buttons.
+pub(crate) fn background_base() -> Hsla {
+    let mut base = shell_fill();
+    base.a = 1.;
+    base
+}
+/// `--zen-rail`: ink 14% over the opaque base, the tree rails under tool
+/// phases and orchestrator/operator rows. Opaque, so the curve and spine
+/// overlapping where they meet don't stack into a brighter pixel.
+pub(crate) fn rail_color() -> Hsla {
+    let (base, ink) = (background_base().to_rgb(), content(1.).to_rgb());
+    let mix = |b: f32, i: f32| b + (i - b) * 0.14;
+    gpui::Rgba {
+        r: mix(base.r, ink.r),
+        g: mix(base.g, ink.g),
+        b: mix(base.b, ink.b),
+        a: 1.,
+    }
+    .into()
 }
 /// Apply to surrounding chrome, leaving the content on the window's glass.
 pub(crate) fn inset_chrome_wash() -> Hsla {
@@ -312,6 +435,58 @@ pub(crate) fn icon(path: &'static str, side: f32) -> Svg {
         .text_color(content(0.5))
         .flex_shrink_0()
 }
+/// A provider's brand fill for its icon tile, top and bottom of a gentle
+/// gradient. `None` for a multicolour logo that keeps a light tile.
+pub(crate) fn provider_tile(provider: &str) -> Option<(Hsla, Hsla)> {
+    let (top, bottom) = match provider {
+        "claude" => (0xE3876A, 0xD06A49),
+        "antigravity" => return None,
+        // The violet-to-pink of its mark.
+        "omp" => (0xC45BE0, 0x8A5CF2),
+        "cursor" | "grok" | "pi" | "fx" => (0x343434, 0x161616),
+        "opencode" => (0x3B3636, 0x1F1C1C),
+        "hermes" | "devin" => (0x3A3A3E, 0x1E1E22),
+        // Codex: the blue of its mark's gradient.
+        _ => (0x7A8CFF, 0x4048FF),
+    };
+    Some((rgb(top).into(), rgb(bottom).into()))
+}
+
+/// The provider's mark in white, to sit on its [`provider_tile`] colour.
+/// A multicolour logo sits on a neutral tile in that tile's ink.
+pub(crate) fn provider_glyph(provider: &str, side: f32) -> AnyElement {
+    let (path, scale) = match provider {
+        // A multicolour logo on a neutral tile: one colour, like the rest.
+        "antigravity" => {
+            return svg()
+                .path("antigravity.svg")
+                .size(px(side))
+                .text_color(crate::tab_tile::tile_ink())
+                .flex_shrink_0()
+                .into_any_element();
+        }
+        // Codex's mark without the white disc behind it, so the prompt cut
+        // out of it shows the tile's colour.
+        "codex" => ("codex-glyph.svg", 1.),
+        "claude" => ("claude.svg", 1.),
+        "cursor" => ("cursor.svg", 1.),
+        "grok" => ("grok.svg", 1.),
+        "opencode" => ("opencode.svg", 1.),
+        "pi" => ("pi.svg", 1.),
+        "omp" => ("omp.svg", 1.),
+        "fx" => ("fx.svg", 1.),
+        "hermes" => ("hermes.svg", 0.72),
+        "devin" => ("devin.svg", 0.88),
+        _ => ("codex-glyph.svg", 1.),
+    };
+    svg()
+        .path(path)
+        .size(px(side * scale))
+        .text_color(gpui::white())
+        .flex_shrink_0()
+        .into_any_element()
+}
+
 pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
     let (path, monochrome, scale) = match provider {
         "claude" => ("claude.svg", false, 1.),
@@ -511,5 +686,32 @@ mod composer_tests {
         assert_eq!(composer_blur(), 0.);
         assert_eq!(composer_border(false), content(0.1));
         assert_eq!(composer_border(true), content(0.2));
+    }
+
+    #[test]
+    fn project_colors_replace_the_app_colors_and_blend_in() {
+        let preferences = crate::settings::Preferences::default();
+        configure(&preferences, false);
+        let app_accent = accent_color();
+        let theme = monocode_core::project_appearance::ProjectTheme {
+            accent_color: Some("#ef4444".into()),
+            hue: 20,
+            saturation: 40,
+            ..Default::default()
+        };
+        assert!(configure_project(&preferences, Some(&theme), false, true));
+        assert!(tweening());
+        // The blend starts from the colors on screen.
+        assert_eq!(accent_color(), app_accent);
+        std::thread::sleep(TWEEN_LENGTH);
+        configure_project(&preferences, Some(&theme), false, true);
+        assert!(!tweening());
+        assert_eq!(accent_color(), rgb(0xef4444).into());
+        assert_eq!(picked_accent(), rgb(0xef4444).into());
+        assert_eq!(shell_fill().h, 20. / 360.);
+        // Without animation the app colors return at once.
+        assert!(configure_project(&preferences, None, false, false));
+        assert!(!tweening());
+        assert_eq!(accent_color(), app_accent);
     }
 }

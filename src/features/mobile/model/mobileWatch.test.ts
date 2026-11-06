@@ -31,6 +31,47 @@ describe("mobile watch frames", () => {
     }
   });
 
+  it("sends the pending question first and when it changes, null once answered", () => {
+    const question = {
+      requestId: 3,
+      questions: [
+        {
+          id: "q",
+          prompt: "Which?",
+          multiSelect: false,
+          allowCustom: true,
+          options: [{ id: "a", label: "A" }],
+        },
+      ],
+    };
+    const turns = [turn("a", "text")];
+    const first = watchUpdate(null, { busy: true, older: false, turns });
+    expect(first!.update).toMatchObject({ question: null });
+    const asked = watchUpdate(first!.baseline, {
+      busy: true,
+      older: false,
+      turns,
+      question,
+    });
+    expect(asked!.update).toEqual({
+      busy: true,
+      older: false,
+      order: ["a"],
+      turns: [],
+      question,
+    });
+    expect(
+      watchUpdate(asked!.baseline, { busy: true, older: false, turns, question }),
+    ).toBeNull();
+    const answered = watchUpdate(asked!.baseline, {
+      busy: true,
+      older: false,
+      turns,
+      question: null,
+    });
+    expect(answered!.update).toMatchObject({ question: null });
+  });
+
   it("sends everything first, then only the turn that changed", () => {
     const first = watchUpdate(null, {
       busy: true,
@@ -92,4 +133,18 @@ describe("mobile watch frames", () => {
     });
     expect(() => turnsBefore(ids, "gone", 2)).toThrow();
   });
+});
+
+it("propagates reset metadata, automatic preference changes and clearing with unchanged turns", () => {
+  const conversation = { busy: false, older: false, turns: [] };
+  const usageLimit = { token: "a", resetsAt: 123456, resumeAtReset: false, canResume: false,
+    canAutoResume: true, resetLabel: "Resets tomorrow", limitation: "Keep desktop open" };
+  const initial = watchUpdate(null, { ...conversation, usageLimit })!;
+  expect(initial.update).toMatchObject({ usageLimit });
+  expect(watchUpdate(initial.baseline, { ...conversation, usageLimit })).toBeNull();
+  const armed = { ...usageLimit, token: "b", resumeAtReset: true };
+  const next = watchUpdate(initial.baseline, { ...conversation, usageLimit: armed })!;
+  expect(next.update).toMatchObject({ usageLimit: armed, turns: [] });
+  const cleared = watchUpdate(next.baseline, conversation)!;
+  expect(cleared.update).toMatchObject({ usageLimit: null });
 });

@@ -2,12 +2,19 @@ use super::*;
 use crate::{
     project_background::ProjectBackground,
     project_settings::{AppearanceControls, BackgroundDialog, Event, project_icon},
+    project_theme::ThemeDialog,
 };
 use monocode_core::project_appearance::ProjectAppearance;
 
+/// A project dialog from the project menu: its background or theme colors.
 pub(super) struct OpenBackground {
-    view: Entity<BackgroundDialog>,
+    view: ProjectDialog,
     _events: Subscription,
+}
+#[derive(Clone)]
+enum ProjectDialog {
+    Background(Entity<BackgroundDialog>),
+    Theme(Entity<ThemeDialog>),
 }
 impl Shell {
     pub(super) fn appearance(&self, path: &str) -> ProjectAppearance {
@@ -23,7 +30,7 @@ impl Shell {
     pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
         project_icon(&self.appearance(path), path, side)
     }
-    fn save_project_appearance(
+    pub(super) fn save_project_appearance(
         &mut self,
         path: String,
         mut appearance: ProjectAppearance,
@@ -105,6 +112,55 @@ impl Shell {
             surface: Some(surface),
         }
     }
+    /// The Theme colors dialog for `path`. Its colors show live, so the
+    /// project opens first.
+    pub(super) fn open_project_theme(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.project != path {
+            self.select_project(path.clone(), window, cx);
+        }
+        self.close_menu(cx);
+        self.close_preview(cx);
+        let prefs = &self.workspace.preferences;
+        let light = prefs.theme == "light"
+            || (prefs.theme == "system"
+                && matches!(
+                    window.appearance(),
+                    gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
+                ));
+        let app = prefs.project_theme();
+        let appearance = self.appearance(&path);
+        let view = cx.new(|cx| ThemeDialog::new(path.clone(), appearance, app, light, cx));
+        let events = self.project_dialog_events(&view, path, window, cx);
+        window.focus(&view.focus_handle(cx), cx);
+        self.background_dialog = Some(OpenBackground {
+            view: ProjectDialog::Theme(view),
+            _events: events,
+        });
+        cx.notify();
+    }
+    fn project_dialog_events<T: gpui::EventEmitter<Event>>(
+        &mut self,
+        view: &Entity<T>,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(
+            view,
+            window,
+            move |this, _, event: &Event, window, cx| match event {
+                Event::Changed(appearance) => {
+                    this.save_project_appearance(path.clone(), appearance.clone(), cx)
+                }
+                Event::Close => this.close_background_dialog(window, cx),
+            },
+        )
+    }
     pub(super) fn open_background_dialog(
         &mut self,
         path: String,
@@ -114,20 +170,10 @@ impl Shell {
         self.close_menu(cx);
         self.close_preview(cx);
         let view = cx.new(|cx| BackgroundDialog::new(path.clone(), self.appearance(&path), cx));
-        let events =
-            cx.subscribe_in(
-                &view,
-                window,
-                move |this, _, event: &Event, window, cx| match event {
-                    Event::Changed(appearance) => {
-                        this.save_project_appearance(path.clone(), appearance.clone(), cx)
-                    }
-                    Event::Close => this.close_background_dialog(window, cx),
-                },
-            );
+        let events = self.project_dialog_events(&view, path, window, cx);
         window.focus(&view.focus_handle(cx), cx);
         self.background_dialog = Some(OpenBackground {
-            view,
+            view: ProjectDialog::Background(view),
             _events: events,
         });
         cx.notify();
@@ -145,9 +191,19 @@ impl Shell {
         let view = self.background_dialog.as_ref()?.view.clone();
         let viewport = window.viewport_size();
         let width = 420f32.min(viewport.width.as_f32() - 24.);
-        let height = (view.read(cx).measured_height().unwrap_or(622.) + 2.)
-            .min(viewport.height.as_f32() - 32.);
-        let popup_region = view.read(cx).popup_region();
+        let (measured, popup_region, view): (_, _, gpui::AnyView) = match view {
+            ProjectDialog::Background(view) => (
+                view.read(cx).measured_height().unwrap_or(622.),
+                view.read(cx).popup_region(),
+                view.into(),
+            ),
+            ProjectDialog::Theme(view) => (
+                view.read(cx).measured_height().unwrap_or(490.),
+                Default::default(),
+                view.into(),
+            ),
+        };
+        let height = (measured + 2.).min(viewport.height.as_f32() - 32.);
         let anchor = Anchor::Point(gpui::point(
             px((viewport.width.as_f32() - width) / 2.),
             px((viewport.height.as_f32() - height) / 2.),
