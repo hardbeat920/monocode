@@ -50,7 +50,8 @@ pub fn prepare_prompt(
     attachments: &[PathBuf],
 ) -> Result<String, String> {
     let text = native_prompt(kind, text);
-    if matches!(kind, Kind::Omp | Kind::Devin) && text.trim_start().starts_with('/') {
+    if matches!(kind, Kind::Omp | Kind::Devin | Kind::Copilot) && text.trim_start().starts_with('/')
+    {
         crate::composer::validate_attachments(attachments)?;
         return Ok(text);
     }
@@ -162,7 +163,7 @@ pub fn discover_commands(
     mut request: Request,
     cancel: Arc<AtomicBool>,
 ) -> Result<Vec<NativeCommand>, String> {
-    if !request.kind.is_pi() {
+    if !request.kind.is_pi() && request.kind != Kind::Copilot {
         return Ok(Vec::new());
     }
     request.provider_id = None;

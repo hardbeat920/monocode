@@ -19,6 +19,7 @@ import {
   refreshHarnessCatalogs,
   registerHarness,
   resetHarnessIdlePark,
+  rewindHarnessLastTurn,
   sendHarnessTurn,
   type HarnessAdapter,
 } from "./registry";
@@ -97,6 +98,47 @@ describe("harness registry", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     finish();
     await sending;
+  });
+
+  it.each(["cursor", "copilot"] as const)(
+    "sends %s the supported mode, not the saved one",
+    async (harness) => {
+      const sendTurn = vi.fn(async () => undefined);
+      registerHarness(stub(harness, { sendTurn }));
+      await sendHarnessTurn({
+        harness,
+        sessionId: "coerce",
+        cwd: "/tmp",
+        model: `${harness}:default`,
+        runtimeMode: "auto",
+        text: "Hello",
+        onEvent: vi.fn(),
+      });
+      expect(sendTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeMode: "auto-accept-edits" }),
+      );
+    },
+  );
+
+  it("normalizes the saved mode for rewind and compaction too", async () => {
+    const rewindLastTurn = vi.fn(async () => ({ submitted: false }));
+    const compactContext = vi.fn(async () => undefined);
+    registerHarness(stub("cursor", { rewindLastTurn, compactContext }));
+    const base = {
+      harness: "cursor" as const,
+      sessionId: "coerce-more",
+      cwd: "/tmp",
+      model: "cursor:default",
+      runtimeMode: "auto" as const,
+      onEvent: vi.fn(),
+    };
+    await rewindHarnessLastTurn(base);
+    await compactHarnessContext(base);
+    const expected = expect.objectContaining({
+      runtimeMode: "auto-accept-edits",
+    });
+    expect(rewindLastTurn).toHaveBeenCalledWith(expected);
+    expect(compactContext).toHaveBeenCalledWith(expected);
   });
 
   it("advertises isolated text prompt support by harness", () => {

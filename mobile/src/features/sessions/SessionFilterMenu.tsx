@@ -29,6 +29,7 @@ const HARNESS_NAMES: Record<Harness, string> = {
   claude: "Claude",
   codex: "Codex",
   cursor: "Cursor",
+  copilot: "GitHub Copilot",
   grok: "Grok",
   opencode: "OpenCode",
   pi: "Pi",

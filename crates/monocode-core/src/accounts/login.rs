@@ -25,6 +25,8 @@ pub fn arguments(kind: Kind, action: AuthAction) -> Option<&'static [&'static st
         (Kind::Claude | Kind::Devin, AuthAction::SignOut) => Some(&["auth", "logout"]),
         (Kind::Codex | Kind::Cursor, AuthAction::SignIn) => Some(&["login"]),
         (Kind::Codex | Kind::Cursor, AuthAction::SignOut) => Some(&["logout"]),
+        (Kind::Copilot, AuthAction::SignIn) => Some(&["login", "--web-flow"]),
+        (Kind::Copilot, AuthAction::SignOut) => Some(&["logout"]),
         (Kind::Grok, AuthAction::SignIn) => Some(&["login", "--oauth"]),
         (Kind::Fx, AuthAction::SignIn) => Some(&["login", "vercel"]),
         _ => None,
@@ -184,6 +186,14 @@ mod tests {
         assert_eq!(
             arguments(Kind::Grok, AuthAction::SignIn),
             Some(["login", "--oauth"].as_slice())
+        );
+        assert_eq!(
+            arguments(Kind::Copilot, AuthAction::SignIn),
+            Some(["login", "--web-flow"].as_slice())
+        );
+        assert_eq!(
+            arguments(Kind::Copilot, AuthAction::SignOut),
+            Some(["logout"].as_slice())
         );
         assert!(arguments(Kind::Pi, AuthAction::SignIn).is_none());
         assert_eq!(

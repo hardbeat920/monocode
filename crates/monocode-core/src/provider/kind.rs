@@ -12,9 +12,10 @@ pub enum Kind {
     Fx,
     Hermes,
     Devin,
+    Copilot,
 }
 impl Kind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Claude,
         Self::Codex,
         Self::Cursor,
@@ -26,6 +27,7 @@ impl Kind {
         Self::Hermes,
         Self::Antigravity,
         Self::Devin,
+        Self::Copilot,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -40,6 +42,7 @@ impl Kind {
             Self::Fx => "fx",
             Self::Hermes => "hermes",
             Self::Devin => "devin",
+            Self::Copilot => "copilot",
         }
     }
     pub fn label(self) -> &'static str {
@@ -55,6 +58,7 @@ impl Kind {
             Self::Fx => "fx",
             Self::Hermes => "Hermes Agent",
             Self::Devin => "Devin",
+            Self::Copilot => "GitHub Copilot",
         }
     }
     pub fn parse(id: &str) -> Option<Self> {
@@ -106,11 +110,13 @@ impl Kind {
             Self::Fx => "fx CLI",
             Self::Hermes => "Hermes Agent CLI",
             Self::Devin => "Devin CLI",
+            Self::Copilot => "GitHub Copilot CLI",
         }
     }
     /// The install command React shows in its hint, when it has one.
     fn install_command(self) -> Option<&'static str> {
         match self {
+            Self::Copilot => Some("npm install -g @github/copilot"),
             Self::Grok => Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
             Self::Pi => Some("npm i -g @earendil-works/pi-coding-agent"),
             Self::Omp => Some("curl -fsSL https://omp.sh/install | sh"),
