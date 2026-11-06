@@ -181,6 +181,7 @@ vi.mock("@/ui/Ticker", () => ({
     );
   },
 }));
+vi.mock("@/features/sessions/TerminalSpinner", () => ({ TerminalSpinner: () => null }));
 vi.mock("@/features/sessions/ProviderLogo", () => ({
   ProviderLogo: () => null,
 }));

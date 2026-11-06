@@ -1,42 +1,50 @@
-import { use, useSyncExternalStore } from "react";
-import { Text, type StyleProp, type TextStyle } from "react-native";
+import { StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 
-import { AnimationsPaused } from "@/ui/AnimationsPaused";
+import { createBeat, useBeat } from "@/ui/beat";
 
 // Same frames and speed as the desktop TerminalSpinner.
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const FRAME_MS = 80;
 
-// One clock for every spinner on screen, so they step in one render rather
-// than each on its own timer, and none runs while none is shown.
-let frame = 0;
-let timer: ReturnType<typeof setInterval> | null = null;
-const listeners = new Set<() => void>();
+// One clock for every spinner on screen, and none while none is shown.
+const beat = createBeat(FRAME_MS, FRAMES.length);
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  timer ??= setInterval(() => {
-    frame = (frame + 1) % FRAMES.length;
-    listeners.forEach((notify) => notify());
-  }, FRAME_MS);
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0 && timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-  };
-}
-const still = () => () => {};
-const current = () => frame;
-
+/** Every frame on one strip, slid past a window a line tall (see `beat`). */
 export function TerminalSpinner({ style }: { style?: StyleProp<TextStyle> }) {
-  const paused = use(AnimationsPaused);
-  const shown = useSyncExternalStore(paused ? still : subscribe, current);
+  const frame = useBeat(beat);
+  const line = useSharedValue(0);
+  const strip = useAnimatedStyle(() => ({
+    transform: [{ translateY: -frame.get() * line.get() }],
+  }));
 
   return (
-    <Text accessibilityElementsHidden style={style}>
-      {FRAMES[shown]}
-    </Text>
+    <View style={styles.window} accessibilityElementsHidden>
+      {/* Sizes the window as the single frame it shows. */}
+      <Text style={[style, styles.unseen]}>{FRAMES[0]}</Text>
+      <Animated.View style={[styles.strip, strip]}>
+        <Text
+          style={style}
+          onLayout={(event) => line.set(event.nativeEvent.layout.height / FRAMES.length)}
+        >
+          {FRAMES.join("\n")}
+        </Text>
+      </Animated.View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  window: {
+    overflow: "hidden",
+  },
+  unseen: {
+    opacity: 0,
+  },
+  strip: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+});
