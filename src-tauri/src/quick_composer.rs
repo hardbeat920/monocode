@@ -141,7 +141,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 /// the application on webview creation, so recheck native focus at execution
 /// time: the user may have switched apps since the frontend scheduled it.
 #[tauri::command]
-pub async fn quick_composer_prepare(app: AppHandle, window: WebviewWindow) -> Result<bool, String> {
+pub async fn quick_composer_prepare(app: AppHandle, window: tauri::Window) -> Result<bool, String> {
     if !crate::window::is_workspace_window(window.label()) {
         return Err("Only a workspace can prepare the composer.".into());
     }
@@ -237,7 +237,7 @@ pub fn quick_composer_fit(window: WebviewWindow, height: f64) -> Result<(), Stri
     let panel = window.clone();
     window
         .run_on_main_thread(move || {
-            let Some(ns_window) = crate::macos::ns_window(&panel) else {
+            let Some(ns_window) = crate::macos::ns_window(&panel.as_ref().window()) else {
                 return;
             };
             // AppKit's origin is at the bottom left. Change size and origin in
@@ -424,7 +424,7 @@ fn capture_screenshot() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn quick_composer_take(
     app: AppHandle,
-    window: WebviewWindow,
+    window: tauri::Window,
     state: State<'_, QuickComposerState>,
 ) -> Result<Option<delivery::Delivery>, String> {
     if !crate::window::is_workspace_window(window.label()) {
@@ -434,14 +434,12 @@ pub fn quick_composer_take(
         .pending
         .lock()
         .map_err(|err| err.to_string())?
-        .claim(window.label(), |label| {
-            app.get_webview_window(label).is_some()
-        }))
+        .claim(window.label(), |label| app.get_window(label).is_some()))
 }
 
 #[tauri::command]
 pub fn quick_composer_ack(
-    window: WebviewWindow,
+    window: tauri::Window,
     state: State<'_, QuickComposerState>,
     id: String,
 ) -> Result<(), String> {
@@ -469,7 +467,7 @@ fn target_or_create<T>(
 
 /// The window the user last looked at, else the first one. Hidden windows
 /// count: close-to-dock keeps them running.
-fn launch_target(app: &AppHandle) -> Option<WebviewWindow> {
+fn launch_target(app: &AppHandle) -> Option<tauri::Window> {
     let windows = workspace_windows(app);
     windows
         .iter()
@@ -570,7 +568,7 @@ fn show(app: &AppHandle, panel: &WebviewWindow) {
 
 /// Restore focus without resetting a draft or moving the panel after capture.
 pub(crate) fn present(panel: &WebviewWindow) {
-    match crate::macos::ns_window(panel) {
+    match crate::macos::ns_window(&panel.as_ref().window()) {
         Some(ns_window) if is_panel(&ns_window) => {
             ns_window.orderFrontRegardless();
             ns_window.makeKeyWindow();
@@ -643,7 +641,7 @@ fn is_panel(ns_window: &NSWindow) -> bool {
 /// Swap Tao's window class for a non-activating panel subclass in place, the
 /// way tauri-nspanel does. Tao and wry keep their delegate and views.
 pub(crate) fn make_panel(window: &WebviewWindow) {
-    let Some(ns_window) = crate::macos::ns_window(window) else {
+    let Some(ns_window) = crate::macos::ns_window(&window.as_ref().window()) else {
         return;
     };
     let Some(panel_class) = panel_class() else {

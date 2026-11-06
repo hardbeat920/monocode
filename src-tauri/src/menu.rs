@@ -10,7 +10,7 @@ use tauri::menu::{
 };
 #[cfg(target_os = "macos")]
 use tauri::Wry;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(target_os = "macos")]
 #[derive(Deserialize)]
@@ -119,6 +119,7 @@ fn menu_item(
 
 pub fn dispatch(app: &AppHandle, id: &str) {
     match id {
+        "open_browser" => emit_to_focused(app, id),
         "help_website" => {
             let _ = open::that("https://usemono.dev");
         }
@@ -145,6 +146,17 @@ pub fn dispatch(app: &AppHandle, id: &str) {
             let _ = app.emit("toggle_autosave", enabled);
         }
         "quit" => crate::window::request_quit(app),
+        "browser_reload" => {
+            if let Some(window) = app
+                .windows()
+                .into_values()
+                .find(|w| w.is_focused().unwrap_or(false))
+            {
+                if let Some(view) = app.get_webview(&crate::browser::label(window.label())) {
+                    let _ = view.reload();
+                }
+            }
+        }
         "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab" | "forward_tab"
         | "split_right" | "split_down" | "focus_left" | "focus_right" | "focus_up"
         | "focus_down" | "sidebar_opacity" | "open_project" | "go_to_file" | "open_search"
@@ -273,6 +285,12 @@ fn build(
         "Terminal: New Tab",
         overrides,
     )?;
+    let open_browser = MenuItemBuilder::with_id("open_browser", "Open Browser")
+        .accelerator("CmdOrCtrl+Shift+B")
+        .build(app)?;
+    let browser_reload = MenuItemBuilder::with_id("browser_reload", "Reload Page")
+        .accelerator("CmdOrCtrl+R")
+        .build(app)?;
     let toggle_terminal = menu_item(
         app,
         "toggle_terminal",
@@ -466,6 +484,8 @@ fn build(
         .item(&new_tab)
         .item(&new_terminal)
         .item(&new_terminal_tab)
+        .item(&open_browser)
+        .item(&browser_reload)
         .item(&split_right)
         .item(&split_down)
         .item(&close_tab)

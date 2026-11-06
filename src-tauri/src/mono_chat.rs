@@ -343,7 +343,7 @@ fn changed(app: &AppHandle, mono_id: &str) {
     }
 }
 
-fn workspace(window: &WebviewWindow) -> Result<(), String> {
+fn workspace(window: &tauri::Window) -> Result<(), String> {
     if is_workspace_window(window.label()) {
         Ok(())
     } else {
@@ -364,7 +364,7 @@ fn panel(app: &AppHandle, window: &WebviewWindow) -> Result<String, String> {
 #[tauri::command]
 pub fn mono_chat_sync(
     app: AppHandle,
-    window: WebviewWindow,
+    window: tauri::Window,
     monos: Vec<MonoEntry>,
     hosted: Vec<HostedMono>,
     mascots: Vec<menu_bar::MenuMascot>,
@@ -440,7 +440,7 @@ fn owner(app: &AppHandle, mono_id: &str) -> Result<String, String> {
     if let Some(label) = inner
         .owners
         .get(mono_id)
-        .filter(|label| app.get_webview_window(label).is_some())
+        .filter(|label| app.get_window(label).is_some())
     {
         return Ok(label.clone());
     }
@@ -547,7 +547,7 @@ fn switch(app: &AppHandle, window: &WebviewWindow, to: &str) -> Result<(), Strin
 #[tauri::command]
 pub fn mono_chat_switch(
     app: AppHandle,
-    window: WebviewWindow,
+    window: tauri::Window,
     from: String,
     to: String,
 ) -> Result<(), String> {
@@ -556,10 +556,15 @@ pub fn mono_chat_switch(
         let mut showing = panels(&app, &from);
         showing.sort_by_key(|w| !w.is_visible().unwrap_or(false));
         showing.into_iter().next()
-    } else if panel(&app, &window)? == from {
-        Some(window)
     } else {
-        return Err("This action belongs to a different Mono.".into());
+        let window = app
+            .get_webview_window(window.label())
+            .ok_or("Floating Mono window is unavailable")?;
+        if panel(&app, &window)? == from {
+            Some(window)
+        } else {
+            return Err("This action belongs to a different Mono.".into());
+        }
     };
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -629,7 +634,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
     // discarded on failure, so catching this unwind cannot expose it later.
     if let Err(exception) = objc2::exception::catch(AssertUnwindSafe(|| {
         crate::quick_composer::make_panel(&window);
-        crate::macos::prepare_floating_window(&window);
+        crate::macos::prepare_floating_window(&window.as_ref().window());
     })) {
         let _ = window.destroy();
         return Err(std::io::Error::other(format!(
@@ -666,7 +671,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
             let _ = hidden.hide();
         }
         tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
-            if let Some(native) = crate::macos::ns_window(&hidden) {
+            if let Some(native) = crate::macos::ns_window(&hidden.as_ref().window()) {
                 native.invalidateShadow();
             }
         }
@@ -727,7 +732,7 @@ pub fn mono_chat_state(app: AppHandle, window: WebviewWindow) -> Result<View, St
 #[tauri::command]
 pub fn mono_chat_publish(
     app: AppHandle,
-    window: WebviewWindow,
+    window: tauri::Window,
     mono_id: String,
     session: Value,
 ) -> Result<(), String> {
@@ -744,7 +749,7 @@ pub fn mono_chat_publish(
 }
 
 #[tauri::command]
-pub fn mono_chat_take(app: AppHandle, window: WebviewWindow) -> Result<Vec<Request>, String> {
+pub fn mono_chat_take(app: AppHandle, window: tauri::Window) -> Result<Vec<Request>, String> {
     workspace(&window)?;
     Ok(app
         .state::<MonoChatState>()
@@ -759,7 +764,7 @@ pub fn mono_chat_take(app: AppHandle, window: WebviewWindow) -> Result<Vec<Reque
 }
 
 #[tauri::command]
-pub fn mono_chat_accept(app: AppHandle, window: WebviewWindow, id: u32) -> Result<bool, String> {
+pub fn mono_chat_accept(app: AppHandle, window: tauri::Window, id: u32) -> Result<bool, String> {
     workspace(&window)?;
     Ok(app
         .state::<MonoChatState>()
@@ -772,7 +777,7 @@ pub fn mono_chat_accept(app: AppHandle, window: WebviewWindow, id: u32) -> Resul
 #[tauri::command]
 pub fn mono_chat_reply(
     app: AppHandle,
-    window: WebviewWindow,
+    window: tauri::Window,
     id: u32,
     error: Option<String>,
 ) -> Result<(), String> {
@@ -884,7 +889,7 @@ pub async fn mono_chat_action(
 }
 
 #[tauri::command]
-pub fn mono_chat_keep_alive(app: AppHandle, window: WebviewWindow) -> bool {
+pub fn mono_chat_keep_alive(app: AppHandle, window: tauri::Window) -> bool {
     let state = app.state::<MonoChatState>();
     let inner = state.0.lock().unwrap();
     inner.views.keys().any(|id| {

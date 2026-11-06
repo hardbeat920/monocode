@@ -138,8 +138,8 @@ pub fn quick_git_fit(
             return;
         }
         let (Some(parent_ns), Some(popup_ns)) = (
-            crate::macos::ns_window(&parent),
-            crate::macos::ns_window(&window),
+            crate::macos::ns_window(&parent.as_ref().window()),
+            crate::macos::ns_window(&window.as_ref().window()),
         ) else {
             return;
         };
@@ -238,7 +238,7 @@ fn complete(
                 NSApplication::sharedApplication(mtm)
                     .currentEvent()
                     .is_some_and(|event| event.r#type() == NSEventType::LeftMouseDown)
-                    && crate::macos::ns_window(&parent).is_some_and(|window| {
+                    && crate::macos::ns_window(&parent.as_ref().window()).is_some_and(|window| {
                         over_trigger(window.frame(), &request.anchor, NSEvent::mouseLocation())
                     })
             });

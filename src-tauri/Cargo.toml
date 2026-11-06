@@ -23,7 +23,7 @@ if-addrs = "0.15"
 hostname = "0.4"
 igd-next = "0.18"
 natpmp = "0.5"
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "unstable"] }
 tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true

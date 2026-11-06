@@ -5,6 +5,7 @@ mod artifacts;
 mod automations;
 mod azure_devops;
 mod background_work;
+mod browser;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
@@ -190,7 +191,7 @@ pub(crate) fn passwd_identity() -> Option<PasswdIdentity> {
 
 #[tauri::command]
 fn set_traffic_lights_visible(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] visible: bool,
 ) {
     #[cfg(target_os = "macos")]
@@ -199,7 +200,7 @@ fn set_traffic_lights_visible(
 
 #[tauri::command]
 fn set_window_background_blur(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] radius: u8,
 ) {
     #[cfg(target_os = "macos")]
@@ -208,7 +209,7 @@ fn set_window_background_blur(
 
 #[tauri::command]
 fn set_dock_badge(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] count: u32,
 ) {
     #[cfg(target_os = "macos")]
@@ -217,7 +218,7 @@ fn set_dock_badge(
 
 #[tauri::command]
 fn set_trackpad_zoom_enabled(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] enabled: bool,
 ) {
     #[cfg(target_os = "macos")]
@@ -294,13 +295,13 @@ pub fn run() {
                 quick_composer::init(app.handle())?;
                 mono_chat::init(app.handle())?;
                 macos::install_dock_menu(app.handle());
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     macos::install(&window);
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     let _ = window.set_decorations(false);
                     let _ = window.set_shadow(true);
                 }
@@ -310,7 +311,7 @@ pub fn run() {
         .on_menu_event(|app, event| {
             menu::dispatch(app, event.id().as_ref());
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(browser::restrict_commands(tauri::generate_handler![
             mobile_access::mobile_status,
             mobile_access::mobile_configure,
             mobile_access::mobile_invite,
@@ -319,6 +320,7 @@ pub fn run() {
             mobile_access::mobile_publish,
             mobile_access::mobile_reply,
             mobile_access::mobile_push,
+            browser::embedded_browser,
             remote::remote_machines,
             remote::remote_connect,
             remote::remote_disconnect,
@@ -651,7 +653,7 @@ pub fn run() {
             project_logo::save_project_logo,
             project_logo::remove_project_logo,
             project_logo::forget_logo_file,
-        ])
+        ]))
         .build(context)
         .expect("error while building MonoCode");
 

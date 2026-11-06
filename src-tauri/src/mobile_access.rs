@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::sync::oneshot;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -332,7 +332,7 @@ pub fn mobile_revoke(host: State<'_, MobileHost>, device_id: String) -> Result<(
 }
 #[tauri::command]
 pub fn mobile_publish(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, MobileHost>,
     catalog: Value,
 ) -> Result<(), String> {
@@ -353,12 +353,7 @@ pub fn mobile_publish(
     Ok(())
 }
 #[tauri::command]
-pub fn mobile_reply(
-    window: WebviewWindow,
-    host: State<'_, MobileHost>,
-    id: String,
-    response: Value,
-) {
+pub fn mobile_reply(window: Window, host: State<'_, MobileHost>, id: String, response: Value) {
     let mut inner = host.inner.lock().unwrap();
     if inner
         .pending
@@ -374,7 +369,7 @@ pub fn mobile_reply(
 /// taken the last ones yet: keep the baseline and send again later.
 #[tauri::command]
 pub fn mobile_push(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, MobileHost>,
     id: String,
     update: Value,
@@ -480,7 +475,7 @@ fn watch(
                 _ = sink.closed() => break,
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {
                     let watching = host.inner.lock().is_ok_and(|inner| inner.watches.contains_key(&id));
-                    if !watching || app.get_webview_window(&window).is_none() {
+                    if !watching || app.get_window(&window).is_none() {
                         break;
                     }
                 }
@@ -500,7 +495,7 @@ fn watch(
 fn merged_catalog(app: &AppHandle, inner: &mut Inner) -> Value {
     inner
         .catalogs
-        .retain(|window, _| app.get_webview_window(window).is_some());
+        .retain(|window, _| app.get_window(window).is_some());
     let mut result = json!({"projects":[],"monos":[],"sessions":[]});
     for field in ["projects", "monos", "sessions"] {
         let mut items = HashMap::new();
