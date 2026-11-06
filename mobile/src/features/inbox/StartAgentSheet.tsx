@@ -19,7 +19,7 @@ import { themedStyles, useColors, useScheme, withAlpha } from "@/ui/theme";
 import { useInboxDetail } from "./detail";
 import { FIXTURES_ENABLED } from "./fixtures";
 import { useInbox } from "./InboxProvider";
-import { ProviderMark } from "./ProviderMark";
+import { ItemMark } from "./ItemMark";
 import { defaultProject, startParams, type StartMode } from "./startAgent";
 
 /**
@@ -85,8 +85,9 @@ export function StartAgentSheet({
       markStartedHere(sessionId);
       void connection.refresh();
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Close the sheets, then the new session over the project it belongs to.
-      router.dismissAll();
+      // Back to the root stack first: dismissAll only pops the inbox's own stack, which
+      // leaves the modal up and pushes the session inside it.
+      router.dismissTo({ pathname: "/project/[projectId]", params: { projectId } });
       router.push({
         pathname: "/project/[projectId]/session/[sessionId]",
         params: { projectId, sessionId },
@@ -106,7 +107,7 @@ export function StartAgentSheet({
       <SettingsPage>
         {item ? (
           <View style={styles.item}>
-            <ProviderMark source={item.source} size={26} />
+            <ItemMark item={item} size={26} />
             <Text numberOfLines={2} style={styles.itemTitle}>
               {item.title}
             </Text>

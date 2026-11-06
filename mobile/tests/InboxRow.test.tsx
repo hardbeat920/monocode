@@ -2,7 +2,14 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { InboxRow, snoozedLabel, whyLabel, type RowHandlers } from "@/features/inbox/InboxRow";
+import {
+  InboxRow,
+  itemRef,
+  snoozedLabel,
+  whyLabel,
+  type RowHandlers,
+} from "@/features/inbox/InboxRow";
+import { itemState } from "@/features/inbox/ItemMark";
 import type { InboxItem } from "@/features/inbox/protocol";
 
 const NOW = new Date("2026-11-01T14:00:00").getTime();
@@ -91,6 +98,7 @@ vi.mock("@/ui/theme", () => {
     caution: "amber",
     deletions: "red",
     additions: "green",
+    merged: "violet",
     surfaceRaised: "gray",
     background: "black",
   };
@@ -160,8 +168,7 @@ describe("an inbox row", () => {
     render();
     const text = container.textContent ?? "";
     expect(text).toContain("Stream tool output");
-    expect(text).toContain("Review requested by maren-k");
-    expect(text).toContain("acme/app · #12");
+    expect(text).toContain("PR #12 · Review requested by maren-k · acme/app");
     expect(text).toContain("12m");
     expect(text).toContain("+312");
     expect(text).toContain("−48");
@@ -177,7 +184,7 @@ describe("an inbox row", () => {
 
   it("opens on a tap", () => {
     render();
-    act(() => button(`Unread, Stream tool output, Review requested by maren-k, acme/app`).click());
+    act(() => button(`Unread, Stream tool output, PR #12, Review requested by maren-k, acme/app`).click());
     expect(handlers.open).toHaveBeenCalledWith(item);
   });
 
@@ -212,6 +219,45 @@ describe("an inbox row", () => {
     render({ ...item, snoozedUntil: NOW + 3_600_000 });
     expect(container.textContent).toContain("Snoozed until");
     expect(snoozedLabel(NOW + 3_600_000, NOW)).toMatch(/3:00/);
+  });
+
+  it("names a GitHub item's kind and drops the reason that only repeats it", () => {
+    render({ ...item, attention: undefined, attentionLabel: undefined });
+    expect(container.textContent).toContain("PR #12");
+    expect(container.textContent).not.toContain("Open pull request");
+    expect(itemRef({ ...item, kind: "issue" })).toBe("Issue #12");
+  });
+
+  it("keeps a reason that says something new", () => {
+    render(item);
+    expect(container.textContent).toContain(`PR #12 · ${item.attentionLabel}`);
+    render({ ...item, attention: undefined, attentionLabel: undefined, status: "draft" });
+    expect(container.textContent).toContain("PR #12 · Draft");
+  });
+
+  it("leaves other sources' identifiers and reasons as they are", () => {
+    const linear: InboxItem = {
+      ...item,
+      source: "linear",
+      kind: "issue",
+      number: "ENG-42",
+      attention: undefined,
+      attentionLabel: undefined,
+    };
+    render(linear);
+    expect(container.textContent).toContain("ENG-42 · Open issue");
+  });
+
+  it("tells pull requests from issues by shape in every state", () => {
+    const colors = { additions: "green", deletions: "red", muted: "gray", merged: "violet" };
+    const state = (kind: InboxItem["kind"], status: InboxItem["status"]) =>
+      itemState({ kind, status }, colors as never);
+    expect(state("pr", "open")).toEqual({ icon: "pullRequest", tint: "green" });
+    expect(state("pr", "draft")).toEqual({ icon: "pullRequestDraft", tint: "gray" });
+    expect(state("pr", "merged")).toEqual({ icon: "merge", tint: "violet" });
+    expect(state("pr", "closed")).toEqual({ icon: "pullRequestClosed", tint: "red" });
+    expect(state("issue", "open")).toEqual({ icon: "issue", tint: "green" });
+    expect(state("issue", "closed")).toEqual({ icon: "passing", tint: "violet" });
   });
 
   it("falls back to the status when the desktop gave no reason", () => {

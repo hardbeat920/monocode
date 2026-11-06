@@ -10,7 +10,7 @@ import {
   HeaderButton,
   useWrapPreference,
 } from "@/features/files/codeScreen";
-import type { ChangedFile } from "@/features/workspace/types";
+import type { ChangedFile, DiffLine } from "@/features/workspace/types";
 import { themedStyles, useColors } from "@/ui/theme";
 
 import { formatCount, splitPath, STATUS_LETTER, useDiffTheme } from "./diffTheme";
@@ -20,9 +20,18 @@ import { formatCount, splitPath, STATUS_LETTER, useDiffTheme } from "./diffTheme
  * desktop's syntax colours when it could highlight the file: a native modal
  * whose transparent header the diff scrolls under. As in the file screen, the
  * line numbers and signs stay put while the code pans sideways, or long lines
- * wrap. It shows the diff as it was when opened.
+ * wrap. It shows the diff as it was when opened. With `onLine` its lines can
+ * be tapped, and `marked` flags the ones `isMarked` says have a comment.
  */
-export function DiffScreen({ file }: { file: ChangedFile | undefined }) {
+export function DiffScreen({
+  file,
+  onLine,
+  isMarked,
+}: {
+  file: ChangedFile | undefined;
+  onLine?: (line: DiffLine) => void;
+  isMarked?: (line: DiffLine) => boolean;
+}) {
   const colors = useColors();
   const styles = useStyles();
   const { name, dir } = splitPath(file?.relative ?? "");
@@ -40,9 +49,11 @@ export function DiffScreen({ file }: { file: ChangedFile | undefined }) {
               sign: line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ",
               tone: line.kind === "context" ? null : diff[line.kind],
               dim: line.kind === "context",
+              press: onLine ? () => onLine(line) : undefined,
+              marked: isMarked?.(line),
             },
       ),
-    [file, diff],
+    [file, diff, onLine, isMarked],
   );
 
   return (

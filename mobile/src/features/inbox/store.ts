@@ -1,12 +1,17 @@
 import {
   applyMark,
+  facetParams,
   feedKey,
+  hasFacets,
   marksToRestore,
   parseCachedPage,
+  type InboxFacets,
   type Mark,
 } from "./model";
 import {
   PAGE_SIZE,
+  type InboxAction,
+  type InboxActionResult,
   type InboxClient,
   type InboxItem,
   type InboxList,
@@ -22,7 +27,13 @@ export type FeedQuery = {
   projectId?: string;
   source?: InboxSource;
   q?: string;
+  facets?: InboxFacets;
 };
+
+/** A filtered or searched list is passing, not worth one of the cached places. */
+function kept(query: FeedQuery) {
+  return !query.q && !hasFacets(query.facets);
+}
 
 /** One list as the screens see it: items with pending marks laid over them. */
 export type Feed = {
@@ -44,6 +55,7 @@ export type Feed = {
   fetchedAt: number | null;
   providers: InboxProviderState[];
   counts: InboxList["counts"];
+  options?: InboxList["options"];
 };
 
 type Raw = Omit<Feed, "items" | "key"> & { items: InboxItem[] };
@@ -66,6 +78,11 @@ export type InboxStoreOptions = {
 };
 
 export const POLL_MS = 5000;
+/**
+ * How often with a desktop that says when to read. Only for what its rev can't
+ * see, as a snooze running out.
+ */
+export const FOLLOWED_POLL_MS = 5 * 60_000;
 /** The lists kept on the phone per desktop; the least recently read go. */
 const CACHE_LIMIT = 8;
 /** Pages re-read in one refresh to cover what was scrolled in; the rest is dropped. */
@@ -105,6 +122,8 @@ export function createInboxStore(options: InboxStoreOptions) {
   const generations = new Map<string, number>();
   let linked = true;
   let disposed = false;
+  /** The desktop's Inbox rev, once it publishes one. */
+  let followed: string | null = null;
 
   const cacheKey = (key: string) => `monocode.inbox.${namespace}.${key}`;
   const indexKey = `monocode.inbox.${namespace}.index`;
@@ -118,7 +137,7 @@ export function createInboxStore(options: InboxStoreOptions) {
     queries.set(key, query);
     let value = raws.get(key);
     if (!value) {
-      const cached = query.q ? null : parseCachedPage(storage.get(cacheKey(key)));
+      const cached = kept(query) ? parseCachedPage(storage.get(cacheKey(key))) : null;
       value = {
         items: cached?.items ?? [],
         loaded: !!cached,
@@ -132,6 +151,7 @@ export function createInboxStore(options: InboxStoreOptions) {
         fetchedAt: cached?.fetchedAt ?? null,
         providers: cached?.providers ?? [],
         counts: cached?.counts ?? EMPTY_COUNTS,
+        options: cached?.options,
       };
       raws.set(key, value);
     }
@@ -173,6 +193,7 @@ export function createInboxStore(options: InboxStoreOptions) {
         fetchedAt: page.fetchedAt,
         providers: page.providers,
         counts: page.counts,
+        options: page.options,
       }),
     );
     let index: string[] = [];
@@ -193,6 +214,7 @@ export function createInboxStore(options: InboxStoreOptions) {
       ...(query.projectId ? { projectId: query.projectId } : {}),
       ...(query.source ? { source: query.source } : {}),
       ...(query.q ? { q: query.q } : {}),
+      ...facetParams(query.facets, Date.now()),
       ...(cursor ? { cursor } : {}),
       limit: PAGE_SIZE,
     };
@@ -233,10 +255,11 @@ export function createInboxStore(options: InboxStoreOptions) {
         fetchedAt: page.fetchedAt,
         providers: page.providers,
         counts: page.counts,
+        options: page.options,
       };
       raws.set(key, next);
       generations.set(key, (generations.get(key) ?? 0) + 1);
-      if (!query.q) remember(key, { ...next, items: page.items, nextCursor: page.nextCursor });
+      if (kept(query)) remember(key, { ...next, items: page.items, nextCursor: page.nextCursor });
       for (const item of items) known.set(item.key, item);
       view(key);
       emit();
@@ -299,7 +322,22 @@ export function createInboxStore(options: InboxStoreOptions) {
       const query = queries.get(key);
       if (query && isActive()) await refresh(query);
       schedule(key);
-    }, pollMs);
+    }, followed ? FOLLOWED_POLL_MS : pollMs);
+  }
+
+  /**
+   * The rev the desktop publishes with its catalog: lists in view are read
+   * when it moves, in place of polling. A desktop without one is polled.
+   */
+  function follow(rev: string | null | undefined) {
+    const next = rev ?? null;
+    if (next === followed) return;
+    followed = next;
+    for (const key of watching.keys()) {
+      schedule(key);
+      const query = queries.get(key);
+      if (next && query && isActive()) void refresh(query);
+    }
   }
 
   /** Reads a list now and keeps it fresh until the returned function is called. */
@@ -400,7 +438,29 @@ export function createInboxStore(options: InboxStoreOptions) {
     };
   }
 
+  /** Runs at the provider, so nothing shows until the desktop says it happened. */
+  async function act(key: string, action: InboxAction): Promise<InboxActionResult> {
+    const result = await client.act(key, action);
+    settle(result.item, key);
+    return result;
+  }
+
+  /** Marks read what the list holds; a refused request changes nothing here. */
+  async function readAll(query: FeedQuery): Promise<void> {
+    await client.readAll(params(query));
+    const key = feedKey(query);
+    const value = raws.get(key);
+    if (value) {
+      update(key, {
+        items: value.items.map((item) => ({ ...item, unread: false })),
+        counts: { ...value.counts, unread: 0 },
+      });
+    }
+    await refresh(query);
+  }
+
   return {
+    follow,
     getFeed(query: FeedQuery): Feed {
       raw(query);
       return view(feedKey(query));
@@ -415,6 +475,8 @@ export function createInboxStore(options: InboxStoreOptions) {
     refresh,
     loadMore,
     mark,
+    act,
+    readAll,
     find,
     /** Whether the desktop is linked; polls stop reading while it isn't. */
     setLinked(next: boolean) {
@@ -455,6 +517,7 @@ function sameMeta(feed: Feed, value: Raw) {
     feed.stale === value.stale &&
     feed.fetchedAt === value.fetchedAt &&
     feed.providers === value.providers &&
-    feed.counts === value.counts
+    feed.counts === value.counts &&
+    feed.options === value.options
   );
 }

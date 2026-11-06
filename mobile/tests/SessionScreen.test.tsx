@@ -21,6 +21,7 @@ const layout = vi.hoisted(() => ({
   onTargetLayout: undefined as undefined | (() => void),
   onBelowLayout: undefined as undefined | ((event: { nativeEvent: { layout: { height: number } } }) => void),
 }));
+vi.mock("@/features/inbox/InboxProvider", () => ({ useInboxBadge: () => 0 }));
 vi.mock("expo-sqlite/kv-store", () => ({ default: { getItemSync: () => null } }));
 vi.mock("expo-blur", () => ({
   BlurTargetView: forwardRef<HTMLDivElement, { children?: ReactNode; onLayout?: () => void }>(({ children, onLayout }, ref) => {
@@ -90,6 +91,7 @@ vi.mock("@/ui/ScenePager", () => ({
 }));
 vi.mock("@/ui/DitherLoading", () => ({ DitherLoading: () => null }));
 vi.mock("@/features/workspace/UnreadDot", () => ({
+  menuLabel: () => "Projects and monos",
   UnreadDot: () => null,
   useAnyUnreadMono: () => false,
 }));

@@ -2,9 +2,12 @@ import type {
   InboxAttention,
   InboxItem,
   InboxList,
+  InboxListParams,
   InboxMarkAction,
+  InboxOptions,
   InboxScope,
   InboxSource,
+  InboxStatus,
 } from "./protocol";
 
 // The Inbox's pure logic: what a scope shows, how rows group, how a mark
@@ -30,22 +33,128 @@ export function isSnoozed(item: InboxItem, now: number) {
 }
 
 /** The chips under the switch; each narrows the list on its own. */
-export type InboxChip = "unread" | "reviews" | "issues" | "ci";
+export type InboxChip = "unread" | "reviews" | "ci";
 export const INBOX_CHIPS: { id: InboxChip; label: string }[] = [
   { id: "unread", label: "Unread" },
   { id: "reviews", label: "Reviews" },
-  { id: "issues", label: "Issues" },
   { id: "ci", label: "CI failing" },
 ];
+
+export type InboxUpdated = "today" | "7d" | "30d";
+
+/** The stand-in for the signed-in user among the authors, as on the desktop. */
+export const ME = "@me";
+
+/**
+ * The desktop's filter menu, set from the filter sheets. An empty list leaves
+ * that filter off; an item has to pass every one that is on.
+ */
+export type InboxFacets = {
+  /** What `placesOf` gives: a project, a tracker's team, a Linear project. */
+  places?: readonly string[];
+  /** Logins, or `ME`. */
+  authors?: readonly string[];
+  statuses?: readonly InboxStatus[];
+  kind?: InboxItem["kind"];
+  sources?: readonly InboxSource[];
+  updated?: InboxUpdated;
+  assigned?: boolean;
+};
 
 export type InboxFilter = {
   scope: InboxScope;
   /** Only this phone project's items; every project's when unset. */
   projectId?: string;
   chips?: readonly InboxChip[];
-  sources?: readonly InboxSource[];
+  facets?: InboxFacets;
   query?: string;
 };
+
+export function hasFacets(facets: InboxFacets | undefined) {
+  return !!facetsKey(facets);
+}
+
+/** Facets as text: the same choices make the same key, in any order. */
+export function facetsKey(facets: InboxFacets | undefined) {
+  if (!facets) return "";
+  const entries = Object.entries(facets)
+    .filter(([, value]) => (Array.isArray(value) ? value.length > 0 : !!value))
+    .map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])
+    .sort(([a], [b]) => String(a).localeCompare(String(b)));
+  return entries.length > 0 ? JSON.stringify(entries) : "";
+}
+
+/** When an `updated` choice starts, by the phone's clock. */
+export function updatedSince(updated: InboxUpdated, now: number) {
+  if (updated === "today") return new Date(now).setHours(0, 0, 0, 0);
+  return now - (updated === "7d" ? 7 : 30) * DAY;
+}
+
+/** Facets as `inbox.list` takes them. */
+export function facetParams(facets: InboxFacets | undefined, now: number): InboxListParams {
+  if (!hasFacets(facets)) return {};
+  const { updated, assigned, kind, ...lists } = facets!;
+  return {
+    ...Object.fromEntries(Object.entries(lists).filter(([, list]) => list.length > 0)),
+    ...(kind ? { kind } : {}),
+    ...(updated ? { updatedSince: updatedSince(updated, now) } : {}),
+    ...(assigned ? { assigned } : {}),
+  };
+}
+
+/** What the project picker can narrow an item by, as the desktop's `places`. */
+export function placesOf(item: InboxItem) {
+  const place = item.projectId ?? `repo:${item.repo}`;
+  return item.linearProject ? [place, `linear:${item.linearProject}`] : [place];
+}
+
+function isAuthor(item: InboxItem, author: string) {
+  return author === ME
+    ? !!item.mine
+    : item.author.name.toLowerCase() === author.toLowerCase();
+}
+
+/**
+ * Whether an item passes the facets. The desktop has already applied them to
+ * what it sends; this answers at once while its reply is on the way, and is
+ * all an older desktop gets.
+ */
+export function matchesFacets(item: InboxItem, facets: InboxFacets, now: number) {
+  const { places, authors, statuses, kind, sources, updated, assigned } = facets;
+  return (
+    (!places?.length || placesOf(item).some((place) => places.includes(place))) &&
+    (!authors?.length || authors.some((author) => isAuthor(item, author))) &&
+    (!statuses?.length || statuses.includes(item.status)) &&
+    (!kind || item.kind === kind) &&
+    (!sources?.length || sources.includes(item.source)) &&
+    (!updated || item.updatedAt >= updatedSince(updated, now)) &&
+    (!assigned || !!item.assigned)
+  );
+}
+
+/** Filter options from a list's own items, for a desktop that sends none. */
+export function optionsFrom(items: InboxItem[]): InboxOptions {
+  const authors = new Map<string, InboxOptions["authors"][number]>();
+  const places = new Map<string, InboxOptions["places"][number]>();
+  const place = (id: string, name: string, kind: InboxOptions["places"][number]["kind"]) => {
+    const entry = places.get(id) ?? { id, name, kind, count: 0 };
+    places.set(id, { ...entry, count: entry.count + 1 });
+  };
+  for (const item of items) {
+    place(item.projectId ?? `repo:${item.repo}`, item.repo, item.projectId ? "project" : "tracker");
+    if (item.mine || !item.author.name) continue;
+    const id = item.author.name.toLowerCase();
+    const entry = authors.get(id) ?? { ...item.author, itemKey: item.key, count: 0 };
+    authors.set(id, { ...entry, count: entry.count + 1 });
+  }
+  const mine = items.filter((item) => item.mine).length;
+  return {
+    authors: [...authors.values()].sort((a, b) => b.count - a.count),
+    ...(mine > 0 ? { me: mine } : {}),
+    places: [...places.values()].sort((a, b) => b.count - a.count),
+    sources: sourcesIn(items),
+  };
+}
 
 /**
  * Items in `projectId`. An item the desktop couldn't map to a project is
@@ -67,22 +176,20 @@ function matchesChip(item: InboxItem, chip: InboxChip) {
       return item.unread;
     case "reviews":
       return item.attention === "reviewRequested";
-    case "issues":
-      return item.kind === "issue";
     case "ci":
       return item.attention === "ciFailed" || item.checks === "failing";
   }
 }
 
-/** What the list shows: the scope, project, chips, sources and search applied, newest first. */
+/** What the list shows: the scope, project, chips, facets and search applied, newest first. */
 export function visibleItems(items: InboxItem[], filter: InboxFilter, now: number) {
   const needle = filter.query?.trim().toLowerCase() ?? "";
   const chips = filter.chips ?? [];
-  const sources = filter.sources ?? [];
+  const facets = filter.facets ?? {};
   return inProject(items, filter.projectId)
     .filter((item) => inScope(item, filter.scope, now))
     .filter((item) => chips.every((chip) => matchesChip(item, chip)))
-    .filter((item) => sources.length === 0 || sources.includes(item.source))
+    .filter((item) => matchesFacets(item, facets, now))
     .filter(
       (item) =>
         !needle ||
@@ -93,7 +200,7 @@ export function visibleItems(items: InboxItem[], filter: InboxFilter, now: numbe
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** The sources in the list, in the order first seen, for the source chips. */
+/** The sources in the list, in the order first seen. */
 export function sourcesIn(items: InboxItem[]): InboxSource[] {
   return [...new Set(items.map((item) => item.source))];
 }
@@ -283,7 +390,7 @@ export function withOverrides(state: MarkState): InboxItem[] {
 /** What is kept on the phone of a list, to show before the desktop answers. */
 export type CachedPage = Pick<
   InboxList,
-  "items" | "nextCursor" | "fetchedAt" | "providers" | "counts"
+  "items" | "nextCursor" | "fetchedAt" | "providers" | "counts" | "options"
 >;
 
 /** Reads a saved page, or null when it is missing or not a page. */
@@ -298,6 +405,7 @@ export function parseCachedPage(text: string | null | undefined): CachedPage | n
       fetchedAt: page.fetchedAt,
       providers: Array.isArray(page.providers) ? page.providers : [],
       counts: page.counts ?? { unread: 0, needsMe: 0, done: 0 },
+      options: page.options,
     };
   } catch {
     return null;
@@ -342,8 +450,11 @@ export function feedKey(query: {
   projectId?: string;
   source?: InboxSource;
   q?: string;
+  facets?: InboxFacets;
 }) {
-  return [query.scope, query.projectId ?? "*", query.source ?? "*", query.q ?? ""].join("|");
+  const parts = [query.scope, query.projectId ?? "*", query.source ?? "*", query.q ?? ""];
+  const facets = facetsKey(query.facets);
+  return (facets ? [...parts, facets] : parts).join("|");
 }
 
 // -- People ------------------------------------------------------------------

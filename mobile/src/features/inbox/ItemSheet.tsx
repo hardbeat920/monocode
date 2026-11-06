@@ -1,25 +1,34 @@
+import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MONO } from "@/features/changes/diffTheme";
 import { keepDiff } from "@/features/changes/shownDiffs";
 import { HeaderButton } from "@/features/files/codeScreen";
-import { Markdown } from "@/features/sessions/Markdown";
 import { SettingsPage } from "@/features/settings/SettingsUI";
 import { relativeTime } from "@/features/workspace/relativeTime";
+import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { GradualBlur } from "@/ui/GradualBlur";
-import { Icon } from "@/ui/Icon";
+import { Icon, type IconName } from "@/ui/Icon";
+import { LiquidView } from "@/ui/LiquidView";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { Avatar } from "./Avatar";
-import { hasChecks, hasCode, useInboxDetail } from "./detail";
+import { hasChecks, hasCode, reloadInboxDetail, useInboxDetail } from "./detail";
+import { InboxMarkdown } from "./InboxMarkdown";
+import { actionCopy, mergeOptions } from "./itemActions";
+import { countComments, lineLabel, useReviewComments } from "./review";
+import { ItemMenu, type ItemMenuEntry } from "./ItemMenu";
 import { useInbox } from "./InboxProvider";
 import { ChecksGlyph, whyLabel } from "./InboxRow";
+import { itemState } from "./ItemMark";
 import { InboxToast } from "./InboxToast";
 import { SOURCE_NAMES } from "./ProviderMark";
 import type {
+  InboxAction,
   InboxCheck,
   InboxDetail,
   InboxDiffFile,
@@ -33,21 +42,26 @@ type Tab = "summary" | "code" | "checks";
 
 /** The action bar over the page's end: the button, and room above and below it. */
 const BAR = 86;
+const BUTTON = 50;
 
 /**
  * An inbox item's sheet, as the mock lays it out: provider, number, status
  * and author; the description and comments; for a pull request its changed
- * files and, on GitHub, its checks. The primary action starts an agent on
- * it; the header's button opens it in the provider's own app or site.
+ * files and, on GitHub, its checks. The action bar starts an agent on it and
+ * holds what the desktop's detail offers: merging, the ⋯ menu's other pull
+ * request actions, commenting and copying. Anything that reaches the provider
+ * is confirmed first. The header's button opens it in the provider's own app
+ * or site.
  */
 export function ItemSheet({ itemKey }: { itemKey: string }) {
   const colors = useColors();
   const styles = useStyles();
   const { bottom } = useSafeAreaInsets();
-  const { client, mark } = useInbox();
-  const { item, detail, diff, checks, error, loading, reload } = useInboxDetail(itemKey);
+  const { client, review, mark, act, notify } = useInbox();
+  const { item, detail, diff, checks, error, loading, reload, adopt } = useInboxDetail(itemKey);
   const now = useNow();
   const [tab, setTab] = useState<Tab>("summary");
+  const [acting, setActing] = useState(false);
 
   // Opening an item reads it.
   const unread = item?.unread;
@@ -85,6 +99,118 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
       pathname: "/inbox/start",
       params: { key: itemKey, ...(text ? { text } : {}) },
     });
+
+  const actions = detail?.actions ?? [];
+  const canComment = actions.includes("comment");
+  const canReview = actions.includes("review");
+  const merges = mergeOptions(actions);
+  // The list may have changed at the desk; the Code tab shows it as it stands.
+  useEffect(() => {
+    if (canReview && current === "code") void review.load(itemKey).catch(() => {});
+  }, [canReview, current, itemKey, review]);
+
+  const comment = (replyTo?: string, author?: string) =>
+    router.push({
+      pathname: "/inbox/comment",
+      params: {
+        key: itemKey,
+        ...(replyTo ? { replyTo } : {}),
+        ...(author ? { author } : {}),
+      },
+    });
+  const copy = (text: string, message: string) => {
+    void Clipboard.setStringAsync(text);
+    void Haptics.selectionAsync();
+    notify(message);
+  };
+
+  const run = async (action: InboxAction) => {
+    if (!item) return;
+    setActing(true);
+    try {
+      adopt(await act(item, action));
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (reason) {
+      Alert.alert(
+        actionCopy(action, detail ?? {}).failed,
+        reason instanceof Error ? reason.message : String(reason),
+      );
+    } finally {
+      setActing(false);
+    }
+  };
+  const confirm = (action: InboxAction) => {
+    if (acting) return;
+    const words = actionCopy(action, detail ?? {});
+    Alert.alert(words.title, words.detail, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: words.confirm,
+        style: action === "close" ? "destructive" : "default",
+        onPress: () => void run(action),
+      },
+    ]);
+  };
+
+  const menu: ItemMenuEntry[] = [];
+  if (item) {
+    const headRef = detail?.headRef;
+    if (canComment) {
+      menu.push({
+        label: "Add comment",
+        icon: "comment",
+        symbol: "text.bubble",
+        onPress: () => comment(),
+      });
+    }
+    menu.push({
+      label: "Copy link",
+      icon: "link",
+      symbol: "link",
+      onPress: () => copy(item.url, "Link copied"),
+    });
+    if (headRef) {
+      menu.push({
+        label: "Copy branch name",
+        icon: "branch",
+        symbol: "arrow.triangle.branch",
+        onPress: () => copy(headRef, "Branch name copied"),
+      });
+    }
+    if (actions.includes("ready")) {
+      menu.push({
+        label: "Ready for review",
+        icon: "pullRequest",
+        symbol: "checkmark.circle",
+        onPress: () => confirm("ready"),
+      });
+    }
+    if (actions.includes("draft")) {
+      menu.push({
+        label: "Convert to draft",
+        icon: "draft",
+        symbol: "circle.dashed",
+        onPress: () => confirm("draft"),
+      });
+    }
+    if (actions.includes("reopen")) {
+      menu.push({
+        label: "Reopen pull request",
+        icon: "pullRequest",
+        symbol: "arrow.uturn.backward",
+        onPress: () => confirm("reopen"),
+      });
+    }
+    if (actions.includes("close")) {
+      menu.push({
+        label: "Close pull request",
+        icon: "close",
+        symbol: "xmark.circle",
+        destructive: true,
+        onPress: () => confirm("close"),
+      });
+    }
+  }
 
   return (
     <View style={styles.root}>
@@ -139,13 +265,21 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
               </View>
             ) : null}
             {current === "summary" ? (
-              <Summary item={item} detail={detail} loading={loading} client={client} now={now} />
+              <Summary
+                item={item}
+                detail={detail}
+                loading={loading}
+                client={client}
+                now={now}
+                onComment={canComment ? comment : undefined}
+              />
             ) : current === "code" ? (
               <Code
                 files={diff?.files ?? null}
                 truncated={diff?.truncated ?? false}
                 loading={loading}
                 itemKey={item.key}
+                reviewing={canReview}
               />
             ) : (
               <Checks
@@ -161,19 +295,56 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
       </SettingsPage>
       <GradualBlur edge="bottom" height={BAR + bottom} color={colors.sheet} />
       <View style={[styles.bar, { paddingBottom: bottom + 12 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Start agent on this"
-          disabled={!item}
-          onPress={() => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            start();
-          }}
-          style={({ pressed }) => [styles.primary, !item && styles.disabled, pressed && styles.pressed]}
-        >
-          <Icon name="sparkle" size={19} color={colors.inverse} />
-          <Text style={styles.primaryLabel}>Start agent on this</Text>
-        </Pressable>
+        {menu.length > 0 ? <ItemMenu entries={menu} size={BUTTON} /> : null}
+        {/* LiquidView's `style` lands inside its Pressable, so the row's flex goes here. */}
+        <View style={styles.action}>
+          <LiquidView
+            accessibilityLabel="Start agent on this"
+            disabled={!item}
+            onPress={() => start()}
+            pressedScale={1.03}
+            tintColor={merges.length > 0 ? undefined : colors.inverseSurface}
+            style={!item && styles.disabled}
+            innerStyle={styles.face}
+          >
+            <Icon
+              name="sparkle"
+              size={19}
+              color={merges.length > 0 ? colors.content : colors.inverse}
+            />
+            <Text style={[styles.primaryLabel, merges.length > 0 && styles.secondaryLabel]}>
+              {merges.length > 0 ? "Start agent" : "Start agent on this"}
+            </Text>
+          </LiquidView>
+        </View>
+        {merges.length > 0 ? (
+          <ChoiceMenu
+            label="Merge pull request"
+            title="Merge pull request"
+            disabled={acting}
+            actions={merges.map(({ action, label }) => ({
+              label,
+              onPress: () => confirm(action),
+            }))}
+            style={styles.action}
+          >
+            <LiquidView
+              interactive={!acting}
+              tintColor={colors.inverseSurface}
+              style={acting && styles.disabled}
+              innerStyle={styles.face}
+            >
+              {acting ? (
+                <ActivityIndicator color={colors.inverse} />
+              ) : (
+                <>
+                  <Icon name="merge" size={19} color={colors.inverse} />
+                  <Text style={styles.primaryLabel}>Merge</Text>
+                </>
+              )}
+            </LiquidView>
+          </ChoiceMenu>
+        ) : null}
       </View>
       <InboxToast bottom={bottom + 84} />
     </View>
@@ -213,19 +384,12 @@ const STATUS_WORDS: Record<InboxItem["status"], string> = {
 function Facts({ item, detail }: { item: InboxItem; detail: InboxDetail | null }) {
   const colors = useColors();
   const styles = useStyles();
-  const status =
-    item.status === "merged"
-      ? colors.accent
-      : item.status === "closed"
-        ? colors.muted
-        : item.status === "draft"
-          ? colors.muted
-          : colors.additions;
+  const state = itemState(item, colors);
   const decision = detail?.reviewDecision;
   const checks = item.checks ?? detail?.checksSummary;
   return (
     <View style={styles.facts}>
-      <Fact tint={status} icon={item.kind === "pr" ? "pullRequest" : "issue"}>
+      <Fact tint={state.tint} icon={state.icon}>
         {STATUS_WORDS[item.status]}
       </Fact>
       {item.attention && item.attention !== "other" ? (
@@ -261,7 +425,7 @@ function Fact({
 }: {
   children: string;
   tint?: string;
-  icon?: "pullRequest" | "issue";
+  icon?: IconName;
 }) {
   const colors = useColors();
   const styles = useStyles();
@@ -280,34 +444,60 @@ function Summary({
   loading,
   client,
   now,
+  onComment,
 }: {
   item: InboxItem;
   detail: InboxDetail | null;
   loading: boolean;
   client: ReturnType<typeof useInbox>["client"];
   now: number;
+  /** Writes a comment, or with a target a reply. Left out where the desktop can't post. */
+  onComment?: (replyTo?: string, author?: string) => void;
 }) {
   const styles = useStyles();
   const colors = useColors();
   if (!detail) {
     return loading ? <ActivityIndicator style={styles.center} color={colors.muted} /> : null;
   }
+  const comments = detail.thread.filter((entry) => entry.kind !== "commit").length;
   return (
     <View>
       {detail.body.trim() ? (
-        <Markdown text={detail.body} />
+        <InboxMarkdown text={detail.body} place={{ itemKey: item.key }} client={client} />
       ) : (
         <Text style={styles.muted}>No description.</Text>
       )}
-      {detail.thread.length > 0 ? (
-        <>
-          <Text style={styles.heading}>
-            COMMENTS <Text style={styles.headingCount}>{detail.thread.length}</Text>
-          </Text>
-          {detail.thread.map((entry) => (
-            <Comment key={entry.id} entry={entry} itemKey={item.key} client={client} now={now} />
-          ))}
-        </>
+      <View accessibilityRole="header" style={styles.commentsHead}>
+        <Icon name="comment" size={20} color={colors.content} />
+        <Text style={styles.commentsTitle}>Comments</Text>
+        <View style={styles.commentsCount}>
+          <Text style={styles.commentsCountLabel}>{comments}</Text>
+        </View>
+      </View>
+      {comments === 0 ? <Text style={styles.noComments}>No comments yet.</Text> : null}
+      {detail.thread.map((entry) =>
+        entry.kind === "commit" ? (
+          <CommitRow key={entry.id} entry={entry} now={now} />
+        ) : (
+          <Comment
+            key={entry.id}
+            entry={entry}
+            itemKey={item.key}
+            client={client}
+            now={now}
+            onReply={onComment}
+          />
+        ),
+      )}
+      {onComment ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => onComment()}
+          style={({ pressed }) => [styles.addComment, pressed && styles.pressed]}
+        >
+          <Icon name="comment" size={18} color={colors.muted} />
+          <Text style={styles.addCommentLabel}>Add a comment</Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -318,24 +508,145 @@ function Comment({
   itemKey,
   client,
   now,
+  onReply,
 }: {
   entry: InboxThreadEntry;
   itemKey: string;
   client: ReturnType<typeof useInbox>["client"];
   now: number;
+  onReply?: (replyTo: string, author: string) => void;
 }) {
   const styles = useStyles();
+  const { replyTo } = entry;
   return (
     <View style={styles.comment}>
-      <Avatar person={entry.author} itemKey={itemKey} client={client} size={28} />
-      <View style={styles.commentBody}>
-        <Text style={styles.commentHead}>
+      <View style={styles.commentHead}>
+        <Avatar person={entry.author} itemKey={itemKey} client={client} size={28} />
+        <Text numberOfLines={1} style={styles.commentWho}>
           <Text style={styles.whoName}>{entry.author.name}</Text>
-          {entry.kind === "comment" ? "" : ` ${entry.kind === "review" ? "reviewed" : "committed"}`}
-          <Text style={styles.commentTime}>{`  ${relativeTime(entry.createdAt, now)}`}</Text>
+          {entry.kind === "review" ? " reviewed" : ""}
         </Text>
-        <Markdown text={entry.body} />
+        <Text style={styles.commentTime}>{relativeTime(entry.createdAt, now)}</Text>
       </View>
+      {entry.path ? (
+        <Text numberOfLines={1} style={styles.commentPlace}>
+          {entry.line ? `${entry.path}:${entry.line}` : entry.path}
+        </Text>
+      ) : null}
+      <InboxMarkdown
+        text={entry.body}
+        place={{ itemKey, commentId: entry.id }}
+        client={client}
+      />
+      {onReply && replyTo ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Reply to ${entry.author.name}`}
+          hitSlop={8}
+          onPress={() => onReply(replyTo, entry.author.name)}
+          style={styles.reply}
+        >
+          <Text style={styles.replyLabel}>Reply</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/** A commit between the comments: activity, so it doesn't read as one. */
+function CommitRow({ entry, now }: { entry: InboxThreadEntry; now: number }) {
+  const colors = useColors();
+  const styles = useStyles();
+  return (
+    <View style={styles.commit}>
+      <Icon name="branch" size={14} color={colors.faint} />
+      <Text numberOfLines={1} style={styles.commitText}>
+        {`${entry.author.name} committed: ${entry.body}`}
+      </Text>
+      <Text style={styles.commentTime}>{relativeTime(entry.createdAt, now)}</Text>
+    </View>
+  );
+}
+
+/** The line comments waiting to go out, and the button that posts them together. */
+function ReviewCard({ itemKey }: { itemKey: string }) {
+  const colors = useColors();
+  const styles = useStyles();
+  const { review, notify } = useInbox();
+  const comments = useReviewComments(review, itemKey);
+  const [posting, setPosting] = useState(false);
+
+  if (comments.length === 0) {
+    return <Text style={styles.reviewHint}>Tap a line in a file to comment on it.</Text>;
+  }
+
+  const refused = (title: string, reason: unknown) =>
+    Alert.alert(title, reason instanceof Error ? reason.message : String(reason));
+  const post = async () => {
+    setPosting(true);
+    try {
+      await review.submit(itemKey);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      reloadInboxDetail(itemKey);
+      notify("Review posted");
+    } catch (reason) {
+      refused("Couldn’t post the review", reason);
+    } finally {
+      setPosting(false);
+    }
+  };
+  const confirm = () =>
+    Alert.alert(
+      "Post this review?",
+      `${countComments(comments.length)} will go to GitHub as one review. It doesn’t approve or request changes.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Post review", onPress: () => void post() },
+      ],
+    );
+
+  return (
+    <View style={[styles.card, styles.review]}>
+      <Text style={styles.reviewTitle}>Your review</Text>
+      {comments.map((comment) => (
+        <View key={comment.id} style={styles.pending}>
+          <View style={styles.pendingBody}>
+            <Text numberOfLines={1} style={styles.commentPlace}>
+              {lineLabel(comment)}
+            </Text>
+            <Text numberOfLines={3} style={styles.pendingText}>
+              {comment.text}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove comment on ${lineLabel(comment)}`}
+            disabled={posting}
+            hitSlop={8}
+            onPress={() =>
+              void review
+                .remove(itemKey, comment.id)
+                .catch((reason: unknown) => refused("Couldn’t remove the comment", reason))
+            }
+          >
+            <Icon name="close" size={18} color={colors.muted} />
+          </Pressable>
+        </View>
+      ))}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Post review"
+        accessibilityState={{ disabled: posting, busy: posting }}
+        disabled={posting}
+        onPress={confirm}
+        style={({ pressed }) => [styles.postReview, pressed && styles.pressed]}
+      >
+        {posting ? (
+          <ActivityIndicator color={colors.inverse} />
+        ) : (
+          <Text style={styles.postReviewLabel}>Post review</Text>
+        )}
+      </Pressable>
     </View>
   );
 }
@@ -345,15 +656,19 @@ function Code({
   truncated,
   loading,
   itemKey,
+  reviewing,
 }: {
   files: InboxDiffFile[] | null;
   truncated: boolean;
   loading: boolean;
   itemKey: string;
+  /** Its lines take review comments. */
+  reviewing: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
-  const { client } = useInbox();
+  const { client, review } = useInbox();
+  const pending = useReviewComments(review, itemKey);
   const [opening, setOpening] = useState<string | null>(null);
   if (!files) {
     return loading ? (
@@ -377,45 +692,56 @@ function Code({
         setOpening(null);
       }
     }
-    router.push({ pathname: "/diff", params: { id: keepDiff(toChangedFile(whole)) } });
+    const id = keepDiff(toChangedFile(whole), reviewing ? itemKey : undefined);
+    router.push({ pathname: "/diff", params: { id } });
   };
 
   return (
-    <View style={styles.card}>
-      {files.map((file, index) => {
-        const slash = file.path.lastIndexOf("/");
-        return (
-          <Pressable
-            key={file.path}
-            accessibilityRole="button"
-            accessibilityLabel={`${file.path}, ${file.additions} added, ${file.deletions} removed`}
-            onPress={() => void open(file)}
-            style={({ pressed }) => [
-              styles.fileRow,
-              index > 0 && styles.divided,
-              pressed && styles.pressed,
-            ]}
-          >
-            <View style={styles.fileName}>
-              <Text numberOfLines={1} style={styles.fileTitle}>
-                {file.path.slice(slash + 1)}
-              </Text>
-              <Text numberOfLines={1} style={styles.fileDir}>
-                {slash > 0 ? file.path.slice(0, slash) : "/"}
-              </Text>
-            </View>
-            {opening === file.path ? (
-              <ActivityIndicator color={colors.muted} />
-            ) : (
-              <Text style={styles.fileCounts}>
-                <Text style={{ color: colors.additions }}>{`+${file.additions}`}</Text>
-                <Text style={{ color: colors.deletions }}>{`  −${file.deletions}`}</Text>
-              </Text>
-            )}
-            <Icon name="chevronRight" size={16} color={colors.faint} />
-          </Pressable>
-        );
-      })}
+    <View>
+      {reviewing ? <ReviewCard itemKey={itemKey} /> : null}
+      <View style={styles.card}>
+        {files.map((file, index) => {
+          const slash = file.path.lastIndexOf("/");
+          const notes = pending.filter((comment) => comment.path === file.path).length;
+          return (
+            <Pressable
+              key={file.path}
+              accessibilityRole="button"
+              accessibilityLabel={`${file.path}, ${file.additions} added, ${file.deletions} removed`}
+              onPress={() => void open(file)}
+              style={({ pressed }) => [
+                styles.fileRow,
+                index > 0 && styles.divided,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.fileName}>
+                <Text numberOfLines={1} style={styles.fileTitle}>
+                  {file.path.slice(slash + 1)}
+                </Text>
+                <Text numberOfLines={1} style={styles.fileDir}>
+                  {slash > 0 ? file.path.slice(0, slash) : "/"}
+                </Text>
+              </View>
+              {notes > 0 ? (
+                <View style={styles.fileNotes}>
+                  <Icon name="comment" size={13} color={colors.accent} />
+                  <Text style={[styles.fileNotesLabel, { color: colors.accent }]}>{notes}</Text>
+                </View>
+              ) : null}
+              {opening === file.path ? (
+                <ActivityIndicator color={colors.muted} />
+              ) : (
+                <Text style={styles.fileCounts}>
+                  <Text style={{ color: colors.additions }}>{`+${file.additions}`}</Text>
+                  <Text style={{ color: colors.deletions }}>{`  −${file.deletions}`}</Text>
+                </Text>
+              )}
+              <Icon name="chevronRight" size={16} color={colors.faint} />
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -564,32 +890,158 @@ const useStyles = themedStyles((colors) => ({
     height: 8,
     borderRadius: 4,
   },
-  heading: {
-    marginTop: 22,
-    marginBottom: 10,
+  commentsHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 28,
+    marginBottom: 14,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: colors.stroke,
+  },
+  commentsTitle: {
+    color: colors.content,
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+  commentsCount: {
+    minWidth: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 7,
+    borderRadius: 12,
+    backgroundColor: colors.fill,
+  },
+  commentsCountLabel: {
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
-  headingCount: {
-    color: colors.faint,
+  noComments: {
+    marginBottom: 8,
+    color: colors.muted,
+    fontSize: 15,
   },
   comment: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 16,
-  },
-  commentBody: {
-    flex: 1,
-    gap: 3,
+    gap: 8,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderCurve: "continuous",
+    backgroundColor: colors.listCard,
+    borderWidth: 1,
+    borderColor: colors.stroke,
   },
   commentHead: {
-    color: colors.content,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  commentWho: {
+    flex: 1,
+    color: colors.muted,
     fontSize: 14,
   },
   commentTime: {
     color: colors.faint,
     fontSize: 13,
+  },
+  commentPlace: {
+    color: colors.muted,
+    fontFamily: MONO,
+    fontSize: 12,
+  },
+  reply: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+  },
+  replyLabel: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  addComment: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: 44,
+    marginTop: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderCurve: "continuous",
+    borderWidth: 1,
+    borderColor: colors.stroke,
+  },
+  addCommentLabel: {
+    color: colors.muted,
+    fontSize: 15,
+  },
+  commit: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  commitText: {
+    flex: 1,
+    color: colors.muted,
+    fontSize: 13,
+  },
+  review: {
+    gap: 10,
+    marginBottom: 12,
+    padding: 14,
+  },
+  reviewTitle: {
+    color: colors.content,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  reviewHint: {
+    marginBottom: 10,
+    color: colors.muted,
+    fontSize: 13,
+  },
+  pending: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  pendingBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  pendingText: {
+    color: colors.content,
+    fontSize: 14,
+  },
+  postReview: {
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 22,
+    backgroundColor: colors.inverseSurface,
+  },
+  postReviewLabel: {
+    color: colors.inverse,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  fileNotes: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  fileNotesLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   muted: {
     color: colors.muted,
@@ -692,24 +1144,25 @@ const useStyles = themedStyles((colors) => ({
     right: 0,
     bottom: 0,
     flexDirection: "row",
+    alignItems: "center",
     gap: 10,
     paddingTop: 12,
     paddingHorizontal: 16,
   },
-  primary: {
+  action: {
     flex: 1,
-    height: 50,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
+  },
+  face: {
+    height: BUTTON,
     gap: 8,
-    borderRadius: 25,
-    backgroundColor: colors.inverseSurface,
   },
   primaryLabel: {
     color: colors.inverse,
     fontSize: 17,
     fontWeight: "600",
+  },
+  secondaryLabel: {
+    color: colors.content,
   },
   disabled: {
     opacity: 0.35,

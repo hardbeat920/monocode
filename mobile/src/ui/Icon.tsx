@@ -2,7 +2,12 @@ import Alert01Icon from "@hugeicons/core-free-icons/Alert01Icon";
 import ArrowUpRight01Icon from "@hugeicons/core-free-icons/ArrowUpRight01Icon";
 import CancelCircleIcon from "@hugeicons/core-free-icons/CancelCircleIcon";
 import CheckmarkCircle01Icon from "@hugeicons/core-free-icons/CheckmarkCircle01Icon";
+import CircleDashedIcon from "@hugeicons/core-free-icons/CircleDashedIcon";
+import CircleDotIcon from "@hugeicons/core-free-icons/CircleDotIcon";
 import CircleIcon from "@hugeicons/core-free-icons/CircleIcon";
+import GitMergeIcon from "@hugeicons/core-free-icons/GitMergeIcon";
+import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestClosedIcon";
+import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import Clock01Icon from "@hugeicons/core-free-icons/Clock01Icon";
 import Comment01Icon from "@hugeicons/core-free-icons/Comment01Icon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
@@ -10,7 +15,6 @@ import Link01Icon from "@hugeicons/core-free-icons/Link01Icon";
 import Undo02Icon from "@hugeicons/core-free-icons/Undo02Icon";
 import WifiOff01Icon from "@hugeicons/core-free-icons/WifiOff01Icon";
 import Add01Icon from "@hugeicons/core-free-icons/Add01Icon";
-import Archive01Icon from "@hugeicons/core-free-icons/Archive01Icon";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
 import Archive02Icon from "@hugeicons/core-free-icons/Archive02Icon";
@@ -18,7 +22,6 @@ import ArrowUp02Icon from "@hugeicons/core-free-icons/ArrowUp02Icon";
 import BotIcon from "@hugeicons/core-free-icons/BotIcon";
 import BubbleChatIcon from "@hugeicons/core-free-icons/BubbleChatIcon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
-import CircleIcon from "@hugeicons/core-free-icons/CircleIcon";
 import ChartBreakoutSquareIcon from "@hugeicons/core-free-icons/ChartBreakoutSquareIcon";
 import ComputerIcon from "@hugeicons/core-free-icons/ComputerIcon";
 import ComputerRemoveIcon from "@hugeicons/core-free-icons/ComputerRemoveIcon";
@@ -119,7 +122,10 @@ const icons = {
   // The Inbox: snooze, items, checks, and the offline note.
   clock: Clock01Icon,
   pullRequest: GitPullRequestIcon,
-  issue: CircleIcon,
+  pullRequestDraft: GitPullRequestDraftIcon,
+  pullRequestClosed: GitPullRequestClosedIcon,
+  merge: GitMergeIcon,
+  issue: CircleDotIcon,
   comment: Comment01Icon,
   link: Link01Icon,
   external: ArrowUpRight01Icon,
@@ -130,10 +136,10 @@ const icons = {
   passing: CheckmarkCircle01Icon,
   failing: CancelCircleIcon,
   info: InformationCircleIcon,
-  archive: Archive01Icon,
   people: UserGroupIcon,
   layers: Layers01Icon,
   circle: CircleIcon,
+  draft: CircleDashedIcon,
 };
 
 export type IconName = keyof typeof icons;

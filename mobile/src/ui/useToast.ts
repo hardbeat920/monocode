@@ -7,8 +7,10 @@ export type ToastState = {
   undo?: () => void;
 };
 
-/** How long a toast stays before it goes by itself. */
+/** How long a toast stays before it goes by itself: long enough to reach Undo. */
 export const TOAST_MS = 5000;
+/** The same for one with nothing to tap, which only has to be read. */
+const NOTE_MS = 3000;
 
 /**
  * The one line under a list that says what a change did. One at a time; a
@@ -30,7 +32,7 @@ export function useToast(ms = TOAST_MS) {
       setToast({ id, message, undo });
       timer.current = setTimeout(
         () => setToast((now) => (now?.id === id ? null : now)),
-        ms,
+        undo ? ms : Math.min(ms, NOTE_MS),
       );
     },
     [ms],

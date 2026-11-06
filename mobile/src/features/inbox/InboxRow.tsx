@@ -18,8 +18,8 @@ import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { ACTION_GAP, ACTION_SIZE, ActionFace, SwipeAction, SwipeActions } from "@/ui/SwipeAction";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
 
+import { ItemMark } from "./ItemMark";
 import { snoozeOptions } from "./model";
-import { ProviderMark } from "./ProviderMark";
 import type { InboxItem } from "./protocol";
 
 /** Three buttons and the gaps around them: how far the row slides to show them. */
@@ -52,9 +52,24 @@ export function whyLabel(item: InboxItem) {
   }
 }
 
+/** What a row calls an item: GitHub's say which kind, as both number alike. */
+export function itemRef(item: InboxItem) {
+  if (item.source !== "github") return item.number;
+  return [item.kind === "pr" ? "PR" : "Issue", item.number].filter(Boolean).join(" ");
+}
+
+/** Why a row is here, left out where its mark and reference already say it. */
+function rowReason(item: InboxItem, now: number) {
+  if (item.snoozedUntil && item.snoozedUntil > now) {
+    return `Snoozed until ${snoozedLabel(item.snoozedUntil, now)}`;
+  }
+  const plain = item.source === "github" && !item.attentionLabel && item.status === "open";
+  return plain ? undefined : whyLabel(item);
+}
+
 /**
- * An inbox item as the mock lays it out: the provider's mark, then the title
- * with its age, why it's here, and where it lives with its size, comments and
+ * An inbox item: what it is, then the title with its age, and under that its
+ * reference, why it's here and where it lives, with its size, comments and
  * checks. Swiping it left uncovers Snooze, Start agent and Done, as in Mail;
  * swiped all the way, it commits Done. Right swipes are left to the page.
  */
@@ -63,11 +78,14 @@ export const InboxRow = memo(function InboxRow({
   handlers,
   now,
   exiting,
+  scoped = false,
 }: {
   item: InboxItem;
   handlers: RowHandlers;
   now: number;
   exiting?: EntryOrExitLayoutType;
+  /** In a list of one project's items, which needn't each name it. */
+  scoped?: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
@@ -92,12 +110,9 @@ export const InboxRow = memo(function InboxRow({
     handlers.done(item);
   };
 
-  const summary = [
-    item.unread ? "Unread" : null,
-    item.title,
-    whyLabel(item),
-    item.repo,
-  ]
+  const ref = itemRef(item);
+  const reason = rowReason(item, now);
+  const summary = [item.unread ? "Unread" : null, item.title, ref, reason, item.repo]
     .filter(Boolean)
     .join(", ");
 
@@ -110,8 +125,7 @@ export const InboxRow = memo(function InboxRow({
         overshootRight
         overshootFriction={4}
         dragOffsetFromRightEdge={10}
-        // Its actions are on the right, so only a swipe left is its own; one
-        // right goes to the page, which swipes back a page or opens the drawer.
+        // Its actions are on the right, so only a swipe left is its own.
         dragOffsetFromLeftEdge={Number.MAX_SAFE_INTEGER}
         onSwipeableOpenStartDrag={() => {
           armed.set(false);
@@ -166,11 +180,11 @@ export const InboxRow = memo(function InboxRow({
           style={({ pressed }) => [styles.row, pressed && styles.pressed]}
         >
           <View pointerEvents="none" style={[styles.dot, !item.unread && styles.dotRead]} />
-          <ProviderMark source={item.source} />
+          <ItemMark item={item} />
           <View style={styles.body}>
             <View style={styles.line}>
               <Text
-                numberOfLines={1}
+                numberOfLines={2}
                 style={[styles.title, !item.unread && styles.titleRead]}
               >
                 {item.title}
@@ -179,14 +193,16 @@ export const InboxRow = memo(function InboxRow({
                 {relativeTime(item.updatedAt, now)}
               </Text>
             </View>
-            <Text numberOfLines={1} style={[styles.why, { color: tone }]}>
-              {item.snoozedUntil && item.snoozedUntil > now
-                ? `Snoozed until ${snoozedLabel(item.snoozedUntil, now)}`
-                : whyLabel(item)}
-            </Text>
             <View style={styles.line}>
               <Text numberOfLines={1} style={styles.ref}>
-                {[item.repo, item.number].filter(Boolean).join(" · ")}
+                {ref}
+                {reason ? (
+                  <Text style={[styles.why, { color: tone }]}>
+                    {ref ? " · " : ""}
+                    {reason}
+                  </Text>
+                ) : null}
+                {scoped ? "" : `${ref || reason ? " · " : ""}${item.repo}`}
               </Text>
               <View style={styles.stats}>
                 {item.kind === "pr" && item.additions !== undefined ? (
@@ -372,7 +388,6 @@ const useStyles = themedStyles((colors) => ({
     color: colors.accent,
   },
   why: {
-    fontSize: 14,
     fontWeight: "500",
   },
   ref: {

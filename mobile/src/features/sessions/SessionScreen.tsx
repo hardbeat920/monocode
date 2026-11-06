@@ -54,7 +54,8 @@ import {
 import { GlassBlurTarget, GlassPresence, LiquidView } from "@/ui/LiquidView";
 import { DitherLoading } from "@/ui/DitherLoading";
 import { useDrawerActions, useSceneSwapping, useSceneSwitching } from "@/ui/ScenePager";
-import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
+import { useInboxBadge } from "@/features/inbox/InboxProvider";
+import { menuLabel, UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
 import { themedStyles, useColors } from "@/ui/theme";
 
 export const HEADER_HEIGHT = 44;
@@ -162,9 +163,12 @@ export function useSessionLayout() {
  */
 export function SheetLayout({
   top,
+  keyboardOffset = 0,
   children,
 }: {
   top: number;
+  /** As the layout's own, for a bar that rests nearer the keyboard. */
+  keyboardOffset?: number;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -176,12 +180,12 @@ export function SheetLayout({
       bottom: dockBottom,
       bareBottom: dockBottom + PAGE_FADE,
       dockBottom,
-      keyboardOffset: 0,
+      keyboardOffset,
       extraContentPadding: undefined,
       composerGrowth: 0,
       settled: true,
     }),
-    [top, dockBottom],
+    [top, dockBottom, keyboardOffset],
   );
   return <SessionLayoutContext value={layout}>{children}</SessionLayoutContext>;
 }
@@ -309,6 +313,18 @@ export function SessionScreen({
 // layout. Laid out as in the keyboard-controller chat guide: content runs
 // full-bleed under a floating header, and the composer sits in a
 // view that rides on top of the keyboard (see useKeyboardLift).
+/** The drawer's button in the frame's header. Reads the Inbox's count itself,
+ *  so a new one doesn't re-render the frame. */
+function FrameMenuButton({ replies, onPress }: { replies: boolean; onPress: () => void }) {
+  const inbox = useInboxBadge() > 0;
+  return (
+    <>
+      <CircleButton icon="sidebar" label={menuLabel(replies, inbox)} onPress={onPress} />
+      {replies || inbox ? <UnreadDot /> : null}
+    </>
+  );
+}
+
 export function SessionFrame({
   children,
   nativeHeaderHeight,
@@ -640,12 +656,7 @@ export function SessionFrame({
               )}
               <View style={[styles.header, { top: headerTop }]}>
                 <View>
-                  <CircleButton
-                    icon="sidebar"
-                    label={unread ? "Projects and monos, new replies" : "Projects and monos"}
-                    onPress={drawer.open}
-                  />
-                  {unread ? <UnreadDot /> : null}
+                  <FrameMenuButton replies={unread} onPress={drawer.open} />
                 </View>
                 <View style={styles.titleBlock}>
                   {centerLayers.map((layer) => (

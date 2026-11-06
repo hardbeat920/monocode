@@ -27,31 +27,33 @@ import Animated, {
 import { useConnection } from "@/features/connection/ConnectionProvider";
 import { FileSearchBar, SEARCH_BAR } from "@/features/files/FileSearchBar";
 import { ProjectMascot } from "@/features/mascots/ProjectMascot";
-import { useSessionLayout } from "@/features/sessions/SessionScreen";
+import { HEADER_HEIGHT, useSessionLayout } from "@/features/sessions/SessionScreen";
 import { projectColor } from "@/features/workspace/projectColors";
 import { relativeTime } from "@/features/workspace/relativeTime";
-import { AnimationsPaused } from "@/ui/AnimationsPaused";
-import { useKeepsSwipe } from "@/ui/ScenePager";
 import { GlassSegments } from "@/ui/GlassSegments";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
-import { useInbox, useInboxFeed } from "./InboxProvider";
+import { Chip, FilterChips, FilterSheet, placeName, type FilterKind } from "./InboxFilters";
+import { useInbox, useInboxActionsSupported, useInboxFeed } from "./InboxProvider";
 import { GroupMenu } from "./GroupMenu";
 import { InboxRow, type RowHandlers } from "./InboxRow";
-import { SOURCE_NAMES, useSourceColor } from "./ProviderMark";
+import { SOURCE_NAMES } from "./ProviderMark";
 import { InboxToast } from "./InboxToast";
 import {
   bannerFor,
   groupItems,
+  hasFacets,
   INBOX_CHIPS,
-  sourcesIn,
+  optionsFrom,
   visibleItems,
   type InboxChip,
+  type InboxFacets,
   type InboxGrouping,
 } from "./model";
 import type { InboxItem, InboxScope, InboxSource } from "./protocol";
+import type { Feed } from "./store";
 import { useNow } from "./useNow";
 
 const SCOPES: { id: InboxScope; label: string }[] = [
@@ -64,51 +66,46 @@ type Entry =
   | { type: "header"; id: string; title: string; count: number; projectId?: string }
   | { type: "row"; id: string; item: InboxItem };
 
+/** The gaps around the scope switch, under the header and over the list. */
+const SCOPE_ABOVE = 4;
+const SCOPE_BELOW = 12;
+/** What the scope switch takes below the header: the list starts this far down. */
+export const SCOPE_SPACE = SCOPE_ABOVE + HEADER_HEIGHT + SCOPE_BELOW;
+
 /**
- * The project's Inbox, the third page after New and Sessions: review requests,
- * mentions, assignments and failing checks from the connected sources. It
- * starts on this project's items, with a chip to take in every project's.
- * `active` while the page is in view: it polls then.
+ * The Inbox: review requests, mentions, assignments and failing checks from
+ * the connected sources, for every project. The scope switch sits under the
+ * header and the list scrolls under both. The chips open the desktop's filters
+ * in partial sheets; `project`, the one it was opened from, heads the picker.
  */
-export function InboxPage({
-  projectId,
-  projectName,
-  active,
-}: {
-  projectId: string;
-  projectName: string;
-  active: boolean;
-}) {
+export function InboxPage({ project }: { project?: { id: string; name: string } }) {
   const colors = useColors();
   const styles = useStyles();
   const reduced = useReducedMotion();
-  const keepsSwipe = useKeepsSwipe();
-  const { mark } = useInbox();
+  const { mark, readAll, client } = useInbox();
   const { pageTop, dockBottom } = useSessionLayout();
   const bottom = dockBottom + SEARCH_BAR + 16;
 
   const [scope, setScope] = useState<InboxScope>("all");
-  const [wide, setWide] = useState(false);
   const [chips, setChips] = useState<InboxChip[]>([]);
-  const [sources, setSources] = useState<InboxSource[]>([]);
+  const [facets, setFacets] = useState<InboxFacets>({});
+  const [sheet, setSheet] = useState<FilterKind | null>(null);
   const [grouping, setGrouping] = useState<InboxGrouping>("day");
   const [search, setSearch] = useState("");
-  const scoped = wide ? undefined : projectId;
+  const wide = !facets.places?.length;
 
-  const { feed, refresh, loadMore } = useInboxFeed({ scope, projectId: scoped }, active);
-  const now = useNow(active);
+  const { feed: live, refresh, loadMore } = useInboxFeed({ scope, facets });
+  const feed = useHeldFeed(live, scope);
+  const canReadAll = useInboxActionsSupported();
+  const now = useNow();
   const [pulling, setPulling] = useState(false);
 
   const shown = useMemo(
     () =>
-      visibleItems(
-        feed.items,
-        { scope, projectId: scoped, chips, sources, query: search },
-        now,
-      ),
-    [feed.items, scope, scoped, chips, sources, search, now],
+      visibleItems(feed.items, { scope, chips, facets, query: search }, now),
+    [feed.items, scope, chips, facets, search, now],
   );
-  const available = useMemo(() => sourcesIn(feed.items), [feed.items]);
+  const options = useMemo(() => feed.options ?? optionsFrom(feed.items), [feed.options, feed.items]);
   const names = useProjectNames();
   const entries = useMemo<Entry[]>(
     () =>
@@ -133,9 +130,6 @@ export function InboxPage({
     openRow.current?.close();
     openRow.current = null;
   }, []);
-  useEffect(() => {
-    if (!active) closeOpenRow();
-  }, [active, closeOpenRow]);
 
   const latest = useRef({ mark });
   useLayoutEffect(() => {
@@ -158,40 +152,30 @@ export function InboxPage({
     [],
   );
 
-  const filtered = chips.length > 0 || sources.length > 0 || !!search.trim();
-  const banner = bannerFor(feed);
+  const { places, ...others } = facets;
+  const filtered = chips.length > 0 || hasFacets(others) || !!search.trim();
+  const onePlace = places?.length === 1 ? places[0] : undefined;
+  const banner = bannerFor(live);
   const exiting = reduced ? undefined : FadeOut.duration(140).reduceMotion(ReduceMotion.System);
 
   const header = (
     <View style={styles.header}>
-      <ScopeSwitch
-        value={scope}
-        onChange={(next) => {
-          closeOpenRow();
-          setScope(next);
-        }}
-        needsMe={feed.counts.needsMe}
-      />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        {...keepsSwipe}
         style={styles.chipScroll}
         contentContainerStyle={styles.chips}
       >
-        <Chip
-          label={wide ? "All projects" : projectName}
-          selected={!wide}
-          onPress={() => setWide(!wide)}
-          leading={
-            wide ? (
-              <Icon name="folder" size={16} color={colors.muted} />
-            ) : (
-              <ProjectMascot project={projectId} color={projectColor(projectId)} size={16} />
-            )
-          }
-          hint={wide ? "Show only this project" : "Show every project"}
+        <FilterChips
+          facets={facets}
+          onChange={setFacets}
+          options={options}
+          // An older desktop can't say who is assigned.
+          canAssign={!!feed.options}
+          names={names}
+          client={client}
+          onOpen={setSheet}
         />
         {INBOX_CHIPS.map((chip) => (
           <Chip
@@ -208,30 +192,13 @@ export function InboxPage({
             }
           />
         ))}
-        {available.length > 1 || sources.length > 0
-          ? available.map((source) => (
-              <SourceChip
-                key={source}
-                source={source}
-                selected={sources.includes(source)}
-                onPress={() =>
-                  setSources((current) =>
-                    current.includes(source)
-                      ? current.filter((entry) => entry !== source)
-                      : [...current, source],
-                  )
-                }
-              />
-            ))
-          : null}
       </ScrollView>
       {banner ? <Banner banner={banner} now={now} onRetry={() => void refresh()} /> : null}
     </View>
   );
 
   return (
-    <AnimationsPaused value={!active}>
-      <View style={styles.page}>
+    <View style={styles.page}>
         <Animated.FlatList
           data={feed.loaded ? entries : []}
           keyExtractor={(entry) => entry.id}
@@ -242,7 +209,13 @@ export function InboxPage({
             entry.type === "header" ? (
               <GroupHeader entry={entry} />
             ) : (
-              <InboxRow item={entry.item} handlers={handlers} now={now} exiting={exiting} />
+              <InboxRow
+                item={entry.item}
+                handlers={handlers}
+                now={now}
+                exiting={exiting}
+                scoped={!wide}
+              />
             )
           }
           ListHeaderComponent={header}
@@ -254,20 +227,20 @@ export function InboxPage({
                 wide={wide}
                 connected={feed.providers.some((provider) => provider.connected)}
                 offline={feed.offline}
-                projectName={projectName}
+                projectName={onePlace ? placeName(onePlace, options, names) : undefined}
                 onClear={() => {
                   setChips([]);
-                  setSources([]);
+                  setFacets({});
                   setSearch("");
                 }}
-                onWiden={() => setWide(true)}
+                onWiden={() => setFacets(others)}
               />
             ) : (
               <Skeleton />
             )
           }
           ListFooterComponent={
-            feed.loadingMore ? <ActivityIndicator style={styles.more} color={colors.muted} /> : null
+            live.loadingMore ? <ActivityIndicator style={styles.more} color={colors.muted} /> : null
           }
           onScrollBeginDrag={closeOpenRow}
           onEndReached={() => void loadMore()}
@@ -284,27 +257,66 @@ export function InboxPage({
               }}
             />
           }
-          contentInset={{ top: pageTop }}
-          contentOffset={{ x: 0, y: -pageTop }}
           scrollIndicatorInsets={{ top: pageTop, bottom }}
-          contentContainerStyle={[styles.list, { paddingBottom: bottom }]}
+          contentContainerStyle={[styles.list, { paddingTop: pageTop, paddingBottom: bottom }]}
           initialNumToRender={12}
           windowSize={7}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         />
+        <GradualBlur edge="top" height={pageTop} color={colors.background} />
         <GradualBlur edge="bottom" height={bottom} color={colors.background} />
+        <View style={[styles.scopeBar, { top: pageTop - SCOPE_SPACE + SCOPE_ABOVE }]}>
+          <ScopeSwitch
+            value={scope}
+            onChange={(next) => {
+              closeOpenRow();
+              setScope(next);
+            }}
+            needsMe={feed.counts.needsMe}
+          />
+        </View>
         <InboxToast bottom={bottom + 8} />
         <FileSearchBar
           value={search}
           onChange={setSearch}
           placeholder="Search inbox"
-          accessory={<GroupMenu value={grouping} onChange={setGrouping} />}
+          accessory={
+            <GroupMenu
+              value={grouping}
+              onChange={setGrouping}
+              onMarkAllRead={
+                canReadAll && feed.counts.unread > 0
+                  ? () => void readAll({ scope, facets })
+                  : undefined
+              }
+            />
+          }
         />
-      </View>
-    </AnimationsPaused>
+        <FilterSheet
+          open={sheet}
+          onClose={() => setSheet(null)}
+          facets={facets}
+          onChange={setFacets}
+          options={options}
+          names={names}
+          pinned={project?.id}
+          client={client}
+        />
+    </View>
   );
+}
+
+/**
+ * The list to show. A new filter is a new list that hasn't been read yet; the
+ * last one stays up meanwhile, with the filter applied to it on the phone, so
+ * a change shows at once instead of as a skeleton.
+ */
+function useHeldFeed(live: Feed, scope: InboxScope) {
+  const [held, setHeld] = useState({ feed: live, scope });
+  if (live.loaded && held.feed !== live) setHeld({ feed: live, scope });
+  return live.loaded || held.scope !== scope || !held.feed.loaded ? live : held.feed;
 }
 
 /** Phone project ids to their names, for the project grouping. */
@@ -345,7 +357,6 @@ function ScopeSwitch({
   const styles = useStyles();
   return (
     <GlassSegments
-      style={styles.scopes}
       value={value}
       onChange={onChange}
       segments={SCOPES.map((scope) => ({
@@ -358,61 +369,6 @@ function ScopeSwitch({
             </View>
           ) : undefined,
       }))}
-    />
-  );
-}
-
-function Chip({
-  label,
-  selected,
-  onPress,
-  leading,
-  count,
-  hint,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-  leading?: React.ReactNode;
-  count?: number;
-  hint?: string;
-}) {
-  const styles = useStyles();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={hint}
-      accessibilityState={{ selected }}
-      onPress={() => {
-        void Haptics.selectionAsync();
-        onPress();
-      }}
-      style={[styles.chip, selected && styles.chipOn]}
-    >
-      {leading}
-      <Text style={[styles.chipLabel, selected && styles.chipLabelOn]}>{label}</Text>
-      {count ? <Text style={[styles.chipCount, selected && styles.chipLabelOn]}>{count}</Text> : null}
-    </Pressable>
-  );
-}
-
-function SourceChip({
-  source,
-  selected,
-  onPress,
-}: {
-  source: InboxSource;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const tint = useSourceColor(source);
-  return (
-    <Chip
-      label={SOURCE_NAMES[source]}
-      selected={selected}
-      onPress={onPress}
-      leading={<View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: tint }} />}
     />
   );
 }
@@ -466,7 +422,7 @@ function EmptyState({
   wide: boolean;
   connected: boolean;
   offline: boolean;
-  projectName: string;
+  projectName?: string;
   onClear: () => void;
   onWiden: () => void;
 }) {
@@ -564,8 +520,10 @@ const useStyles = themedStyles((colors) => ({
     gap: 10,
     paddingBottom: 4,
   },
-  scopes: {
-    marginHorizontal: 4,
+  scopeBar: {
+    position: "absolute",
+    left: 14,
+    right: 14,
   },
   count: {
     minWidth: 18,
@@ -589,31 +547,6 @@ const useStyles = themedStyles((colors) => ({
   chips: {
     gap: 6,
     paddingHorizontal: 14,
-  },
-  chip: {
-    height: 32,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    backgroundColor: colors.fill,
-  },
-  chipOn: {
-    backgroundColor: withAlpha(colors.accent, 0.18),
-  },
-  chipLabel: {
-    color: colors.muted,
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  chipLabelOn: {
-    color: colors.accent,
-  },
-  chipCount: {
-    color: colors.muted,
-    fontSize: 13,
-    fontVariant: ["tabular-nums"],
   },
   banner: {
     flexDirection: "row",

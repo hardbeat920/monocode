@@ -68,9 +68,8 @@ import {
   type Workspace,
 } from "@/features/workspace/WorkspaceMenu";
 import { ComposerWorkspace } from "@/features/workspace/ComposerWorkspace";
-import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
-import { InboxPage } from "@/features/inbox/InboxPage";
-import { useInboxSupported } from "@/features/inbox/InboxProvider";
+import { useInboxBadge } from "@/features/inbox/InboxProvider";
+import { menuLabel, UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
 import { Icon } from "@/ui/Icon";
 import { androidBackHeader } from "@/ui/AndroidHeader";
 import { GlassBlurTarget, LiquidView } from "@/ui/LiquidView";
@@ -78,6 +77,19 @@ import { useDrawerActions, useDrawerSwipe } from "@/ui/ScenePager";
 import { Timed } from "@/ui/Timed";
 import { useColors } from "@/ui/theme";
 import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
+
+/** The drawer's button, as on every screen it opens from. Reads the Inbox's
+ *  count itself, so a new one doesn't re-render the project. */
+function MenuButton({ replies, onPress }: { replies: boolean; onPress: () => void }) {
+  const colors = useColors();
+  const inbox = useInboxBadge() > 0;
+  return (
+    <ProjectHeaderButton label={menuLabel(replies, inbox)} onPress={onPress}>
+      <Icon name="sidebar" size={22} color={colors.content} />
+      {replies || inbox ? <UnreadDot /> : null}
+    </ProjectHeaderButton>
+  );
+}
 
 /**
  * A project's screen: a new session, or with `sessionId` one of its sessions.
@@ -144,8 +156,7 @@ export function ProjectScreen({
     sessionId,
   );
   // Only a new session has pages; a session is the chat alone.
-  const inboxOn = useInboxSupported();
-  const pages = useProjectPages(project.id, !sessionId, inboxOn);
+  const pages = useProjectPages(project.id, !sessionId);
   // Between pages, mid-swipe or springing to one.
   const swiping = useDerivedValue(() => {
     const at = pages.progress.get();
@@ -286,16 +297,7 @@ export function ProjectScreen({
   const headerSurface = (content: ReactNode) => (
     <GlassBlurTarget value={blurTarget}>{content}</GlassBlurTarget>
   );
-  const menuButton = (
-    <ProjectHeaderButton
-      label={unread ? "Projects and monos, new replies" : "Projects and monos"}
-      onPress={drawer.open}
-    >
-      {/* The drawer's button, as on every screen it opens from. */}
-      <Icon name="sidebar" size={22} color={colors.content} />
-      {unread ? <UnreadDot /> : null}
-    </ProjectHeaderButton>
-  );
+  const menuButton = <MenuButton replies={unread} onPress={drawer.open} />;
   const settingsButton = (
     <ProjectHeaderButton
       label="Settings"
@@ -430,7 +432,7 @@ export function ProjectScreen({
                 }
               : { headerTitle: "", headerBackVisible: !sheet }
             : {
-                headerTitle: () => <ProjectSwitch pages={pages} projectId={project.id} />,
+                headerTitle: () => <ProjectSwitch pages={pages} />,
                 ...(Platform.OS === "android"
                   ? {
                       headerTitleAlign: "center" as const,
@@ -497,17 +499,6 @@ export function ProjectScreen({
                   onOpen={(session) => openSession(session.id)}
                 />
               </Timed>
-            }
-            inbox={
-              inboxOn ? (
-                <Timed id="project inbox page">
-                  <InboxPage
-                    projectId={project.id}
-                    projectName={project.name}
-                    active={focused && pages.view === "inbox"}
-                  />
-                </Timed>
-              ) : undefined
             }
           />
         )}

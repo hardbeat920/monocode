@@ -1,3 +1,8 @@
+/** The Inbox page; `projectId` is the project it was opened from, if any. */
+export function inboxListRoute(projectId?: string) {
+  return { pathname: "/inbox-list" as const, params: projectId ? { projectId } : {} };
+}
+
 /** Where a tap on a notification goes: an inbox item's sheet, by its key. */
 export type InboxTarget = { pathname: "/inbox/item"; params: { key: string } };
 

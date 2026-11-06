@@ -218,6 +218,7 @@ function LinkedWorkspace() {
                 <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
                 <Stack.Screen name="models" options={screens.modal} />
                 <Stack.Screen name="inbox" options={screens.modal} />
+                <Stack.Screen name="inbox-list" options={screens.session} />
                 <Stack.Screen name="changes" options={screens.changes} />
               </Stack>
             </SessionFrame>

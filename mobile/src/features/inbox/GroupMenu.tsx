@@ -1,4 +1,4 @@
-import { Label, Picker } from "@expo/ui/swift-ui";
+import { Button, Label, Picker } from "@expo/ui/swift-ui";
 import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 
 import { SEARCH_BAR } from "@/features/files/FileSearchBar";
@@ -6,13 +6,16 @@ import { GlassMenuButton } from "@/ui/GlassMenuButton";
 
 import type { InboxGrouping } from "./model";
 
-/** The round button beside the search: how rows are grouped, in a native menu. */
+/** The round button beside the search: how rows are grouped, and marking them read, in a native menu. */
 export function GroupMenu({
   value,
   onChange,
+  onMarkAllRead,
 }: {
   value: InboxGrouping;
   onChange: (value: InboxGrouping) => void;
+  /** Left out when nothing is unread. */
+  onMarkAllRead?: () => void;
 }) {
   return (
     <GlassMenuButton
@@ -29,6 +32,9 @@ export function GroupMenu({
         <Label title="Day" systemImage="calendar" modifiers={[tag("day")]} />
         <Label title="Project" systemImage="folder" modifiers={[tag("project")]} />
       </Picker>
+      {onMarkAllRead ? (
+        <Button label="Mark all as read" systemImage="checkmark.circle" onPress={onMarkAllRead} />
+      ) : null}
     </GlassMenuButton>
   );
 }

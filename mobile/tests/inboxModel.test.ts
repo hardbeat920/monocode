@@ -12,6 +12,11 @@ import {
   parseCachedPage,
   snoozeOptions,
   visibleItems,
+  facetParams,
+  ME,
+  optionsFrom,
+  placesOf,
+  type InboxFacets,
   withOverrides,
   type MarkState,
 } from "@/features/inbox/model";
@@ -76,8 +81,8 @@ describe("scope filtering", () => {
   it("applies chips, sources and search together", () => {
     expect(keys(visibleItems(items, { scope: "all", chips: ["unread"] }, NOW))).toEqual(["a", "d"]);
     expect(keys(visibleItems(items, { scope: "all", chips: ["ci"] }, NOW))).toEqual(["d"]);
-    expect(keys(visibleItems(items, { scope: "all", chips: ["issues"] }, NOW))).toEqual(["c"]);
-    expect(keys(visibleItems(items, { scope: "all", sources: ["linear"] }, NOW))).toEqual(["c"]);
+    expect(keys(visibleItems(items, { scope: "all", facets: { kind: "issue" } }, NOW))).toEqual(["c"]);
+    expect(keys(visibleItems(items, { scope: "all", facets: { sources: ["linear"] } }, NOW))).toEqual(["c"]);
     expect(keys(visibleItems(items, { scope: "all", query: " REVIEW " }, NOW))).toEqual([]);
     expect(keys(visibleItems([item({ key: "x", title: "Fix the backoff" })], { scope: "all", query: "backoff" }, NOW))).toEqual(["x"]);
   });
@@ -237,5 +242,57 @@ describe("item sheet helpers", () => {
       ["del", 1, null],
       ["add", null, 1],
     ]);
+  });
+});
+
+describe("facets", () => {
+  const list = [
+    item({ key: "a", author: { name: "Ana" }, status: "open", updatedAt: NOW - HOUR, projectId: "p1" }),
+    item({ key: "b", author: { name: "me" }, mine: true, status: "merged", updatedAt: NOW - 40 * 24 * HOUR, projectId: "p2" }),
+    item({ key: "c", kind: "issue", source: "linear", repo: "Core", linearProject: "l1", assigned: true, author: { name: "" }, status: "closed", updatedAt: NOW - 2 * HOUR }),
+  ];
+  const show = (facets: InboxFacets) => keys(visibleItems(list, { scope: "all", facets }, NOW));
+
+  it("offers an item under each place it can be narrowed by", () => {
+    expect(placesOf(list[0])).toEqual(["p1"]);
+    expect(placesOf(list[2])).toEqual(["repo:Core", "linear:l1"]);
+  });
+
+  it("matches any choice within a filter and every filter that is on", () => {
+    expect(show({ authors: ["ana", ME] })).toEqual(["a", "b"]);
+    expect(show({ places: ["p2", "linear:l1"] })).toEqual(["c", "b"]);
+    expect(show({ statuses: ["open", "closed"] })).toEqual(["a", "c"]);
+    expect(show({ assigned: true })).toEqual(["c"]);
+    expect(show({ updated: "30d" })).toEqual(["a", "c"]);
+    expect(show({ kind: "pr", authors: ["ana"] })).toEqual(["a"]);
+    expect(show({ kind: "issue", authors: ["ana"] })).toEqual([]);
+  });
+
+  it("sends only the filters that are on, and the time as the phone's", () => {
+    expect(facetParams({ places: [], kind: undefined }, NOW)).toEqual({});
+    expect(facetParams({ authors: [ME], kind: "pr", updated: "7d", assigned: true }, NOW)).toEqual({
+      authors: [ME],
+      kind: "pr",
+      updatedSince: NOW - 7 * 24 * HOUR,
+      assigned: true,
+    });
+  });
+
+  it("keys a list by its choices, not the order they were made in", () => {
+    const one = feedKey({ scope: "all", facets: { authors: ["a", "b"], kind: "pr" } });
+    expect(feedKey({ scope: "all", facets: { kind: "pr", authors: ["b", "a"] } })).toBe(one);
+    expect(feedKey({ scope: "all", facets: { authors: [] } })).toBe(feedKey({ scope: "all" }));
+  });
+
+  it("builds options from a list when the desktop sends none", () => {
+    const options = optionsFrom(list);
+    expect(options.me).toBe(1);
+    expect(options.authors.map((author) => author.name)).toEqual(["Ana"]);
+    expect(options.places.map((place) => [place.id, place.kind])).toEqual([
+      ["p1", "project"],
+      ["p2", "project"],
+      ["repo:Core", "tracker"],
+    ]);
+    expect(optionsFrom([list[0]]).me).toBeUndefined();
   });
 });

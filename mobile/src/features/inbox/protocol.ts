@@ -27,7 +27,13 @@ export type InboxItem = {
   repo: string;
   /** The phone project it maps to (catalog `projects[].id`), when known. */
   projectId?: string;
+  /** The Linear project, or `~none`, on a Linear issue. */
+  linearProject?: string;
   author: InboxPerson;
+  /** The signed-in user wrote it. An older desktop leaves this out. */
+  mine?: boolean;
+  /** It is assigned to the signed-in user. An older desktop leaves this out. */
+  assigned?: boolean;
   status: InboxStatus;
   updatedAt: number;
   unread: boolean;
@@ -50,10 +56,43 @@ export type InboxListParams = {
   source?: InboxSource;
   projectId?: string;
   q?: string;
+  /** Logins, or `@me`. These filters are as `inbox.list` documents them. */
+  authors?: readonly string[];
+  /** What `placesOf` gives for an item. */
+  places?: readonly string[];
+  statuses?: readonly InboxStatus[];
+  kind?: InboxItem["kind"];
+  sources?: readonly InboxSource[];
+  updatedSince?: number;
+  assigned?: boolean;
   cursor?: string;
   limit?: number;
   /** Ask the desktop to fetch from its providers now and answer when it has. */
   refresh?: boolean;
+};
+
+export type InboxAuthorOption = {
+  name: string;
+  avatarKey?: string;
+  /** An item of theirs, which the avatar is fetched through. */
+  itemKey: string;
+  count: number;
+};
+
+export type InboxPlaceOption = {
+  id: string;
+  name: string;
+  kind: "project" | "tracker" | "linearProject";
+  count: number;
+};
+
+/** What the filter sheets offer: the scope's items, before any filter. */
+export type InboxOptions = {
+  authors: InboxAuthorOption[];
+  /** The signed-in user's items; unset until a provider has named them. */
+  me?: number;
+  places: InboxPlaceOption[];
+  sources: InboxSource[];
 };
 
 export type InboxList = {
@@ -64,6 +103,8 @@ export type InboxList = {
   fetchedAt: number;
   providers: InboxProviderState[];
   counts: { unread: number; needsMe: number; done: number };
+  /** An older desktop leaves this out and filters nothing itself. */
+  options?: InboxOptions;
 };
 
 export type InboxThreadEntry = {
@@ -72,6 +113,11 @@ export type InboxThreadEntry = {
   createdAt: number;
   body: string;
   kind: "comment" | "review" | "commit";
+  /** What `comment` takes to answer this entry; only where the provider has replies. */
+  replyTo?: string;
+  /** The file and line a review comment is on. */
+  path?: string;
+  line?: number;
 };
 
 export type InboxDetail = {
@@ -80,6 +126,10 @@ export type InboxDetail = {
   thread: InboxThreadEntry[];
   reviewDecision?: "approved" | "changesRequested" | "pending";
   checksSummary?: InboxChecks;
+  /** What can be done to the item now; an older desktop leaves it out and offers nothing. */
+  actions?: InboxItemAction[];
+  baseRef?: string;
+  headRef?: string;
 };
 
 export type InboxDiffLine = {
@@ -113,6 +163,37 @@ export type InboxMarkAction =
   | "snooze"
   | "unsnooze";
 
+/** What the desktop's pull request buttons do. */
+export type InboxAction =
+  | "merge"
+  | "squash"
+  | "rebase"
+  | "ready"
+  | "draft"
+  | "close"
+  | "reopen";
+
+export type InboxItemAction = InboxAction | "comment" | "review";
+
+/** Which side of a diff a line comment is on: a deleted line, or an added or unchanged one. */
+export type InboxReviewSide = "left" | "right";
+
+export type InboxReviewLine = {
+  path: string;
+  line: number;
+  side: InboxReviewSide;
+};
+
+/** A line comment waiting to go out with the review. The desktop's diff shares the list. */
+export type InboxReviewComment = InboxReviewLine & { id: number; text: string };
+
+export type InboxActionResult = {
+  item: InboxItem;
+  actions: InboxItemAction[];
+  /** A merge queue or auto-merge has it; the pull request is still open. */
+  queued: boolean;
+};
+
 export type InboxStartParams = {
   key: string;
   projectId: string;
@@ -123,6 +204,12 @@ export type InboxStartParams = {
 };
 
 export type InboxMedia = { mime: string; base64: string };
+
+/** An avatar, or an image by its place in the item's body or in one comment. */
+export type InboxMediaTarget =
+  | { avatarKey: string }
+  | { index: number }
+  | { commentId: string; commentIndex: number };
 
 /** The phone's request function (ConnectionProvider's `command`). */
 export type InboxTransport = <T>(
@@ -137,9 +224,23 @@ export type InboxClient = {
   diff: (key: string, path?: string) => Promise<InboxDiff>;
   checks: (key: string) => Promise<InboxCheck[]>;
   mark: (key: string, action: InboxMarkAction, until?: number) => Promise<InboxItem>;
+  readAll: (params: InboxListParams) => Promise<{ marked: number }>;
+  act: (key: string, action: InboxAction) => Promise<InboxActionResult>;
+  comment: (key: string, body: string, replyTo?: string) => Promise<void>;
+  review: (key: string) => Promise<InboxReviewComment[]>;
+  reviewAdd: (
+    key: string,
+    line: InboxReviewLine,
+    text: string,
+  ) => Promise<InboxReviewComment[]>;
+  reviewRemove: (key: string, id: number) => Promise<InboxReviewComment[]>;
+  /** Posts every pending comment as one review. What is left pending. */
+  reviewSubmit: (key: string) => Promise<InboxReviewComment[]>;
   start: (params: InboxStartParams) => Promise<{ sessionId: string }>;
-  media: (key: string, options?: { avatarKey?: string; index?: number }) => Promise<InboxMedia>;
+  media: (key: string, target: InboxMediaTarget) => Promise<InboxMedia>;
 };
+
+type InboxReviewList = { comments: InboxReviewComment[] };
 
 /** The default page size, as the desktop's. */
 export const PAGE_SIZE = 30;
@@ -149,9 +250,21 @@ export function createInboxClient(
   transport: InboxTransport,
   makeId: () => string,
 ): InboxClient {
-  // A start whose reply was lost keeps its command id for the retry, so the
-  // desktop's dedupe starts one session, not two.
-  const starts = new Map<string, string>();
+  // A command whose reply was lost keeps its id for the retry, so the desktop's
+  // dedupe starts one session, merges once and posts one comment.
+  const unanswered = new Map<string, string>();
+  const once = async <T,>(method: string, params: object): Promise<T> => {
+    const body = withoutUndefined(params);
+    const signature = JSON.stringify([method, body]);
+    let id = unanswered.get(signature);
+    if (!id) {
+      id = makeId();
+      unanswered.set(signature, id);
+    }
+    const result = await transport<T>(method, body, id);
+    unanswered.delete(signature);
+    return result;
+  };
   return {
     list: (params) => transport<InboxList>("inbox.list", withoutUndefined(params)),
     item: (key) => transport<InboxDetail>("inbox.item", { key }),
@@ -166,20 +279,21 @@ export function createInboxClient(
           withoutUndefined({ key, action, until }),
         )
       ).item,
-    start: async (params) => {
-      const body = withoutUndefined(params);
-      const signature = JSON.stringify(body);
-      let id = starts.get(signature);
-      if (!id) {
-        id = makeId();
-        starts.set(signature, id);
-      }
-      const result = await transport<{ sessionId: string }>("inbox.start", body, id);
-      starts.delete(signature);
-      return result;
+    readAll: (params) => transport<{ marked: number }>("inbox.readAll", withoutUndefined(params)),
+    act: (key, action) => once<InboxActionResult>("inbox.action", { key, action }),
+    comment: async (key, body, replyTo) => {
+      await once<object>("inbox.comment", { key, body, replyTo });
     },
-    media: (key, options = {}) =>
-      transport<InboxMedia>("inbox.media", withoutUndefined({ key, ...options })),
+    review: async (key) =>
+      (await transport<InboxReviewList>("inbox.review", { key })).comments,
+    reviewAdd: async (key, line, text) =>
+      (await once<InboxReviewList>("inbox.reviewAdd", { key, ...line, text })).comments,
+    reviewRemove: async (key, id) =>
+      (await transport<InboxReviewList>("inbox.reviewRemove", { key, id })).comments,
+    reviewSubmit: async (key) =>
+      (await once<InboxReviewList>("inbox.reviewSubmit", { key })).comments,
+    start: (params) => once<{ sessionId: string }>("inbox.start", params),
+    media: (key, target) => transport<InboxMedia>("inbox.media", { key, ...target }),
   };
 }
 

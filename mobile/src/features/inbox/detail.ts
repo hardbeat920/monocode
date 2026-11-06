@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { useInbox } from "./InboxProvider";
 import type {
+  InboxActionResult,
   InboxCheck,
   InboxDetail,
   InboxDiff,
@@ -29,12 +30,22 @@ export type DetailState = {
   /** Something is still being read. */
   loading: boolean;
   reload: () => void;
+  /** Shows what an action's reply says at once, then reads the item again. */
+  adopt: (result: InboxActionResult) => void;
 };
 
 type Cached = Pick<DetailState, "detail" | "diff" | "checks">;
 
 /** What each sheet read last, so one opened again shows at once while it refreshes. */
 const cache = new Map<string, Cached>();
+
+/** The open sheets, by item, for a change made on another screen. */
+const open = new Map<string, Set<() => void>>();
+
+/** Reads an item's open sheets again; a posted comment shows this way. */
+export function reloadInboxDetail(key: string) {
+  for (const reload of open.get(key) ?? []) reload();
+}
 
 /**
  * An item's sheet: its body and thread, then (for pull requests) its diff and
@@ -78,6 +89,33 @@ export function useInboxDetail(key: string): DetailState {
     };
   }, [client, key, tick]);
 
+  const reload = useCallback(() => {
+    setLoading(true);
+    setTick((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    const sheets = open.get(key) ?? new Set();
+    open.set(key, sheets.add(reload));
+    return () => {
+      sheets.delete(reload);
+      if (sheets.size === 0) open.delete(key);
+    };
+  }, [key, reload]);
+
+  const adopt = useCallback(
+    ({ item, actions }: InboxActionResult) => {
+      const current = cache.get(key);
+      if (current?.detail) {
+        const next = { ...current, detail: { ...current.detail, item, actions } };
+        cache.set(key, next);
+        setState(next);
+      }
+      reload();
+    },
+    [key, reload],
+  );
+
   // The list's copy follows marks made anywhere; the read one is the fallback
   // for an item opened from a push, before any list has it.
   const listed = useSyncExternalStore(store.subscribe, () => store.find(key));
@@ -86,9 +124,7 @@ export function useInboxDetail(key: string): DetailState {
     item: listed ?? state.detail?.item,
     error: state.detail || listed ? null : error,
     loading,
-    reload: useCallback(() => {
-      setLoading(true);
-      setTick((value) => value + 1);
-    }, []),
+    reload,
+    adopt,
   };
 }

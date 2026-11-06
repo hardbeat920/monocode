@@ -1,11 +1,14 @@
-import { applyMark, needsMe, isSnoozed } from "./model";
+import { applyMark, isSnoozed, matchesFacets, needsMe, optionsFrom } from "./model";
 import type {
+  InboxAction,
   InboxCheck,
   InboxClient,
   InboxDetail,
   InboxDiff,
   InboxItem,
+  InboxItemAction,
   InboxList,
+  InboxReviewComment,
 } from "./protocol";
 
 // A fixture-backed client with realistic sample items, so the whole Inbox runs
@@ -271,8 +274,35 @@ export function sampleItems(now: number, projectIds: readonly string[]): InboxIt
   return SAMPLES.map(({ ago, project, body: _b, thread: _t, files: _f, checkList: _c, decision: _d, ...item }) => ({
     ...item,
     updatedAt: now - ago * MIN,
+    mine: item.author.name === "you",
+    assigned: item.attention === "assigned",
     ...(project !== undefined && projectIds[project] ? { projectId: projectIds[project] } : {}),
   }));
+}
+
+const FIXTURE_STATUS: Record<InboxAction, InboxItem["status"]> = {
+  merge: "merged",
+  squash: "merged",
+  rebase: "merged",
+  ready: "open",
+  draft: "draft",
+  close: "closed",
+  reopen: "open",
+};
+
+/** What the desktop offers, as `actions` in `mobile/inbox.rs`. */
+function fixtureActions(item: InboxItem): InboxItemAction[] {
+  if (item.source !== "github" || item.kind !== "pr") return ["comment"];
+  switch (item.status) {
+    case "open":
+      return ["comment", "review", "merge", "squash", "rebase", "draft", "close"];
+    case "draft":
+      return ["comment", "review", "ready", "close"];
+    case "closed":
+      return ["comment", "review", "reopen"];
+    case "merged":
+      return ["comment", "review"];
+  }
 }
 
 /**
@@ -292,6 +322,9 @@ export function createFixtureClient(options: {
     ...options.controls,
   };
   let items = sampleItems(now(), options.projectIds);
+  const posted = new Map<string, { body: string; at: number }[]>();
+  const pending = new Map<string, InboxReviewComment[]>();
+  const pendingOn = (key: string) => pending.get(key) ?? [];
   const sample = (key: string) => SAMPLES.find((entry) => entry.key === key);
 
   const gate = async <T>(run: () => T): Promise<T> => {
@@ -312,14 +345,17 @@ export function createFixtureClient(options: {
         const scope = params.scope ?? "all";
         const at = now();
         const q = params.q?.trim().toLowerCase();
-        const matching = items
+        const unfiltered = items
           .filter((item) => !params.projectId || item.projectId === params.projectId)
           .filter((item) => !params.source || item.source === params.source)
           .filter((item) =>
             scope === "done"
               ? item.done
               : !item.done && !isSnoozed(item, at) && (scope === "all" || needsMe(item)),
-          )
+          );
+        const matching = unfiltered
+          .filter((item) => matchesFacets(item, params, at))
+          .filter((item) => !params.updatedSince || item.updatedAt >= params.updatedSince)
           .filter((item) => !q || `${item.title} ${item.repo}`.toLowerCase().includes(q))
           .sort((a, b) => b.updatedAt - a.updatedAt);
         const limit = params.limit ?? 30;
@@ -343,6 +379,7 @@ export function createFixtureClient(options: {
             needsMe: open.filter(needsMe).length,
             done: items.filter((item) => item.done).length,
           },
+          options: optionsFrom(unfiltered),
         };
       }),
     item: (key) =>
@@ -358,7 +395,18 @@ export function createFixtureClient(options: {
             createdAt: now() - entry.ago * MIN,
             body: entry.body,
             kind: entry.kind ?? "comment",
-          })),
+            ...(item.source === "github" ? { replyTo: `${key}#${index}` } : {}),
+          })).concat(
+            (posted.get(key) ?? []).map((entry, index) => ({
+              id: `${key}#posted${index}`,
+              author: { name: "you" },
+              createdAt: entry.at,
+              body: entry.body,
+              kind: "comment" as const,
+            })),
+          ),
+          actions: fixtureActions(item),
+          ...(item.kind === "pr" ? { baseRef: "main", headRef: "fix/sample-branch" } : {}),
           ...(data?.decision ? { reviewDecision: data.decision } : {}),
           ...(item.checks ? { checksSummary: item.checks } : {}),
         };
@@ -391,6 +439,53 @@ export function createFixtureClient(options: {
         const next = applyMark(find(key), action, until);
         items = items.map((item) => (item.key === key ? next : item));
         return next;
+      }),
+    readAll: () =>
+      gate(() => {
+        const marked = items.filter((item) => item.unread).length;
+        items = items.map((item) => ({ ...item, unread: false }));
+        return { marked };
+      }),
+    act: (key, action) =>
+      gate(() => {
+        const before = find(key);
+        if (!fixtureActions(before).includes(action)) {
+          throw new Error("That action isn't available on this item");
+        }
+        const next = { ...before, status: FIXTURE_STATUS[action] };
+        items = items.map((item) => (item.key === key ? next : item));
+        return { item: next, actions: fixtureActions(next), queued: false };
+      }),
+    comment: (key, body) =>
+      gate(() => {
+        find(key);
+        posted.set(key, [...(posted.get(key) ?? []), { body, at: now() }]);
+      }),
+    review: (key) => gate(() => pendingOn(key)),
+    reviewAdd: (key, line, text) =>
+      gate(() => {
+        const comments = pendingOn(key);
+        const id = Math.max(0, ...comments.map((comment) => comment.id)) + 1;
+        const next = [...comments, { ...line, id, text }];
+        pending.set(key, next);
+        return next;
+      }),
+    reviewRemove: (key, id) =>
+      gate(() => {
+        const next = pendingOn(key).filter((comment) => comment.id !== id);
+        pending.set(key, next);
+        return next;
+      }),
+    reviewSubmit: (key) =>
+      gate(() => {
+        const sent = pendingOn(key);
+        if (sent.length === 0) throw new Error("There is nothing to submit");
+        posted.set(key, [
+          ...(posted.get(key) ?? []),
+          ...sent.map((comment) => ({ body: comment.text, at: now() })),
+        ]);
+        pending.set(key, []);
+        return [];
       }),
     start: (params) =>
       gate(() => {

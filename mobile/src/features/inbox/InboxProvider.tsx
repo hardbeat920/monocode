@@ -14,16 +14,20 @@ import { useConnection } from "@/features/connection/ConnectionProvider";
 import { makeCommandId } from "@/features/connection/nativeLink";
 
 import { createFixtureClient, FIXTURES_ENABLED } from "./fixtures";
+import { actionMessage } from "./itemActions";
 import { countItems, markMessage } from "./model";
 import { useToast, type ToastState } from "@/ui/useToast";
 
 import { useNow } from "./useNow";
 import {
   createInboxClient,
+  type InboxAction,
+  type InboxActionResult,
   type InboxClient,
   type InboxItem,
   type InboxMarkAction,
 } from "./protocol";
+import { createReviewBook, type ReviewBook } from "./review";
 import { createInboxStore, type Feed, type FeedQuery, type InboxStore } from "./store";
 
 export type InboxToastState = ToastState;
@@ -31,10 +35,18 @@ export type InboxToastState = ToastState;
 type InboxContext = {
   store: InboxStore;
   client: InboxClient;
+  /** The pending line comments, one list per pull request, on every screen. */
+  review: ReviewBook;
   toast: InboxToastState | null;
   dismissToast: () => void;
   /** Marks an item, shown at once; Undo in the toast takes it back. */
   mark: (item: InboxItem, action: InboxMarkAction, until?: number) => Promise<void>;
+  /** Runs a pull request action. Throws what the provider said, for the screen to show. */
+  act: (item: InboxItem, action: InboxAction) => Promise<InboxActionResult>;
+  /** Marks read everything in a list. */
+  readAll: (query: FeedQuery) => Promise<void>;
+  /** One line in the toast. */
+  notify: (message: string) => void;
 };
 
 const Context = createContext<InboxContext | null>(null);
@@ -81,6 +93,10 @@ export function InboxProvider({
     [client, namespace, fixtures],
   );
   useEffect(() => () => store.dispose(), [store]);
+  useEffect(() => {
+    store.follow(catalog.inboxRev);
+  }, [store, catalog.inboxRev]);
+  const review = useMemo(() => createReviewBook(client), [client]);
   const linked = connected || fixtures || !!injected;
   useEffect(() => {
     store.setLinked(linked);
@@ -111,9 +127,32 @@ export function InboxProvider({
     [store, show, dismissToast],
   );
 
+  const act = useCallback(
+    async (item: InboxItem, action: InboxAction) => {
+      const result = await store.act(item.key, action);
+      show(actionMessage(action, result.queued));
+      return result;
+    },
+    [store, show],
+  );
+
+  const readAll = useCallback(
+    async (query: FeedQuery) => {
+      try {
+        await store.readAll(query);
+        show("Marked all as read");
+      } catch {
+        show("Couldn't reach the desktop. Nothing changed.");
+      }
+    },
+    [store, show],
+  );
+
+  const notify = useCallback((message: string) => show(message), [show]);
+
   const value = useMemo(
-    () => ({ store, client, toast, dismissToast, mark }),
-    [store, client, toast, dismissToast, mark],
+    () => ({ store, client, review, toast, dismissToast, mark, act, readAll, notify }),
+    [store, client, review, toast, dismissToast, mark, act, readAll, notify],
   );
   return <Context value={value}>{children}</Context>;
 }
@@ -131,12 +170,17 @@ export function useInbox() {
 
 /**
  * Whether the Inbox is shown: the desktop says it serves it, or this is the
- * fixture build. An older desktop's phone never sees the segment.
+ * fixture build. An older desktop's phone never sees its row in the drawer.
  */
 export function useInboxSupported() {
   const inbox = useOptionalInbox();
   const catalog = useConnection().catalog;
   return !!inbox && (catalog.inbox === true || FIXTURES_ENABLED);
+}
+
+/** Whether the desktop answers `inbox.readAll`, `inbox.action` and `inbox.comment`. */
+export function useInboxActionsSupported() {
+  return useConnection().catalog.inboxActions === true || FIXTURES_ENABLED;
 }
 
 const IDLE_FEED = (key: string): Feed => ({
@@ -157,10 +201,10 @@ const IDLE_FEED = (key: string): Feed => ({
 /** A list, watched (read now and polled) while `watching`. */
 export function useInboxFeed(query: FeedQuery, watching = true) {
   const inbox = useOptionalInbox();
-  const { scope, projectId, source, q } = query;
+  const { scope, projectId, source, q, facets } = query;
   const stable = useMemo<FeedQuery>(
-    () => ({ scope, projectId, source, q }),
-    [scope, projectId, source, q],
+    () => ({ scope, projectId, source, q, facets }),
+    [scope, projectId, source, q, facets],
   );
   const store = inbox?.store;
   const subscribe = useCallback(
@@ -188,10 +232,10 @@ export function useInboxFeed(query: FeedQuery, watching = true) {
   };
 }
 
-/** The unread count for the Inbox segment's badge: this project's, 0 without the Inbox. */
-export function useInboxBadge(projectId: string | undefined) {
+/** The unread count across every project, for the drawer: 0 without the Inbox. */
+export function useInboxBadge() {
   const supported = useInboxSupported();
-  const { feed } = useInboxFeed({ scope: "all", projectId }, supported);
+  const { feed } = useInboxFeed({ scope: "all" }, supported);
   const now = useNow(supported);
   return supported ? countItems(feed.items, undefined, now).unread : 0;
 }

@@ -105,3 +105,182 @@ describe("turn metrics", () => {
     expect(hasTurnMetrics({ inputTokens: 0 })).toBe(false);
   });
 });
+
+describe("provider text", () => {
+  const html = (text: string) => parseMarkdown(text, { html: true });
+
+  it("reads the pull request a phone showed as raw tags", () => {
+    const blocks = html(
+      [
+        "### Before",
+        '<img width="699" height="1017" alt="IMG_0189" src="https://github.com/user-attachments/assets/98c9" />',
+        "",
+        "### Checklist",
+        "- [x] I ran `npm run check`",
+        "- [ ] Not this one",
+        "",
+        "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->",
+        "<!-- coderabbit-ai-generated:v1 -->",
+        "",
+        "## Summary by CodeRabbit",
+      ].join("\r\n"),
+    );
+    expect(blocks.map((block) => block.type)).toEqual([
+      "heading",
+      "image",
+      "heading",
+      "list",
+      "heading",
+    ]);
+    expect(blocks[1]).toMatchObject({
+      image: {
+        src: "https://github.com/user-attachments/assets/98c9",
+        alt: "IMG_0189",
+        width: 699,
+        height: 1017,
+      },
+    });
+    expect(blocks[3]).toMatchObject({ tasks: [true, false] });
+    expect(blocks[3]).toMatchObject({
+      items: [
+        [{ inline: [{ text: "I ran " }, { type: "code", text: "npm run check" }] }],
+        [{ inline: [{ text: "Not this one" }] }],
+      ],
+    });
+  });
+
+  it("drops comments across lines but not in code", () => {
+    const blocks = html(
+      [
+        "before <!-- gone --> after `<!-- kept -->`",
+        "",
+        "<!-- a template hint",
+        "over ![two](https://x.test/a.png) lines -->",
+        "```html",
+        "<!-- also kept -->",
+        "```",
+      ].join("\n"),
+    );
+    expect(blocks).toMatchObject([
+      { type: "paragraph", inline: [{ text: "before  after " }, { text: "<!-- kept -->" }] },
+      { type: "code", text: "<!-- also kept -->" },
+    ]);
+  });
+
+  it("stands an image apart from the words around it", () => {
+    expect(html("Before ![a](https://x.test/a.png) after")).toMatchObject([
+      { type: "paragraph", inline: [{ text: "Before" }] },
+      { type: "image", image: { src: "https://x.test/a.png", alt: "a" } },
+      { type: "paragraph", inline: [{ text: "after" }] },
+    ]);
+  });
+
+  it("keeps the link around an image", () => {
+    const image = { type: "image", image: { src: "https://x.test/a.png" } };
+    expect(html("[![a](https://x.test/a.png)](https://x.test/page)")).toMatchObject([
+      { ...image, href: "https://x.test/page" },
+    ]);
+    expect(html('<a href="https://x.test/page"><img src="https://x.test/a.png"></a>')).toMatchObject([
+      { ...image, href: "https://x.test/page" },
+    ]);
+  });
+
+  it("finds images in layout tags and leaves no empty text", () => {
+    expect(
+      html(
+        [
+          '<p align="center">',
+          "  <picture>",
+          '    <source srcset="https://x.test/dark.png">',
+          '    <img src="https://x.test/a.png" width="50%">',
+          "  </picture>",
+          "</p>",
+        ].join("\n"),
+      ),
+    ).toEqual([{ type: "image", image: { type: "image", src: "https://x.test/a.png", alt: "" } }]);
+  });
+
+  it("keeps images in table cells for the table to draw", () => {
+    const [table] = html(
+      ["| Before | After |", "|---|---|", '| <img src="https://x.test/a.png"> | text |'].join("\n"),
+    );
+    expect(table).toMatchObject({
+      type: "table",
+      rows: [
+        [[{ text: "Before" }], [{ text: "After" }]],
+        [[{ type: "image", src: "https://x.test/a.png" }], [{ text: "text" }]],
+      ],
+    });
+  });
+
+  it("folds details, nested ones whole", () => {
+    expect(
+      html(
+        [
+          "<details><summary><b>Walkthrough</b></summary>",
+          "",
+          "Outer **text**",
+          "",
+          "<details open>",
+          "<summary>Inner</summary>",
+          "",
+          "Deep",
+          "</details>",
+          "</details>",
+          "",
+          "After",
+        ].join("\n"),
+      ),
+    ).toMatchObject([
+      {
+        type: "details",
+        open: false,
+        summary: [{ type: "strong", children: [{ text: "Walkthrough" }] }],
+        children: [
+          { type: "paragraph" },
+          {
+            type: "details",
+            open: true,
+            summary: [{ text: "Inner" }],
+            children: [{ type: "paragraph", inline: [{ text: "Deep" }] }],
+          },
+        ],
+      },
+      { type: "paragraph", inline: [{ text: "After" }] },
+    ]);
+  });
+
+  it("shows an unclosed details rather than losing it", () => {
+    expect(html("<details>\n<summary>Open</summary>\n\nStill here")).toMatchObject([
+      { type: "details", children: [{ inline: [{ text: "Still here" }] }] },
+    ]);
+  });
+
+  it("reads inline tags and leaves ones that are not HTML", () => {
+    expect(parseInline("<b>bold</b> <code>x</code> <a href='https://x.test'>go</a>", true)).toMatchObject([
+      { type: "strong" },
+      { text: " " },
+      { type: "code", text: "x" },
+      { text: " " },
+      { type: "link", href: "https://x.test" },
+    ]);
+    expect(parseInline("line<br>next<br/>", true).map((node) => "text" in node && node.text).join("")).toBe(
+      "line\nnext\n",
+    );
+    expect(parseInline("a Vec<T> and Option<String>", true)).toEqual([
+      { type: "text", text: "a Vec<T> and Option<String>" },
+    ]);
+  });
+
+  it("leaves an agent's words as written", () => {
+    const text = 'Use <img src="a.png"> or ![a](b.png), not <!-- this -->';
+    expect(parseMarkdown(text)).toEqual([{ type: "paragraph", inline: parseInline(text) }]);
+    expect(parseInline(text).some((node) => node.type === "image")).toBe(false);
+    expect(parseMarkdown("<details>\n<summary>Hi</summary>\n</details>")[0].type).toBe("paragraph");
+  });
+
+  it("gives task boxes to any Markdown, and only to lists that have them", () => {
+    expect(parseMarkdown("- [x] done\n- plain")[0]).toMatchObject({ tasks: [true, undefined] });
+    expect(parseMarkdown("- plain")[0]).not.toHaveProperty("tasks");
+  });
+});

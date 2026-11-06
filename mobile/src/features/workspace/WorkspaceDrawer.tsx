@@ -14,6 +14,9 @@ import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useConnection, useMonoTools } from "@/features/connection/ConnectionProvider";
+import { InboxCount } from "@/features/inbox/InboxCount";
+import { useInboxBadge, useInboxSupported } from "@/features/inbox/InboxProvider";
+import { inboxListRoute } from "@/features/inbox/routing";
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { plainText } from "@/features/sessions/markdownParser";
@@ -59,7 +62,7 @@ type Show = "both" | "monos" | "projects";
 /**
  * The phone's counterpart of the desktop's rail, laid out as a messaging
  * app's chat list: the Monocode mark, the filter and a new Mono up top, level
- * with a screen's header; the Monos with their latest line and when; and at
+ * with a screen's header; the Inbox; the Monos with their latest line and when; and at
  * Projects under their own label, and at the foot settings and search, level
  * with a screen's composer. Picking one switches the screen under it as the
  * drawer shuts.
@@ -73,6 +76,7 @@ export function WorkspaceDrawer() {
   const colors = useColors();
   const styles = useStyles();
   const { projects, monos: roster } = useWorkspace();
+  const inboxOn = useInboxSupported();
   const { pairing } = useConnection();
   const tools = useMonoTools();
   const [query, setQuery] = useState("");
@@ -148,6 +152,10 @@ export function WorkspaceDrawer() {
   });
   useEffect(() => onMonoCreated((monoId) => openCreated.current(monoId)), []);
 
+  const openInbox = () => {
+    drawer.closeThen(() => router.push(inboxListRoute(activeProject)));
+  };
+
   // Each kind under its label, as the filter lets it show.
   const listedMonos = show === "projects" ? [] : monos;
   const listedProjects = show === "monos" ? [] : shownProjects;
@@ -171,6 +179,7 @@ export function WorkspaceDrawer() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
+          {inboxOn && !needle && filter === "all" ? <InboxEntry onPress={openInbox} /> : null}
           {listedMonos.length ? (
             <View style={styles.list}>
               <Text style={styles.sectionLabel}>Monos</Text>
@@ -435,6 +444,32 @@ export function oneLine(text: string) {
   return plainText(text.slice(0, 600));
 }
 
+/** The Inbox's way in, over everything it gathers from. Reads its own count,
+ *  so a new one doesn't re-render the drawer. */
+function InboxEntry({ onPress }: { onPress: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const unread = useInboxBadge();
+  return (
+    <View style={styles.inbox}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={unread ? `Inbox, ${unread} unread` : "Inbox"}
+        onPress={onPress}
+        style={({ pressed }) => [styles.projectRow, pressed && styles.rowActive]}
+      >
+        <View style={styles.projectIcon}>
+          <Icon name="inbox" size={24} color={colors.content} />
+        </View>
+        <Text style={[styles.rowLabel, styles.rowText]} numberOfLines={1}>
+          Inbox
+        </Text>
+        <InboxCount unread={unread} />
+      </Pressable>
+    </View>
+  );
+}
+
 /** A project as a row of the list, under the Monos: its mascot and name. */
 const ProjectRow = memo(function ProjectRow({
   project,
@@ -530,6 +565,10 @@ const useStyles = themedStyles((colors) => ({
     paddingVertical: 10,
     borderRadius: radii.card - 6,
     borderCurve: "continuous",
+  },
+  inbox: {
+    paddingHorizontal: LIST_INSET,
+    marginBottom: 12,
   },
   projectRow: {
     flexDirection: "row",
