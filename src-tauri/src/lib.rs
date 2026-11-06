@@ -11,6 +11,7 @@ mod codex_mono_store;
 mod control;
 pub mod control_cli;
 mod cursor_store;
+mod deepseek;
 mod devin_config;
 mod devin_usage;
 mod external_editor;
@@ -500,6 +501,7 @@ pub fn run() {
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
+            harness::harness_resolve_deepseek,
             harness::harness_resolve_devin,
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
@@ -523,6 +525,16 @@ pub fn run() {
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
+            deepseek::deepseek_key_status,
+            deepseek::deepseek_save_api_key,
+            deepseek::deepseek_clear_api_key,
+            deepseek::fetch_deepseek_balance,
+            deepseek::fetch_deepseek_official_models,
+            deepseek::deepseek_account_status,
+            deepseek::deepseek_start_official_login,
+            deepseek::deepseek_cancel_official_login,
+            deepseek::deepseek_sign_out_official,
+            deepseek::fetch_deepseek_account_quota,
             devin_usage::fetch_devin_usage,
             pty::pty_spawn,
             pty::pty_write,

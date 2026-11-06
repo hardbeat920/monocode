@@ -10,6 +10,7 @@ import {
 } from "../model/worktreeFocus";
 import { createWorktree, type Worktree } from "../model/worktrees";
 import { SidebarWorktreeSwitcher } from "./SidebarWorktreeSwitcher";
+import { translate } from "../../../shared/i18n/locale";
 
 vi.mock("../hooks/useProjectWorktrees", () => ({
   useProjectWorktrees: vi.fn(),
@@ -52,7 +53,7 @@ const render = async (pending = false, switchError?: string) => {
 };
 const trigger = () =>
   container.querySelector<HTMLButtonElement>(
-    '[aria-label="Switch working copy"]',
+    `[aria-label="${translate("Switch working copy")}"]`,
   )!;
 const option = (name: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(
@@ -60,7 +61,7 @@ const option = (name: string) =>
   )!;
 const search = () =>
   document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search or create a worktree..."]',
+    `input[placeholder="${translate("Search or create a worktree...")}"]`,
   )!;
 const typeQuery = async (value: string) => {
   await act(async () => {
@@ -80,7 +81,9 @@ const press = async (key: string, target: HTMLElement = search()) => {
   );
 };
 const createButton = () =>
-  document.querySelector<HTMLButtonElement>('[title^="Create worktree "]');
+  document.querySelector<HTMLButtonElement>(
+    `[title^="${translate("Create worktree {name}", { name: "" })}"]`,
+  );
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -120,7 +123,7 @@ it("requests a switch without publishing the destination and permits a newer sel
   expect(worktreeFocus("/picker")).toBeUndefined();
   await render(true);
   expect(trigger().getAttribute("aria-busy")).toBe("true");
-  expect(trigger().textContent).toBe("Workspace");
+  expect(trigger().textContent).toBe(translate("Workspace"));
   await act(async () => trigger().click());
   await act(async () => option("feature-b").click());
   expect(select).toHaveBeenLastCalledWith({
@@ -137,7 +140,7 @@ it("shows a switch failure in the reopened picker", async () => {
   expect(document.querySelector('[role="alert"]')?.textContent).toBe(
     "Working copy no longer exists",
   );
-  expect(trigger().textContent).toBe("Workspace");
+  expect(trigger().textContent).toBe(translate("Workspace"));
 });
 
 it("requests fallback from a deleted worktree once and does not retry while pending or failed", async () => {
@@ -203,7 +206,7 @@ it.each(["click", "Enter"])(
     await typeQuery("  feature/new  ");
     expect(document.querySelectorAll('[role="option"]')).toHaveLength(0);
     expect(createButton()?.textContent).toContain(
-      "Create worktree feature/new",
+      translate("Create worktree {name}", { name: "feature/new" }),
     );
     if (action === "click") {
       await act(async () => createButton()!.click());

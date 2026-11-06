@@ -11,6 +11,8 @@ import {
   StickyNote,
   X,
 } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import {
   useCallback,
   useEffect,
@@ -419,6 +421,7 @@ export function Composer({
   onEditingLastTurnChange,
   children,
 }: Props) {
+  useLanguage();
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
@@ -2114,17 +2117,15 @@ export function Composer({
               defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
-                  ? "Select a branch or worktree to continue…"
+                  ? translate("Select a branch or worktree to continue…")
                   : inboxCard
-                    ? "Add a note, or send to start…"
+                    ? translate("Add a note, or send to start…")
                     : noteCard
-                      ? "Add a message, or send…"
+                      ? translate("Add a message, or send…")
                       : handoffCard
-                        ? "Add context, or send to continue…"
+                        ? translate("Add context, or send to continue…")
                         : (placeholder ??
-                          (shell
-                            ? "Ask, build, / for commands, @ for references... "
-                            : "Ask, build, / for commands, @ for references... "))
+                          translate("Ask, build, / for commands, @ for references... "))
               }
               aria-label={inputAriaLabel}
               disabled={disabled}
@@ -2175,7 +2176,7 @@ export function Composer({
               className={compact ? "hidden" : "relative shrink-0"}
             >
               <ToolButton
-                label="Add files or choose a mode"
+                label={translate("Add files or choose a mode")}
                 active={plusOpen}
                 onClick={() => setPlusOpen((open) => !open)}
               >
@@ -2192,7 +2193,7 @@ export function Composer({
                   className="p-1.5"
                 >
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
-                    Add to message
+                    {translate("Add to message")}
                   </p>
                   <button
                     type="button"
@@ -2206,13 +2207,15 @@ export function Composer({
                   >
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
-                      <span className="block text-[13px]">Upload file</span>
+                      <span className="block text-[13px]">{translate("Upload file")}</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
-                          ? "Attach files or images"
+                          ? translate("Attach files or images")
                           : remote && !remoteFeatures?.attachments
-                            ? "Update this machine’s host to attach files"
-                            : `${HARNESS_TITLE[harness]} does not support attachments`}
+                            ? translate("Update this machine’s host to attach files")
+                            : translate("{title} does not support attachments", {
+                                title: HARNESS_TITLE[harness],
+                              })}
                       </span>
                     </span>
                   </button>
@@ -2234,9 +2237,9 @@ export function Composer({
                     >
                       <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Plan mode</span>
+                        <span className="block text-[13px]">{translate("Plan mode")}</span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Review a plan before building
+                          {translate("Review a plan before building")}
                         </span>
                       </span>
                       {planActive ? (
@@ -2264,9 +2267,9 @@ export function Composer({
                     >
                       <CursorMagicSelection className="mt-0.5 size-4 shrink-0 text-sky-300/80" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Operator</span>
+                        <span className="block text-[13px]">{translate("Operator")}</span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Give this thread access to MonoCode
+                          {translate("Give this thread access to MonoCode")}
                         </span>
                       </span>
                       {operatorActive ? (
@@ -2295,13 +2298,13 @@ export function Composer({
                       <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5">
-                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="text-[13px]">{translate("Orchestrator")}</span>
                           <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
                             v1
                           </span>
                         </span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Plan and coordinate agent work
+                          {translate("Plan and coordinate agent work")}
                         </span>
                       </span>
                       {orchestrationActive && (
@@ -2327,9 +2330,9 @@ export function Composer({
                     >
                       <CircleDashed className="mt-0.5 size-4 shrink-0 text-content/60" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Draft</span>
+                        <span className="block text-[13px]">{translate("Draft")}</span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Save this message without starting the agent
+                          {translate("Save this message without starting the agent")}
                         </span>
                       </span>
                       {draftActive ? (
@@ -2436,14 +2439,14 @@ export function Composer({
             {resendEdited ? (
               <button
                 type="button"
-                title="Stop editing last message"
-                aria-label="Stop editing last message"
+                title={translate("Stop editing last message")}
+                aria-label={translate("Stop editing last message")}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={exitEditMode}
                 className="edit-last-turn-button flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-[11px] font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
               >
                 <X className="size-3" strokeWidth={1.8} />
-                <span>Cancel edit</span>
+                <span>{translate("Cancel edit")}</span>
               </button>
             ) : null}
             <div className="flex shrink-0 items-center gap-1">
@@ -2452,7 +2455,7 @@ export function Composer({
                 disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}
-                label={draftActive ? "Save draft" : "Send"}
+                label={draftActive ? translate("Save draft") : translate("Send")}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
@@ -2587,7 +2590,7 @@ export function ComposerAction({
   disabled = false,
   hasValue,
   allowBusySubmit = true,
-  label = "Send",
+  label = translate("Send"),
   onSend,
   onStop,
 }: {
@@ -2599,6 +2602,7 @@ export function ComposerAction({
   onSend: () => void;
   onStop: () => void;
 }) {
+  useLanguage();
   if (disabled) {
     return (
       <button
@@ -2626,8 +2630,8 @@ export function ComposerAction({
     ) : (
       <button
         type="button"
-        title="Stop"
-        aria-label="Stop"
+        title={translate("Stop")}
+        aria-label={translate("Stop")}
         onClick={onStop}
         className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
       >

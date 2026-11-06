@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { translate } from "../../../shared/i18n/locale";
 import { QuickWorkspaceControls } from "./QuickWorkspaceControls";
 import type { QuickGitResult } from "../model/quickGitPopup";
 
@@ -72,7 +73,7 @@ afterEach(async () => {
 });
 
 it("opens a native picker without adding a menu or spacer to the composer", async () => {
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   expect(request().request).toMatchObject({
     kind: "branch",
     choice: { cwd: "/repo", mode: "current" },
@@ -104,9 +105,11 @@ it("opens a native picker without adding a menu or spacer to the composer", asyn
 });
 
 it("ignores results from a picker replaced by a newer request", async () => {
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   const oldId = request().request.id;
-  await act(async () => button("Workspace Current checkout").click());
+  await act(async () => button(
+    translate("Workspace {label}", { label: translate("Current checkout") }),
+  ).click());
   act(() =>
     bridge.result({
       payload: {
@@ -118,12 +121,14 @@ it("ignores results from a picker replaced by a newer request", async () => {
   );
   expect(onChange).not.toHaveBeenCalled();
   expect(
-    button("Workspace Current checkout").getAttribute("aria-expanded"),
+    button(
+    translate("Workspace {label}", { label: translate("Current checkout") }),
+  ).getAttribute("aria-expanded"),
   ).toBe("true");
 });
 
 it("does not steal focus after clicking outside the popup", async () => {
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   act(() =>
     bridge.result({
       payload: { id: request().request.id, restoreFocus: false },
@@ -135,36 +140,38 @@ it("does not steal focus after clicking outside the popup", async () => {
 
 it("recovers from failure to open a popup and disables controls outside repositories", async () => {
   vi.mocked(invoke).mockRejectedValueOnce(new Error("Window failed"));
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   expect(onError).toHaveBeenCalledWith("Error: Window failed");
   expect(onOpenChange).toHaveBeenLastCalledWith(false);
   bridge.repo = false;
   await render();
-  expect(button("Choose branch").disabled).toBe(true);
-  expect(button("Workspace Current checkout").disabled).toBe(true);
+  expect(button(translate("Choose branch")).disabled).toBe(true);
+  expect(button(
+    translate("Workspace {label}", { label: translate("Current checkout") }),
+  ).disabled).toBe(true);
 });
 
 it("keeps a trigger toggle closed when blur arrives between mousedown and click", async () => {
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   const id = request().request.id;
   act(() =>
-    button("Choose branch").dispatchEvent(
+    button(translate("Choose branch")).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     ),
   );
   act(() => bridge.result({ payload: { id, restoreFocus: false } }));
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   expect(
     vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "quick_git_open"),
   ).toHaveLength(1);
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   expect(
     vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "quick_git_open"),
   ).toHaveLength(2);
 });
 
 it("handles native blur before DOM mousedown and still allows switching pickers", async () => {
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   act(() =>
     bridge.result({
       payload: {
@@ -175,17 +182,19 @@ it("handles native blur before DOM mousedown and still allows switching pickers"
     }),
   );
   act(() =>
-    button("Choose branch").dispatchEvent(
+    button(translate("Choose branch")).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     ),
   );
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   expect(
     vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "quick_git_open"),
   ).toHaveLength(1);
-  await act(async () => button("Choose branch").click());
+  await act(async () => button(translate("Choose branch")).click());
   act(() =>
-    button("Workspace Current checkout").dispatchEvent(
+    button(
+    translate("Workspace {label}", { label: translate("Current checkout") }),
+  ).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     ),
   );
@@ -194,6 +203,8 @@ it("handles native blur before DOM mousedown and still allows switching pickers"
       payload: { id: request().request.id, restoreFocus: false },
     }),
   );
-  await act(async () => button("Workspace Current checkout").click());
+  await act(async () => button(
+    translate("Workspace {label}", { label: translate("Current checkout") }),
+  ).click());
   expect(request().request.kind).toBe("workspace");
 });

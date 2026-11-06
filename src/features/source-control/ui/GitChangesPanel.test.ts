@@ -47,6 +47,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
   recordInboxSelfActivity: vi.fn(),
 }));
 
+import { translate } from "../../../shared/i18n/locale";
 import { GitChangesPanel, rememberIndex } from "./GitChangesPanel";
 import {
   gitDiffIndex,
@@ -140,7 +141,7 @@ describe("GitChangesPanel commit message generation", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Generate commit message"]',
+          `[aria-label="${translate("Generate commit message")}"]`,
         )!
         .click();
     });
@@ -150,14 +151,14 @@ describe("GitChangesPanel commit message generation", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Cancel commit message generation"]',
+          `[aria-label="${translate("Cancel commit message generation")}"]`,
         )!
         .click();
     });
     expect(signal?.aborted).toBe(true);
     expect(
       container.querySelector<HTMLButtonElement>(
-        '[aria-label="Generate commit message"]',
+        `[aria-label="${translate("Generate commit message")}"]`,
       )?.disabled,
     ).toBe(false);
     expect(container.querySelector("textarea")?.disabled).toBe(false);
@@ -165,7 +166,7 @@ describe("GitChangesPanel commit message generation", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Generate commit message"]',
+          `[aria-label="${translate("Generate commit message")}"]`,
         )!
         .click();
     });
@@ -204,7 +205,7 @@ async function renderPanel(cwd = "/repo") {
 
 async function openBranchMenu() {
   const toggle = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Branch actions"]',
+    `[aria-label="${translate("Branch actions")}"]`,
   )!;
   await act(async () => toggle.click());
   await act(async () => {});
@@ -229,7 +230,7 @@ function changedFile(
 
 async function showTree() {
   const toggle = container.querySelector<HTMLButtonElement>(
-    '[aria-label="View as Tree"]',
+    `[aria-label="${translate("View as Tree")}"]`,
   );
   if (toggle) await act(async () => toggle.click());
   let collapsed: HTMLButtonElement | null;
@@ -272,7 +273,7 @@ describe("GitChangesPanel folder actions", () => {
       await act(async () => {
         container
           .querySelector<HTMLButtonElement>(
-            '[aria-label="Stage Changes in src"]',
+            `[aria-label="${translate("Stage Changes in {path}", { path: "src" })}"]`,
           )!
           .click();
       });
@@ -309,7 +310,7 @@ describe("GitChangesPanel folder actions", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Stage Changes in src/nested"]',
+          `[aria-label="${translate("Stage Changes in {path}", { path: "src/nested" })}"]`,
         )!
         .click();
     });
@@ -337,7 +338,7 @@ describe("GitChangesPanel folder actions", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Unstage Changes in src"]',
+          `[aria-label="${translate("Unstage Changes in {path}", { path: "src" })}"]`,
         )!
         .click();
     });
@@ -364,13 +365,13 @@ describe("GitChangesPanel folder actions", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Stage Changes in src"]',
+          `[aria-label="${translate("Stage Changes in {path}", { path: "src" })}"]`,
         )!
         .click();
     });
     const actions = [
       ...container.querySelectorAll<HTMLButtonElement>(
-        'button[aria-label^="Stage Changes"], button[aria-label="Discard Changes"]',
+        `button[aria-label^="${translate("Stage Changes in {path}", { path: "##" }).split("##")[0]}"], button[aria-label="${translate("Discard Changes")}"], button[title="${translate("Stage Changes")}"], button[title="${translate("Discard Changes")}"]`,
       ),
     ];
     expect(actions.length).toBeGreaterThan(2);
@@ -378,7 +379,7 @@ describe("GitChangesPanel folder actions", () => {
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Stage Changes in docs"]',
+          `[aria-label="${translate("Stage Changes in {path}", { path: "docs" })}"]`,
         )!
         .click();
     });
@@ -400,7 +401,7 @@ describe("GitChangesPanel folder actions", () => {
     await showTree();
     invalidateWatchedFiles.mockClear();
     const stage = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Stage Changes in src"]',
+      `[aria-label="${translate("Stage Changes in {path}", { path: "src" })}"]`,
     )!;
     await act(async () => stage.click());
 
@@ -423,7 +424,7 @@ describe("GitChangesPanel pull action", () => {
     await renderPanel();
 
     const pull = await openBranchMenu();
-    expect(pull.textContent).toContain("Pull");
+    expect(pull.textContent).toContain(translate("Pull"));
     expect(pull.disabled).toBe(true);
   });
 
@@ -480,7 +481,9 @@ describe("GitChangesPanel remote pull request", () => {
 
     const button = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((candidate) => candidate.textContent?.trim() === "Create PR");
+    ].find(
+      (candidate) => candidate.textContent?.trim() === translate("Create PR"),
+    );
     expect(button?.disabled).toBe(false);
     await act(async () => {
       button!.click();

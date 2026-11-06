@@ -9,6 +9,7 @@ import {
 } from "../model/githubTasks";
 import type { LinkedWorkItem } from "../../sessions/model/session";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
+import { translate } from "../../../shared/i18n/locale";
 import {
   InboxDetail,
   inboxStatusMark,
@@ -120,10 +121,10 @@ describe("InboxDetail layout", () => {
     expect(scrollIndex).toBeGreaterThan(headerIndex);
     expect(header).toContain("line-clamp-2");
     expect(header).toContain('title="A long inbox issue"');
-    expect(header).toContain("Send to agent");
+    expect(header).toContain(translate("Send to agent"));
     expect(header).toContain("Ask");
-    expect(header).toContain("Open on GitHub");
-    expect(header).toContain("Unassigned");
+    expect(header).toContain(translate("Open on GitHub"));
+    expect(header).toContain(translate("Unassigned"));
     expect(header).toContain("whitespace-nowrap");
     expect(header).not.toContain("data-inbox-detail-fixed-header");
     expect(identityTag).not.toContain("border-b");
@@ -194,7 +195,7 @@ describe("InboxDetail layout", () => {
     const markup = renderDetail(item({ kind: "pr", state: "open" }));
 
     expect(markup).toContain("Merge pull request");
-    expect(markup).toContain('aria-label="Merge options"');
+    expect(markup).toContain(`aria-label="${translate("Merge options")}"`);
     expect(markup).toContain("Convert to draft");
     expect(markup).toContain("Close pull request");
   });
@@ -205,7 +206,7 @@ describe("InboxDetail layout", () => {
     );
     expect(draft).toContain("Ready for review");
     expect(draft).toContain("Close pull request");
-    expect(draft).not.toContain('aria-label="Merge options"');
+    expect(draft).not.toContain(`aria-label="${translate("Merge options")}"`);
 
     const closed = renderDetail(item({ kind: "pr", state: "closed" }));
     expect(closed).toContain("Reopen pull request");
@@ -213,7 +214,7 @@ describe("InboxDetail layout", () => {
 
     const merged = renderDetail(item({ kind: "pr", state: "merged" }));
     expect(merged).not.toContain("Reopen pull request");
-    expect(merged).not.toContain('aria-label="Merge options"');
+    expect(merged).not.toContain(`aria-label="${translate("Merge options")}"`);
   });
 
   it("does not show GitHub lifecycle actions for GitLab merge requests", () => {
@@ -226,7 +227,7 @@ describe("InboxDetail layout", () => {
       }),
     );
 
-    expect(markup).not.toContain('aria-label="Merge options"');
+    expect(markup).not.toContain(`aria-label="${translate("Merge options")}"`);
     expect(markup).not.toContain("Convert to draft");
     expect(markup).not.toContain("Close pull request");
   });
@@ -257,7 +258,7 @@ describe("InboxDetail layout", () => {
     const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
     const headerIndex = markup.indexOf("data-inbox-detail-header");
     const fixedHeader = markup.slice(fixedIndex, scrollIndex);
-    const reviewIndex = markup.lastIndexOf("Review on GitHub");
+    const reviewIndex = markup.lastIndexOf(translate("Review on GitHub"));
     const reviewButton = markup.slice(
       markup.lastIndexOf("<button", reviewIndex),
       reviewIndex,
@@ -270,10 +271,14 @@ describe("InboxDetail layout", () => {
     expect(markup.match(/data-inbox-detail-scroll/g)).toHaveLength(1);
     expect(fixedHeader).toContain("Pull request");
     expect(fixedHeader).toContain("#157");
-    expect(fixedHeader).toContain("Review on GitHub");
+    expect(fixedHeader).toContain(translate("Review on GitHub"));
     expect(reviewIndex).toBeLessThan(scrollIndex);
-    expect(markup.match(/aria-label="Review on GitHub"/g)).toHaveLength(1);
-    expect(markup.slice(scrollIndex)).not.toContain("Review on GitHub");
+    expect(
+      markup.match(
+        new RegExp(`aria-label="${translate("Review on GitHub")}"`, "g"),
+      ),
+    ).toHaveLength(1);
+    expect(markup.slice(scrollIndex)).not.toContain(translate("Review on GitHub"));
     expect(fixedHeader).toContain("h-9");
     expect(fixedHeader).toContain("px-4");
     expect(fixedHeader).not.toContain("h-10");
@@ -318,8 +323,8 @@ describe("InboxDetail layout", () => {
     const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
     const header = markup.slice(headerIndex, scrollIndex);
 
-    expect(header).toContain("Send to agent");
-    expect(header).toContain("Choose project");
+    expect(header).toContain(translate("Send to agent"));
+    expect(header).toContain(translate("Choose project"));
     expect(header).not.toContain("overflow-y-auto");
   });
 
@@ -337,9 +342,9 @@ describe("InboxDetail layout", () => {
     const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
     const header = markup.slice(headerIndex, scrollIndex);
 
-    expect(header).toContain("Mentioned you");
-    expect(header).toContain("Choose project");
-    expect(header).toContain("Open on GitLab");
+    expect(header).toContain(translate("Mentioned you"));
+    expect(header).toContain(translate("Choose project"));
+    expect(header).toContain(translate("Open on GitLab"));
   });
 
   it("keeps related threads in the pinned header", () => {

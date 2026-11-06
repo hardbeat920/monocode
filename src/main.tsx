@@ -1,4 +1,5 @@
 import React, { useLayoutEffect } from "react";
+import { initLocale } from "./shared/i18n/locale";
 import ReactDOM from "react-dom/client";
 // TEMPORARY: remove with src/debugMonoScroll.ts.
 if (import.meta.env.DEV) void import("./debugMonoScroll");
@@ -30,6 +31,7 @@ performance.mark("monocode:bootstrap");
 const appLoaded = import("./app/App");
 
 initAppearance();
+initLocale();
 initSounds();
 installNativeContextMenuGuard();
 // Prime the real home directory before the first render so every `~/` file

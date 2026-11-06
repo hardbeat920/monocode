@@ -439,6 +439,7 @@ async function resolveHarnessBinary(
     hermes: "harness_resolve_hermes",
     antigravity: "harness_resolve_antigravity",
     devin: "harness_resolve_devin",
+    deepseek: "harness_resolve_deepseek",
   };
   return invoke(command[provider]);
 }
@@ -510,6 +511,12 @@ export function resolveAntigravityBinary(
     path: string;
     args: string[];
   }>;
+}
+
+export function resolveDeepseekBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("deepseek", binaryPath);
 }
 
 export function freeHarnessPort(): Promise<number> {

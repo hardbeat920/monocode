@@ -28,6 +28,8 @@ import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { MOD } from "../../../platform/tauri/platform";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 
 export type TabGroupMenuAction =
   | "new-tab"
@@ -90,36 +92,38 @@ type MenuItem = {
   icon: IconComponent;
 };
 
-const ITEMS: MenuItem[] = [
-  {
-    id: "new-tab",
-    label: "New tab in group",
-    shortcut: `${MOD}T`,
-    icon: SquarePlus,
-  },
-  {
-    id: "new-window",
-    label: "Move group to new window",
-    icon: AppWindow,
-  },
-  {
-    id: "close-group",
-    label: "Close group",
-    shortcut: `${MOD}W`,
-    icon: X,
-  },
-  {
-    id: "ungroup",
-    label: "Ungroup",
-    icon: Ungroup,
-  },
-  {
-    id: "delete-group",
-    label: "Delete group",
-    danger: true,
-    icon: Trash2,
-  },
-];
+function menuItems(): MenuItem[] {
+  return [
+    {
+      id: "new-tab",
+      label: translate("New tab in group"),
+      shortcut: `${MOD}T`,
+      icon: SquarePlus,
+    },
+    {
+      id: "new-window",
+      label: translate("Move group to new window"),
+      icon: AppWindow,
+    },
+    {
+      id: "close-group",
+      label: translate("Close group"),
+      shortcut: `${MOD}W`,
+      icon: X,
+    },
+    {
+      id: "ungroup",
+      label: translate("Ungroup"),
+      icon: Ungroup,
+    },
+    {
+      id: "delete-group",
+      label: translate("Delete group"),
+      danger: true,
+      icon: Trash2,
+    },
+  ];
+}
 
 export function TabGroupMenu({
   x,
@@ -140,13 +144,16 @@ export function TabGroupMenu({
   onLogoChange,
   onPick,
   onClose,
-  ariaLabel = "Tab group actions",
+  ariaLabel,
   showActions = true,
   leadingAction,
   extraItems,
   onExtraPick,
   footer,
 }: Props) {
+  useLanguage();
+  const resolvedAriaLabel = ariaLabel ?? translate("Tab group actions");
+  const items = menuItems();
   const menuId = useId();
   const [submenu, setSubmenu] = useState<{
     item: TabGroupMenuExtraItem;
@@ -209,7 +216,7 @@ export function TabGroupMenu({
         data-menu-owner={menuId}
         role="menu"
         tabIndex={-1}
-        aria-label={ariaLabel}
+        aria-label={resolvedAriaLabel}
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}
         onMouseEnter={cancelSubmenuClose}
@@ -231,7 +238,7 @@ export function TabGroupMenu({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={commitName}
-          aria-label="Group name"
+          aria-label={translate("Group name")}
           className="mb-2 w-full rounded-lg border border-content/10 bg-content/5 px-2.5 py-1.5 text-[13px] text-content outline-none ring-accent/40 focus:ring-1"
         />
 
@@ -239,8 +246,16 @@ export function TabGroupMenu({
           <div className="mb-2 flex items-center gap-2 px-0.5">
             <button
               type="button"
-              title={logoPath ? "Change project logo" : "Add project logo"}
-              aria-label={logoPath ? "Change project logo" : "Add project logo"}
+              title={
+                logoPath
+                  ? translate("Change project logo")
+                  : translate("Add project logo")
+              }
+              aria-label={
+                logoPath
+                  ? translate("Change project logo")
+                  : translate("Add project logo")
+              }
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 void (async () => {
@@ -265,16 +280,20 @@ export function TabGroupMenu({
               />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] text-content/50">Project logo</p>
+              <p className="text-[11px] text-content/50">
+                {translate("Project logo")}
+              </p>
               <p className="truncate text-[12px] text-content/70">
-                {logoPath ? "Shown in tabs and composer" : "Optional — replaces folder icon"}
+                {logoPath
+                  ? translate("Shown in tabs and composer")
+                  : translate("Optional — replaces folder icon")}
               </p>
             </div>
             {logoPath ? (
               <button
                 type="button"
-                title="Remove project logo"
-                aria-label="Remove project logo"
+                title={translate("Remove project logo")}
+                aria-label={translate("Remove project logo")}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   void clearProjectLogo(projectKey(logoProject)).then(onLogoChange);
@@ -332,7 +351,7 @@ export function TabGroupMenu({
           <>
             <div className="my-1 h-px bg-content/10" />
 
-            {ITEMS.slice(0, 2).map((item) => (
+            {items.slice(0, 2).map((item) => (
               <MenuRow
                 key={item.id}
                 item={item}
@@ -343,7 +362,7 @@ export function TabGroupMenu({
 
             <div className="my-1 h-px bg-content/10" />
 
-            {ITEMS.slice(2, 4).map((item) => (
+            {items.slice(2, 4).map((item) => (
               <MenuRow
                 key={item.id}
                 item={item}
@@ -354,7 +373,7 @@ export function TabGroupMenu({
 
             <div className="my-1 h-px bg-content/10" />
 
-            {ITEMS.slice(4).map((item) => (
+            {items.slice(4).map((item) => (
               <MenuRow
                 key={item.id}
                 item={item}

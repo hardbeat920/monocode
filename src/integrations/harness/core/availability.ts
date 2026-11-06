@@ -5,6 +5,7 @@ import {
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
+  resolveDeepseekBinary,
   resolveDevinBinary,
   resolveFxBinary,
   resolveGrokBinary,
@@ -58,6 +59,10 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     install: IS_WIN
       ? "irm https://static.devin.ai/cli/setup.ps1 | iex"
       : "curl -fsSL https://cli.devin.ai/install.sh | bash",
+  },
+  deepseek: {
+    name: "DeepSeek Harness (dsh)",
+    install: "npm i -g @deepseek-ai/dsh",
   },
 };
 
@@ -171,6 +176,14 @@ export function probeHarnessAvailability(
       if (id === "devin") {
         try {
           await resolveDevinBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "deepseek") {
+        try {
+          await resolveDeepseekBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

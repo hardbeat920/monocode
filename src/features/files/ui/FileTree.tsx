@@ -6,6 +6,8 @@ import {
   FoldVertical,
   Search,
 } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import {
   createContext,
   memo,
@@ -97,11 +99,15 @@ type Clip = { mode: "copy" | "cut"; path: string; isDir: boolean };
 type MenuTarget = { path: string; isDir: boolean; isRoot: boolean };
 type MenuState = { x: number; y: number; target: MenuTarget };
 
-const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
-  : IS_WIN
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+function revealLabel() {
+  return translate(
+    IS_MAC
+      ? "Reveal in Finder"
+      : IS_WIN
+        ? "Reveal in File Explorer"
+        : "Open Containing Folder",
+  );
+}
 
 type TreeCtxValue = {
   expanded: Set<string>;
@@ -179,56 +185,56 @@ function explorerItems(
     !!clip?.isDir &&
     (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
   return [
-    { kind: "item", id: "new-file", label: "New File" },
-    { kind: "item", id: "new-folder", label: "New Folder" },
+    { kind: "item", id: "new-file", label: translate("New File") },
+    { kind: "item", id: "new-folder", label: translate("New Folder") },
     { kind: "sep" },
     {
       kind: "item",
       id: "cut",
-      label: "Cut",
+      label: translate("Cut"),
       shortcut: `${MOD}X`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "copy",
-      label: "Copy",
+      label: translate("Copy"),
       shortcut: `${MOD}C`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "paste",
-      label: "Paste",
+      label: translate("Paste"),
       shortcut: `${MOD}V`,
       disabled: pasteBlocked,
     },
     {
       kind: "item",
       id: "duplicate",
-      label: "Duplicate",
+      label: translate("Duplicate"),
       disabled: target.isRoot,
     },
     { kind: "sep" },
     {
       kind: "item",
       id: "copy-path",
-      label: "Copy Path",
+      label: translate("Copy Path"),
       shortcut: `${MOD}${SHIFT}C`,
     },
-    { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
+    { kind: "item", id: "copy-relative-path", label: translate("Copy Relative Path") },
     { kind: "sep" },
     {
       kind: "item",
       id: "rename",
-      label: "Rename",
+      label: translate("Rename"),
       shortcut: "F2",
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "delete",
-      label: "Delete",
+      label: translate("Delete"),
       shortcut: "⌫",
       disabled: target.isRoot,
       danger: true,
@@ -239,11 +245,11 @@ function explorerItems(
           {
             kind: "item" as const,
             id: "open-terminal",
-            label: "Open in Terminal",
+            label: translate("Open in Terminal"),
           },
         ]
       : []),
-    { kind: "item", id: "reveal", label: REVEAL_LABEL },
+    { kind: "item", id: "reveal", label: revealLabel() },
   ];
 }
 
@@ -260,6 +266,7 @@ export const FileTree = memo(function FileTree({
   onSearch,
   gitStatuses,
 }: Props) {
+  useLanguage();
   const [expanded, setExpanded] = useState(() => loadExpanded(cwd));
   const [selectedPath, setSelectedPath] = useState(() => loadSelected(cwd));
   const [children, setChildren] = useState<FsEntry[] | null>(() =>
@@ -549,8 +556,8 @@ export const FileTree = memo(function FileTree({
     const label = basename(path);
     const ok = window.confirm(
       isDir
-        ? `Delete folder “${label}” and everything inside it?`
-        : `Delete “${label}”?`,
+        ? translate("Delete folder “{label}” and everything inside it?", { label })
+        : translate("Delete “{label}”?", { label }),
     );
     if (!ok) return;
     await deletePath(path);
@@ -1016,20 +1023,20 @@ export const FileTree = memo(function FileTree({
         <PaneHeader
           compact={compactHeader}
           role="toolbar"
-          aria-label="Explorer"
+          aria-label={translate("Explorer")}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
         >
-          <HeaderIcon label="New File" onClick={() => startCreate(false)}>
+          <HeaderIcon label={translate("New File")} onClick={() => startCreate(false)}>
             <FilePlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
-          <HeaderIcon label="New Folder" onClick={() => startCreate(true)}>
+          <HeaderIcon label={translate("New Folder")} onClick={() => startCreate(true)}>
             <FolderPlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
           <HeaderIcon
-            label="Collapse All"
+            label={translate("Collapse All")}
             onClick={() => {
               setCreating(null);
               setRenaming(null);
@@ -1042,7 +1049,9 @@ export const FileTree = memo(function FileTree({
           </HeaderIcon>
           {onSearch ? (
             <HeaderIcon
-              label={`Search in files (${MOD}Shift+F)`}
+              label={translate("Search in files ({shortcut})", {
+                shortcut: `${MOD}Shift+F`,
+              })}
               onClick={onSearch}
             >
               <Search className="size-3.5" strokeWidth={1.75} />
@@ -1367,6 +1376,7 @@ export function NameRow({
   onCommit: (raw: string) => Promise<void>;
   onCancel: () => void;
 }) {
+  useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const finished = useRef(false);
   const [value, setValue] = useState(initial);
@@ -1438,7 +1448,7 @@ export function NameRow({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          aria-label="Type file name. Press Enter to confirm or Escape to cancel."
+          aria-label={translate("Type file name. Press Enter to confirm or Escape to cancel.")}
           onChange={(e) => {
             setValue(e.target.value);
             setSubmitError(null);

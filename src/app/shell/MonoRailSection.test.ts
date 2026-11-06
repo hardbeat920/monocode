@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMono } from "../../features/monos/model/mono";
 import { loadMonosEnabled } from "../../features/settings/model/settings";
 import { MonoRailSection } from "./MonoRailSection";
+import { translate } from "../../shared/i18n/locale";
 
 let root: Root;
 let container: HTMLElement;
@@ -42,7 +43,8 @@ function render(props: Partial<Parameters<typeof MonoRailSection>[0]> = {}) {
   return onCreate;
 }
 
-const intro = () => document.body.querySelector('[aria-label="Meet Monos"]');
+const intro = () =>
+  document.body.querySelector(`[aria-label="${translate("Meet Monos")}"]`);
 const button = (label: string) =>
   [...document.body.querySelectorAll("button")].find(
     (entry) => entry.textContent === label,
@@ -51,9 +53,11 @@ const button = (label: string) =>
 it("shows the intro card in place of the list while there is no mono", () => {
   const onCreate = render();
   expect(intro()).not.toBeNull();
-  expect(container.querySelector('[aria-label="New mono"]')).toBeNull();
+  expect(
+    container.querySelector(`[aria-label="${translate("New mono")}"]`),
+  ).toBeNull();
 
-  act(() => button("Create mono").click());
+  act(() => button(translate("Create mono")).click());
   expect(onCreate).toHaveBeenCalledOnce();
 });
 
@@ -67,7 +71,9 @@ it("lists monos once there are some, with the plus in the header", () => {
   createMono();
   render();
   expect(intro()).toBeNull();
-  expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
+  expect(
+    container.querySelectorAll(`[aria-label="${translate("New mono")}"]`),
+  ).toHaveLength(1);
 });
 
 it("counts a mono's unread replies, except the one open", () => {
@@ -76,7 +82,9 @@ it("counts a mono's unread replies, except the one open", () => {
   render({ unseenCounts: new Map([[mono.id, 3]]) });
   expect(badge()?.textContent).toBe("3");
   expect(
-    container.querySelector(`[aria-label*="3 new replies"]`),
+    container.querySelector(
+      `[aria-label*="${translate("{count} new replies", { count: 3 })}"]`,
+    ),
   ).not.toBeNull();
 
   render({ unseenCounts: new Map([[mono.id, 120]]) });

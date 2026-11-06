@@ -19,6 +19,7 @@ let availability: HarnessAvailability = {
   hermes: false,
   antigravity: false,
   devin: false,
+  deepseek: false,
 };
 let version = 0;
 let probedAt = 0;

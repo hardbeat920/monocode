@@ -6,6 +6,7 @@ import { newSession } from "../../sessions/model/session";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import type { FloatingMonoView } from "../model/floatingMono";
 import { FloatingMonoChat } from "./FloatingMonoChat";
+import { translate } from "../../../shared/i18n/locale";
 
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -150,7 +151,11 @@ it("lists every Mono beside the chat and switches or adds from there", async () 
     to: "second",
   });
   await act(async () =>
-    rail.querySelector<HTMLButtonElement>('[aria-label="New mono"]')!.click(),
+    rail
+      .querySelector<HTMLButtonElement>(
+        `[aria-label="${translate("New mono")}"]`,
+      )!
+      .click(),
   );
   expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
     monoId: "first",
@@ -248,7 +253,9 @@ it("shows an opening failure instead of keeping the loader indefinitely", async 
   expect(container.querySelector('[aria-busy="false"]')).not.toBeNull();
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Hide chat"]')!
+      .querySelector<HTMLButtonElement>(
+        `[aria-label="${translate("Hide chat")}"]`,
+      )!
       .click(),
   );
   expect(native.hide).toHaveBeenCalledOnce();

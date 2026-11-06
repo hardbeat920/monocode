@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
+import { translate } from "../../shared/i18n/locale";
 import { saveProjectRailOrder } from "../../features/projects/model/recents";
 import {
   loadSessionFolders,
@@ -50,7 +51,9 @@ function renameInput(): HTMLInputElement {
 }
 
 function projectSearchInput(): HTMLInputElement | null {
-  return document.querySelector('input[placeholder="Search projects..."]');
+  return document.querySelector(
+    `input[placeholder="${translate("Search projects...")}"]`,
+  );
 }
 
 function pressKey(target: HTMLElement, key: string) {
@@ -639,7 +642,7 @@ describe("sidebar session multiselection", () => {
     props.activeSessionId = "session-1";
     act(() => render());
     const search = container.querySelector<HTMLInputElement>(
-      'input[placeholder="Search conversations..."]',
+      `input[placeholder="${translate("Search conversations...")}"]`,
     )!;
     // All sessions still match, but the list returns to its first page.
     typeTitle(search, "Original conversation");

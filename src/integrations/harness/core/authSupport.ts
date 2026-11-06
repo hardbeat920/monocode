@@ -17,7 +17,7 @@ const LOGIN_ARGS: Partial<Record<HarnessId, readonly string[]>> = {
 };
 
 export function supportsHarnessLogin(harness: HarnessId): boolean {
-  return LOGIN_ARGS[harness] != null;
+  return harness === "deepseek" || LOGIN_ARGS[harness] != null;
 }
 
 /** Exposed for login execution, settings copy, and regression tests. */
@@ -33,6 +33,9 @@ export function isHarnessAuthError(message: string): boolean {
     /\b(?:sign-in|login|session) (?:has )?expired\b/i,
     /\bplease (?:sign|log) in\b/i,
     /\brun [`'"]?\S+ (?:auth )?login\b/i,
+    /未登录/,
+    /授权(?:无效|已过期)/,
+    /请到设置/,
   ].some((pattern) => pattern.test(message));
 }
 

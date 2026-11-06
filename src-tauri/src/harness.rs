@@ -864,6 +864,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve DeepSeek Harness CLI (`dsh`).
+#[tauri::command(async)]
+pub fn harness_resolve_deepseek() -> Result<CursorBinary, String> {
+    resolve_deepseek()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "DeepSeek Harness (dsh) not found. Install `@deepseek-ai/dsh` (see https://www.deepseek.com), then retry.".into()
+        })
+}
+
+
 /// Resolve Cognition's Devin CLI (`devin`).
 #[tauri::command(async)]
 pub fn harness_resolve_devin() -> Result<CursorBinary, String> {
@@ -1840,6 +1853,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "fx"
             | "hermes"
             | "devin"
+            | "dsh"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -2081,6 +2095,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "hermes" => resolve_hermes(),
         "antigravity" => resolve_antigravity(),
         "devin" => resolve_devin(),
+        "deepseek" => resolve_deepseek(),
         _ => None,
     }
 }
@@ -2127,6 +2142,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "hermes" => &["hermes"],
         "antigravity" => &["agy_acp_server.par"],
         "devin" => &["devin"],
+        "deepseek" => &["dsh"],
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
@@ -2200,6 +2216,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
         "devin" => lower.contains("devin"),
+        "deepseek" => true,
         _ => true,
     };
     if has_version && provider_marker {
@@ -2461,6 +2478,30 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_grok_agent)
+}
+
+
+fn resolve_deepseek() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/dsh"));
+        candidates.push(home.join(".npm-global/bin/dsh"));
+        candidates.push(home.join(".bun/bin/dsh"));
+        candidates.push(home.join("n/bin/dsh"));
+        candidates.push(home.join(".cargo/bin/dsh"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/dsh"));
+    candidates.push(PathBuf::from("/usr/local/bin/dsh"));
+    candidates.push(PathBuf::from("/usr/bin/dsh"));
+    candidates.push(PathBuf::from("/snap/bin/dsh"));
+    if let Some(from_shell) = which_via_login_shell("dsh") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
 }
 
 fn resolve_hermes() -> Option<PathBuf> {

@@ -10,6 +10,7 @@ import omp from "../../../assets/providers/omp.svg";
 import opencode from "../../../assets/providers/opencode.svg";
 import pi from "../../../assets/providers/pi.svg";
 import antigravity from "../../../assets/providers/antigravity.svg";
+import deepseek from "../../../assets/providers/deepseek.svg";
 import type { HarnessId } from "../model/session";
 
 export const HARNESS_ICONS: Record<HarnessId, string> = {
@@ -24,6 +25,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   hermes,
   antigravity,
   devin,
+  deepseek,
 };
 
 /** White marks that must follow `currentColor` so they stay visible in light mode. */
@@ -35,6 +37,7 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "fx",
   "hermes",
   "devin",
+  "deepseek",
 ]);
 
 function MonoIcon({
@@ -82,7 +85,7 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (harness === "hermes" || harness === "devin") {
+  if (harness === "hermes" || harness === "devin" || harness === "deepseek") {
     const mark = HARNESS_ICONS[harness];
     return (
       <span
@@ -90,7 +93,7 @@ export function HarnessIcon({
         className={`inline-flex items-center justify-center ${className}`}
       >
         <span
-          className={`block ${harness === "hermes" ? "size-[72%]" : "size-[88%]"} bg-current`}
+          className={`block ${harness === "hermes" ? "size-[72%]" : harness === "deepseek" ? "size-[90%]" : "size-[88%]"} bg-current`}
           style={{
             // Quoted: Vite inlines small SVGs as data URIs that contain spaces.
             maskImage: `url("${mark}")`,

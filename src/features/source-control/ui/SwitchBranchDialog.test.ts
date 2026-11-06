@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { translate } from "../../../shared/i18n/locale";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
 import { generateCommitMessage } from "../../../integrations/harness";
 
@@ -44,7 +45,7 @@ it("lets the switch dialog cancel generation and ignores its late result", async
     await act(async () => {
       document
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Generate commit message"]',
+          `[aria-label="${translate("Generate commit message")}"]`,
         )!
         .click();
     });
@@ -54,14 +55,14 @@ it("lets the switch dialog cancel generation and ignores its late result", async
     await act(async () => {
       document
         .querySelector<HTMLButtonElement>(
-          '[aria-label="Cancel commit message generation"]',
+          `[aria-label="${translate("Cancel commit message generation")}"]`,
         )!
         .click();
     });
     expect(signal?.aborted).toBe(true);
     expect(
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Generate commit message"]',
+        `[aria-label="${translate("Generate commit message")}"]`,
       )?.disabled,
     ).toBe(false);
 

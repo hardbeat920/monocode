@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { translate } from "../../../shared/i18n/locale";
 import {
   SessionPane,
   type SessionPaneProps,
@@ -819,7 +820,9 @@ it("creates a host worktree through the composer and selects it", async () => {
     document.body.querySelector('[aria-label="Existing worktrees"]'),
   ).toBeNull();
   expect(
-    document.body.querySelector('input[placeholder="Search working copies…"]'),
+    document.body.querySelector(
+      `input[placeholder="${translate("Search working copies…")}"]`,
+    ),
   ).toBeNull();
   const create = [
     ...document.body.querySelectorAll<HTMLButtonElement>("button"),
