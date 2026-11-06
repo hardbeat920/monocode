@@ -36,7 +36,7 @@ import {
   messageFilesFromClipboard,
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
-import { useFileDrop } from "../hooks/useFileDrop";
+import { useFileDrop, type QueuedDropSink } from "../hooks/useFileDrop";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   loadProjectFiles,
@@ -286,8 +286,13 @@ type Props = {
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
-  onEditQueuedMessage?: (messageId: string, text: string) => void;
+  onEditQueuedMessage?: (
+    messageId: string,
+    text: string,
+    attachments: Attachment[],
+  ) => void;
   onQueuedMessageEditingChange?: (messageId?: string) => void;
+  onReorderQueuedMessages?: (orderedIds: string[]) => void;
   onSteerQueuedMessage?: (messageId: string) => void;
   onResumeQueue?: () => void;
   onUsageLimitResume?: () => void;
@@ -406,6 +411,7 @@ export function Composer({
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
+  onReorderQueuedMessages,
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
@@ -421,6 +427,7 @@ export function Composer({
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const queuedDropSinkRef = useRef<QueuedDropSink | null>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -1184,6 +1191,7 @@ export function Composer({
     state: fileDropStateRef,
     read: readDroppedAttachments,
     onError: setPasteError,
+    queuedSinkRef: queuedDropSinkRef,
   });
   const restoreDraft = useCallback(
     (
@@ -1864,9 +1872,12 @@ export function Composer({
       <MessageQueue
         messages={queuedMessages}
         status={queueStatus}
+        attachmentsSupported={attachmentsSupported}
+        dropSinkRef={queuedDropSinkRef}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}
+        onReorder={onReorderQueuedMessages}
         onSteer={onSteerQueuedMessage}
         onResume={onResumeQueue}
       />
