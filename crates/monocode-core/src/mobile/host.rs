@@ -2,6 +2,8 @@
 //! host pairs devices, serves the link and checks every request; the app
 //! answers them from its own state. No arbitrary app commands are exposed.
 use super::catalog::{recent_sessions, session_page};
+use super::notify::{self, Notice};
+use super::presence::{self, Held, Presence, Report};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use monocode_mobile_link::{now, Address, Gate, Identity, WatchSink, PORT, VERSION};
 use serde::{Deserialize, Serialize};
@@ -186,6 +188,29 @@ struct Inner {
     router_status: String,
     router_started: bool,
     error: Option<String>,
+    /// Notices kept back while the user is at the Mac.
+    presence: Presence,
+}
+
+/// What to send when held notices are freed: per phone, the ones it takes, or
+/// one summary when a crowd of them waits for it.
+fn plan_release(inner: &Inner, released: Vec<Held>) -> Vec<(String, Notice)> {
+    let mut plan = Vec::new();
+    for push in inner.config.devices.iter().filter_map(|d| d.push.as_ref()) {
+        let mine: Vec<&Held> = released
+            .iter()
+            .filter(|held| !push.disabled.contains(&held.category))
+            .collect();
+        if mine.len() > presence::DIGEST_AFTER {
+            plan.push((push.token.clone(), presence::digest(&mine)));
+        } else {
+            plan.extend(
+                mine.into_iter()
+                    .map(|held| (push.token.clone(), held.notice.clone())),
+            );
+        }
+    }
+    plan
 }
 
 #[derive(Clone)]
@@ -265,6 +290,7 @@ impl MobileHost {
                 router_status: "Off".into(),
                 router_started: false,
                 error: None,
+                presence: Presence::default(),
             })),
             gate,
             path,
@@ -433,6 +459,62 @@ impl MobileHost {
             .filter(|push| !push.disabled.iter().any(|off| off == category))
             .map(|push| push.token.clone())
             .collect()
+    }
+
+    /// Tells paired phones that `category` took place: now, or once the user
+    /// is away from the Mac.
+    pub fn notice(&self, category: &str, notice: Notice) {
+        if self.push_tokens(category).is_empty() {
+            return;
+        }
+        let held = match self.inner.lock() {
+            Ok(mut inner) => inner.presence.hold(Held {
+                category: category.to_owned(),
+                notice,
+            }),
+            Err(_) => return,
+        };
+        if let Some(held) = held {
+            let tokens = self.push_tokens(&held.category);
+            self.send(tokens.into_iter().map(|token| (token, held.notice.clone())));
+        }
+    }
+
+    /// What the app sees of the user, about once a second. Notices wait while
+    /// they are at the Mac, and the ones still worth hearing go out when they
+    /// leave or the setting turns off.
+    pub fn set_presence(&self, report: Report) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let inner = &mut *inner;
+        let released = inner.presence.update(&report, &inner.catalog);
+        if released.is_empty() {
+            return;
+        }
+        let plan = plan_release(inner, released);
+        self.send(plan);
+    }
+
+    /// Sends each notice to its phone on a thread of its own, forgetting a
+    /// phone Expo says is gone.
+    fn send(&self, plan: impl IntoIterator<Item = (String, Notice)>) {
+        let plan: Vec<(String, Notice)> = plan.into_iter().collect();
+        if plan.is_empty() {
+            return;
+        }
+        let host = self.clone();
+        std::thread::spawn(move || {
+            for (token, notice) in plan {
+                match notify::send(std::slice::from_ref(&token), &notice) {
+                    Ok(gone) if !gone.is_empty() => {
+                        let _ = host.forget_push_tokens(&gone);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Mobile notification not sent: {error}"),
+                }
+            }
+        });
     }
 
     /// Drops tokens Expo says no longer reach a phone, as when the app was
@@ -1087,5 +1169,55 @@ mod tests {
             .unwrap();
         assert!(host.push_tokens("agentInput").is_empty());
         std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_crowd_of_held_notices_reaches_a_phone_as_one_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mobile-access.json");
+        let phone = |id: &str, disabled: Value| json!({"id":id,"name":id,"fingerprint":id,"push":{"token":format!("ExponentPushToken[{id}]"),"disabled":disabled}});
+        std::fs::write(
+            &path,
+            json!({"enabled":false,"devices":[
+                phone("a", json!([])),
+                phone("b", json!(["agentFinished"])),
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let (host, _events) = MobileHost::open(path).unwrap();
+        let inner = host.inner.lock().unwrap();
+        let held = |category: &str, id: &str| Held {
+            category: category.into(),
+            notice: Notice {
+                title: format!("Session {id}"),
+                subtitle: None,
+                body: "Finished".into(),
+                data: json!({"sessionId":id}),
+            },
+        };
+        let crowd = vec![
+            held("agentInput", "1"),
+            held("agentFinished", "2"),
+            held("agentFinished", "3"),
+            held("monoMessages", "4"),
+        ];
+        let plan = plan_release(&inner, crowd);
+        let for_phone = |token: &str| -> Vec<&Notice> {
+            plan.iter()
+                .filter(|(to, _)| to == token)
+                .map(|(_, notice)| notice)
+                .collect()
+        };
+        // Phone a would hear four: one summary. Phone b skips finishes, so
+        // it hears two, one by one.
+        let a = for_phone("ExponentPushToken[a]");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].title, "4 updates while you were away");
+        let b = for_phone("ExponentPushToken[b]");
+        assert_eq!(
+            b.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(),
+            ["Session 1", "Session 4"]
+        );
     }
 }

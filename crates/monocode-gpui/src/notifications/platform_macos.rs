@@ -232,3 +232,28 @@ pub fn open_settings() -> Result<(), String> {
         .map(|_| ())
         .map_err(|error| error.to_string())
 }
+
+/// Seconds since the last key press, click or pointer move on this Mac.
+pub fn idle_seconds() -> Option<f64> {
+    use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
+    // `kCGAnyInputEventType` is every bit set.
+    Some(CGEventSource::seconds_since_last_event_type(
+        CGEventSourceStateID::CombinedSessionState,
+        CGEventType(u32::MAX),
+    ))
+}
+
+/// Whether the login window or screen saver lock is up.
+pub fn screen_locked() -> bool {
+    use objc2_core_foundation::{CFBoolean, CFString};
+    let Some(session) = objc2_core_graphics::CGSessionCopyCurrentDictionary() else {
+        return false;
+    };
+    let key = CFString::from_str("CGSSessionScreenIsLocked");
+    // SAFETY: the key is a live CFString and the dictionary stores CFBooleans
+    // under it, or nothing.
+    unsafe {
+        let value = session.value(&*key as *const CFString as *const std::ffi::c_void);
+        !value.is_null() && (*(value as *const CFBoolean)).value()
+    }
+}

@@ -11,7 +11,10 @@ use crate::{
 use gpui::{EntityId, Task};
 use monocode_core::{
     agent::{AccessMode, Settings, TurnInfo},
-    mobile::{Event, Invite, MobileHost, Push, Request, Status, WatchStart, notify, watch},
+    mobile::{
+        Attendance, Event, Invite, MobileHost, Push, Report, Request, Status, WatchStart, notify,
+        watch,
+    },
     transcript::Row,
 };
 use serde_json::{Value, json};
@@ -1728,25 +1731,52 @@ impl Shell {
         }
     }
 
-    fn send_mobile_notice(&self, category: &str, notice: notify::Notice, cx: &App) {
+    /// Hands a notice to the host, which sends it now or, while the user is
+    /// at this Mac, once they are away.
+    fn send_mobile_notice(&self, category: &str, notice: notify::Notice, _cx: &App) {
+        if let Some(host) = &self.mobile.host {
+            host.notice(category, notice);
+        }
+    }
+
+    /// Tells the host where the user is, so phone notices wait for them to
+    /// leave: idle for the chosen time, or the screen locked.
+    pub(super) fn poll_presence(&mut self, cx: &App) {
         let Some(host) = self.mobile.host.clone() else {
             return;
         };
-        let tokens = host.push_tokens(category);
-        if tokens.is_empty() {
-            return;
-        }
-        cx.background_executor()
-            .spawn(async move {
-                match notify::send(&tokens, &notice) {
-                    Ok(gone) if !gone.is_empty() => {
-                        let _ = host.forget_push_tokens(&gone);
-                    }
-                    Ok(_) => {}
-                    Err(error) => eprintln!("Mobile notification not sent: {error}"),
+        let prefs = &self.workspace.preferences;
+        let attendance = match crate::notifications::platform::idle_seconds() {
+            Some(idle) if prefs.phone_alerts_when_away => {
+                let limit = f64::from(prefs.phone_away_minutes.max(1)) * 60.;
+                if idle >= limit || crate::notifications::platform::screen_locked() {
+                    Attendance::Away
+                } else {
+                    Attendance::AtDesk
                 }
-            })
-            .detach();
+            }
+            _ => Attendance::Ignore,
+        };
+        let mut report = Report {
+            attendance,
+            ..Report::default()
+        };
+        if attendance != Attendance::Ignore {
+            for view in self.notification_chats(cx) {
+                let chat = view.read(cx);
+                if chat.needs_approval() {
+                    let id = chat.summary.id;
+                    report.waiting.push(self.mobile_session_id(id));
+                }
+            }
+            if self.window_active
+                && let Some(id) = self.workspace.active
+                && self.notice_session_visible(id, cx)
+            {
+                report.viewing = Some(self.mobile_session_id(id));
+            }
+        }
+        host.set_presence(report);
     }
 
     /// The account a new session uses: the phone's pick, checked against the
