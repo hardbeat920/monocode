@@ -1,11 +1,14 @@
 import { Host, HStack, Image, Menu, Spacer } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
+  animation,
+  Animation,
   buttonBorderShape,
   buttonStyle,
   contentShape,
   frame,
   menuIndicator,
+  rotationEffect,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { isLiquidGlassAvailable } from "expo-glass-effect";
@@ -17,7 +20,7 @@ import { LiquidView } from "./LiquidView";
 import { useColors } from "./theme";
 
 /** What SwiftUI's glass button adds around its label, both sides together, measured on the simulator. */
-const PADDING = 14;
+export const GLASS_BUTTON_PADDING = 14;
 
 /**
  * A round glass button that opens a native menu from itself, the menu
@@ -38,6 +41,7 @@ export function GlassMenuButton({
   label,
   size,
   on = false,
+  turned = false,
   children,
 }: {
   /** The icon where the glass is the app's own. */
@@ -48,12 +52,19 @@ export function GlassMenuButton({
   label: string;
   size: number;
   on?: boolean;
+  /**
+   * Turns the glyph an eighth, as a plus into a cross. It's the glyph that
+   * turns: SwiftUI glass laid out under a rotated parent swells to many times
+   * its size.
+   */
+  turned?: boolean;
   children: ReactNode;
 }) {
   const colors = useColors();
   const spoken = on ? `${label}, on` : label;
 
   if (isLiquidGlassAvailable()) {
+    const turn = Animation.spring({ duration: 0.38, bounce: 0.2 });
     return (
       <View style={{ width: size, height: size }}>
         <Host ignoreSafeArea="keyboard" style={{ width: size, height: size }}>
@@ -69,7 +80,14 @@ export function GlassMenuButton({
                 systemName={symbol}
                 size={18}
                 color={colors.content}
-                modifiers={[frame({ width: size - PADDING, height: size - PADDING })]}
+                modifiers={[
+                  rotationEffect(turned ? 45 : 0),
+                  animation(turn, turned),
+                  frame({
+                    width: size - GLASS_BUTTON_PADDING,
+                    height: size - GLASS_BUTTON_PADDING,
+                  }),
+                ]}
               />
             }
           >

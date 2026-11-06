@@ -12,6 +12,7 @@ import { Composer } from "@/features/sessions/Composer";
 const runtime = vi.hoisted(() => ({
   os: "android",
   offline: false,
+  glass: false,
   values: [] as { get: () => unknown; set: (value: unknown) => void }[],
   photos: vi.fn(async () => []),
   files: vi.fn(async () => []),
@@ -61,7 +62,7 @@ vi.mock("react-native", () => {
       accessibilityLabel,
       disabled,
     }: {
-      children?: ReactNode;
+      children?: ReactNode | ((state: { pressed: boolean }) => ReactNode);
       onPress?: () => void;
       accessibilityLabel?: string;
       disabled?: boolean;
@@ -71,7 +72,7 @@ vi.mock("react-native", () => {
         onClick={onPress}
         disabled={disabled}
       >
-        {children}
+        {typeof children === "function" ? children({ pressed: false }) : children}
       </button>
     ),
     TextInput: forwardRef<
@@ -103,7 +104,7 @@ vi.mock("@/features/sessions/TypingPostureFocus", () => ({
   }) => <button aria-label="Enter typing posture" disabled={!enabled} onClick={onEnterTypingPosture} />,
 }));
 vi.mock("react-native-reanimated", () => {
-  const transition = { duration: () => ({}) };
+  const transition = { duration: () => ({}), delay: () => transition };
   return {
     default: {
       View: ({
@@ -119,7 +120,7 @@ vi.mock("react-native-reanimated", () => {
         return <div style={Object.assign({}, ...styles)}>{children}</div>;
       },
     },
-    Easing: { out: () => null, cubic: null },
+    Easing: { out: () => null, cubic: null, bezier: () => null },
     FadeIn: transition,
     FadeOut: transition,
     interpolate: (
@@ -151,9 +152,28 @@ vi.mock("react-native-reanimated", () => {
       }
       return ref.current;
     },
+    withSpring: (value: unknown) => value,
     withTiming: (value: unknown) => value,
   };
 });
+vi.mock("expo-glass-effect", () => ({
+  isLiquidGlassAvailable: () => runtime.glass,
+}));
+vi.mock("@/ui/GlassStretchButton", () => ({
+  GlassStretchButton: ({
+    label,
+    disabled,
+    onPress,
+  }: {
+    label: string;
+    disabled?: boolean;
+    onPress: () => void;
+  }) => <button aria-label={label} disabled={disabled} onClick={onPress} />,
+}));
+vi.mock("@/ui/GlassBacking", () => ({
+  ActionDisc: () => null,
+  GlassBacking: () => <i data-testid="glass" />,
+}));
 vi.mock("@expo/ui/swift-ui", () => ({
   Button: () => null,
   Host: () => null,
@@ -199,7 +219,9 @@ vi.mock("@/features/sessions/attachments", () => ({
   isImage: () => false,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
-vi.mock("@/ui/LiquidView", () => ({ LiquidView: () => null }));
+vi.mock("@/ui/LiquidView", () => ({
+  LiquidView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
 vi.mock("@/ui/theme", () => ({
   useColors: () => ({}),
   useScheme: () => "dark",
@@ -248,6 +270,7 @@ beforeEach(() => {
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
   runtime.offline = false;
+  runtime.glass = false;
   runtime.values = [];
   vi.clearAllMocks();
   container = document.createElement("div");
@@ -401,4 +424,26 @@ it("leaves a session's error for when the desktop is back, so it can't lock the 
   render(true, { notice });
   expect(container.querySelector("textarea")!.disabled).toBe(true);
   expect(container.textContent).toContain("Turn failed");
+});
+
+it("draws the glass model out with the card, and takes it off screen once it's back", () => {
+  runtime.glass = true;
+  const display = () =>
+    container.querySelector<HTMLElement>("[data-testid=glass]")!.parentElement!.style.display;
+  render();
+  expect(display()).toBe("none");
+  const input = container.querySelector("textarea")!;
+  act(() => input.focus());
+  render();
+  expect(display()).toBe("flex");
+  act(() => button("Model: GPT").click());
+  expect(model).toHaveBeenCalledOnce();
+  act(() => input.blur());
+  render();
+  expect(display()).toBe("none");
+});
+
+it("can't stop a turn behind a session's error", () => {
+  render(true, { notice: { text: "Turn failed", dismiss: vi.fn() } });
+  expect(button("Stop").disabled).toBe(true);
 });
