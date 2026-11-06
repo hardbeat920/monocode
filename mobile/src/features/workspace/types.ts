@@ -103,6 +103,15 @@ export type Mono = {
   lastActiveAt: number;
   harness?: Harness;
   model?: string;
+  /** What sessions it starts run on when it names no model; unset parts
+   *  are its own. Missing on desktops that predate it. */
+  subsessions?: MonoSubsessions | null;
+};
+
+export type MonoSubsessions = {
+  harness?: Harness;
+  model?: string;
+  effort?: string;
 };
 
 // The desktop's RuntimeMode (src/features/sessions/model/session.ts).
@@ -127,6 +136,31 @@ export type SessionSummary = {
   /** What it waits on the user for; absent from an older desktop. */
   waiting?: "approval" | "question";
 };
+
+// The desktop's UserQuestionPrompt (src/features/sessions/model/userQuestion.ts):
+// what an agent asks the user, answered from the composer's question card.
+export type QuestionOption = { id: string; label: string; description?: string };
+export type Question = {
+  id: string;
+  header?: string;
+  prompt: string;
+  multiSelect: boolean;
+  allowCustom: boolean;
+  options: QuestionOption[];
+};
+export type QuestionPrompt = {
+  requestId: number;
+  title?: string;
+  questions: Question[];
+  /** When the agent carries on without an answer, if it would. */
+  autoResolveAt?: number;
+};
+export type QuestionReply =
+  | { kind: "answered"; answers: Record<string, string[]>; custom?: Record<string, string> }
+  | { kind: "skipped" };
+
+/** Phone-local identity for one showing, even when the desktop reuses an ID. */
+export type DisplayedQuestionPrompt = QuestionPrompt & { displayId: number };
 
 export type Message = {
   id: string;
@@ -172,7 +206,27 @@ export type TurnItem =
       entries: FoldEntry[];
     }
   | { type: "work"; id: string; live: boolean; phases: WorkPhase[] }
-  | { type: "notice"; id: string; text: string; error?: boolean };
+  | { type: "notice"; id: string; text: string; error?: boolean }
+  /** Sessions a Mono started, as cards under the reply after the launch. */
+  | { type: "sessions"; id: string; sessions: LaunchedSession[] }
+  /** A Mono's suggested replies; `chosen` is the reply sent after them. */
+  | { type: "choices"; id: string; options: string[]; chosen?: string }
+  /** A document a Mono wrote, opened in the reader. */
+  | { type: "document"; id: string; documentId: string; title: string; kind: string };
+
+// The desktop's LaunchedSessionState (src/features/monos/model/monoSpawnedSessions.ts).
+export type LaunchedSessionState = "working" | "input" | "draft" | "failed" | "stopped" | "done";
+
+/** A session a Mono started, as its card in the Mono's chat. */
+export type LaunchedSession = {
+  id: string;
+  projectId: string;
+  /** The project's name, for the card's pill. */
+  project: string;
+  title: string;
+  harness: Harness;
+  state: LaunchedSessionState;
+};
 
 export type Turn = {
   id: string;
@@ -194,4 +248,15 @@ export type TurnMetrics = {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   cacheHitPercent?: number;
+};
+
+/** Desktop-owned usage recovery state; mobile only renders these capabilities. */
+export type UsageLimitState = {
+  token: string;
+  resetsAt?: number | null;
+  resumeAtReset: boolean;
+  canResume: boolean;
+  canAutoResume: boolean;
+  resetLabel: string;
+  limitation: string;
 };

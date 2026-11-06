@@ -266,16 +266,13 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
   zsh: "code.sh",
 };
 
-// Shiki (via Streamdown's CodeBlock) treats these as plaintext and renders no
-// syntax colors at all, which is common in agent output (pseudocode, file
-// trees, command output) fenced as `text` or left untagged. Falling back to
-// the JS grammar for these still colors strings, numbers, and punctuation,
-// matching what most agent-output fences actually look like.
+// Prose and command output must not enter a programming-language grammar:
+// slashes and apostrophes can otherwise carry regex/string colors across lines.
 const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
 
 function highlightLanguageFor(language: string): string {
   return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase())
-    ? "js"
+    ? "text"
     : language;
 }
 
@@ -413,12 +410,8 @@ function MarkdownCode({
     (fence.language ? fileNameForLanguage(fence.language) : "");
   const lineNumbers = !/\bnoLineNumbers\b/.test(meta);
   const code = textContent(children);
-  // highlightLanguageFor swaps the fence language for "js" so Shiki still
-  // colors plaintext fences, but Streamdown's CodeBlock reuses that same
-  // value for the header label. Without this, a `text` fence would show a
-  // "js" header, and an untagged fence would gain a header it never had.
-  // Render our own label with the original language instead, and hide
-  // Streamdown's via CSS (see .markdown-code-fallback-label in index.css).
+  // Keep the original label when plaintext aliases normalize to "text",
+  // including the empty label of an untagged fence.
   const isPlaintextFallback = PLAINTEXT_FENCE_LANGUAGES.has(
     fence.language.toLowerCase(),
   );

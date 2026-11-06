@@ -1,6 +1,7 @@
-// Sidebar.tsx's peek: in the inset layout a collapsed sidebar slides out over
-// the workspace while the pointer rests on the window's left edge or on the
-// sidebar toggle, and puts itself away once the pointer leaves it.
+// Sidebar.tsx's peek: in the Focused layout (rounded or boxy) a collapsed
+// sidebar slides out over the workspace while the pointer rests on the
+// window's left edge or on the sidebar toggle, and puts itself away once the
+// pointer leaves it.
 use super::Shell;
 use crate::{reveal::bezier, theme::*};
 use gpui::{
@@ -62,9 +63,9 @@ impl SidebarPeek {
 }
 
 impl Shell {
-    /// Only the inset layout's collapsed sidebar peeks.
+    /// Only the Focused layout's collapsed sidebar peeks, rounded or boxy.
     fn peek_available(&self) -> bool {
-        !self.workspace.boxy_layout()
+        !self.workspace.classic_layout
             && !self.workspace.sidebar_visible
             && self.sidebar_slide.is_none()
             && self.settings.is_none()
@@ -257,7 +258,10 @@ impl Shell {
         // Glass blurs the dimmed workspace under a faint wash; otherwise the
         // panel takes the window's own surface.
         let glass = self.window_glass == Some(true) && !is_light();
-        let scale = window.scale_factor();
+        // The blur marker carries no alpha for opacity to fade, so the blur
+        // itself eases with the panel; at full strength to the last frame it
+        // would vanish all at once as the peek closes.
+        let blur = 24. * window.scale_factor() * progress;
         let sidebar = if self.sidebar_uncached() {
             self.sidebar_frame.clone().into_any_element()
         } else {
@@ -295,10 +299,10 @@ impl Shell {
                         move |bounds, _, window, _| {
                             #[cfg(any(target_os = "macos", target_os = "windows"))]
                             let quad = gpui::fill(bounds, content(0.05))
-                                .border_color(gpui::backdrop_blur_marker(24. * scale));
+                                .border_color(gpui::backdrop_blur_marker(blur));
                             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                             let quad = {
-                                let _ = scale;
+                                let _ = blur;
                                 gpui::fill(bounds, shell_fill())
                             };
                             window.paint_quad(quad.corner_radii(px(10.)));

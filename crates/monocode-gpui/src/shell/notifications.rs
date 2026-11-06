@@ -126,8 +126,8 @@ impl Shell {
             self.notification_state.responding.insert(id);
             return;
         }
-        if !self.notification_state.responding.remove(&id)
-            || chat.busy
+        let ended = self.notification_state.responding.remove(&id) && !chat.busy;
+        if !ended
             || chat.notification_was_cancelled()
             || chat.summary.archived
             || self
@@ -135,6 +135,10 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|monos| monos.read(cx).is_mono_session(id))
         {
+            // Ended with no finish to send, as when stopped.
+            if ended {
+                self.mobile_turn_ended(id);
+            }
             return;
         }
         let summary = chat.summary.clone();
@@ -277,6 +281,12 @@ impl Shell {
             ));
             self.observations.push(cx.subscribe(
                 &monos,
+                |this, _, event: &crate::monos::NotificationPosted, cx| {
+                    this.notify_mobile_post(event.session, &event.body, cx)
+                },
+            ));
+            self.observations.push(cx.subscribe(
+                &monos,
                 |this, _, event: &crate::monos::NotificationFinished, cx| {
                     if !event.was_cancelled && !event.habit && !event.summary.archived {
                         this.deliver_session_notice(
@@ -373,7 +383,7 @@ impl Shell {
         views
     }
 
-    fn notification_chat(&self, id: i64, cx: &App) -> Option<Entity<Conversation>> {
+    pub(super) fn notification_chat(&self, id: i64, cx: &App) -> Option<Entity<Conversation>> {
         self.sessions
             .get(&id)
             .cloned()
@@ -432,8 +442,8 @@ impl Shell {
         }
     }
 
-    fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.app_view_open() || self.settings.is_some() || self.app_search.is_some() {
+    pub(super) fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
+        if self.app_view_open() || self.settings.is_some() || self.search_page() {
             return false;
         }
         if self.mono_active(cx) {
@@ -450,17 +460,19 @@ impl Shell {
                 .into_iter()
                 .any(|pane| {
                     self.workspace.session_for_pane(pane) == id
-                        && !self.workspace.review_owners.contains_key(&pane)
+                        && !self.workspace.is_detached_pane(pane)
                 })
         })
     }
 
     pub(super) fn sync_notices(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = monocode_core::time::now_ms();
-        let prefs = self.workspace.preferences.clone();
-        if self.notification_state.sounds_enabled != prefs.sounds {
-            self.notification_state.sounds_enabled = prefs.sounds;
-            if prefs.sounds {
+        // This runs on every Shell frame; borrow the preferences below instead
+        // of cloning their JSON maps each time.
+        let sounds = self.workspace.preferences.sounds;
+        if self.notification_state.sounds_enabled != sounds {
+            self.notification_state.sounds_enabled = sounds;
+            if sounds {
                 self.notification_state.sounds_enabled_at = now;
             }
         }
@@ -468,6 +480,7 @@ impl Shell {
         let mut snapshots = Vec::new();
         let mut directories = HashMap::new();
         let mut completed = Vec::new();
+        let mut quiet = Vec::new();
         let mut live_ids = HashSet::new();
         for view in views {
             let chat = view.read(cx);
@@ -475,17 +488,20 @@ impl Shell {
             live_ids.insert(id);
             if chat.responding() {
                 self.notification_state.responding.insert(id);
-            } else if self.notification_state.responding.remove(&id)
-                && !chat.busy
-                && !chat.notification_was_cancelled()
-                && !chat.summary.archived
-                && self.sessions.contains_key(&id)
-                && !self
-                    .monos
-                    .as_ref()
-                    .is_some_and(|monos| monos.read(cx).is_mono_session(id))
-            {
-                completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
+            } else if self.notification_state.responding.remove(&id) && !chat.busy {
+                if !chat.notification_was_cancelled()
+                    && !chat.summary.archived
+                    && self.sessions.contains_key(&id)
+                    && !self
+                        .monos
+                        .as_ref()
+                        .is_some_and(|monos| monos.read(cx).is_mono_session(id))
+                {
+                    completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
+                } else {
+                    // Ended with no finish to send, as when stopped.
+                    quiet.push(id);
+                }
             }
             directories.insert(id.to_string(), chat.summary.cwd.clone());
             let mono_visible = self.mono_active(cx) && self.notice_session_visible(id, cx);
@@ -506,6 +522,9 @@ impl Shell {
         self.notification_state
             .responding
             .retain(|id| live_ids.contains(id));
+        for id in quiet {
+            self.mobile_turn_ended(id);
+        }
         let badge = delivery::dock_badge_count(
             snapshots
                 .iter()
@@ -539,6 +558,7 @@ impl Shell {
                 cx,
             );
         }
+        let prefs = &self.workspace.preferences;
         self.notification_state.approvals.update(cx, |notices, cx| {
             notices.sync(
                 &snapshots,
@@ -593,6 +613,7 @@ impl Shell {
         cue: Option<crate::sound::Cue>,
         cx: &mut Context<Self>,
     ) {
+        self.notify_mobile(summary, category, body, cx);
         self.dispatch_notice(
             summary,
             category,
@@ -1341,7 +1362,7 @@ impl Shell {
 }
 
 #[cfg(test)]
-mod error_tests {
+mod tests {
     use super::*;
     use gpui::{TestAppContext, VisualTestContext};
 
@@ -1400,6 +1421,32 @@ mod error_tests {
             .update(visual, |shell, _, cx| {
                 assert!(shell.error.is_none());
                 assert!(!shell.notification_state.file_error.read(cx).is_visible());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn dismissing_installed_update_does_not_open_whats_new(cx: &mut TestAppContext) {
+        let (window, _, _) = crate::shell::tests::window(cx);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |shell, _, cx| {
+                shell.notification_state.installed.update(cx, |notice, cx| {
+                    notice.set_version(Some("1.2.3".into()), cx)
+                });
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let close = visual.debug_bounds("dismiss-installed-update").unwrap();
+        visual.simulate_click(close.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(!shell.notification_state.installed.read(cx).is_visible());
+                assert!(shell.notification_state.whats_new.is_none());
             })
             .unwrap();
     }
