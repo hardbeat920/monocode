@@ -327,16 +327,38 @@ impl Conversation {
         cx.notify();
         Ok(())
     }
+    /// The access a turn runs with. The saved mode is the user's choice and is
+    /// left alone; a model that can't do it shows (and runs with) the closest
+    /// preceding mode it supports.
+    pub(crate) fn supported_access(&self) -> AccessMode {
+        monocode_core::catalog::supported_access(
+            Kind::from_id(&self.summary.provider),
+            self.access_model(),
+            self.settings.access,
+        )
+    }
+    /// The catalog entry the provider launch checks access against.
+    fn access_model(&self) -> Option<&monocode_core::catalog::Model> {
+        monocode_core::catalog::launch_model(&self.catalog, self.model.as_deref())
+    }
     pub(crate) fn mono_access_options(&self) -> Vec<MenuItem> {
         let provider = Kind::from_id(&self.summary.provider);
+        let access = self.supported_access();
+        let mut offered = monocode_core::catalog::access_modes(provider, self.access_model());
+        if offered.is_empty() {
+            // No approval levels: Supervised is the provider's normal mode.
+            offered.push(AccessMode::Supervised);
+        }
         let mut items = vec![
             MenuAction::new("access:read-only", "Read-only")
                 .icon("square-lock")
                 .description("Inspect without changing files.")
-                .checked(self.settings.access == AccessMode::ReadOnly)
+                .checked(access == AccessMode::ReadOnly)
                 .into(),
         ];
-        items.extend(ACCESS_MODES.iter().map(|(id, label, hint, glyph)| {
+        items.extend(ACCESS_MODES.iter().filter(|(id, ..)| {
+            offered.contains(&AccessMode::from_id(id))
+        }).map(|(id, label, hint, glyph)| {
                     let hint = match (provider,*id) {
                         (Kind::Cursor,"supervised") => "Confirm commands using Cursor's permission policy; Cursor may accept edits automatically.",
                         (Kind::Pi | Kind::Omp,_) => "Tool confirmations follow this provider's configured extensions.",
@@ -345,7 +367,7 @@ impl Conversation {
                     let action = MenuAction::new(format!("access:{id}"), *label)
                         .icon(glyph)
                         .description(hint)
-                        .checked(self.settings.access.id() == *id);
+                        .checked(access.id() == *id);
                     MenuItem::from(if *id == "full-access" {
                         action.icon_color(tint(AMBER_400, 0.9))
                     } else {
@@ -363,7 +385,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.settings.access = mode;
-        super::remember_access(mode, cx);
+        super::remember_access(&self.summary.provider, self.model.as_deref(), mode, cx);
         self.save_settings(cx);
         cx.notify();
     }
@@ -516,12 +538,25 @@ impl Conversation {
         if self.busy || self.stopping {
             return Err("Wait for the current reply before changing models".into());
         }
+        let changed = self.summary.provider != provider.id() || self.model != model;
+        if changed {
+            super::remember_access(
+                &self.summary.provider,
+                self.model.as_deref(),
+                self.settings.access,
+                cx,
+            );
+        }
         if self.summary.provider != provider.id() {
             self.summary.provider = provider.id().into();
             self.summary.provider_id = None;
             self.catalog.clear();
         }
         self.model = model;
+        if changed {
+            self.settings.access =
+                super::preferred_access(provider.id(), self.model.as_deref(), cx);
+        }
         self.settings.effort = super::preferred_effort(provider.id(), cx);
         self.settings.fast = false;
         self.settings.thinking = None;
@@ -834,6 +869,7 @@ impl Conversation {
     /// The session composer's box: the field, then a toolbar with the model
     /// picker, its settings, access and send.
     fn mono_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let access = self.supported_access();
         let radius = COMPOSER_RADIUS;
         let has_value = self.input.read(cx).has_message_text() || !self.attachments.is_empty();
         // As the session composer: setting pills only with controls beside
@@ -946,7 +982,7 @@ impl Conversation {
                             .children(controls)
                             .child(
                                 tool_pill("mono-access", "Access")
-                                    .aria_label(format!("Access, {}", self.settings.access.label()))
+                                    .aria_label(format!("Access, {}", access.label()))
                                     .aria_expanded(self.menu_is(ComposerMenu::Access))
                                     .child(self.access_anchor.probe())
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -954,7 +990,7 @@ impl Conversation {
                                     }))
                                     .child(
                                         icon(
-                                            match self.settings.access {
+                                            match access {
                                                 AccessMode::FullAccess => "shield-alert",
                                                 AccessMode::AutoAcceptEdits => "pencil-edit",
                                                 AccessMode::Auto => "sparkles",
@@ -963,14 +999,14 @@ impl Conversation {
                                             14.,
                                         )
                                         .text_color(
-                                            if self.settings.access == AccessMode::FullAccess {
+                                            if access == AccessMode::FullAccess {
                                                 tint(AMBER_400, 0.9)
                                             } else {
                                                 content(1.)
                                             },
                                         ),
                                     )
-                                    .child(pill_label(self.settings.access.label()))
+                                    .child(pill_label(access.label()))
                                     .child(icon("chevron-down", 12.)),
                             ),
                     )

@@ -10,7 +10,7 @@ impl Shell {
                 && saved.favorite_models == prefs.favorite_models
                 && saved.recent_models == prefs.recent_models
                 && saved.file_view_mode == prefs.file_view_mode
-                && saved.default_access == prefs.default_access
+                && saved.model_access == prefs.model_access
                 && saved.provider_efforts == prefs.provider_efforts
             {
                 return;
@@ -19,7 +19,7 @@ impl Shell {
             saved.favorite_models = prefs.favorite_models.clone();
             saved.recent_models = prefs.recent_models.clone();
             saved.file_view_mode = prefs.file_view_mode.clone();
-            saved.default_access = prefs.default_access.clone();
+            saved.model_access = prefs.model_access.clone();
             saved.provider_efforts = prefs.provider_efforts.clone();
             this.sync_settings(cx);
             this.persist(cx);
@@ -95,5 +95,17 @@ mod tests {
             })
             .unwrap();
         stored(&[]);
+        cx.update(|cx| {
+            crate::conversation::remember_access(
+                "claude",
+                Some("opus"),
+                monocode_core::agent::AccessMode::Auto,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let state = locked(&database).unwrap().ui_state().unwrap().unwrap();
+        let state: Workspace = serde_json::from_str(&state).unwrap();
+        assert_eq!(state.preferences.model_access["claude"]["opus"], "auto");
     }
 }
