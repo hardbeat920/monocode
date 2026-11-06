@@ -184,6 +184,7 @@ function GeneralSection({
           />
         </SettingRow>
         <ModelSettingRows
+          project={cwd}
           harness={harness}
           model={model}
           values={modelSettings}

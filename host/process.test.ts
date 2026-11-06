@@ -10,7 +10,30 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveProvider } from "./process";
+import { resolveProvider, providerLaunch } from "./process";
+
+it("runs the standard Windows npm OpenCode entry without interpreting its wrapper", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-opencode-launch-"));
+  const entry = join(directory, "node_modules/opencode-ai/bin/opencode");
+  mkdirSync(join(directory, "node_modules/opencode-ai/bin"), {
+    recursive: true,
+  });
+  writeFileSync(entry, "process.exit(0)");
+  try {
+    expect(
+      await providerLaunch(
+        join(directory, "opencode.cmd"),
+        ["serve", "a & b"],
+        "win32",
+      ),
+    ).toEqual({ command: process.execPath, args: [entry, "serve", "a & b"] });
+    await expect(
+      providerLaunch(join(directory, "custom.cmd"), [], "win32"),
+    ).rejects.toThrow("Unsupported Windows provider launcher");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 it.each(["cursor", "pi", "fx"] as const)(
   "does not execute an unrelated ambiguous %s binary while resolving providers",

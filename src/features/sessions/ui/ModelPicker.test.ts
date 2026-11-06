@@ -15,6 +15,18 @@ vi.mock("../../../integrations/harness/core/registry", () => ({
   refreshHarnessCatalogs: () => Promise.resolve(),
 }));
 
+vi.mock(
+  "../../../integrations/harness/providers/opencode/opencodeCatalog",
+  async () => {
+    const { projectHarnessModels } = await import("../model/models");
+    return {
+      projectOpenCodeModels: (cwd: string) =>
+        projectHarnessModels("opencode", cwd),
+      refreshProjectOpenCodeCatalog: async () => undefined,
+    };
+  },
+);
+
 vi.mock("../../../shared/ui/Popover", () => ({
   Popover: ({
     children,
@@ -63,11 +75,16 @@ vi.mock("../../../shared/ui/Popover", () => ({
     ),
 }));
 
-import { ModelControlPills, ModelPicker } from "./ModelPicker";
+import {
+  ModelControlPills,
+  ModelPicker,
+  ModelSettingRows,
+} from "./ModelPicker";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
   setHarnessModels,
+  setProjectHarnessModels,
 } from "../model/models";
 
 let container: HTMLDivElement;
@@ -287,6 +304,112 @@ describe("model picker", () => {
       options.indexOf("Claude Opus 5") + 1,
     );
   });
+
+  it("uses the worktree inventory for a session outside its project root", () => {
+    setProjectHarnessModels("opencode", "/project", [
+      { id: "opencode:fixture/base", harness: "opencode", name: "Base model" },
+    ]);
+    setProjectHarnessModels("opencode", "/worktree", [
+      {
+        id: "opencode:fixture/worktree",
+        harness: "opencode",
+        name: "Worktree model",
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "opencode",
+          model: "opencode:fixture/worktree",
+          values: {},
+          project: "/project",
+          catalogCwd: "/worktree",
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.textContent).toContain("Worktree model");
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+    const options = [...container.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent,
+    );
+    expect(options).toContain("Worktree model");
+    expect(options).not.toContain("Base model");
+  });
+
+  it.each(["pill", "text", "compact", "rows"] as const)(
+    "uses project-specific OpenCode settings in %s controls",
+    (variant) => {
+      const model = "opencode:fixture/worktree";
+      setProjectHarnessModels("opencode", "/worktree", [
+        {
+          id: model,
+          harness: "opencode",
+          name: "Worktree model",
+          settings: [
+            {
+              id: "variant",
+              label: "Variant",
+              kind: "select",
+              value: "high",
+              options: [
+                { value: "low", label: "Project Low" },
+                { value: "high", label: "Project High" },
+              ],
+            },
+          ],
+        },
+      ]);
+      const onSettingsChange = vi.fn();
+      act(() =>
+        root.render(
+          variant === "rows"
+            ? createElement(ModelSettingRows, {
+                project: "/worktree",
+                harness: "opencode",
+                model,
+                values: {},
+                onSettingsChange,
+                row: ({ control }) => control,
+              })
+            : createElement(ModelControlPills, {
+                project: "/worktree",
+                harness: "opencode",
+                model,
+                values: {},
+                variant: variant === "compact" ? "text" : variant,
+                labelClassName: variant === "compact" ? "hidden" : undefined,
+                onSettingsChange,
+              }),
+        ),
+      );
+      const trigger = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Variant: Project High"]',
+      );
+      expect(trigger).not.toBeNull();
+      expect(trigger?.querySelector("svg")).not.toBeNull();
+      if (variant === "compact") {
+        expect(trigger?.querySelector("span.hidden")?.textContent).toBe(
+          "Project High",
+        );
+      }
+      act(() => trigger?.click());
+      const option = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === "Project Low");
+      expect(option).toBeDefined();
+      act(() => option?.click());
+      expect(onSettingsChange).toHaveBeenCalledWith({ variant: "low" });
+    },
+  );
 
   it("shows a saved Claude version's settings when only its alias is live", () => {
     setHarnessModels("claude", [
