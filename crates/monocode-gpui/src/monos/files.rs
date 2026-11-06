@@ -274,10 +274,12 @@ impl Monos {
         for run in self.running.values().filter(|r| r.mono == id) {
             run.view.update(cx, |v, cx| v.mono_stop(cx));
         }
-        self.roster.monos.retain(|m| m.id != id);
+        self.roster.remove(id);
         if self.active.as_deref() == Some(id) {
             self.active = None;
         }
         self.save(cx);
+        // The sidebar's origin tiles turn grey.
+        self.changed(cx);
     }
 }
