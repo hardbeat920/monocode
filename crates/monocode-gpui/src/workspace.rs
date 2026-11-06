@@ -573,7 +573,10 @@ impl Workspace {
         state.sidebar_width = state.sidebar_width.clamp(200., 560.);
         state.right_panel_width = state
             .right_panel_width
-            .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
+            .clamp(
+                crate::right_panel::WIDTH_MIN,
+                crate::right_panel::WIDTH_CEILING,
+            )
             .round();
         state.right_panel_tabs = crate::right_panel::RightTab::normalize(&state.right_panel_tabs);
         state
