@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { loginHarness } from "../../../integrations/harness/core/auth";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  hasResumableHarnessLogin,
+  loginHarness,
+  onHarnessLoginEnd,
+  submitHarnessLoginCode,
+  type LoginMode,
+} from "../../../integrations/harness/core/auth";
+import { copyText } from "../../../platform/tauri/clipboard";
 import { HARNESS_TITLE, type HarnessId } from "../model/session";
 import { Modal } from "../../../shared/ui/Modal";
 import {
@@ -9,24 +16,71 @@ import {
 
 type Props = {
   harness: HarnessId;
+  providerAccountId?: string;
   onClose: () => void;
 };
 
-export function ProviderSignInDialog({ harness, onClose }: Props) {
+export function ProviderSignInDialog({
+  harness,
+  providerAccountId,
+  onClose,
+}: Props) {
   const [state, setState] = useState<ProviderSignInState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [mode, setMode] = useState<LoginMode | null>(null);
+  const [resumable, setResumable] = useState(() =>
+    hasResumableHarnessLogin(harness, providerAccountId),
+  );
+  const attempt = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setState("idle");
     setError(null);
-  }, [harness]);
+    setLoginUrl(null);
+    setMode(null);
+    setResumable(hasResumableHarnessLogin(harness, providerAccountId));
+    return () => attempt.current?.abort();
+  }, [harness, providerAccountId]);
+
+  useEffect(() => {
+    if (!resumable) return;
+    return onHarnessLoginEnd(harness, providerAccountId, () =>
+      setResumable(false),
+    );
+  }, [harness, providerAccountId, resumable]);
 
   const signIn = useCallback(() => {
+    const controller = new AbortController();
+    attempt.current = controller;
     setState("running");
     setError(null);
-    void loginHarness(harness).then(
-      () => setState("complete"),
+    setLoginUrl(null);
+    setMode(null);
+    setResumable(false);
+    void loginHarness(harness, providerAccountId, {
+      signal: controller.signal,
+      onUrl: setLoginUrl,
+      onMode: setMode,
+    }).then(
+      () => {
+        if (attempt.current === controller) {
+          attempt.current = null;
+          setError(null);
+          setResumable(false);
+          setState("complete");
+        }
+      },
       (reason: unknown) => {
+        if (attempt.current !== controller) return;
+        if (controller.signal.aborted) {
+          setState("idle");
+          setLoginUrl(null);
+          setResumable(hasResumableHarnessLogin(harness, providerAccountId));
+          return;
+        }
+        attempt.current = null;
+        setResumable(false);
         setState("error");
         setError(
           reason instanceof Error
@@ -35,11 +89,22 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
         );
       },
     );
-  }, [harness]);
+  }, [harness, providerAccountId]);
+
+  const cancel = useCallback(() => {
+    if (!attempt.current) return;
+    setState("cancelling");
+    attempt.current.abort();
+  }, []);
+
+  const close = useCallback(() => {
+    attempt.current?.abort();
+    onClose();
+  }, [onClose]);
 
   return (
     <Modal
-      onClose={onClose}
+      onClose={close}
       title="Authentication required"
       description={`Sign in to continue using ${HARNESS_TITLE[harness]}.`}
       size="sm"
@@ -50,7 +115,46 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
         state={state}
         error={error}
         onSignIn={signIn}
-        onComplete={onClose}
+        onComplete={close}
+        onCancel={state === "running" ? cancel : undefined}
+        cancelLabel={mode === "detach" ? "Leave sign-in running" : undefined}
+        resumable={resumable}
+        loginUrl={loginUrl}
+        onCopyUrl={
+          loginUrl
+            ? () => {
+                const controller = attempt.current;
+                if (!controller || controller.signal.aborted) return;
+                void copyText(loginUrl).catch(() => {
+                  if (
+                    attempt.current === controller &&
+                    !controller.signal.aborted
+                  )
+                    setError("Could not copy sign-in link.");
+                });
+              }
+            : undefined
+        }
+        onSubmitCode={
+          loginUrl
+            ? (code) => {
+                const controller = attempt.current;
+                if (!controller || controller.signal.aborted) return;
+                void submitHarnessLoginCode(
+                  harness,
+                  code,
+                  controller.signal,
+                  providerAccountId,
+                ).catch(() => {
+                  if (
+                    attempt.current === controller &&
+                    !controller.signal.aborted
+                  )
+                    setError("Could not submit sign-in code.");
+                });
+              }
+            : undefined
+        }
         completeActionLabel="Continue"
         autoFocus
       />

@@ -64,6 +64,49 @@ describe("isCurrentChildExit", () => {
 });
 
 describe("child bridge", () => {
+  it("requests window-scoped unload cleanup", async () => {
+    mocks.invoke.mockResolvedValue(undefined);
+    const child = await loadChild();
+    await child.killAllChildren(true);
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_kill_all", {
+      windowUnload: true,
+    });
+  });
+
+  it("does not require a native exit acknowledgment from a headless host", async () => {
+    const child = await loadChild();
+    const invoke = vi.fn(async () => undefined);
+    child.configureChildBackend({ invoke, listen: vi.fn() });
+    await child.acknowledgeLoginExit("login", 42);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("replays a matching exit that arrives while another window attaches to a login", async () => {
+    installResolvedListeners();
+    const snapshot = deferred<{ pid: number; line: string }>();
+    mocks.invoke.mockImplementation((command: string) =>
+      command === "harness_login_snapshot"
+        ? snapshot.promise
+        : Promise.resolve(),
+    );
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const onExit = vi.fn();
+    child.watchChild("monocode-provider-login-claude", vi.fn(), onExit);
+    const attaching = child.attachLogin("monocode-provider-login-claude");
+    mocks.handlers.get("harness-exit")?.({
+      payload: {
+        sessionId: "monocode-provider-login-claude",
+        code: 0,
+        pid: 42,
+      } as never,
+    });
+    snapshot.resolve({ pid: 42, line: "link" });
+    await expect(attaching).resolves.toBe("link");
+    expect(onExit).toHaveBeenCalledWith(0, 42);
+    release();
+  });
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();
     mocks.listen.mockImplementation(
@@ -143,7 +186,39 @@ describe("child bridge", () => {
 
     spawned.resolve(42);
     await spawning;
-    expect(onExit).toHaveBeenCalledWith(1);
+    expect(onExit).toHaveBeenCalledWith(1, 42);
+    release();
+  });
+
+  it("stops without discarding the PID-matched exit watcher", async () => {
+    installResolvedListeners();
+    mocks.invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "harness_spawn" ? 42 : undefined),
+    );
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const onExit = vi.fn();
+    child.watchChild("login", vi.fn(), onExit);
+    await child.spawnChild("login", "claude", ["auth", "login"], "/repo");
+    await child.stopChild("login");
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_stop", {
+      sessionId: "login",
+      requireExisting: false,
+    });
+    mocks.handlers.get("harness-exit")?.({
+      payload: { sessionId: "login", code: null, pid: 41 } as never,
+    });
+    expect(onExit).not.toHaveBeenCalled();
+    mocks.handlers.get("harness-exit")?.({
+      payload: { sessionId: "login", code: null, pid: 42 } as never,
+    });
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(onExit).toHaveBeenCalledWith(null, 42);
+    await child.acknowledgeLoginExit("login", 42);
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_ack_login_exit", {
+      sessionId: "login",
+      pid: 42,
+    });
     release();
   });
 

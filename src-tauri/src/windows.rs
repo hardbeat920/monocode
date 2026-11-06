@@ -145,6 +145,13 @@ mod tests {
     };
 
     #[test]
+    fn native_login_reports_detach_with_a_managed_job() {
+        assert_eq!(crate::harness::harness_login_mode(), "detach");
+        initialize().unwrap();
+        assert!(managed_job().is_ok());
+    }
+
+    #[test]
     fn managed_short_lived_command_preserves_exit_status() {
         let mut command = Command::new("cmd.exe");
         command.args(["/D", "/C", "exit", "7"]);

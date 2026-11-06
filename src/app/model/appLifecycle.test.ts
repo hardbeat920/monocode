@@ -11,6 +11,7 @@ import {
   commitQuit,
   confirmReload,
   reportQuitPoll,
+  reapWindowRuntime,
   setQuitWorkspace,
 } from "./appLifecycle";
 import type { DockSide } from "../../features/projects/model/projectTerminal";
@@ -220,6 +221,11 @@ describe("closing a busy window", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(ask).mockResolvedValue(true);
+  });
+
+  it("preserves a native Windows login during window unload cleanup", async () => {
+    await reapWindowRuntime([], []);
+    expect(killAllChildren).toHaveBeenCalledWith(true);
   });
 
   function workspace() {

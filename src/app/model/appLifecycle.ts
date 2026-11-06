@@ -516,7 +516,7 @@ export async function reapWindowRuntime(
   );
   // Catalog probes, title generators, and usage scrapers are not session
   // children. Drop them so an unused Pi/Codex probe cannot outlive the window.
-  if (includeAllChildren) await killAllChildren().catch(() => undefined);
+  if (includeAllChildren) await killAllChildren(true).catch(() => undefined);
 }
 
 function terminalFileIds(tabs: WorkspaceTab[]): string[] {
