@@ -18,6 +18,7 @@ import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tau
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
 import type { HostStore } from "./store";
+import { GITHUB_INBOX_COMMANDS, GithubInbox, type GithubInboxCommand } from "./github-inbox";
 import {
   createHostPath,
   existingPath,
@@ -37,6 +38,7 @@ const exec = promisify(execFile);
  * works on either machine. Paths are absolute host paths and must lie inside
  * a registered project or one of its worktrees. */
 export const WORKSPACE_COMMANDS = [
+  ...GITHUB_INBOX_COMMANDS,
   "list_dir",
   "list_project_files",
   "read_text_file",
@@ -98,6 +100,7 @@ const alreadyExists = (name: string) =>
 type Located = { root: string; relative: string };
 
 export class WorkspaceCommands {
+  private readonly githubInbox = new GithubInbox();
   private roots = new Map<string, { at: number; roots: string[] }>();
   private rootsGeneration = 0;
 
@@ -118,6 +121,8 @@ export class WorkspaceCommands {
       args && typeof args === "object" && !Array.isArray(args)
         ? (args as Record<string, unknown>)
         : {};
+    if (GITHUB_INBOX_COMMANDS.includes(command as GithubInboxCommand))
+      return this.gitRoot(input.cwd).then((cwd) => this.githubInbox.run(command as GithubInboxCommand, cwd, input));
     switch (command as WorkspaceCommand) {
       case "list_dir":
         return this.listDir(input.path);
@@ -207,6 +212,7 @@ export class WorkspaceCommands {
       case "search_project":
         return this.searchProject(input.options);
     }
+    throw new Error("Unsupported workspace command");
   }
 
   /** The project folders and worktrees files may be read and written in. */
