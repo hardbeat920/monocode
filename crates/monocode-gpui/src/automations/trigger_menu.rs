@@ -4,11 +4,12 @@
 use super::*;
 use crate::popover::{Menu, MenuAction, MenuEvent, MenuItem, Popover, menu_popover};
 
-const CATEGORIES: [(&str, &str, &str); 6] = [
+const CATEGORIES: [(&str, &str, &str); 7] = [
     ("time", "Scheduled", "clock"),
     ("github", "GitHub", "inbox-github"),
     ("linear", "Linear", "inbox-linear"),
     ("jira", "Jira", "inbox-jira"),
+    ("bitbucket", "Bitbucket", "inbox-bitbucket"),
     ("gitlab", "GitLab", "inbox-gitlab"),
     ("azuredevops", "Azure DevOps", "inbox-azuredevops"),
 ];

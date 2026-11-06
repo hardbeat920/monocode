@@ -43,6 +43,7 @@ fn trigger_mark(kind: &str, side: f32) -> AnyElement {
         "github" => ("inbox-github", content(0.65)),
         "linear" => ("inbox-linear", content(0.65)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
+        "bitbucket" => ("inbox-bitbucket", content(0.65)),
         "azuredevops" => ("inbox-azuredevops", content(0.65)),
         _ => ("zap", content(0.45)),
     };

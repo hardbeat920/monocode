@@ -70,6 +70,7 @@ export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
   jira: "Jira",
   gitlab: "GitLab",
   azuredevops: "ADO",
+  bitbucket: "Bitbucket",
 };
 
 export function visibleInboxSources(
@@ -81,6 +82,7 @@ export function visibleInboxSources(
   if (connections.jira !== false) sources.push("jira");
   if (connections.gitlab !== false) sources.push("gitlab");
   if (connections.azuredevops !== false) sources.push("azuredevops");
+  if (connections.bitbucket !== false) sources.push("bitbucket");
   return sources;
 }
 
@@ -93,12 +95,21 @@ export function connectableInboxSources(
   if (connections.jira === false) sources.push("jira");
   if (connections.gitlab === false) sources.push("gitlab");
   if (connections.azuredevops === false) sources.push("azuredevops");
+  if (connections.bitbucket === false) sources.push("bitbucket");
   return sources;
 }
 
 /** Account-wide issue trackers: no local repos, no PRs, no draft/merged states. */
 export function isTrackerSource(source?: InboxSource): boolean {
   return source === "linear" || source === "jira";
+}
+
+/**
+ * Sources whose items are all one kind, so the shared Issues/Pull requests
+ * filter does not apply (Bitbucket retired its issue tracker in 2026).
+ */
+function ignoresKindFilter(source?: InboxSource): boolean {
+  return isTrackerSource(source) || source === "bitbucket";
 }
 
 export function resolveInboxSource(
@@ -119,6 +130,7 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
   jira: null,
   gitlab: null,
   azuredevops: null,
+  bitbucket: null,
 };
 
 export function loadInboxSource(): InboxSource {
@@ -127,7 +139,8 @@ export function loadInboxSource(): InboxSource {
     return raw === "linear" ||
       raw === "jira" ||
       raw === "gitlab" ||
-      raw === "azuredevops"
+      raw === "azuredevops" ||
+      raw === "bitbucket"
       ? raw
       : "github";
   } catch {
@@ -163,6 +176,7 @@ export function loadInboxConnections(): InboxSourceConnections {
       jira: connectFlag(record.jira),
       gitlab: connectFlag(record.gitlab),
       azuredevops: connectFlag(record.azuredevops),
+      bitbucket: connectFlag(record.bitbucket),
     };
   } catch {
     return UNKNOWN_CONNECTIONS;
@@ -254,7 +268,7 @@ export function hasActiveInboxFilters(
     (source === "linear"
       ? filters.hiddenLinearProjects.length > 0
       : source !== "jira" && filters.hiddenProjects.length > 0) ||
-    (isTrackerSource(source) ? false : filters.hiddenKinds.length > 0) ||
+    (ignoresKindFilter(source) ? false : filters.hiddenKinds.length > 0) ||
     filters.time !== "all" ||
     statusActive
   );
@@ -379,7 +393,7 @@ export function applyInboxFilters(
     ((source === "gitlab" || source === "azuredevops") && filters.assignedToMe)
       ? []
       : filters.hiddenProjects;
-  const hiddenKinds = isTrackerSource(source) ? [] : filters.hiddenKinds;
+  const hiddenKinds = ignoresKindFilter(source) ? [] : filters.hiddenKinds;
   return filterInboxItems(
     filterInboxByStatus(
       filterInboxByTime(
