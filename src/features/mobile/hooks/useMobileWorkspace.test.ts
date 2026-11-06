@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useMobileWorkspace } from "./useMobileWorkspace";
+import { rememberProject } from "../../projects/model/recents";
 
 const desktop = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -75,6 +76,22 @@ describe("new mobile session publication", () => {
   afterEach(() => {
     act(() => root.unmount());
     vi.useRealTimers();
+  });
+
+  it("publishes newly opened desktop projects without waiting for the catalog poll", async () => {
+    desktop.invoke.mockImplementation(async (method: string) =>
+      method === "mobile_status" ? { enabled: true } : undefined,
+    );
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    desktop.invoke.mockClear();
+    act(() => {
+      rememberProject("/projects/new-project");
+    });
+    await flush();
+    expect(desktop.invoke).toHaveBeenCalledWith("mobile_publish", {
+      catalog: catalog("new"),
+    });
   });
 
   it("routes account usage reads and refreshes to the shared desktop usage cache", async () => {
