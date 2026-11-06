@@ -203,6 +203,57 @@ describe("UsageProviderChip", () => {
     );
   });
 
+  it("shows one tightest-window meter in compact rows and keeps full details", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: codexLimits(),
+          now,
+          variant: "compact",
+          accountLabel: "Work account",
+        }),
+      ),
+    );
+
+    const trigger = button("Codex usage details");
+    expect(trigger.getAttribute("aria-description")).toBe("Work account");
+    expect(trigger.textContent).toContain("Work");
+    expect(trigger.textContent).toContain("81% 2d 23h");
+    expect(trigger.textContent).not.toContain("42% 2h");
+    expect(trigger.querySelector(".w-5 > span")?.getAttribute("style")).toBe(
+      "width: 81%;",
+    );
+    await act(async () => trigger.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "5-hour limit",
+    );
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Weekly limit",
+    );
+  });
+
+  it("keeps remaining-capacity meaning in compact rows", () => {
+    localStorage.setItem("monocode.showRemainingUsage", "1");
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: codexLimits(),
+          now,
+          variant: "compact",
+        }),
+      ),
+    );
+
+    const trigger = button("Codex usage details");
+    expect(trigger.textContent).toBe("19% 2d 23h");
+    expect(trigger.title).toBe(
+      "58% remaining · Resets in 2h · 19% remaining · Resets in 2d 23h",
+    );
+    expect(trigger.querySelector(".w-5 > span")?.getAttribute("style")).toBe(
+      "width: 19%;",
+    );
+  });
+
   it.each(["this window", "another window"])(
     "updates the footer and open popover when the preference changes in %s",
     async (source) => {

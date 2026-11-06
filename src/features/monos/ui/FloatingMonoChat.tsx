@@ -31,6 +31,7 @@ import { MonoComposer } from "./MonoComposer";
 import { MonoStatusDot } from "./MonoRailMascot";
 import { MonoStatus } from "./MonoStatus";
 import { MONO_PAGE_TURNS } from "../../sessions/data/sessionStore";
+import { MonoUsageFooter } from "./MonoUsageFooter";
 
 const EMPTY: FloatingMonoView = {
   monos: [],
@@ -282,6 +283,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
             }}
           />
         ) : null}
+        {view.session ? <MonoUsageFooter session={view.session} /> : null}
       </div>
     </div>
   );
@@ -335,7 +337,9 @@ function MonoRail({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSwitch(mono.id)}
               className={`grid size-8 place-items-center rounded-lg transition-opacity ${
-                selected ? "" : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
+                selected
+                  ? ""
+                  : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <PixelMascot
