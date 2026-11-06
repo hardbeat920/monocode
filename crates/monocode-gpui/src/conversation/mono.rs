@@ -166,6 +166,10 @@ impl Conversation {
             .update(cx, |t, cx| t.set_pending(pending, cx));
     }
     pub(crate) fn mono_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
+        // A quit cancels running turns; the outbox must survive it untouched.
+        if monocode_core::process::shutting_down() {
+            return false;
+        }
         if self.mono_ui.delivered.contains(&message.id) || (self.busy && message.internal) {
             return false;
         }
