@@ -91,8 +91,9 @@ impl Monos {
             }
             _ => false,
         });
+        self.panel_check = None;
         if let Some(Route::Session(session)) = view.route {
-            cx.spawn(async move |this, cx| {
+            self.panel_check = Some(cx.spawn(async move |this, cx| {
                 let _ = this.update(cx, |this, cx| {
                     let live = this.owner.upgrade().is_some_and(|owner| {
                         owner
@@ -106,8 +107,7 @@ impl Monos {
                         cx.notify();
                     }
                 });
-            })
-            .detach();
+            }));
         }
         self.overview_tab = view.tab;
         self.overview_previous = view.previous;

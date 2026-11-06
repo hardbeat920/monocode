@@ -369,6 +369,17 @@ fn each_mono_remembers_its_details_tab_and_open_session(cx: &mut TestAppContext)
         .unwrap();
     cx.run_until_parked();
     assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+    // A card from another Mono's chat switches to that Mono's own view and
+    // leaves the one it came from intact.
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
 }
 
 #[test]

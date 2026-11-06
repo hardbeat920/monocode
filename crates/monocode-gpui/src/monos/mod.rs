@@ -107,6 +107,9 @@ pub(crate) struct Monos {
     /// Each Mono's details-panel tab and open page, restored when it is
     /// opened again.
     panel_views: HashMap<String, PanelView>,
+    /// Drops a restored session page once it proves archived or deleted;
+    /// explicit navigation cancels it.
+    panel_check: Option<gpui::Task<()>>,
     settings: Option<SettingsSection>,
     settings_focus: gpui::FocusHandle,
     fields: HashMap<String, Entity<Input>>,
@@ -342,6 +345,7 @@ impl Monos {
             overview_reveal: None,
             route: None,
             panel_views: HashMap::new(),
+            panel_check: None,
             settings: None,
             settings_focus: cx.focus_handle(),
             fields: HashMap::new(),

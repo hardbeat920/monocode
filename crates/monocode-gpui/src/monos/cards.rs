@@ -529,6 +529,8 @@ impl Monos {
         if value["type"] != "choice" {
             if self.active.as_deref() != Some(mono) {
                 self.remember_panel_view();
+                self.restore_panel_view(mono, cx);
+                self.details.update(cx, |details, cx| details.reset(cx));
             }
             self.active = Some(mono.into());
             if let Some(handle) = self.parent_window {
@@ -546,6 +548,7 @@ impl Monos {
             }
             "session" => {
                 if let Some(id) = value["sessionId"].as_i64() {
+                    self.panel_check = None;
                     self.route = Some(Route::Session(id));
                     self.show_overview(cx);
                     self.overview_tab = OverviewTab::Sessions;
@@ -555,6 +558,7 @@ impl Monos {
             "document" => {
                 if let Some(id) = value["documentId"].as_str() {
                     self.open_document(id, cx);
+                    self.panel_check = None;
                     self.route = Some(Route::Document(id.into()));
                     self.show_overview(cx);
                     self.overview_tab = OverviewTab::Documents;
