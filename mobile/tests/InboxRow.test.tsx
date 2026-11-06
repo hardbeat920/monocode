@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   InboxRow,
   itemRef,
+  rowFit,
   snoozedLabel,
   whyLabel,
   type RowHandlers,
@@ -16,6 +17,7 @@ const NOW = new Date("2026-11-01T14:00:00").getTime();
 
 const captured = vi.hoisted(() => ({
   accessibility: undefined as undefined | ((event: { nativeEvent: { actionName: string } }) => void),
+  fontScale: 1,
 }));
 
 vi.mock("react-native", () => ({
@@ -40,6 +42,7 @@ vi.mock("react-native", () => ({
     );
   },
   StyleSheet: { create: (styles: unknown) => styles },
+  useWindowDimensions: () => ({ fontScale: captured.fontScale }),
 }));
 vi.mock("react-native-gesture-handler/ReanimatedSwipeable", () => ({
   default: ({
@@ -159,6 +162,7 @@ describe("an inbox row", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     captured.accessibility = undefined;
+    captured.fontScale = 1;
     container = document.createElement("div");
     root = createRoot(container);
   });
@@ -173,6 +177,19 @@ describe("an inbox row", () => {
     expect(text).toContain("+312");
     expect(text).toContain("−48");
     expect(text).toContain("4");
+  });
+
+  it("keeps everything it says at every text size", () => {
+    for (const fontScale of [0.82, 1, 1.35, 1.79, 3.57]) {
+      captured.fontScale = fontScale;
+      render({ ...item, key: `size-${fontScale}` });
+      const text = container.textContent ?? "";
+      expect(text, `at ${fontScale}`).toContain("Stream tool output");
+      expect(text, `at ${fontScale}`).toContain("12m");
+      expect(text, `at ${fontScale}`).toContain("PR #12 · Review requested by maren-k · acme/app");
+      expect(text, `at ${fontScale}`).toContain("+312");
+      expect(text, `at ${fontScale}`).toContain("−48");
+    }
   });
 
   it("says unread in its label, and not once read", () => {
@@ -264,5 +281,23 @@ describe("an inbox row", () => {
     expect(whyLabel({ ...item, attentionLabel: undefined, status: "merged" })).toBe("Merged");
     expect(whyLabel({ ...item, attentionLabel: undefined })).toBe("Open pull request");
     expect(whyLabel({ ...item, attentionLabel: undefined, kind: "issue" })).toBe("Open issue");
+  });
+});
+
+describe("how a row fits the text size", () => {
+  it("keeps one line of details up to XL", () => {
+    expect(rowFit(0.82)).toBe("regular");
+    expect(rowFit(1)).toBe("regular");
+    expect(rowFit(1.118)).toBe("regular");
+  });
+
+  it("gives the details their own lines at XXL and XXXL", () => {
+    expect(rowFit(1.235)).toBe("roomy");
+    expect(rowFit(1.353)).toBe("roomy");
+  });
+
+  it("gives the title the full width at every accessibility size", () => {
+    expect(rowFit(1.786)).toBe("stacked");
+    expect(rowFit(3.571)).toBe("stacked");
   });
 });

@@ -24,6 +24,7 @@ import {
   SheetTitle,
 } from "@/ui/SheetParts";
 import { SHEET_FADE, SHEET_FILL, SheetBody, SheetFade } from "@/ui/SheetScroll";
+import { useTextScale } from "@/ui/textScale";
 import { themedStyles, useColors, withAlpha, type Palette } from "@/ui/theme";
 
 import { Avatar } from "./Avatar";
@@ -72,8 +73,15 @@ const HEADING = 40;
 const FOOT = 12;
 /** The room a row's leading mark takes, so labels line up down a card. */
 const LEADING = 28;
+/** A row's line of text at the default size, and the space above and below it. */
+const ROW_LINE = 20;
+const ROW_PADDING = 8;
 /** Where a sheet stops at first; a longer list can be pulled up to full height. */
 const SHEET_MOST = 0.62;
+/** How far a chip's text grows: past this, too few chips fit to pick between. */
+const CHIP_TEXT_MAX = 1.6;
+/** A chip's longest label at the default size. */
+const CHIP_LABEL_WIDTH = 160;
 
 const toggled = <T,>(list: readonly T[] | undefined, value: T) =>
   list?.includes(value) ? list.filter((entry) => entry !== value) : [...(list ?? []), value];
@@ -157,6 +165,7 @@ export function Chip({
   hint?: string;
 }) {
   const styles = useStyles();
+  const textScale = Math.min(useTextScale(), CHIP_TEXT_MAX);
   return (
     <Pressable
       accessibilityRole="button"
@@ -170,10 +179,25 @@ export function Chip({
       style={[styles.chip, selected && styles.chipOn]}
     >
       {leading}
-      <Text numberOfLines={1} style={[styles.chipLabel, selected && styles.chipLabelOn]}>
+      <Text
+        numberOfLines={1}
+        maxFontSizeMultiplier={CHIP_TEXT_MAX}
+        style={[
+          styles.chipLabel,
+          { maxWidth: CHIP_LABEL_WIDTH * textScale },
+          selected && styles.chipLabelOn,
+        ]}
+      >
         {label}
       </Text>
-      {count ? <Text style={[styles.chipCount, selected && styles.chipLabelOn]}>{count}</Text> : null}
+      {count ? (
+        <Text
+          maxFontSizeMultiplier={CHIP_TEXT_MAX}
+          style={[styles.chipCount, selected && styles.chipLabelOn]}
+        >
+          {count}
+        </Text>
+      ) : null}
       {trailing}
     </Pressable>
   );
@@ -199,6 +223,7 @@ export function FilterChips({
 }) {
   const colors = useColors();
   const styles = useStyles();
+  const chevron = Math.round(12 * Math.max(1, Math.min(useTextScale(), CHIP_TEXT_MAX)));
   const place = (id: string) => placeName(id, options, names);
   const shown: FilterKind[] = [
     "place",
@@ -259,7 +284,11 @@ export function FilterChips({
             onPress={() => onOpen(kind)}
             leading={leading(kind)}
             trailing={
-              <Icon name="chevronDown" size={12} color={selected ? colors.accent : colors.muted} />
+              <Icon
+                name="chevronDown"
+                size={chevron}
+                color={selected ? colors.accent : colors.muted}
+              />
             }
             hint={`Choose ${TITLES[kind].toLowerCase()}`}
           />
@@ -316,6 +345,7 @@ export function FilterSheet({
   const sheetColor = useSheetColor();
   const styles = useStyles();
   const { width, height } = useWindowDimensions();
+  const textScale = Math.max(1, useTextScale());
   const { bottom } = useSafeAreaInsets();
   // Stays on the last filter while the sheet slides away.
   const [kind, setKind] = useState<FilterKind>("place");
@@ -342,7 +372,10 @@ export function FilterSheet({
   });
   const rows = sections.reduce((sum, section) => sum + section.rows.length, 0);
   const headings = sections.filter((section) => section.title).length;
-  const fits = SHEET_TOP + TITLE + rows * SHEET_ROW + headings * HEADING + FOOT;
+  // Rows grow with the text; a guess over is only a sheet that can rise further.
+  const rowHeight = Math.max(SHEET_ROW, ROW_LINE * textScale + ROW_PADDING * 2);
+  const fits =
+    SHEET_TOP + TITLE * textScale + rows * rowHeight + headings * HEADING * textScale + FOOT;
   const sheetHeight = Math.min(fits, Math.round(height * SHEET_MOST));
 
   return (
@@ -385,7 +418,7 @@ export function FilterSheet({
                           style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
                         >
                           {row.leading ? <View style={styles.rowLeading}>{row.leading}</View> : null}
-                          <Text numberOfLines={1} style={styles.rowLabel}>
+                          <Text numberOfLines={2} style={styles.rowLabel}>
                             {row.label}
                           </Text>
                           {row.selected ? (
@@ -602,19 +635,19 @@ function sheetSections(
 
 const useStyles = themedStyles((colors) => ({
   chip: {
-    height: 32,
+    minHeight: 32,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    paddingVertical: 4,
     paddingHorizontal: 12,
-    borderRadius: 16,
+    borderRadius: 22,
     backgroundColor: colors.fill,
   },
   chipOn: {
     backgroundColor: withAlpha(colors.accent, 0.18),
   },
   chipLabel: {
-    maxWidth: 160,
     color: colors.muted,
     fontSize: 14,
     fontWeight: "500",
@@ -643,10 +676,11 @@ const useStyles = themedStyles((colors) => ({
     paddingHorizontal: SHEET_INSET,
   },
   row: {
-    height: SHEET_ROW - 1,
+    minHeight: SHEET_ROW - 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    paddingVertical: ROW_PADDING,
     paddingHorizontal: SHEET_INSET,
   },
   rowPressed: {

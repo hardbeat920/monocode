@@ -33,6 +33,7 @@ import { relativeTime } from "@/features/workspace/relativeTime";
 import { GlassSegments } from "@/ui/GlassSegments";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
+import { CONTROL_TEXT_MAX, useTextScale } from "@/ui/textScale";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { Chip, FilterChips, FilterSheet, placeName, type FilterKind } from "./InboxFilters";
@@ -82,6 +83,7 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
   const colors = useColors();
   const styles = useStyles();
   const reduced = useReducedMotion();
+  const textScale = useTextScale();
   const { mark, readAll, client } = useInbox();
   const { pageTop, dockBottom } = useSessionLayout();
   const bottom = dockBottom + SEARCH_BAR + 16;
@@ -158,8 +160,12 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
   const banner = bannerFor(live);
   const exiting = reduced ? undefined : FadeOut.duration(140).reduceMotion(ReduceMotion.System);
 
+  // React Native draws a live text size change into the old boxes, clipping it
+  // until each is measured again, so everything with text takes the size as
+  // its key. The list itself stays: the native header follows it, and its
+  // scroll position is kept.
   const header = (
-    <View style={styles.header}>
+    <View key={textScale} style={styles.header}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -201,7 +207,7 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
     <View style={styles.page}>
         <Animated.FlatList
           data={feed.loaded ? entries : []}
-          keyExtractor={(entry) => entry.id}
+          keyExtractor={(entry) => `${textScale}:${entry.id}`}
           itemLayoutAnimation={
             reduced ? undefined : LinearTransition.duration(220).reduceMotion(ReduceMotion.System)
           }
@@ -222,6 +228,7 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
           ListEmptyComponent={
             feed.loaded ? (
               <EmptyState
+                key={textScale}
                 scope={scope}
                 filtered={filtered}
                 wide={wide}
@@ -267,7 +274,10 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
         />
         <GradualBlur edge="top" height={pageTop} color={colors.background} />
         <GradualBlur edge="bottom" height={bottom} color={colors.background} />
-        <View style={[styles.scopeBar, { top: pageTop - SCOPE_SPACE + SCOPE_ABOVE }]}>
+        <View
+          key={`scope:${textScale}`}
+          style={[styles.scopeBar, { top: pageTop - SCOPE_SPACE + SCOPE_ABOVE }]}
+        >
           <ScopeSwitch
             value={scope}
             onChange={(next) => {
@@ -279,6 +289,7 @@ export function InboxPage({ project }: { project?: { id: string; name: string } 
         </View>
         <InboxToast bottom={bottom + 8} />
         <FileSearchBar
+          key={`search:${textScale}`}
           value={search}
           onChange={setSearch}
           placeholder="Search inbox"
@@ -365,7 +376,9 @@ function ScopeSwitch({
         trailing:
           scope.id === "needsMe" && needsMe > 0 ? (
             <View style={styles.count}>
-              <Text style={styles.countLabel}>{needsMe}</Text>
+              <Text maxFontSizeMultiplier={CONTROL_TEXT_MAX} style={styles.countLabel}>
+                {needsMe}
+              </Text>
             </View>
           ) : undefined,
       }))}
@@ -527,9 +540,9 @@ const useStyles = themedStyles((colors) => ({
   },
   count: {
     minWidth: 18,
-    height: 18,
+    minHeight: 18,
     paddingHorizontal: 5,
-    borderRadius: 9,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.accent,

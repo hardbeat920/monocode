@@ -5,6 +5,7 @@ import Animated from "react-native-reanimated";
 import { useKeyboardLift, useSessionLayout } from "@/features/sessions/SessionScreen";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
+import { CONTROL_TEXT_MAX } from "@/ui/textScale";
 import { themedStyles, useColors, useScheme } from "@/ui/theme";
 
 /** The pill's height: the resting composer's, so the pages' bottoms match. */
@@ -65,6 +66,7 @@ export function FileSearchBar({
           keyboardAppearance={scheme}
           cursorColor={colors.accent}
           selectionColor={colors.accent}
+          maxFontSizeMultiplier={CONTROL_TEXT_MAX}
           style={styles.input}
         />
         {value ? (

@@ -16,6 +16,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { LiquidView } from "./LiquidView";
+import { CONTROL_TEXT_MAX } from "./textScale";
 import { themedStyles } from "./theme";
 
 const HEIGHT = 44;
@@ -86,6 +87,10 @@ export function GlassSegments<T extends string>({
               style={styles.segment}
             >
               <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+                maxFontSizeMultiplier={CONTROL_TEXT_MAX}
                 style={[
                   styles.label,
                   segment.value === value && styles.labelOn,
@@ -138,8 +143,10 @@ const useStyles = themedStyles((colors) => ({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
+    paddingHorizontal: 6,
   },
   label: {
+    flexShrink: 1,
     color: colors.muted,
     fontSize: 15,
     fontWeight: "600",
