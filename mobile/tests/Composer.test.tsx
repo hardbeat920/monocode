@@ -447,3 +447,10 @@ it("can't stop a turn behind a session's error", () => {
   render(true, { notice: { text: "Turn failed", dismiss: vi.fn() } });
   expect(button("Stop").disabled).toBe(true);
 });
+
+it("keeps the mic round at rest, however wide the composer is", () => {
+  render(true, { busy: false });
+  const { width, minWidth } = button("Dictate").parentElement!.style;
+  expect(width).toBe("0%");
+  expect(minWidth).toBe("36px");
+});

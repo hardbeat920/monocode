@@ -16,11 +16,6 @@ import { GlassStretchButton } from "@/ui/GlassStretchButton";
 import { themedStyles, useColors } from "@/ui/theme";
 
 const SWAP = { duration: 160, easing: Easing.bezier(0.23, 1, 0.32, 1) };
-/**
- * The orb's width at rest, as a share of its lane. It sits just under the
- * button's own size, which holds it round, so stretching starts at once.
- */
-const REST_PERCENT = 10;
 
 /**
  * The composer's trailing control, in a lane its parent sizes: from the add
@@ -66,9 +61,9 @@ export function ComposerAction({
     fill.set(withTiming(primary ? 1 : 0, SWAP));
   }, [primary, fill]);
 
-  const orb = useAnimatedStyle(() => ({
-    width: `${REST_PERCENT + (100 - REST_PERCENT) * stretch.get()}%`,
-  }));
+  // A share of the lane, so nothing is measured as the card morphs. At rest it's
+  // none: `minWidth` holds the orb round however wide the composer is.
+  const orb = useAnimatedStyle(() => ({ width: `${100 * stretch.get()}%` }));
   const unavailable = blocked || !!primary?.disabled;
 
   return (
