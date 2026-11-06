@@ -12,7 +12,7 @@ pub struct GitHubLabel {
     pub color: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubAssignee {
     pub login: String,
@@ -32,6 +32,7 @@ pub struct GitHubWorkItem {
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
+    pub author: GitHubAssignee,
     pub draft: bool,
     pub repo: String,
 }
@@ -164,8 +165,8 @@ pub(super) fn git_github_work_items_for(
     repo: &str,
     kind: &str,
     assigned_to_me: bool,
+    author: &str,
     state: &str,
-    search: &str,
     limit: u32,
 ) -> Result<Vec<GitHubWorkItem>, String> {
     let kind = kind.trim();
@@ -181,9 +182,9 @@ pub(super) fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let mut args = vec![
         kind.to_string(),
@@ -201,10 +202,10 @@ pub(super) fn git_github_work_items_for(
         args.push("--assignee".into());
         args.push("@me".into());
     }
-    let search = search.trim();
-    if !search.is_empty() {
-        args.push("--search".into());
-        args.push(search.to_string());
+    let author = author.trim();
+    if !author.is_empty() {
+        args.push("--author".into());
+        args.push(author.to_string());
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = gh_checked(root, &refs)?;
@@ -228,9 +229,9 @@ pub(super) fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let json = gh_checked(
         root,
@@ -1282,6 +1283,8 @@ fn parse_github_work_items(
         #[serde(default)]
         assignees: Vec<RowAssignee>,
         #[serde(default)]
+        author: Option<RowAssignee>,
+        #[serde(default)]
         is_draft: bool,
     }
     let rows: Vec<Row> = serde_json::from_str(json).map_err(|error| error.to_string())?;
@@ -1312,6 +1315,13 @@ fn parse_github_work_items(
                     login: assignee.login,
                 })
                 .collect(),
+            author: row
+                .author
+                .map(|author| GitHubAssignee {
+                    avatar_url: github_avatar_url(&author.login),
+                    login: author.login,
+                })
+                .unwrap_or_default(),
             draft: row.is_draft,
             repo: repo.to_string(),
         })
@@ -1347,5 +1357,22 @@ fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String,
         Ok((String::new(), true))
     } else {
         Ok((output, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_rows_carry_their_author() {
+        let json = r#"[
+            {"number":1,"title":"A","url":"u","state":"OPEN","author":{"login":"octocat"}},
+            {"number":2,"title":"B","url":"u","state":"OPEN","author":null}
+        ]"#;
+        let items = parse_github_work_items(json, "pr", "acme/app").unwrap();
+        assert_eq!(items[0].author.login, "octocat");
+        assert!(items[0].author.avatar_url.contains("octocat"));
+        assert_eq!(items[1].author, GitHubAssignee::default());
     }
 }

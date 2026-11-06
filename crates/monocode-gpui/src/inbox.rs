@@ -49,6 +49,9 @@ pub(crate) struct Inbox {
         std::collections::HashMap<String, monocode_core::project_appearance::ProjectAppearance>,
     state: ViewState,
     snapshot: Snapshot,
+    /// Authors offered by the filter menu, most active first. Kept from the
+    /// last fetch that wasn't narrowed to one author.
+    authors: Vec<model::Person>,
     sessions: Vec<Session>,
     focus: FocusHandle,
     search: Entity<Input>,
@@ -120,6 +123,23 @@ fn other_projects(projects: &[PathBuf], cwd: &PathBuf) -> Vec<String> {
         .filter(|project| *project != cwd)
         .map(|project| project.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Every author in `items`, most items first, then by login.
+fn authors(items: &[Item]) -> Vec<model::Person> {
+    let mut counts = std::collections::HashMap::<String, (usize, model::Person)>::new();
+    for item in items
+        .iter()
+        .filter(|item| model::has_authors(&item.provider) && !item.author.login.is_empty())
+    {
+        counts
+            .entry(item.author.login.to_lowercase())
+            .or_insert_with(|| (0, item.author.clone()))
+            .0 += 1;
+    }
+    let mut authors = counts.into_values().collect::<Vec<_>>();
+    authors.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.login.cmp(&y.login)));
+    authors.into_iter().map(|(_, person)| person).collect()
 }
 
 impl EventEmitter<Event> for Inbox {}
@@ -248,12 +268,14 @@ impl Inbox {
             service: Service {
                 data_dir,
                 cwd: cwd.clone(),
+                github_viewer: Default::default(),
             },
             store,
             projects,
             appearances: Default::default(),
             state,
             snapshot: Snapshot::default(),
+            authors: vec![],
             sessions: vec![],
             focus: cx.focus_handle(),
             search,
@@ -468,6 +490,15 @@ impl Inbox {
                 snapshot
                     .items
                     .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+                for (provider, login) in &this.snapshot.viewers {
+                    snapshot
+                        .viewers
+                        .entry(provider.clone())
+                        .or_insert_with(|| login.clone());
+                }
+                if this.state.filters.fetch_author().is_none() || this.authors.is_empty() {
+                    this.authors = authors(&snapshot.items);
+                }
                 this.state.seen.seed(&snapshot.items);
                 this.snapshot = snapshot;
                 this.sessions = sessions;
@@ -529,12 +560,23 @@ impl Inbox {
             self.error = Some(error);
         }
     }
+    fn viewer(&self) -> &str {
+        self.snapshot
+            .viewers
+            .get(&self.state.source)
+            .map_or("", String::as_str)
+    }
     fn visible_items(&self, cx: &App) -> Vec<Item> {
         let search = self.search.read(cx).content.as_ref();
+        let viewer = self.viewer();
         self.snapshot
             .items
             .iter()
-            .filter(|item| self.state.filters.matches(item, &self.state.source, search))
+            .filter(|item| {
+                self.state
+                    .filters
+                    .matches(item, &self.state.source, search, viewer)
+            })
             .filter(|item| {
                 item.provider != "linear" || !self.state.hidden_linear_teams.contains(&item.team_id)
             })
