@@ -57,6 +57,7 @@ describe("mobile transcript", () => {
     expect(turn.items[2]).toMatchObject({ text: "Fixed it." });
     expect(turn).toMatchObject({
       footer: true,
+      handoffFrom: "claude",
       completedAt: at + 64_000,
       copyText: "Looking into it.\n\nFixed it.",
     });
@@ -78,6 +79,7 @@ describe("mobile transcript", () => {
     });
     expect(turn.items.some((item) => item.type === "work")).toBe(true);
     expect(turn.footer).toBeUndefined();
+    expect(turn.handoffFrom).toBeUndefined();
   });
 
   it("signs a Mono's turn, hides its work and stamps the day", () => {

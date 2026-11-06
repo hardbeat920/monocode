@@ -1046,7 +1046,7 @@ fn project(
     // A reply that was only a reaction has nothing of its own to copy or time.
     if turn["footer"] == true && !reacted_only {
         let mut row = Row::text(format!("{turn_id}:footer"), "footer", "");
-        row.action = json!({"type":"footer","copyText":turn["copyText"],"metrics":turn["metrics"],"durationMs":turn["durationMs"],"completedAt":turn["completedAt"]});
+        row.action = json!({"type":"footer","turnId":turn_id,"handoffFrom":turn["handoffFrom"],"copyText":turn["copyText"],"metrics":turn["metrics"],"durationMs":turn["durationMs"],"completedAt":turn["completedAt"]});
         rows.push(Arc::new(row));
     }
     markdown.retain(|id, _| used_markdown.contains(id));
@@ -1138,6 +1138,17 @@ mod reaction_tests {
         assert!(fold_reactions(&mut items));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["reaction"], "👍");
+    }
+
+    #[test]
+    fn reply_footer_carries_the_selected_turn_and_provider_for_handoff() {
+        let turn = json!({"id":"t42","items":[
+            {"type":"text","id":"a","text":"Done."}
+        ], "footer":true,"handoffFrom":"codex","copyText":"Done."});
+        let rows = project(&turn, &mut HashMap::new(), &HashMap::new(), false);
+        let footer = rows.iter().find(|row| row.kind == "footer").unwrap();
+        assert_eq!(footer.action["turnId"], "t42");
+        assert_eq!(footer.action["handoffFrom"], "codex");
     }
 
     #[test]

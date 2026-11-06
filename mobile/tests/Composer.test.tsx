@@ -355,6 +355,20 @@ it("focuses the existing draft on typing posture only for the active route", () 
   expect(input.value).toBe("Unsent draft");
 });
 
+it("focuses a handoff once after its route opens, without stealing focus on return", () => {
+  render(true, { autoFocus: false });
+  const input = container.querySelector("textarea")!;
+  expect(document.activeElement).not.toBe(input);
+  render(false, { autoFocus: true });
+  expect(document.activeElement).not.toBe(input);
+  render(true, { autoFocus: true });
+  expect(document.activeElement).toBe(input);
+  act(() => input.blur());
+  render(false, { autoFocus: true });
+  render(true, { autoFocus: true });
+  expect(document.activeElement).not.toBe(input);
+});
+
 it("keeps the field open while the desktop is away and holds the message until it is back", async () => {
   runtime.offline = true;
   render();

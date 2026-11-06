@@ -24,19 +24,25 @@ export function useSessionPages(projectId: string, query: string, active: boolea
   const [pages, setPages] = useState<Pages | null>(() => lastRead.get(key) ?? null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loading = useRef(false);
+  const generation = useRef(0);
+  const refreshing = useRef(false);
 
   useEffect(() => {
+    const requestGeneration = ++generation.current;
+    loading.current = false;
     if (!active) return;
-    let cancelled = false;
+    refreshing.current = true;
     // Typing waits for a pause; opening loads at once.
     const timer = setTimeout(
       () => {
+        setLoadingMore(false);
         listSessions(projectId, query, 0).then(
           (page) => {
-            if (cancelled) return;
+            if (generation.current !== requestGeneration) return;
             // The same first page leaves the list, and any pages after it, as they are.
             setPages((previous) =>
-              previous?.key === key && sameFirstPage(previous.sessions, page.sessions)
+              generation.current !== requestGeneration ||
+              (previous?.key === key && sameFirstPage(previous.sessions, page.sessions))
                 ? previous
                 : remember({ key, ...page }),
             );
@@ -44,12 +50,15 @@ export function useSessionPages(projectId: string, query: string, active: boolea
           () => {
             // An older desktop without paging: the poll's recent sessions stand in.
           },
-        );
+        ).finally(() => {
+          if (generation.current === requestGeneration) refreshing.current = false;
+        });
       },
       query ? 250 : 0,
     );
     return () => {
-      cancelled = true;
+      generation.current += 1;
+      refreshing.current = false;
       clearTimeout(timer);
     };
   }, [active, key, projectId, query, listSessions]);
@@ -58,14 +67,15 @@ export function useSessionPages(projectId: string, query: string, active: boolea
   if (!current) return null;
 
   const loadMore = () => {
-    if (!current.hasMore || loading.current) return;
+    if (!active || !current.hasMore || loading.current || refreshing.current) return;
+    const requestGeneration = generation.current;
     loading.current = true;
     setLoadingMore(true);
     listSessions(projectId, query, current.sessions.length)
       .then(
         (page) =>
           setPages((previous) => {
-            if (previous?.key !== key) return previous;
+            if (generation.current !== requestGeneration || previous?.key !== key) return previous;
             // New sessions shift the offsets; skip any already listed.
             const seen = new Set(previous.sessions.map((session) => session.id));
             return remember({
@@ -77,12 +87,13 @@ export function useSessionPages(projectId: string, query: string, active: boolea
         () => {},
       )
       .finally(() => {
+        if (generation.current !== requestGeneration) return;
         loading.current = false;
         setLoadingMore(false);
       });
   };
 
-  return { sessions: current.sessions, hasMore: current.hasMore, loadMore, loadingMore };
+  return { sessions: current.sessions, hasMore: current.hasMore, loadMore, loadingMore: active && loadingMore };
 }
 
 function sameFirstPage(shown: SessionSummary[], page: SessionSummary[]) {

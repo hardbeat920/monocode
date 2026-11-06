@@ -746,7 +746,8 @@ final class TranscriptRowModel {
         }
       var x: CGFloat = 16
       for (name, enabled) in [
-        ("copy", !(action["copyText"] as? String ?? "").isEmpty), ("metrics", hasMetrics),
+        ("copy", !(action["copyText"] as? String ?? "").isEmpty),
+        ("handoff", action["handoffFrom"] as? String != nil), ("metrics", hasMetrics),
       ] where enabled {
         mark("icon:" + name, x: x + 4, y: 8, size: 16, alpha: 0.4)
         var event = action
@@ -754,7 +755,7 @@ final class TranscriptRowModel {
         hits.append(
           TranscriptHit(
             rect: CGRect(x: x, y: 4, width: 24, height: 24), action: event,
-            label: name == "copy" ? "Copy response" : "Token metrics"))
+            label: name == "copy" ? "Copy response" : name == "handoff" ? "Handoff" : "Token metrics"))
         x += 28
       }
       if let at = action["completedAt"] as? Double {

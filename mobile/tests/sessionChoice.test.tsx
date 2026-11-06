@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  rememberSessionModel,
   useSessionChoice,
   useForgetChoiceOnLeave,
 } from "@/features/models/sessionChoice";
@@ -58,6 +59,27 @@ describe("mobile account choices", () => {
     act(() => root.render(<Probe />));
   });
   afterEach(() => act(() => root.unmount()));
+
+  it("shows the confirmed handoff model before catalog refresh without reconfiguring desktop", () => {
+    const target: ModelPick = { harness: "grok", model: "grok-4.7", modelSettings: { effort: "high" } };
+    act(() => rememberSessionModel(desktop.fingerprint, project.id, "existing", target, "Grok 4.7"));
+    expect(existing.chosen).toEqual({ pick: target, name: "Grok 4.7" });
+    expect(draft.chosen).toBeNull();
+    expect(desktop.configure).not.toHaveBeenCalled();
+    desktop.fingerprint = "another-desktop";
+    act(() => root.render(<Probe />));
+    expect(existing.chosen).toBeNull();
+  });
+
+  it("does not let abandoned navigation cleanup erase a more recent selection", () => {
+    let forget: () => void;
+    act(() => { forget = rememberSessionModel(desktop.fingerprint, project.id, "existing", pick, "Original", "High"); });
+    act(() => { rememberSessionModel(desktop.fingerprint, project.id, "existing", pick, "Updated", "Low"); });
+    act(() => forget());
+    expect(existing.chosen?.name).toBe("Updated");
+    expect(existing.chosen?.effort).toBe("Low");
+    expect(desktop.configure).not.toHaveBeenCalled();
+  });
 
   it("keeps choices separate for each provider and sends no configure command", () => {
     act(() => draft.pickAccount(pick, "GPT", "account-codex"));
