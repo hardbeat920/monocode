@@ -114,7 +114,7 @@ impl Protocol {
         self.acp.deadline = None;
         self.acp.background.clear();
         if matches!(self.request.kind, Kind::Antigravity | Kind::Devin) {
-            for (_, (wire, _, _)) in self.approvals.drain() {
+            for (_, (wire, _, _, _)) in self.approvals.drain() {
                 write_json(
                     stdin,
                     json!({"jsonrpc":"2.0","id":wire,"result":{"outcome":{"outcome":"cancelled"}}}),
@@ -130,6 +130,7 @@ impl Protocol {
         {
             self.respond(
                 Control {
+                    approval_instance: None,
                     id,
                     decision: Decision::Deny,
                 },
@@ -686,8 +687,11 @@ impl Protocol {
                     {
                         permission["_monocodeOneTime"] = true.into();
                     }
-                    self.approvals
-                        .insert(id.clone(), (v["id"].clone(), "acp".into(), permission));
+                    let instance = crate::agent::next_approval_instance();
+                    self.approvals.insert(
+                        id.clone(),
+                        (v["id"].clone(), "acp".into(), permission, instance),
+                    );
                     let read = matches!(kind, Some("read" | "search"));
                     let planning = self.probe
                         || self.request.settings.plan
@@ -716,6 +720,7 @@ impl Protocol {
                     if planning || auto {
                         self.respond(
                             Control {
+                                approval_instance: None,
                                 id,
                                 decision: if (planning && !read) || self.probe {
                                     Decision::Deny
@@ -729,6 +734,7 @@ impl Protocol {
                         )?;
                     } else {
                         events.push(Event::Approval(Approval {
+                            instance,
                             id,
                             title,
                             detail,
@@ -1588,6 +1594,43 @@ mod tests {
         );
         assert_eq!(shown.start_line, Some(18));
     }
+    #[test]
+    fn stale_approval_decisions_do_not_answer_replaced_acp_permissions() {
+        let mut p = protocol(Kind::Cursor);
+        p.acp.stage = Stage::Prompt;
+        let frame = json!({"id":"same", "method":"session/request_permission", "params":{"toolCall":{"kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}});
+        let mut out = Vec::new();
+        let first = p.frame(frame.clone(), &mut out).unwrap();
+        let Event::Approval(first) = &first[0] else {
+            panic!("first approval")
+        };
+        let next = p.frame(frame, &mut out).unwrap();
+        let Event::Approval(next) = &next[0] else {
+            panic!("replacement approval")
+        };
+        assert_ne!(first.instance, next.instance);
+        p.respond(
+            Control {
+                id: first.id.clone(),
+                approval_instance: Some(first.instance),
+                decision: Decision::Allow,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(out.is_empty());
+        p.respond(
+            Control {
+                id: next.id.clone(),
+                approval_instance: Some(next.instance),
+                decision: Decision::Deny,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
+    }
+
     #[test]
     fn planning_denies_execution_even_in_full_access() {
         let mut p = protocol(Kind::Antigravity);

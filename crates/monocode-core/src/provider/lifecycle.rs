@@ -26,9 +26,11 @@ impl Protocol {
         }
         request["nativeContent"] = content;
         let id = wire.to_string();
+        let instance = crate::agent::next_approval_instance();
         self.approvals
-            .insert(id.clone(), (wire, "codex-mcp".into(), request));
+            .insert(id.clone(), (wire, "codex-mcp".into(), request, instance));
         events.push(Event::Approval(Approval {
+            instance,
             id,
             title,
             detail: String::new(),
@@ -116,6 +118,7 @@ impl Protocol {
                 for id in self.approvals.keys().cloned().collect::<Vec<_>>() {
                     self.respond(
                         Control {
+                            approval_instance: None,
                             id,
                             decision: Decision::Deny,
                         },
@@ -125,6 +128,7 @@ impl Protocol {
                 for id in self.questions.keys().cloned().collect::<Vec<_>>() {
                     self.respond(
                         Control {
+                            approval_instance: None,
                             id,
                             decision: Decision::Deny,
                         },

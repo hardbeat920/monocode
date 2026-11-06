@@ -1406,6 +1406,7 @@ impl Conversation {
                                     if this.controls.as_ref().is_none_or(|controls| {
                                         controls
                                             .send(Control {
+                                                approval_instance: None,
                                                 id: reply.id.clone(),
                                                 decision,
                                             })
@@ -1439,6 +1440,7 @@ impl Conversation {
                                 |this, _, request: &crate::questions::KeptOpen, cx| {
                                     if let Some(controls) = &this.controls {
                                         let _ = controls.send(Control {
+                                            approval_instance: None,
                                             id: request.id.clone(),
                                             decision: Decision::KeepOpen,
                                         });

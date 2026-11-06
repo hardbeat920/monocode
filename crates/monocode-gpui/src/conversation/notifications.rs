@@ -65,6 +65,7 @@ impl Conversation {
         };
         if controls
             .send(Control {
+                approval_instance: Some(self.approvals[index].instance),
                 id: request_id.to_owned(),
                 decision,
             })

@@ -168,6 +168,7 @@ mod tests {
 
     fn request(id: &str, can_remember: bool) -> Approval {
         Approval {
+            instance: monocode_core::agent::next_approval_instance(),
             id: id.into(),
             title: "Run a command?".into(),
             detail: "git status --short".into(),
@@ -287,6 +288,7 @@ mod tests {
             visual.refresh().unwrap();
             let control = receive.try_recv().unwrap();
             assert_eq!(control.id, id);
+            assert!(control.approval_instance.is_some());
             assert!(matches!(
                 (id, control.decision),
                 ("once", Decision::Allow)
@@ -322,10 +324,17 @@ mod tests {
                 assert!(view.mobile_respond_approval(&params, cx).is_err());
                 let replacement = view.mobile_approvals()[0].clone();
                 assert_ne!(old["token"], replacement["token"]);
+                let reviewed_instance = view
+                    .approvals
+                    .iter()
+                    .find(|a| a.id == "same")
+                    .unwrap()
+                    .instance;
                 params["token"] = replacement["token"].clone();
                 assert!(view.mobile_respond_approval(&params, cx).is_ok());
                 let control = receive.try_recv().unwrap();
                 assert_eq!(control.id, "same");
+                assert_eq!(control.approval_instance, Some(reviewed_instance));
                 assert!(matches!(control.decision, Decision::Session));
                 assert!(view.mobile_respond_approval(&params, cx).is_err());
                 assert!(receive.try_recv().is_err());
