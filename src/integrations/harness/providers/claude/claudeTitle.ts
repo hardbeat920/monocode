@@ -3,6 +3,7 @@ import {
   parseGeneratedSessionTitle,
   type GeneratedSessionTitle,
 } from "../../../../features/sessions/model/sessionTitle";
+import { CLAUDE_HELPER_TOOLS } from "./claudeProtocol";
 import { runClaudeTextPrompt } from "./claudeText";
 
 const TITLE_TIMEOUT_MS = 45_000;
@@ -17,6 +18,7 @@ export async function generateClaudeSessionTitle(input: {
     const output = await runClaudeTextPrompt({
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      tools: CLAUDE_HELPER_TOOLS,
       prompt: buildThreadTitlePrompt(input.message),
       timeoutMs: TITLE_TIMEOUT_MS,
     });

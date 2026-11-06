@@ -12,6 +12,7 @@ import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  CLAUDE_HELPER_TOOLS,
   inputJsonDeltaFromEvent,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -44,6 +45,7 @@ type TextSettings = {
   settings: Record<string, boolean>;
   permissionMode?: "plan";
   maxTurns?: number;
+  tools?: readonly string[];
 };
 
 type InFlightTool = {
@@ -78,6 +80,7 @@ function textSettings(
   model: string,
   modelSettings?: Record<string, string>,
   intent?: TurnIntent,
+  tools?: readonly string[],
 ): TextSettings {
   const effort = modelSettings?.effort?.trim() || undefined;
   const context = modelSettings?.context?.trim() || undefined;
@@ -89,12 +92,13 @@ function textSettings(
   if (fast) settings.fastMode = true;
   if (isClaudeUltracodeEffort(effort)) settings.ultracode = true;
   return {
-    key: JSON.stringify({ effort, context, thinking, fast, readOnly }),
+    key: JSON.stringify({ effort, context, thinking, fast, readOnly, tools }),
     launchModel: resolveClaudeApiModelId(model, context),
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
     settings,
     ...(readOnly ? { permissionMode: "plan" as const, maxTurns: 1 } : {}),
+    ...(tools ? { tools } : {}),
   };
 }
 
@@ -117,7 +121,14 @@ export function warmupClaudeText(cwd: string): Promise<void> {
   const run = turns
     .catch(() => undefined)
     .then(async () => {
-      await ensureLive(cwd);
+      // Warm the tool-less helper that titles and Git text will reuse.
+      const model = pickTextModel();
+      await ensureLive(
+        cwd,
+        undefined,
+        model,
+        textSettings(model, undefined, undefined, CLAUDE_HELPER_TOOLS),
+      );
     });
   turns = run.then(
     () => undefined,
@@ -132,6 +143,8 @@ export async function runClaudeTextPrompt(input: {
   model?: string;
   modelSettings?: Record<string, string>;
   intent?: TurnIntent;
+  /** Restrict built-in tools; omit to keep the CLI default. */
+  tools?: readonly string[];
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -151,6 +164,8 @@ async function promptOnLive(input: {
   model?: string;
   modelSettings?: Record<string, string>;
   intent?: TurnIntent;
+  /** Restrict built-in tools; omit to keep the CLI default. */
+  tools?: readonly string[];
   prompt: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -158,7 +173,12 @@ async function promptOnLive(input: {
 }): Promise<string> {
   input.signal?.throwIfAborted();
   const model = pickTextModel(input.model);
-  const settings = textSettings(model, input.modelSettings, input.intent);
+  const settings = textSettings(
+    model,
+    input.modelSettings,
+    input.intent,
+    input.tools,
+  );
   const session = await ensureLive(
     input.cwd,
     input.providerAccountId,
@@ -299,6 +319,7 @@ async function startLive(
         settings: settings.settings,
         permissionMode: settings.permissionMode,
         maxTurns: settings.maxTurns,
+        tools: settings.tools,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },

@@ -240,6 +240,12 @@ function normalizeImageMime(mime: string): string {
   return mime;
 }
 
+// Titles, commit messages, PR text and branch names only need text back. The
+// prompt asking for no tools is not a boundary: the CLI still runs them with
+// the user's permissions, so a title request for "review this PR and comment"
+// can do exactly that. Offer these helpers no tools at all.
+export const CLAUDE_HELPER_TOOLS: readonly string[] = [];
+
 export function buildClaudeSpawnArgs(input: {
   model?: string;
   effort?: string;
@@ -250,6 +256,8 @@ export function buildClaudeSpawnArgs(input: {
   includePartialMessages?: boolean;
   maxTurns?: number;
   isolated?: boolean;
+  /** Built-in tools to offer; an empty list disables every tool. */
+  tools?: readonly string[];
 }): string[] {
   const args = [
     "--output-format",
@@ -291,6 +299,7 @@ export function buildClaudeSpawnArgs(input: {
   if (input.resume) args.push("--resume", input.resume);
   if (input.sessionId) args.push("--session-id", input.sessionId);
   if (input.maxTurns) args.push("--max-turns", String(input.maxTurns));
+  if (input.tools) args.push("--tools", input.tools.join(","));
   return args;
 }
 
