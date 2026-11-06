@@ -243,7 +243,7 @@ impl Conversation {
         cx.notify();
         true
     }
-    pub(super) fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    pub(crate) fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for path in paths {
             if !self.attachments.contains(&path) && !self.pending_attachments.contains(&path) {
                 self.pending_attachments.push(path);

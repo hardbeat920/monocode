@@ -18,6 +18,7 @@ mod context_meter;
 mod conversation;
 #[cfg(debug_assertions)]
 mod dev_reload;
+mod device;
 mod diff_view;
 mod editor_analysis;
 mod editor_scrollbar;
@@ -88,6 +89,7 @@ mod tab_motion;
 mod tab_tile;
 mod terminal;
 mod theme;
+mod tooltip;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 mod transcript;
@@ -117,9 +119,10 @@ fn quit(cx: &mut App) {
     if notifications::updater::defer_quit(cx) {
         return;
     }
-    let shutdown = cx
-        .background_executor()
-        .spawn(async { monocode_core::process::shutdown_all() });
+    let shutdown = cx.background_executor().spawn(async {
+        monocode_core::device::hub::stop();
+        monocode_core::process::shutdown_all()
+    });
     cx.spawn(async move |cx| {
         shutdown.await;
         cx.update(|cx| cx.quit());
@@ -129,9 +132,10 @@ fn quit(cx: &mut App) {
 
 /// Quit, then relaunch the same app once this process has exited.
 fn restart(cx: &mut App) {
-    let shutdown = cx
-        .background_executor()
-        .spawn(async { monocode_core::process::shutdown_all() });
+    let shutdown = cx.background_executor().spawn(async {
+        monocode_core::device::hub::stop();
+        monocode_core::process::shutdown_all()
+    });
     cx.spawn(async move |cx| {
         shutdown.await;
         cx.update(|cx| cx.restart());
@@ -435,6 +439,11 @@ fn main() {
             file_editor::bind(cx);
             popover::bind(cx);
             cx.set_prompt_builder(modal::prompt_builder);
+            // A device hub a crashed run left behind holds simulator captures.
+            #[cfg(target_os = "macos")]
+            cx.background_executor()
+                .spawn(async { monocode_core::device::hub::reap_orphan() })
+                .detach();
             explorer::bind(cx);
             history::bind(cx);
             diff_view::bind(cx);

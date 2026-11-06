@@ -373,6 +373,18 @@ impl Shell {
         // After the keymap, so the menu shows rebound shortcuts.
         crate::app_menu::install(&self.workspace.preferences, cx);
         cx.set_global(self.workspace.preferences.clone());
+        monocode_core::device::set_enabled(
+            self.workspace.preferences.devices && cfg!(target_os = "macos"),
+            self.workspace.preferences.device_agents,
+        );
+        // Readies a device already running, once; never in tests, where it
+        // would start the real hub.
+        #[cfg(not(test))]
+        if monocode_core::device::enabled() {
+            cx.background_executor()
+                .spawn(async { monocode_core::device::hub::prewarm() })
+                .detach();
+        }
         self.sync_right_panel(cx);
         if let Some(center) = crate::accounts::get(cx) {
             center.update(cx, |center, cx| {
@@ -718,6 +730,7 @@ mod tests {
             "settings-nav-appearance",
             "settings-nav-keybindings",
             "settings-nav-chat",
+            "settings-nav-devices",
             "settings-nav-providers",
             "settings-nav-mcp",
             "settings-nav-skills",

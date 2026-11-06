@@ -1069,6 +1069,9 @@ pub(crate) struct Frame {
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
     pub(crate) hitboxes: Vec<Hitbox>,
+    /// Hitboxes from this index on belong to deferred draws, prompts, drags
+    /// and tooltips, which paint above the main element tree.
+    pub(crate) overlay_hitboxes_start: usize,
     pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
     pub(crate) deferred_draws: Vec<DeferredDraw>,
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
@@ -1125,6 +1128,7 @@ impl Frame {
             dispatch_tree,
             scene: Scene::default(),
             hitboxes: Vec::new(),
+            overlay_hitboxes_start: 0,
             window_control_hitboxes: Vec::new(),
             deferred_draws: Vec::new(),
             input_handlers: Vec::new(),
@@ -1155,6 +1159,7 @@ impl Frame {
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
         self.hitboxes.clear();
+        self.overlay_hitboxes_start = 0;
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
         self.tab_stops.clear();
@@ -3807,6 +3812,7 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
+        self.next_frame.overlay_hitboxes_start = self.next_frame.hitboxes.len();
         self.prepaint_deferred_draws(cx);
 
         let mut prompt_element = None;
@@ -5401,6 +5407,29 @@ impl Window {
         };
         self.next_frame.hitboxes.push(hitbox.clone());
         hitbox
+    }
+
+    /// Returns whether an overlay's hitbox overlaps the visible part of `hitbox`.
+    /// Overlays are deferred draws, prompts, drags and tooltips inserted after
+    /// it, which paint on top of it. Hosts of native views, which always draw
+    /// above GPUI's content, can check this to step aside for popovers.
+    ///
+    /// This method should only be called as part of the paint phase, once every
+    /// hitbox of the frame has been inserted.
+    pub fn is_hitbox_covered(&self, hitbox: &Hitbox) -> bool {
+        let frame = &self.next_frame;
+        let Some(index) = frame.hitboxes.iter().position(|h| h.id == hitbox.id) else {
+            return false;
+        };
+        let visible = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+        frame.hitboxes[(index + 1).max(frame.overlay_hitboxes_start)..]
+            .iter()
+            .any(|later| {
+                let overlap = visible
+                    .intersect(&later.bounds)
+                    .intersect(&later.content_mask.bounds);
+                overlap.size.width > Pixels::ZERO && overlap.size.height > Pixels::ZERO
+            })
     }
 
     /// Set a hitbox which will act as a control area of the platform window.
