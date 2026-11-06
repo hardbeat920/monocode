@@ -442,9 +442,14 @@ pub fn resolve_work_item(
 
 /// The pull request a finished tool call opened: `gh pr create` printing the
 /// new PR's URL, or a GitHub MCP `create_pull_request` returning it.
+///
+/// The creation must be the command's final step. Only then do the call's
+/// success and its last output line belong to it: `gh pr create || true`
+/// completes even when `gh` failed and printed an existing PR's URL.
 pub fn opened_pull_request(tool: &crate::tool::ToolCall) -> Option<WorkItem> {
     static GH_PR_CREATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r#"(?:^|[\s;&|('"])gh\s+pr\s+(?:create|new)\b"#).unwrap()
+        regex::Regex::new(r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*gh\s+pr\s+(?:create|new)(?:\s|$)")
+            .unwrap()
     });
     if tool.state != crate::tool::ToolState::Completed {
         return None;
@@ -456,13 +461,115 @@ pub fn opened_pull_request(tool: &crate::tool::ToolCall) -> Option<WorkItem> {
             .and_then(|value| value["html_url"].as_str().and_then(pull));
         return html_url.or_else(|| pull(&tool.output));
     }
-    let shown = tool.presentation();
-    let command = shown.command.unwrap_or(shown.target);
-    if !GH_PR_CREATE.is_match(&command) {
+    let command = tool.presentation().command?;
+    if !GH_PR_CREATE.is_match(final_shell_step(&command)?) {
         return None;
     }
     // `gh` prints the new PR's URL last; earlier lines may quote other links.
-    tool.output.lines().rev().find_map(pull)
+    tool.output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .and_then(pull)
+}
+
+/// The last step of a shell script, split at top-level `;`, `&`, `|`, `&&`,
+/// `||`, parentheses and newlines. Quotes, `$(...)`, backticks and heredoc
+/// bodies stay inside their step, so text in them never reads as a command.
+/// `None` when the script is empty or a quote or substitution never closes.
+fn final_shell_step(script: &str) -> Option<&str> {
+    let bytes = script.as_bytes();
+    let mut open: Vec<u8> = Vec::new();
+    let mut heredocs: Vec<String> = Vec::new();
+    let mut last = None;
+    let mut start = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        let ch = bytes[at];
+        let next = bytes.get(at + 1).copied();
+        let in_double = open.last() == Some(&b'"');
+        match ch {
+            b'\\' => at += 1,
+            b'\'' if !in_double => {
+                at += 1 + bytes[at + 1..].iter().position(|&b| b == b'\'')?;
+            }
+            b'"' | b'`' if open.last() == Some(&ch) => {
+                open.pop();
+            }
+            b'"' | b'`' => open.push(ch),
+            b'$' if next == Some(b'(') => {
+                open.push(b')');
+                at += 1;
+            }
+            _ if in_double => {}
+            b'(' if !open.is_empty() => open.push(b')'),
+            b')' if open.last() == Some(&b')') => {
+                open.pop();
+            }
+            b'<' if next == Some(b'<') && bytes.get(at + 2) != Some(&b'<') => {
+                let (delimiter, end) = heredoc_delimiter(script, at + 2);
+                heredocs.extend(delimiter);
+                at = end - 1;
+            }
+            b'\n' | b';' | b'|' | b'&' | b'(' | b')' => {
+                // `2>&1` and `&>file` are redirects, not background steps.
+                let redirect =
+                    ch == b'&' && (at > 0 && bytes[at - 1] == b'>' || next == Some(b'>'));
+                let top_level = open.is_empty() && !redirect;
+                if top_level {
+                    let step = script[start..at].trim();
+                    if !step.is_empty() {
+                        last = Some(step);
+                    }
+                    start = at + 1;
+                }
+                if ch == b'\n' {
+                    at = skip_heredoc_bodies(script, at + 1, &mut heredocs) - 1;
+                    if top_level {
+                        start = at + 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    if !open.is_empty() {
+        return None;
+    }
+    let rest = script[start..].trim();
+    if rest.is_empty() { last } else { Some(rest) }
+}
+
+/// The delimiter word after `<<` or `<<-`, unquoted, and where that word ends.
+fn heredoc_delimiter(script: &str, from: usize) -> (Option<String>, usize) {
+    let tail = &script[from..];
+    let word = tail.trim_start_matches('-').trim_start_matches([' ', '\t']);
+    let word_start = from + tail.len() - word.len();
+    let len = word
+        .find(|c: char| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>'))
+        .unwrap_or(word.len());
+    let delimiter = word[..len].replace(['\'', '"', '\\'], "");
+    (
+        (!delimiter.is_empty()).then_some(delimiter),
+        word_start + len,
+    )
+}
+
+/// Moves past the pending heredoc bodies starting at `from`, the line after
+/// their `<<`. An unclosed body runs to the end of the script, as in a shell.
+fn skip_heredoc_bodies(script: &str, from: usize, heredocs: &mut Vec<String>) -> usize {
+    let mut at = from;
+    for delimiter in heredocs.drain(..) {
+        while at < script.len() {
+            let line = script[at..].split('\n').next().unwrap_or_default();
+            at += line.len() + 1;
+            if line.trim_start_matches('\t') == delimiter {
+                break;
+            }
+        }
+    }
+    at.min(script.len())
 }
 
 #[cfg(test)]
@@ -626,16 +733,83 @@ mod tests {
         assert!(!references_current_pr("open a PR for this"));
     }
 
+    fn finished_tool(name: &str, input: serde_json::Value, output: &str) -> crate::tool::ToolCall {
+        let mut tool = crate::tool::ToolCall::new("t", name);
+        tool.input = input.to_string();
+        tool.output = output.into();
+        tool.state = crate::tool::ToolState::Completed;
+        tool
+    }
+
+    fn opened_by_command(command: &str, output: &str) -> Option<u64> {
+        let tool = finished_tool("Bash", serde_json::json!({"command": command}), output);
+        opened_pull_request(&tool).map(|item| item.number)
+    }
+
+    #[test]
+    fn only_an_executed_gh_pr_create_step_opens_a_pull_request() {
+        let url = "https://github.com/acme/app/pull/1187\n";
+        for command in [
+            "rg 'gh pr create' notes.md",
+            "rg \"gh pr create\" notes.md",
+            "grep -n gh pr create notes.md",
+            "echo gh pr create",
+            "echo 'gh pr create'; gh pr view 42",
+            "echo \"a; gh pr create\"",
+            "cat <<'EOF'\ngh pr create --fill\nEOF",
+            "cat > notes.md <<'EOF'\nit's done\nEOF\ngh pr view 42",
+            "gh pr creates",
+            "echo 'gh pr create",
+        ] {
+            assert_eq!(opened_by_command(command, url), None, "{command}");
+        }
+        let grep = finished_tool("Grep", serde_json::json!({"pattern": "gh pr create"}), url);
+        assert_eq!(opened_pull_request(&grep), None);
+
+        for command in [
+            "gh pr create --fill",
+            "git push && gh pr create --fill",
+            "echo 'gh pr view 42'; gh pr create --fill",
+            "git push\ngh pr create --fill\n",
+            "gh pr create --fill 2>&1",
+            "GH_PROMPT_DISABLED=1 gh pr create --fill",
+            "(cd app && gh pr create --fill)",
+            "gh pr create --title 'a; b | c' --fill",
+            "gh pr create \\\n  --fill",
+            "gh pr create --title Fix --body \"$(cat <<'EOF'\nDon't say \"done\"; run `gh pr view`\n\nEOF\n)\"",
+            "gh pr create --body-file - <<'EOF'\nDon't stop | here\nEOF",
+            "cat > body.md <<-EOF\n\tit's; here\n\tEOF\ngh pr create --body-file body.md",
+        ] {
+            assert_eq!(opened_by_command(command, url), Some(1187), "{command}");
+        }
+    }
+
+    #[test]
+    fn gh_pr_create_needs_its_own_result_on_the_last_output_line() {
+        let exists = "a pull request for branch \"x\" into branch \"main\" already exists:\nhttps://github.com/acme/app/pull/3\n";
+        let earlier =
+            "https://github.com/acme/app/pull/3\nerror: could not create the pull request\n";
+        for (command, output) in [
+            ("gh pr create --fill || true", exists),
+            ("gh pr create --fill || true", earlier),
+            ("gh pr create --fill", earlier),
+            ("gh pr create --fill; gh pr view 3", exists),
+            ("gh pr create --fill | tee pr.txt", exists),
+            ("gh pr create --fill & wait", exists),
+        ] {
+            assert_eq!(opened_by_command(command, output), None, "{command}");
+        }
+        let created = "\nhttps://github.com/acme/app/pull/1187\n\n";
+        assert_eq!(
+            opened_by_command("gh pr create --fill", created),
+            Some(1187)
+        );
+    }
+
     #[test]
     fn opened_pull_requests_come_from_gh_and_github_mcp_output() {
         use crate::tool::{ToolCall, ToolState};
-        let call = |name: &str, input: serde_json::Value, output: &str| {
-            let mut tool = ToolCall::new("t", name);
-            tool.input = input.to_string();
-            tool.output = output.into();
-            tool.state = ToolState::Completed;
-            tool
-        };
+        let call = finished_tool;
         let created = "Warning: 2 uncommitted changes\n\nCreating pull request for feat/x into main in acme/app\n\nhttps://github.com/acme/app/pull/1187\n";
         let pr = |tool: &ToolCall| opened_pull_request(tool).map(|i| (i.repo, i.number, i.url));
         let expected = Some((
@@ -677,8 +851,16 @@ mod tests {
         for tool in [
             failed,
             running,
-            call("Bash", serde_json::json!({"command": "gh pr view 1187"}), created),
-            call("Bash", serde_json::json!({"command": "echo gh pr creates"}), created),
+            call(
+                "Bash",
+                serde_json::json!({"command": "gh pr view 1187"}),
+                created,
+            ),
+            call(
+                "Bash",
+                serde_json::json!({"command": "echo gh pr creates"}),
+                created,
+            ),
             call(
                 "Bash",
                 serde_json::json!({"command": "git push -u origin feat/x"}),
