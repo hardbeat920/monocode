@@ -371,6 +371,9 @@ impl TranscriptView {
             .find(|m| m.start == state.response)
             .map(|m| m.turn)
     }
+    /// The selection context for one rendered row of `response`. Documents
+    /// select and copy like chat, but "Add to chat/notes" are conversation
+    /// actions, so `quote` is dropped there and their menu offers Copy alone.
     pub(super) fn text_selection(
         &self,
         row: (usize, usize),
@@ -378,8 +381,6 @@ impl TranscriptView {
         quote: bool,
         cx: &Context<Self>,
     ) -> Option<TextSelection> {
-        // Documents select and copy like chat; "Add to chat/notes" are
-        // conversation actions, so their menu offers Copy alone.
         Some(TextSelection {
             state: self.selection.clone(),
             view: cx.weak_entity(),
