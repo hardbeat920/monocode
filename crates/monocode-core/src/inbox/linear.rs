@@ -132,14 +132,38 @@ pub fn linear_list_issues(
     let Some(token) = read_token(&app)? else {
         return Ok(Vec::new());
     };
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
+    let limit = limit
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, super::MAX_FETCH_LIMIT) as usize;
     let filter = issue_filter(assigned_to_me, &state, &team_ids);
-    let data = graphql_with_token(
-        &token,
-        ISSUES_QUERY,
-        json!({ "first": limit, "filter": filter }),
-    )?;
-    parse_linear_issues(&data)
+    let mut issues = Vec::new();
+    let mut after = Value::Null;
+    loop {
+        let data = graphql_with_token(
+            &token,
+            ISSUES_QUERY,
+            json!({
+                "first": (limit - issues.len()).min(super::PAGE_SIZE as usize),
+                "after": after,
+                "filter": filter,
+            }),
+        )?;
+        issues.extend(parse_linear_issues(&data)?);
+        match next_cursor(&data) {
+            Some(cursor) if issues.len() < limit => after = json!(cursor),
+            _ => break,
+        }
+    }
+    Ok(issues)
+}
+
+/// The cursor for the next page of `issues`, when there is one.
+fn next_cursor(data: &Value) -> Option<String> {
+    let page = data.pointer("/issues/pageInfo")?;
+    if !page.get("hasNextPage").and_then(Value::as_bool)? {
+        return None;
+    }
+    string_field(page, "endCursor").filter(|cursor| !cursor.is_empty())
 }
 
 pub fn linear_issue_details(app: PathBuf, id: String) -> Result<LinearIssueDetails, String> {
@@ -204,8 +228,9 @@ query {
 }
 "#;
 const ISSUES_QUERY: &str = r#"
-query InboxIssues($first: Int!, $filter: IssueFilter) {
-  issues(first: $first, filter: $filter, orderBy: updatedAt) {
+query InboxIssues($first: Int!, $after: String, $filter: IssueFilter) {
+  issues(first: $first, after: $after, filter: $filter, orderBy: updatedAt) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       identifier
@@ -691,5 +716,22 @@ fn write_secret_file(path: &std::path::Path, token: &str) -> Result<(), String> 
     #[cfg(not(unix))]
     {
         fs::write(path, token).map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+
+    #[test]
+    fn the_next_page_is_followed_only_while_linear_reports_one() {
+        let more = json!({ "issues": { "pageInfo": { "hasNextPage": true, "endCursor": "abc" } } });
+        assert_eq!(next_cursor(&more).as_deref(), Some("abc"));
+        let last =
+            json!({ "issues": { "pageInfo": { "hasNextPage": false, "endCursor": "abc" } } });
+        assert_eq!(next_cursor(&last), None);
+        assert_eq!(next_cursor(&json!({ "issues": { "nodes": [] } })), None);
+        let empty = json!({ "issues": { "pageInfo": { "hasNextPage": true, "endCursor": "" } } });
+        assert_eq!(next_cursor(&empty), None, "a missing cursor must not loop");
     }
 }

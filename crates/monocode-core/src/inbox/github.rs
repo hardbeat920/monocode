@@ -179,7 +179,8 @@ pub(super) fn git_github_work_items_for(
     } else {
         "open"
     };
-    let limit = limit.clamp(1, 100).to_string();
+    // `gh` pages through the API itself when asked for more than 100.
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT).to_string();
     let fields = if kind == "pr" {
         "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
     } else {
