@@ -633,6 +633,34 @@ pub(super) fn git_github_review_reply_for(
     })
 }
 
+/// Creates a review with `payload` (see `review::github_payload`) and returns
+/// its URL.
+pub(super) fn git_github_submit_review_for(
+    root: &Path,
+    repo: &str,
+    number: i64,
+    payload: &serde_json::Value,
+) -> Result<String, String> {
+    if number <= 0 {
+        return Err("Invalid GitHub item number".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let endpoint = format!("repos/{owner}/{name}/pulls/{number}/reviews");
+    with_temp_markdown(&payload.to_string(), |path| {
+        let json = gh_checked(
+            root,
+            &["api", "--method", "POST", &endpoint, "--input", path],
+        )?;
+        let value: serde_json::Value =
+            serde_json::from_str(&json).map_err(|error| error.to_string())?;
+        value
+            .get("html_url")
+            .and_then(|url| url.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| "GitHub did not return the review's URL".into())
+    })
+}
+
 fn with_temp_markdown(
     body: &str,
     run: impl FnOnce(&str) -> Result<String, String>,

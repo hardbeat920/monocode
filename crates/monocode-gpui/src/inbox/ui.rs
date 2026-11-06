@@ -3053,8 +3053,11 @@ mod tests {
                     inbox.state.seen.seeded = true;
                     assert!(inbox.phone_view().fetched_at.is_none());
                     assert!(inbox.phone_mark("github:nope", Mark::Done, cx).is_err());
+                    let rev = inbox.phone_rev();
+                    assert_eq!(inbox.phone_rev(), rev, "the same list keeps its rev");
                     inbox.phone_mark(&key, Mark::Done, cx).unwrap();
                     assert!(inbox.phone_view().triage.is_done(&key));
+                    assert_ne!(inbox.phone_rev(), rev, "a phone reads again after a mark");
                     let until = monocode_core::time::now_ms() as i64 + 60_000;
                     inbox.phone_mark(&key, Mark::Snooze(until), cx).unwrap();
                     assert_eq!(

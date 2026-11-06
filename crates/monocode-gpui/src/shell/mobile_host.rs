@@ -64,6 +64,8 @@ pub(super) struct Mobile {
     mono_previews: HashMap<i64, MonoPreview>,
     /// Avatar addresses handed to phones as opaque keys.
     inbox_avatars: monocode_core::mobile::inbox::AvatarBook,
+    /// What a phone's Inbox holds, as of the last time one followed along.
+    inbox_rev: Option<String>,
 }
 
 #[derive(Clone)]
@@ -452,6 +454,13 @@ impl Shell {
         if self.mobile.publishing || !host.enabled() {
             return;
         }
+        // A followed phone reads its Inbox only when this rev moves, so its
+        // reading no longer starts the fetches that move it.
+        if let Some(inbox) = self.inbox.clone().filter(|_| host.followed()) {
+            inbox.update(cx, |inbox, cx| inbox.refresh_for_phone(cx));
+            self.mobile.inbox_rev = Some(inbox.read(cx).phone_rev());
+        }
+        let inbox_rev = self.mobile.inbox_rev.clone();
         let paths = self.mobile_projects(cx);
         let projects: Vec<Value> = paths
             .iter()
@@ -611,7 +620,9 @@ impl Shell {
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
                 // `inbox`: it answers the phone's `inbox.*` requests.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true}),
+                // `inboxActions`: it also takes actions, comments and reviews.
+                // `inboxRev`: the phone reads its Inbox when this moves.
+                json!({"inboxRev": inbox_rev, "projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true, "inboxActions": true}),
                 ids,
                 previews,
             ))
@@ -744,9 +755,12 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
-            method if method.starts_with("inbox.") && method != "inbox.start" => {
-                self.mobile_inbox(request, window, cx)
-            }
+            "inbox.start"
+            | "inbox.action"
+            | "inbox.comment"
+            | "inbox.reviewAdd"
+            | "inbox.reviewSubmit" => self.mobile_command(request, window, cx),
+            method if method.starts_with("inbox.") => self.mobile_inbox(request, window, cx),
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1318,6 +1332,23 @@ impl Shell {
             "session.start" => self.mobile_start(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
             "inbox.start" => self.mobile_inbox_start(request, finish, cx),
+            "inbox.action" => {
+                self.ensure_background_inbox(window, cx);
+                self.mobile_inbox_action(request, finish, cx);
+            }
+            "inbox.comment" => {
+                self.ensure_background_inbox(window, cx);
+                self.mobile_inbox_comment(request, finish, cx);
+            }
+            "inbox.reviewAdd" => {
+                self.ensure_background_inbox(window, cx);
+                let result = self.mobile_inbox_review_add(&request.params, cx);
+                finish(self, request, result);
+            }
+            "inbox.reviewSubmit" => {
+                self.ensure_background_inbox(window, cx);
+                self.mobile_inbox_review_submit(request, finish, cx);
+            }
             _ => {
                 let result =
                     self.mobile_session_command(&request.method, &request.params, window, cx);

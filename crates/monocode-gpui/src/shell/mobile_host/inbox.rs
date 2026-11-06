@@ -6,7 +6,7 @@
 use super::*;
 use monocode_core::{
     inbox::Item,
-    mobile::inbox::{self as wire, ListParams, Mark, ProjectRef, SnapshotState, View},
+    mobile::inbox::{self as wire, ListParams, Mark, ProjectRef, ReviewLine, SnapshotState, View},
 };
 
 /// At most this many items are announced in one batch; a flood of new items
@@ -24,6 +24,16 @@ fn to_value(value: impl serde::Serialize) -> Result<Value, String> {
 /// A provider's error as a phone may read it: one line, nothing like a credential.
 fn phone_error(error: String) -> String {
     wire::safe_error(&error)
+}
+
+/// The nth image of a body, fetched and made ready for the phone.
+fn phone_image_at(body: &str, index: u64) -> Result<wire::MediaResponse, String> {
+    let url = wire::image_urls(body)
+        .into_iter()
+        .nth(index as usize)
+        .ok_or("That image is not in the item")?;
+    let (bytes, mime) = monocode_core::inbox::phone_image(&url)?;
+    wire::media_response(mime, &bytes)
 }
 
 fn now() -> i64 {
@@ -46,6 +56,11 @@ impl Shell {
             "inbox.diff" => self.mobile_inbox_diff(request, cx),
             "inbox.checks" => self.mobile_inbox_checks(request, cx),
             "inbox.mark" => self.mobile_inbox_mark(request, cx),
+            "inbox.readAll" => self.mobile_inbox_read_all(request, cx),
+            "inbox.review" | "inbox.reviewRemove" => {
+                let result = self.mobile_inbox_review(&request, cx);
+                request.reply(result);
+            }
             "inbox.media" => self.mobile_inbox_media(request, cx),
             _ => request.reply(Err("Unsupported mobile operation".into())),
         }
@@ -97,6 +112,7 @@ impl Shell {
             seen: view.seen,
             triage: view.triage,
             projects: &projects,
+            viewers: view.viewers,
             now: now(),
         };
         Ok(wire::slim_item(item, &view, &self.mobile.inbox_avatars))
@@ -152,6 +168,7 @@ impl Shell {
                     seen: phone.seen,
                     triage: phone.triage,
                     projects: &projects,
+                    viewers: phone.viewers,
                     now: now(),
                 },
                 &self.mobile.inbox_avatars,
@@ -206,6 +223,7 @@ impl Shell {
                             seen: phone.seen,
                             triage: phone.triage,
                             projects: &projects,
+                            viewers: phone.viewers,
                             now: now(),
                         },
                         &this.mobile.inbox_avatars,
@@ -267,14 +285,198 @@ impl Shell {
         request.reply(result);
     }
 
-    /// An avatar or one of the item's images, which the host fetches itself
-    /// from an address it knows; the phone names only a key or an index.
+    /// `inbox.readAll`: everything the list shows goes read.
+    fn mobile_inbox_read_all(&mut self, request: Request, cx: &mut Context<Self>) {
+        let result = (|| {
+            let params = ListParams::parse(&request.params)?;
+            let inbox = self.inbox.clone().ok_or("The Inbox is not available")?;
+            let projects = self.mobile_inbox_projects(cx);
+            let marked = inbox.update(cx, |inbox, cx| inbox.phone_read_all(&params, &projects, cx));
+            to_value(json!({"marked": marked}))
+        })();
+        request.reply(result);
+    }
+
+    /// `inbox.action`: what the desktop's pull request buttons do. Under a
+    /// command ID, so a retry after a lost reply can't merge twice.
+    pub(super) fn mobile_inbox_action(
+        &mut self,
+        request: Request,
+        finish: impl FnOnce(&mut Shell, Request, Result<Value, String>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let prepared = (|| {
+            let (inbox, item, service) = self.mobile_inbox_target(&request.params, cx)?;
+            let name = request.params["action"].as_str().unwrap_or_default();
+            let action = wire::pull_request_action(&item, name)?;
+            Ok::<_, String>((inbox, item, service, action))
+        })();
+        let (inbox, item, service, action) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return finish(self, request, Err(error)),
+        };
+        let key = item.key();
+        let work = cx
+            .background_executor()
+            .spawn(async move { service.action(&item, action) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                let result = result.map_err(phone_error).and_then(|updated| {
+                    let item = inbox.update(cx, |inbox, cx| inbox.phone_acted(&key, updated, cx));
+                    to_value(wire::ActionResponse {
+                        actions: wire::actions(&item),
+                        queued: wire::queued(&item, action),
+                        item: this.mobile_inbox_slim(&item, cx)?,
+                    })
+                });
+                finish(this, request, result);
+            });
+        })
+        .detach();
+    }
+
+    /// `inbox.comment`: a comment on an item, or a reply to a thread entry's
+    /// `replyTo`. Under a command ID, so a retry can't post it twice.
+    pub(super) fn mobile_inbox_comment(
+        &mut self,
+        request: Request,
+        finish: impl FnOnce(&mut Shell, Request, Result<Value, String>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let prepared = (|| {
+            let body = string(&request.params, "body")
+                .map(|body| body.trim().to_owned())
+                .filter(|body| !body.is_empty())
+                .ok_or("Write a comment first")?;
+            let (inbox, item, service) = self.mobile_inbox_target(&request.params, cx)?;
+            Ok::<_, String>((body, inbox, item, service))
+        })();
+        let (body, inbox, item, service) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return finish(self, request, Err(error)),
+        };
+        let reply = string(&request.params, "replyTo").unwrap_or_default();
+        let key = item.key();
+        let work = cx
+            .background_executor()
+            .spawn(async move { service.comment(&item, body, reply) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                let result = result.map_err(phone_error).map(|_| {
+                    inbox.update(cx, |inbox, cx| inbox.phone_discussed(&key, cx));
+                    json!({})
+                });
+                finish(this, request, result);
+            });
+        })
+        .detach();
+    }
+
+    /// The pull request a review request names.
+    fn mobile_inbox_reviewed(
+        &self,
+        params: &Value,
+        cx: &App,
+    ) -> Result<
+        (
+            Entity<crate::inbox::Inbox>,
+            Item,
+            monocode_core::inbox::Service,
+        ),
+        String,
+    > {
+        let target = self.mobile_inbox_target(params, cx)?;
+        if !wire::reviewable(&target.1) {
+            return Err("Line comments are for GitHub pull requests".into());
+        }
+        Ok(target)
+    }
+
+    /// `inbox.review` and `inbox.reviewRemove`: the pending comments, which are
+    /// the desktop's own. Removing one twice changes nothing, so neither needs
+    /// a command ID.
+    fn mobile_inbox_review(
+        &mut self,
+        request: &Request,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let (inbox, item, _) = self.mobile_inbox_reviewed(&request.params, cx)?;
+        let key = item.key();
+        let comments = if request.method == "inbox.reviewRemove" {
+            let id = request.params["id"].as_u64().ok_or("Missing comment")?;
+            inbox.update(cx, |inbox, _| inbox.phone_review_remove(&key, id))
+        } else {
+            inbox.update(cx, |inbox, _| inbox.phone_review(&key))
+        };
+        to_value(wire::ReviewResponse { comments })
+    }
+
+    /// `inbox.reviewAdd`: under a command ID, so a retry adds it once.
+    pub(super) fn mobile_inbox_review_add(
+        &mut self,
+        params: &Value,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let line = ReviewLine::parse(params)?;
+        let (inbox, item, _) = self.mobile_inbox_reviewed(params, cx)?;
+        let key = item.key();
+        let comments = inbox.update(cx, |inbox, _| inbox.phone_review_add(&key, line));
+        to_value(wire::ReviewResponse { comments })
+    }
+
+    /// `inbox.reviewSubmit`: the pending comments as one review that only
+    /// comments, as the desktop posts it. Under a command ID, so a retry can't
+    /// post it twice.
+    pub(super) fn mobile_inbox_review_submit(
+        &mut self,
+        request: Request,
+        finish: impl FnOnce(&mut Shell, Request, Result<Value, String>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let prepared = (|| {
+            let (inbox, item, service) = self.mobile_inbox_reviewed(&request.params, cx)?;
+            let key = item.key();
+            let comments = inbox.update(cx, |inbox, _| inbox.phone_review_start(&key))?;
+            Ok::<_, String>((inbox, item, service, key, comments))
+        })();
+        let (inbox, item, service, key, comments) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return finish(self, request, Err(error)),
+        };
+        let work = cx.background_executor().spawn({
+            let comments = comments.clone();
+            async move { service.submit_review(&item, "", &comments) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                let posted = result.is_ok();
+                let remaining = inbox.update(cx, |inbox, cx| {
+                    inbox.phone_review_finished(&key, &comments, posted, cx)
+                });
+                let result = result.map_err(phone_error).and_then(|_| {
+                    to_value(wire::ReviewResponse {
+                        comments: remaining,
+                    })
+                });
+                finish(this, request, result);
+            });
+        })
+        .detach();
+    }
+
+    /// An avatar or an image in the item's body or one of its comments, which
+    /// the host fetches itself from an address it knows; the phone names only a
+    /// key or an index.
     fn mobile_inbox_media(&mut self, request: Request, cx: &mut Context<Self>) {
         let params = request.params.clone();
         let avatar_key = string(&params, "avatarKey");
         let index = params["index"].as_u64();
-        let work = match (avatar_key, index) {
-            (Some(key), None) => {
+        let comment = string(&params, "commentId").zip(params["commentIndex"].as_u64());
+        let work = match (avatar_key, index, comment) {
+            (Some(key), None, None) => {
                 let Some(url) = self.mobile.inbox_avatars.url(&key) else {
                     return request.reply(Err("That avatar is no longer available".into()));
                 };
@@ -286,22 +488,27 @@ impl Shell {
                     wire::media_response("image/png", &png)
                 })
             }
-            (None, Some(index)) => {
+            (None, Some(index), None) => {
+                let (_, item, service) = match self.mobile_inbox_target(&params, cx) {
+                    Ok(target) => target,
+                    Err(error) => return request.reply(Err(error)),
+                };
+                cx.background_executor()
+                    .spawn(async move { phone_image_at(&service.details(&item)?.body, index) })
+            }
+            (None, None, Some((id, index))) => {
                 let (_, item, service) = match self.mobile_inbox_target(&params, cx) {
                     Ok(target) => target,
                     Err(error) => return request.reply(Err(error)),
                 };
                 cx.background_executor().spawn(async move {
-                    let body = service.details(&item)?.body;
-                    let url = wire::image_urls(&body)
-                        .into_iter()
-                        .nth(index as usize)
-                        .ok_or("That image is not in the item")?;
-                    let (bytes, mime) = monocode_core::inbox::phone_image(&url)?;
-                    wire::media_response(mime, &bytes)
+                    let thread = service.thread(&item)?;
+                    let body = wire::comment_body(&thread, &id)
+                        .ok_or("That comment is not in the item")?;
+                    phone_image_at(body, index)
                 })
             }
-            _ => return request.reply(Err("Ask for an avatar or an image, not both".into())),
+            _ => return request.reply(Err("Ask for one avatar or one image".into())),
         };
         cx.spawn(async move |_, _| {
             request.reply(work.await.map_err(phone_error).and_then(to_value))

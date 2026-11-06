@@ -6,8 +6,9 @@
 //! a token could ride in. Provider errors are cut down by [`safe_error`] before
 //! they cross the link.
 use crate::inbox::{
-    patch, timestamp_ms, Check, Checks, Details, Diff, Item, Seen, Status, Thread, Triage,
-    PROVIDERS,
+    Check, Checks, Details, Diff, Item, ME, PROVIDERS, Seen, Status, Thread, Triage, patch,
+    review::{PendingComment, Side},
+    timestamp_ms,
 };
 use base64::Engine;
 use serde::Serialize;
@@ -27,6 +28,8 @@ pub const MAX_DIFF_FILES: usize = 300;
 /// A cached avatar or image answer stays under this many bytes of image data.
 pub const MAX_IMAGE_BYTES: usize = 3 * 1024 * 1024;
 const MAX_AVATARS: usize = 4000;
+/// People a filter sheet lists; the rest are a search away.
+const MAX_AUTHORS: usize = 30;
 const MAX_ERROR_CHARS: usize = 160;
 
 // MARK: wire types
@@ -51,7 +54,16 @@ pub struct InboxItem {
     pub repo: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// The Linear project, or `~none`, for the phone's project picker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_project: Option<String>,
     pub author: Author,
+    /// The signed-in user wrote it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mine: bool,
+    /// It is assigned to the signed-in user.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub assigned: bool,
     pub status: &'static str,
     pub updated_at: i64,
     pub unread: bool,
@@ -99,6 +111,42 @@ pub struct ListResponse {
     pub fetched_at: i64,
     pub providers: Vec<ProviderState>,
     pub counts: Counts,
+    pub options: ListOptions,
+}
+
+/// What the phone's filter sheets offer: the scope's items with no filter
+/// applied, so picking one person doesn't take the others off the sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListOptions {
+    /// Most items first, without the signed-in user.
+    pub authors: Vec<AuthorOption>,
+    /// The signed-in user's items; left out until a provider has named them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub me: Option<usize>,
+    /// Most items first.
+    pub places: Vec<PlaceOption>,
+    pub sources: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorOption {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_key: Option<String>,
+    /// An item of theirs, which `inbox.media` needs to find the avatar.
+    pub item_key: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceOption {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    pub count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,6 +157,15 @@ pub struct ThreadEntry {
     pub created_at: i64,
     pub body: String,
     pub kind: &'static str,
+    /// What `inbox.comment` takes to answer this entry, where the provider
+    /// has replies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// The file a review comment is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -121,6 +178,21 @@ pub struct ItemResponse {
     pub review_decision: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks_summary: Option<&'static str>,
+    pub actions: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionResponse {
+    pub item: InboxItem,
+    pub actions: Vec<&'static str>,
+    /// A merge the provider took but hasn't finished: a merge queue or
+    /// auto-merge has it.
+    pub queued: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -174,6 +246,13 @@ pub struct MediaResponse {
     pub base64: String,
 }
 
+/// The reviewer's pending comments on a pull request, shared with the desktop.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewResponse {
+    pub comments: Vec<PendingComment>,
+}
+
 // MARK: requests
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -190,12 +269,79 @@ pub struct ListParams {
     pub source: Option<String>,
     pub project_id: Option<String>,
     pub q: String,
+    pub filters: ListFilters,
     pub cursor: Option<String>,
     pub limit: usize,
     /// The phone asked for a fresh read (pull to refresh): the host fetches from
     /// the providers and answers when that ends, instead of from the cache.
     pub refresh: bool,
 }
+
+/// The desktop's filter menu, across every source: an empty list leaves that
+/// filter off, and an item has to pass each one that is on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListFilters {
+    /// Logins, or `ME`.
+    pub authors: Vec<String>,
+    /// A phone project id, `repo:<label>` or `linear:<project>`: see `places`.
+    pub places: Vec<String>,
+    pub statuses: Vec<String>,
+    pub kind: Option<String>,
+    pub sources: Vec<String>,
+    /// ms. The phone works it out, so "today" is the phone's today.
+    pub updated_since: Option<i64>,
+    pub assigned: bool,
+}
+impl ListFilters {
+    fn parse(params: &Value) -> Self {
+        let list = |key: &str| {
+            params[key]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Self {
+            authors: list("authors"),
+            places: list("places"),
+            statuses: list("statuses"),
+            kind: params["kind"].as_str().map(str::to_owned),
+            sources: list("sources"),
+            updated_since: params["updatedSince"].as_i64(),
+            assigned: params["assigned"].as_bool().unwrap_or(false),
+        }
+    }
+    fn matches(&self, item: &Item, view: &View) -> bool {
+        (self.authors.is_empty()
+            || self.authors.iter().any(|author| {
+                if author == ME {
+                    mine(item, view)
+                } else {
+                    item.author.login.eq_ignore_ascii_case(author)
+                }
+            }))
+            && (self.places.is_empty()
+                || places(item, view)
+                    .iter()
+                    .any(|place| self.places.contains(place)))
+            && (self.statuses.is_empty() || self.statuses.iter().any(|name| name == status(item)))
+            && self
+                .kind
+                .as_deref()
+                .is_none_or(|kind| kind == kind_of(item))
+            && (self.sources.is_empty() || self.sources.contains(&item.provider))
+            && self
+                .updated_since
+                .is_none_or(|since| item.updated_ms() >= since)
+            && (!self.assigned || assigned(item, view))
+    }
+}
+
 impl ListParams {
     pub fn parse(params: &Value) -> Result<Self, String> {
         let text = |key: &str| {
@@ -222,6 +368,7 @@ impl ListParams {
             source,
             project_id: text("projectId"),
             q: text("q").unwrap_or_default(),
+            filters: ListFilters::parse(params),
             cursor: text("cursor"),
             limit: params["limit"]
                 .as_u64()
@@ -269,6 +416,88 @@ impl Mark {
             Self::Unsnooze => triage.unsnooze(&key),
         }
     }
+}
+
+/// A line comment a phone wrote, for the pending review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewLine {
+    pub path: String,
+    pub line: u32,
+    pub side: Side,
+    pub text: String,
+}
+impl ReviewLine {
+    pub fn parse(params: &Value) -> Result<Self, String> {
+        let path = params["path"].as_str().unwrap_or_default().trim();
+        if path.is_empty() {
+            return Err("Choose a line to comment on".into());
+        }
+        let line = params["line"]
+            .as_u64()
+            .and_then(|line| u32::try_from(line).ok())
+            .filter(|line| *line > 0)
+            .ok_or("Choose a line to comment on")?;
+        let side = match params["side"].as_str() {
+            Some("left") => Side::Left,
+            Some("right") => Side::Right,
+            _ => return Err("Choose a line to comment on".into()),
+        };
+        let text = params["text"].as_str().unwrap_or_default().trim();
+        if text.is_empty() {
+            return Err("Write a comment first".into());
+        }
+        Ok(Self {
+            path: path.into(),
+            line,
+            side,
+            text: text.into(),
+        })
+    }
+}
+
+// MARK: actions
+
+const MERGES: [&str; 3] = ["merge", "squash", "rebase"];
+
+/// What the user can do to an item from the phone, as the desktop's detail
+/// offers it: `comment` on anything, and on a GitHub pull request `review`
+/// and the actions its state allows.
+pub fn actions(item: &Item) -> Vec<&'static str> {
+    let mut actions = vec!["comment"];
+    if item.provider != "github" || item.kind != "pr" {
+        return actions;
+    }
+    actions.push("review");
+    if item.state.eq_ignore_ascii_case("open") {
+        if item.draft {
+            actions.extend(["ready", "close"]);
+        } else {
+            actions.extend(MERGES);
+            actions.extend(["draft", "close"]);
+        }
+    } else if item.state.eq_ignore_ascii_case("closed") {
+        actions.push("reopen");
+    }
+    actions
+}
+
+/// The pull request action a phone named, if this item offers it. The host
+/// checks here because `Service::action` runs `gh` on whatever it is given.
+pub fn pull_request_action(item: &Item, name: &str) -> Result<&'static str, String> {
+    actions(item)
+        .into_iter()
+        .find(|action| *action == name && !matches!(*action, "comment" | "review"))
+        .ok_or_else(|| "That action isn't available on this item".into())
+}
+
+/// Whether the item takes line comments and a review.
+pub fn reviewable(item: &Item) -> bool {
+    actions(item).contains(&"review")
+}
+
+/// Whether a merge that returned has yet to happen.
+pub fn queued(item: &Item, action: &str) -> bool {
+    MERGES.contains(&action) && !item.state.eq_ignore_ascii_case("merged")
 }
 
 // MARK: avatars
@@ -413,6 +642,8 @@ pub struct View<'a> {
     pub seen: &'a Seen,
     pub triage: &'a Triage,
     pub projects: &'a [ProjectRef],
+    /// The signed-in login by provider, once a fetch has named it.
+    pub viewers: &'a BTreeMap<String, String>,
     pub now: i64,
 }
 impl View<'_> {
@@ -422,6 +653,61 @@ impl View<'_> {
     fn done(&self, item: &Item) -> bool {
         self.triage.is_done(&item.key())
     }
+    fn viewer(&self, item: &Item) -> Option<&str> {
+        self.viewers
+            .get(&item.provider)
+            .map(|login| login.trim())
+            .filter(|login| !login.is_empty())
+    }
+}
+
+fn mine(item: &Item, view: &View) -> bool {
+    view.viewer(item)
+        .is_some_and(|login| item.author.login.trim().eq_ignore_ascii_case(login))
+}
+
+fn assigned(item: &Item, view: &View) -> bool {
+    matches!(attention(item), Some(("assigned", _)))
+        || view.viewer(item).is_some_and(|login| {
+            item.assignees
+                .iter()
+                .any(|person| person.login.trim().eq_ignore_ascii_case(login))
+        })
+}
+
+fn status(item: &Item) -> &'static str {
+    match item.status() {
+        "Merged" => "merged",
+        "Closed" => "closed",
+        "Draft" => "draft",
+        _ => "open",
+    }
+}
+
+fn kind_of(item: &Item) -> &'static str {
+    if item.kind == "pr" { "pr" } else { "issue" }
+}
+
+/// `~none` is a Linear issue in no project, as in the desktop's filter.
+fn linear_project(item: &Item) -> Option<String> {
+    (item.provider == "linear").then(|| {
+        if item.project_id.is_empty() {
+            "~none".to_owned()
+        } else {
+            item.project_id.clone()
+        }
+    })
+}
+
+/// What the project picker can narrow an item by: the phone project, or for an
+/// item with none the repo, team or tracker project it lists under, and for a
+/// Linear issue its Linear project too.
+fn places(item: &Item, view: &View) -> Vec<String> {
+    let mut places = vec![
+        project_for(item, view.projects).unwrap_or_else(|| format!("repo:{}", repo_label(item))),
+    ];
+    places.extend(linear_project(item).map(|id| format!("linear:{id}")));
+    places
 }
 
 fn matches_query(item: &Item, query: &str) -> bool {
@@ -447,8 +733,9 @@ fn matches_query(item: &Item, query: &str) -> bool {
         .all(|word| text.contains(&word.to_lowercase()))
 }
 
-/// Items for the source and project the phone asked about, whatever their scope.
-fn in_slice<'a>(items: &'a [Item], params: &ListParams, view: &View) -> Vec<&'a Item> {
+/// Items for the source and project the phone asked about, whatever their
+/// scope and filters.
+fn unfiltered<'a>(items: &'a [Item], params: &ListParams, view: &View) -> Vec<&'a Item> {
     items
         .iter()
         .filter(|item| params.source.as_ref().is_none_or(|s| *s == item.provider))
@@ -460,17 +747,28 @@ fn in_slice<'a>(items: &'a [Item], params: &ListParams, view: &View) -> Vec<&'a 
         .collect()
 }
 
+/// Items for the slice the phone asked about, whatever their scope.
+fn in_slice<'a>(items: &'a [Item], params: &ListParams, view: &View) -> Vec<&'a Item> {
+    let mut items = unfiltered(items, params, view);
+    items.retain(|item| params.filters.matches(item, view));
+    items
+}
+
+fn in_scope(item: &Item, scope: &Scope, view: &View) -> bool {
+    !view.hidden(item)
+        && match scope {
+            Scope::All => !view.done(item),
+            Scope::NeedsMe => !view.done(item) && needs_me(item),
+            Scope::Done => view.done(item),
+        }
+}
+
 /// The items of the scope, newest first. A snoozed item is out of every scope
 /// until its time passes; a finished one is only in `Done`.
 pub fn visible<'a>(items: &'a [Item], params: &ListParams, view: &View) -> Vec<&'a Item> {
     let mut visible: Vec<&Item> = in_slice(items, params, view)
         .into_iter()
-        .filter(|item| !view.hidden(item))
-        .filter(|item| match params.scope {
-            Scope::All => !view.done(item),
-            Scope::NeedsMe => !view.done(item) && needs_me(item),
-            Scope::Done => view.done(item),
-        })
+        .filter(|item| in_scope(item, &params.scope, view))
         .filter(|item| matches_query(item, &params.q))
         .collect();
     sort(&mut visible);
@@ -491,6 +789,92 @@ pub fn counts(items: &[Item], params: &ListParams, view: &View) -> Counts {
         counts.needs_me += usize::from(needs_me(item));
     }
     counts
+}
+
+/// Most items first, then by name.
+fn by_count<T>(options: &mut [T], key: impl Fn(&T) -> (usize, String)) {
+    options.sort_by_cached_key(|option| {
+        let (count, name) = key(option);
+        (std::cmp::Reverse(count), name.to_lowercase())
+    });
+}
+
+pub fn options(
+    items: &[Item],
+    params: &ListParams,
+    view: &View,
+    avatars: &AvatarBook,
+) -> ListOptions {
+    let mut people = BTreeMap::<String, AuthorOption>::new();
+    let mut spots = BTreeMap::<String, PlaceOption>::new();
+    let mut sources = Vec::<String>::new();
+    let mut me = view
+        .viewers
+        .values()
+        .any(|login| !login.trim().is_empty())
+        .then_some(0);
+    for item in unfiltered(items, params, view)
+        .into_iter()
+        .filter(|item| in_scope(item, &params.scope, view))
+    {
+        if !sources.contains(&item.provider) {
+            sources.push(item.provider.clone());
+        }
+        let label = repo_label(item);
+        let mut place = |id: String, name: String, kind| {
+            spots
+                .entry(id.clone())
+                .or_insert(PlaceOption {
+                    id,
+                    name,
+                    kind,
+                    count: 0,
+                })
+                .count += 1;
+        };
+        match project_for(item, view.projects) {
+            Some(id) => place(id, label.clone(), "project"),
+            None => place(format!("repo:{label}"), label.clone(), "tracker"),
+        }
+        if let Some(id) = linear_project(item) {
+            let name = if item.project_name.is_empty() {
+                "No project".to_owned()
+            } else {
+                item.project_name.clone()
+            };
+            place(format!("linear:{id}"), name, "linearProject");
+        }
+        if mine(item, view) {
+            me = me.map(|count| count + 1);
+        } else if !item.author.login.trim().is_empty() {
+            let person = author(
+                &item.provider,
+                &item.author.login,
+                &item.author.avatar_url,
+                avatars,
+            );
+            people
+                .entry(person.name.to_lowercase())
+                .or_insert(AuthorOption {
+                    name: person.name,
+                    avatar_key: person.avatar_key,
+                    item_key: item.key(),
+                    count: 0,
+                })
+                .count += 1;
+        }
+    }
+    let mut authors = people.into_values().collect::<Vec<_>>();
+    by_count(&mut authors, |author| (author.count, author.name.clone()));
+    authors.truncate(MAX_AUTHORS);
+    let mut places = spots.into_values().collect::<Vec<_>>();
+    by_count(&mut places, |place| (place.count, place.name.clone()));
+    ListOptions {
+        authors,
+        me,
+        places,
+        sources,
+    }
 }
 
 fn sort(items: &mut [&Item]) {
@@ -611,23 +995,21 @@ pub fn slim_item(item: &Item, view: &View, avatars: &AvatarBook) -> InboxItem {
     };
     InboxItem {
         source: item.provider.clone(),
-        kind: if item.kind == "pr" { "pr" } else { "issue" },
+        kind: kind_of(item),
         number: Some(item.reference()).filter(|n| n != "#0"),
         title: item.title.clone(),
         repo: repo_label(item),
         project_id: project_for(item, view.projects),
+        linear_project: linear_project(item),
         author: author(
             &item.provider,
             &item.author.login,
             &item.author.avatar_url,
             avatars,
         ),
-        status: match item.status() {
-            "Merged" => "merged",
-            "Closed" => "closed",
-            "Draft" => "draft",
-            _ => "open",
-        },
+        mine: mine(item, view),
+        assigned: assigned(item, view),
+        status: status(item),
         updated_at: item.updated_ms(),
         unread: view.seen.unseen(item),
         attention,
@@ -670,6 +1052,7 @@ pub fn list_response(
         fetched_at: state.fetched_at.unwrap_or(0),
         providers: providers(state.connections, state.errors),
         counts: counts(items, params, view),
+        options: options(items, params, view, avatars),
     })
 }
 
@@ -744,6 +1127,17 @@ pub fn checks_response(checks: &Checks) -> ChecksResponse {
     }
 }
 
+/// What a reply to `comment` is sent against: Linear's comment, GitHub's review
+/// thread. A GitHub comment outside a review thread has no replies.
+fn reply_target(item: &Item, comment: &crate::inbox::Comment) -> Option<String> {
+    let target = match item.provider.as_str() {
+        "linear" => &comment.id,
+        "github" => &comment.thread_id,
+        _ => return None,
+    };
+    Some(target.clone()).filter(|target| !target.is_empty())
+}
+
 /// The discussion in time order: comments and replies, reviews and commits.
 pub fn thread_entries(item: &Item, thread: &Thread, avatars: &AvatarBook) -> Vec<ThreadEntry> {
     let mut entries = vec![];
@@ -768,6 +1162,9 @@ pub fn thread_entries(item: &Item, thread: &Thread, avatars: &AvatarBook) -> Vec
             } else {
                 "comment"
             },
+            reply_to: reply_target(item, comment),
+            path: Some(comment.path.clone()).filter(|path| !path.is_empty()),
+            line: comment.line,
         });
         for reply in &comment.replies {
             push(item, reply, avatars, out);
@@ -783,6 +1180,9 @@ pub fn thread_entries(item: &Item, thread: &Thread, avatars: &AvatarBook) -> Vec
             created_at: timestamp_ms(&commit.committed_date),
             body: commit.message_headline.clone(),
             kind: "commit",
+            reply_to: None,
+            path: None,
+            line: None,
         });
     }
     entries.sort_by_key(|entry| entry.created_at);
@@ -803,10 +1203,14 @@ pub fn item_response(
         .unwrap_or_default();
     slim.comments = thread.iter().filter(|e| e.kind != "commit").count();
     slim.checks = checks.and_then(checks_summary);
+    let branch = |name: Option<&String>| name.filter(|name| !name.is_empty()).cloned();
     ItemResponse {
         body: details.map(|d| d.body.clone()).unwrap_or_default(),
         review_decision: details.and_then(review_decision),
         checks_summary: slim.checks,
+        actions: actions(item),
+        base_ref: branch(details.map(|d| &d.base_ref_name)),
+        head_ref: branch(details.map(|d| &d.head_ref_name)),
         item: slim,
         thread,
     }
@@ -921,6 +1325,20 @@ pub fn image_urls(markdown: &str) -> Vec<String> {
     found.into_iter().map(|(_, url)| url).collect()
 }
 
+/// What a comment or reply says, at any depth, by the ID the thread gave it.
+pub fn comment_body<'a>(thread: &'a Thread, id: &str) -> Option<&'a str> {
+    fn find<'a>(comments: &'a [crate::inbox::Comment], id: &str) -> Option<&'a str> {
+        comments.iter().find_map(|comment| {
+            if comment.id == id {
+                Some(comment.body.as_str())
+            } else {
+                find(&comment.replies, id)
+            }
+        })
+    }
+    find(&thread.comments, id)
+}
+
 pub fn media_response(mime: &str, bytes: &[u8]) -> Result<MediaResponse, String> {
     if bytes.len() > MAX_IMAGE_BYTES {
         return Err("Image is too large".into());
@@ -971,11 +1389,13 @@ mod tests {
             path: "/work/app".into(),
         }]
     }
+    static NO_VIEWERS: BTreeMap<String, String> = BTreeMap::new();
     fn view<'a>(seen: &'a Seen, triage: &'a Triage, projects: &'a [ProjectRef]) -> View<'a> {
         View {
             seen,
             triage,
             projects,
+            viewers: &NO_VIEWERS,
             now: NOW,
         }
     }
@@ -1195,6 +1615,7 @@ mod tests {
                 seen: &seen,
                 triage,
                 projects: &projects,
+                viewers: &NO_VIEWERS,
                 now,
             };
             (
@@ -1216,6 +1637,7 @@ mod tests {
             seen: &seen,
             triage: &triage,
             projects: &projects,
+            viewers: &NO_VIEWERS,
             now: NOW,
         };
         assert_eq!(numbers(&visible(&items, &params(json!({})), &view)), [1, 2]);
@@ -1278,9 +1700,96 @@ mod tests {
         let mut state = crate::inbox::ViewState::load(&store);
         state.triage.mark_done(&one.key(), NOW);
         state.save(&store).unwrap();
-        assert!(crate::inbox::ViewState::load(&store)
-            .triage
-            .is_done(&one.key()));
+        assert!(
+            crate::inbox::ViewState::load(&store)
+                .triage
+                .is_done(&one.key())
+        );
+    }
+
+    #[test]
+    fn filters_narrow_the_list_and_its_counts_but_not_the_options() {
+        let mut mine_item = item(1, 1, "mentioned");
+        mine_item.author.login = "Me".into();
+        let mut assigned_item = item(2, 2, "");
+        assigned_item.assignees = vec![Person {
+            login: "me".into(),
+            avatar_url: String::new(),
+        }];
+        let mut closed = item(3, 30, "");
+        closed.state = "closed".into();
+        closed.kind = "issue".into();
+        closed.author.login = "ana".into();
+        let mut linear = item(4, 3, "assigned");
+        linear.provider = "linear".into();
+        linear.kind = "issue".into();
+        linear.repo = String::new();
+        linear.team_name = "Core".into();
+        linear.project_path = String::new();
+        linear.project_id = "p1".into();
+        linear.project_name = "Launch".into();
+        linear.author = Person::default();
+        let items = vec![mine_item, assigned_item, closed, linear];
+
+        let (seen, triage, projects) = (Seen::default(), Triage::default(), projects());
+        let viewers = BTreeMap::from([("github".to_owned(), "me".to_owned())]);
+        let view = View {
+            viewers: &viewers,
+            ..view(&seen, &triage, &projects)
+        };
+        let at = |value: Value| numbers(&visible(&items, &params(value), &view));
+
+        assert_eq!(at(json!({"authors": ["@me"]})), [1]);
+        assert_eq!(at(json!({"authors": ["ANA", "@me"]})), [1, 3]);
+        assert_eq!(at(json!({"assigned": true})), [2, 4]);
+        assert_eq!(at(json!({"places": ["%2Fwork%2Fapp"]})), [1, 2, 3]);
+        assert_eq!(at(json!({"places": ["repo:Core"]})), [4]);
+        assert_eq!(at(json!({"places": ["linear:p1"]})), [4]);
+        assert_eq!(at(json!({"statuses": ["closed"]})), [3]);
+        assert_eq!(at(json!({"kind": "pr"})), [1, 2]);
+        assert_eq!(at(json!({"sources": ["linear"]})), [4]);
+        assert_eq!(at(json!({"updatedSince": NOW - 2 * HOUR - 1})), [1, 2]);
+        assert_eq!(
+            at(json!({"kind": "pr", "authors": ["ana"]})),
+            Vec::<i64>::new()
+        );
+
+        let narrowed = params(json!({"authors": ["ana"]}));
+        assert_eq!(counts(&items, &narrowed, &view).needs_me, 0);
+
+        let options = options(&items, &narrowed, &view, &AvatarBook::default());
+        assert_eq!(options.me, Some(1));
+        assert_eq!(
+            options
+                .authors
+                .iter()
+                .map(|a| (a.name.as_str(), a.count))
+                .collect::<Vec<_>>(),
+            [("ana", 1), ("sam", 1)]
+        );
+        assert_eq!(options.sources, ["github", "linear"]);
+        assert_eq!(
+            options
+                .places
+                .iter()
+                .map(|p| (p.id.as_str(), p.kind, p.count))
+                .collect::<Vec<_>>(),
+            [
+                ("%2Fwork%2Fapp", "project", 3),
+                ("repo:Core", "tracker", 1),
+                ("linear:p1", "linearProject", 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_signed_in_user_is_unknown_until_a_fetch_names_them() {
+        let items = vec![item(1, 1, "")];
+        let (seen, triage, projects) = (Seen::default(), Triage::default(), projects());
+        let view = view(&seen, &triage, &projects);
+        assert!(visible(&items, &params(json!({"authors": ["@me"]})), &view).is_empty());
+        let options = options(&items, &params(json!({})), &view, &AvatarBook::default());
+        assert_eq!(options.me, None);
     }
 
     #[test]
@@ -1328,9 +1837,11 @@ mod tests {
         };
         let mut tracker = NotificationTracker::default();
         // The backlog is a baseline: nothing in it is announced, even if it needs me.
-        assert!(tracker
-            .observe(&snapshot(vec![item(1, 5, "review_requested")]), "s".into())
-            .is_empty());
+        assert!(
+            tracker
+                .observe(&snapshot(vec![item(1, 5, "review_requested")]), "s".into())
+                .is_empty()
+        );
         let mut merged = item(5, 1, "mentioned");
         merged.state = "merged".into();
         let appeared = tracker.observe(
@@ -1574,6 +2085,229 @@ mod tests {
     }
 
     #[test]
+    fn a_pull_request_offers_what_its_state_allows() {
+        let pr = |state: &str, draft: bool| Item {
+            state: state.into(),
+            draft,
+            ..item(1, 1, "")
+        };
+        assert_eq!(
+            actions(&pr("OPEN", false)),
+            [
+                "comment", "review", "merge", "squash", "rebase", "draft", "close"
+            ]
+        );
+        assert_eq!(
+            actions(&pr("open", true)),
+            ["comment", "review", "ready", "close"]
+        );
+        assert_eq!(
+            actions(&pr("closed", false)),
+            ["comment", "review", "reopen"]
+        );
+        assert_eq!(actions(&pr("merged", false)), ["comment", "review"]);
+    }
+
+    #[test]
+    fn only_github_pull_requests_have_pull_request_actions() {
+        let issue = Item {
+            kind: "issue".into(),
+            ..item(1, 1, "")
+        };
+        let gitlab = Item {
+            provider: "gitlab".into(),
+            ..item(1, 1, "")
+        };
+        assert_eq!(actions(&issue), ["comment"]);
+        assert_eq!(actions(&gitlab), ["comment"]);
+        assert!(pull_request_action(&issue, "close").is_err());
+        assert!(pull_request_action(&gitlab, "merge").is_err());
+    }
+
+    #[test]
+    fn an_action_the_state_rules_out_is_refused() {
+        let open = item(1, 1, "");
+        let draft = Item {
+            draft: true,
+            ..item(1, 1, "")
+        };
+        let merged = Item {
+            state: "merged".into(),
+            ..item(1, 1, "")
+        };
+        assert_eq!(pull_request_action(&open, "squash"), Ok("squash"));
+        assert!(pull_request_action(&open, "reopen").is_err());
+        assert!(pull_request_action(&open, "comment").is_err());
+        assert!(pull_request_action(&open, "review").is_err());
+        assert!(pull_request_action(&open, "--admin").is_err());
+        assert!(pull_request_action(&draft, "merge").is_err());
+        assert!(pull_request_action(&merged, "close").is_err());
+    }
+
+    #[test]
+    fn a_merge_still_open_afterwards_is_queued() {
+        let open = item(1, 1, "");
+        let merged = Item {
+            state: "merged".into(),
+            ..item(1, 1, "")
+        };
+        assert!(queued(&open, "squash"));
+        assert!(!queued(&merged, "squash"));
+        assert!(!queued(&open, "close"));
+    }
+
+    #[test]
+    fn replies_go_to_the_thread_or_comment_the_provider_answers() {
+        let comment = |id: &str, thread_id: &str| Comment {
+            id: id.into(),
+            thread_id: thread_id.into(),
+            ..Comment::default()
+        };
+        let on = |provider: &str, comment: Comment| {
+            let thread = Thread {
+                comments: vec![comment],
+                ..Thread::default()
+            };
+            let item = Item {
+                provider: provider.into(),
+                ..item(1, 1, "")
+            };
+            thread_entries(&item, &thread, &AvatarBook::default())[0]
+                .reply_to
+                .clone()
+        };
+        assert_eq!(on("github", comment("c", "t")).as_deref(), Some("t"));
+        assert_eq!(on("github", comment("c", "")), None);
+        assert_eq!(on("linear", comment("c", "")).as_deref(), Some("c"));
+        assert_eq!(on("gitlab", comment("c", "t")), None);
+    }
+
+    #[test]
+    fn an_item_carries_its_actions_and_branches() {
+        let (seen, triage, projects) = (Seen::default(), Triage::default(), projects());
+        let view = view(&seen, &triage, &projects);
+        let details = Details {
+            base_ref_name: "main".into(),
+            head_ref_name: "fix/crash".into(),
+            ..Details::default()
+        };
+        let read = |details: Option<&Details>| {
+            item_response(
+                &item(1, 1, ""),
+                &view,
+                &AvatarBook::default(),
+                details,
+                None,
+                None,
+            )
+        };
+        let response = serde_json::to_value(read(Some(&details))).unwrap();
+        assert_eq!(response["baseRef"], "main");
+        assert_eq!(response["headRef"], "fix/crash");
+        assert_eq!(response["actions"][2], "merge");
+        let bare = serde_json::to_value(read(None)).unwrap();
+        assert!(bare.get("headRef").is_none());
+    }
+
+    #[test]
+    fn only_github_pull_requests_take_line_comments() {
+        let issue = Item {
+            kind: "issue".into(),
+            ..item(1, 1, "")
+        };
+        let gitlab = Item {
+            provider: "gitlab".into(),
+            ..item(1, 1, "")
+        };
+        assert!(reviewable(&item(1, 1, "")));
+        assert!(!reviewable(&issue));
+        assert!(!reviewable(&gitlab));
+    }
+
+    #[test]
+    fn a_line_comment_names_a_real_line_and_says_something() {
+        let line = |value: Value| ReviewLine::parse(&value);
+        assert_eq!(
+            line(json!({"path": "a.rs", "line": 4, "side": "left", "text": " Why? "})),
+            Ok(ReviewLine {
+                path: "a.rs".into(),
+                line: 4,
+                side: Side::Left,
+                text: "Why?".into(),
+            })
+        );
+        let ok = json!({"path": "a.rs", "line": 4, "side": "right", "text": "Why?"});
+        assert!(line(ok.clone()).is_ok());
+        for (field, bad) in [
+            ("path", json!(" ")),
+            ("line", json!(0)),
+            ("line", json!(-1)),
+            ("line", json!(5_000_000_000_u64)),
+            ("side", json!("both")),
+            ("text", json!("  ")),
+        ] {
+            let mut value = ok.clone();
+            value[field] = bad.clone();
+            assert!(line(value).is_err(), "{field} = {bad}");
+        }
+    }
+
+    #[test]
+    fn a_review_comment_says_where_it_is() {
+        let thread = Thread {
+            comments: vec![Comment {
+                id: "c".into(),
+                path: "src/a.rs".into(),
+                line: Some(12),
+                ..Comment::default()
+            }],
+            ..Thread::default()
+        };
+        let entries = thread_entries(&item(1, 1, ""), &thread, &AvatarBook::default());
+        assert_eq!(entries[0].path.as_deref(), Some("src/a.rs"));
+        assert_eq!(entries[0].line, Some(12));
+    }
+
+    #[test]
+    fn pending_comments_cross_the_link_as_the_phone_reads_them() {
+        let response = ReviewResponse {
+            comments: vec![PendingComment {
+                id: 3,
+                path: "a.rs".into(),
+                line: 9,
+                side: Side::Right,
+                text: "Why?".into(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({"comments": [
+                {"id": 3, "path": "a.rs", "line": 9, "side": "right", "text": "Why?"}
+            ]})
+        );
+    }
+
+    #[test]
+    fn a_comment_is_found_by_id_among_replies() {
+        let comment = |id: &str, body: &str, replies: Vec<Comment>| Comment {
+            id: id.into(),
+            body: body.into(),
+            replies,
+            ..Default::default()
+        };
+        let thread = Thread {
+            comments: vec![
+                comment("a", "first", vec![]),
+                comment("b", "second", vec![comment("c", "a reply", vec![])]),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(comment_body(&thread, "a"), Some("first"));
+        assert_eq!(comment_body(&thread, "c"), Some("a reply"));
+        assert_eq!(comment_body(&thread, "gone"), None);
+    }
+
+    #[test]
     fn provider_errors_lose_anything_shaped_like_a_credential() {
         let raw = "HTTP 401: Bad credentials ghp_abcdefghijklmnopqrstuvwxyz0123456789 for https://user:pw@host/x\nsecond line";
         let safe = safe_error(raw);
@@ -1704,9 +2438,11 @@ mod tests {
         }
         let serialized = serde_json::to_string(&responses).unwrap();
         assert!(!serialized.contains("me@acme.test") && !serialized.contains("atlassian"));
-        assert!(!list
-            .providers
-            .iter()
-            .any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_"))));
+        assert!(
+            !list
+                .providers
+                .iter()
+                .any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_")))
+        );
     }
 }

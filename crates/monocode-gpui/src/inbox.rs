@@ -3,6 +3,7 @@
 mod avatar;
 mod diff;
 mod document;
+mod review;
 mod ui;
 pub(crate) use avatar::image as avatar_image;
 pub(crate) use ui::relative_time;
@@ -73,6 +74,9 @@ pub(crate) struct Inbox {
     diff_view: Entity<DiffView>,
     checks: Option<Checks>,
     tab: Tab,
+    /// A phone's pending review comments, by pull request.
+    review: std::collections::HashMap<String, Vec<model::review::PendingComment>>,
+    review_posting: bool,
     loading: bool,
     detail_loading: bool,
     extra_loading: bool,
@@ -142,7 +146,8 @@ fn poll_interval(active: bool) -> Duration {
 }
 
 /// How old the snapshot may get before a watching phone starts a fetch. The
-/// phone polls every few seconds, so this is the lag a new item can have.
+/// catalog is published every few seconds, so this is the lag a new item can
+/// have.
 const PHONE_REFRESH: Duration = Duration::from_secs(30);
 
 /// What a paired phone reads from the Inbox: the cached snapshot and the state
@@ -151,6 +156,7 @@ pub(crate) struct PhoneView<'a> {
     pub items: &'a [Item],
     pub errors: &'a std::collections::BTreeMap<String, String>,
     pub connections: &'a std::collections::BTreeMap<String, model::Status>,
+    pub viewers: &'a std::collections::BTreeMap<String, String>,
     pub seen: &'a model::Seen,
     pub triage: &'a model::Triage,
     /// ms, None before the first fetch ends.
@@ -338,6 +344,8 @@ impl Inbox {
             diff_view,
             checks: None,
             tab: Tab::Summary,
+            review: Default::default(),
+            review_posting: false,
             loading: false,
             detail_loading: false,
             extra_loading: false,
@@ -514,12 +522,25 @@ impl Inbox {
             items: &snapshot.items,
             errors: &snapshot.errors,
             connections: &snapshot.connections,
+            viewers: &snapshot.viewers,
             seen: &self.state.seen,
             triage: &self.state.triage,
             fetched_at,
             interval_ms: poll_interval(self.active).as_millis() as i64,
             service: &self.service,
         }
+    }
+
+    /// Names what a phone would read, so it reads again only when this moves.
+    pub(crate) fn phone_rev(&self) -> String {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let view = self.phone_view();
+        let content = serde_json::to_value((view.items, view.errors, view.seen, view.triage))
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
     }
 
     /// A phone looked at the list: refresh in the background when the last
@@ -645,6 +666,85 @@ impl Inbox {
         self.save();
         cx.notify();
         Ok(item)
+    }
+
+    /// Marks read what a phone's list shows, and says how many that was.
+    pub(crate) fn phone_read_all(
+        &mut self,
+        params: &monocode_core::mobile::inbox::ListParams,
+        projects: &[monocode_core::mobile::inbox::ProjectRef],
+        cx: &mut Context<Self>,
+    ) -> usize {
+        use monocode_core::mobile::inbox::{View, visible};
+        let unread: Vec<Item> = {
+            let snapshot = self.phone_source().0;
+            let view = View {
+                seen: &self.state.seen,
+                triage: &self.state.triage,
+                projects,
+                viewers: &snapshot.viewers,
+                now: monocode_core::time::now_ms() as i64,
+            };
+            visible(&snapshot.items, params, &view)
+                .into_iter()
+                .filter(|item| self.state.seen.unseen(item))
+                .cloned()
+                .collect()
+        };
+        for item in &unread {
+            self.state.seen.mark(item);
+        }
+        if !unread.is_empty() {
+            self.save();
+            cx.notify();
+        }
+        unread.len()
+    }
+
+    /// A phone's action changed an item at its provider. `updated` is the
+    /// provider's copy, which has no attention reason until the next fetch. The
+    /// item as it now stands, read because the user just acted on it.
+    pub(crate) fn phone_acted(
+        &mut self,
+        key: &str,
+        mut updated: Item,
+        cx: &mut Context<Self>,
+    ) -> Item {
+        if let Some(listed) = self
+            .phone_source()
+            .0
+            .items
+            .iter()
+            .find(|item| item.key() == key)
+        {
+            updated.attention_reason = listed.attention_reason.clone();
+        }
+        for old in self
+            .snapshot
+            .items
+            .iter_mut()
+            .chain(self.phone.snapshot.iter_mut().flat_map(|s| &mut s.items))
+            .filter(|item| item.key() == key)
+        {
+            *old = updated.clone();
+        }
+        self.state.seen.mark(&updated);
+        self.save();
+        self.phone_discussed(key, cx);
+        updated
+    }
+
+    /// Something a phone did at the provider shows in the next read: the
+    /// desktop's detail if it has the item open, and both lists.
+    pub(crate) fn phone_discussed(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(key) {
+            self.load_detail(false, cx);
+        }
+        self.refresh(cx);
+        if self.phone_separate() {
+            self.refresh_phone(cx);
+        }
+        cx.notify();
     }
 
     pub(crate) fn unread_count(&self) -> usize {
