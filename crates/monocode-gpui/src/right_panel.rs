@@ -24,7 +24,9 @@ pub(crate) const WIDTH_CEILING: f32 = 4000.;
 const WIDTH_SHARE: f32 = 0.6;
 /// The widest panel a `viewport`-wide window can draw when its other columns
 /// take `beside`: the main area keeps `main_min`, the panel takes at most
-/// 60% of the window, and never less than `min`.
+/// 60% of the window, and never less than `min`. The panel's minimum wins:
+/// in a window too narrow for both, the result is `min` even though the
+/// main area then gets less than `main_min`.
 pub(crate) fn max_width(viewport: f32, beside: f32, main_min: f32, min: f32) -> f32 {
     (viewport - beside - main_min)
         .min(viewport * WIDTH_SHARE)
