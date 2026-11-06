@@ -558,6 +558,7 @@ describe("new session composer workspace", () => {
       "existing-session",
       "Build the app",
       [],
+      undefined,
     );
     expect(desktop.startSession).not.toHaveBeenCalled();
   });

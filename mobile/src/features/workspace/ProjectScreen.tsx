@@ -365,6 +365,7 @@ export function ProjectScreen({
           ) : null}
           <Composer
             key={sessionId ?? project.id}
+            conversationId={sessionId}
             active={focused && (sessionId != null || pages.view === "chat")}
             notice={sessionNotice}
             context={project.name}
@@ -385,9 +386,9 @@ export function ProjectScreen({
               ? {
                   busy: conversation.busy,
                   onStop: () => stop(sessionId),
-                  onSend: (text: string, attachments: Attachment[]) => {
+                  onSend: (text: string, attachments: Attachment[], draftRev?: number) => {
                     markStartedHere(sessionId);
-                    return sendMessage(sessionId, text, attachments);
+                    return sendMessage(sessionId, text, attachments, draftRev);
                   },
                   workspace: (
                     <WorkspaceLine

@@ -1,5 +1,7 @@
 //! Session storage. Desktop launches use Monocode's existing schema directly.
 mod app_access;
+mod composer_draft;
+pub use composer_draft::{sent_from as composer_sent_from, ComposerText, ComposerWrite};
 mod contributions;
 mod managed_sessions;
 mod monocode_import;
@@ -517,6 +519,43 @@ impl Store {
             }
         }
         Ok(out)
+    }
+    /// What was left unsent in a thread's composer, restored when it reopens.
+    pub fn composer_draft(
+        &self,
+        session: i64,
+    ) -> Result<Option<crate::follow_up::Message>, String> {
+        self.setting(&format!("composer-draft:{session}"))?
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            .transpose()
+    }
+    /// `None` clears it once the composer is empty again. Returns the draft's
+    /// new revision, which a paired phone writes against (0 once cleared).
+    pub fn save_composer_draft(
+        &self,
+        session: i64,
+        draft: Option<&crate::follow_up::Message>,
+    ) -> Result<u64, String> {
+        let rev = match draft {
+            Some(_) => composer_draft::next_rev(self.composer_text(session)?.rev),
+            None => 0,
+        };
+        let value = draft
+            .map(|draft| composer_draft::row(draft, rev))
+            .transpose()?
+            .unwrap_or_default();
+        self.save_setting(&format!("composer-draft:{session}"), &value)?;
+        Ok(rev)
+    }
+    /// Sessions with unsent composer text, for the sidebar's Draft mark.
+    pub fn composer_draft_sessions(&self) -> Result<std::collections::HashSet<i64>, String> {
+        Ok(self
+            .settings_with_prefix("composer-draft:")?
+            .into_iter()
+            .filter(|(_, raw)| !raw.is_empty())
+            .map(|(id, _)| id)
+            .collect())
     }
     /// Sessions whose latest message is saved as a draft and not yet sent.
     pub fn draft_sessions(&self) -> Result<std::collections::HashSet<i64>, String> {

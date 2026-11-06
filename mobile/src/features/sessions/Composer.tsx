@@ -2,7 +2,7 @@ import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
 import { useNavigation } from "expo-router";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, {
   Easing,
@@ -30,10 +30,12 @@ import {
   type Attachment,
 } from "./attachments";
 import { DictationBar } from "./DictationBar";
+import { cachedText } from "./composerDraft";
 import { canDictate, insertDictation } from "./dictation";
 import { TypingPostureFocus } from "./TypingPostureFocus";
 import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
+import { useComposerDraft } from "./useComposerDraft";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
 /** Mid-turn the desktop steers with the message or queues it, as its setting says. */
@@ -75,8 +77,11 @@ const DICTATION_FADE = { duration: 180, easing: Easing.out(Easing.cubic) };
  * While the desktop can't be reached, or the session's latest error stands,
  * the field gives way to a line saying so and nothing can be sent; a draft
  * waits under it.
+ * With `conversationId`, the text is the thread's: it follows the desktop
+ * composer's text for the same thread, and typing here changes it there.
  */
 export function Composer({
+  conversationId,
   context,
   branch,
   model,
@@ -93,6 +98,8 @@ export function Composer({
   reply,
   onClearReply,
 }: {
+  /** The thread whose composer text this shares with the desktop. */
+  conversationId?: string;
   /** Only the visible route may focus its composer in response to folding. */
   active?: boolean;
   /** Where this runs: the project, or the mono. */
@@ -102,7 +109,12 @@ export function Composer({
   /** The model's effort, shown dimmer after its name as on desktop. */
   effort?: string;
   harness?: Harness;
-  onSend: (text: string, attachments: Attachment[]) => void | Promise<void>;
+  onSend: (
+    text: string,
+    attachments: Attachment[],
+    /** The desktop composer revision the text was based on, which it clears. */
+    draftRev?: number,
+  ) => void | Promise<void>;
   busy?: boolean;
   onStop?: () => Promise<void>;
   /** Opens the model sheet. */
@@ -129,13 +141,16 @@ export function Composer({
   // person can keep writing. An error waits until it's back.
   const blocked = !offline && !!notice;
   const input = useRef<TextInput>(null);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => cachedText(conversationId));
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inputHeight, setInputHeight] = useState(INPUT_MIN);
   const [dictating, setDictating] = useState(false);
   // Where dictated words go: the cursor, or the selection they replace.
   const selection = useRef({ start: 0, end: 0 });
+  // The desktop's text for this thread, while the person isn't typing here.
+  const showDesktopText = useCallback((next: string) => setText(next), []);
+  const shared = useComposerDraft(conversationId, showDesktopText);
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
   // A draft, in words or files, keeps the card open.
   const hasText = text.length > 0 || attachments.length > 0;
@@ -255,6 +270,7 @@ export function Composer({
     setText((current) => {
       const next = insertDictation(current, words, selection.current);
       selection.current = { start: next.cursor, end: next.cursor };
+      shared.typed(next.text);
       return next.text;
     });
   };
@@ -286,6 +302,7 @@ export function Composer({
     const message = text.trim();
     const files = attachments;
     setSending(true);
+    const draftRev = shared.sent();
     setText("");
     setAttachments([]);
     morph(false);
@@ -294,9 +311,13 @@ export function Composer({
       input.current?.blur();
     }
     try {
-      await onSend(message, files);
+      await onSend(message, files, draftRev);
     } catch (reason) {
-      setText((current) => current || message);
+      setText((current) => {
+        const restored = current || message;
+        shared.typed(restored);
+        return restored;
+      });
       setAttachments((current) => (current.length ? current : files));
       Alert.alert("Message not sent", reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -369,7 +390,10 @@ export function Composer({
           nativeID={COMPOSER_INPUT_ID}
           value={text}
           editable={!dictating && !blocked}
-          onChangeText={setText}
+          onChangeText={(value) => {
+            setText(value);
+            shared.typed(value);
+          }}
           onSelectionChange={(event) => {
             selection.current = event.nativeEvent.selection;
           }}
@@ -379,6 +403,7 @@ export function Composer({
           }}
           onBlur={() => {
             focused.set(false);
+            shared.flush();
             if (!opens) morph(false);
           }}
           onContentSizeChange={(event) =>

@@ -5,13 +5,22 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { ProviderLogo } from "@/features/sessions/ProviderLogo";
 import { Icon } from "@/ui/Icon";
+import { useDraftMark } from "@/features/sessions/composerDraft";
 import { themedStyles, useColors } from "@/ui/theme";
 
 import { relativeTime } from "./relativeTime";
 import { projectForRoute } from "./routing";
+import type { SessionSummary } from "./types";
 import { useWorkspace } from "./WorkspaceProvider";
 
 const RECENT_LIMIT = 20;
+
+function SessionState({ session }: { session: SessionSummary }) {
+  const draft = useDraftMark(session);
+  if (session.waiting) return "Needs attention";
+  if (session.busy) return "Working";
+  return draft ? "Draft" : relativeTime(session.updatedAt);
+}
 
 /** Reuses the workspace catalog; opening the sidebar never starts a second watch. */
 export function WorkspaceSidebar() {
@@ -102,7 +111,7 @@ export function WorkspaceSidebar() {
               <Text numberOfLines={2} style={styles.sessionTitle}>{session.title || "Untitled session"}</Text>
               <Text numberOfLines={1} style={styles.meta}>
                 {projects.find((project) => project.id === session.projectId)?.name}
-                {" · "}{session.waiting ? "Needs attention" : session.busy ? "Working" : relativeTime(session.updatedAt)}
+                {" · "}<SessionState session={session} />
               </Text>
             </View>
             {session.busy || session.waiting ? (
