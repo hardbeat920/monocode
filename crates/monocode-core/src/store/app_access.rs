@@ -1,6 +1,8 @@
 use super::{Session, Store};
 use serde_json::{json, Value};
 
+const THREAD_READS: usize = 20;
+
 impl Store {
     /// A launch is recoverable as an unsent draft if the app exits before its
     /// provider accepts it. Queue delivery uses this same stable message ID.
@@ -75,6 +77,22 @@ impl Store {
         )?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok((session, true))
+    }
+
+    /// Keeps who last read a thread through the app tools, for auditing.
+    pub fn note_thread_read(&self, target: i64, reader: i64) -> Result<(), String> {
+        let mut reads = self.thread_reads(target)?;
+        reads.push(json!({"reader":reader,"at":crate::response::now_ms()}));
+        let start = reads.len().saturating_sub(THREAD_READS);
+        let reads = Value::from(&reads[start..]).to_string();
+        self.save_setting(&format!("thread-reads:{target}"), &reads)
+    }
+
+    pub fn thread_reads(&self, target: i64) -> Result<Vec<Value>, String> {
+        Ok(self
+            .setting(&format!("thread-reads:{target}"))?
+            .and_then(|reads| serde_json::from_str(&reads).ok())
+            .unwrap_or_default())
     }
 
     pub fn app_conversation(

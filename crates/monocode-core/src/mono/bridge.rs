@@ -25,6 +25,11 @@ sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMo
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
+threads.start {prompt,harness?,model?,effort?,modelSettings?,title?,workspaceMode?}
+threads.new {prompt,harness?,model?,effort?,modelSettings?,title?,workspaceMode?,draft?,reveal?}
+threads.send {threadId,prompt}; threads.wait {threadId,timeoutSeconds?}; threads.read {threadId,before?,limit?,maxChars?}
+threads.stop {threadId}; threads.list {}
+Thread actions require a top-level caller. Only its own children may be addressed. threads.start makes a subagent that reports back to the caller; threads.new and sessions.start open a top-level thread the user owns, which the caller does not drive. Start/send return immediately; wait returns idle, working or needsInput, with a timeout of at most 50 seconds.
 worktrees.list {project?}
 worktrees.create {branch,base?,existing?,project?}
 folders.list {project?}
@@ -35,7 +40,7 @@ soul.read {}; soul.update {text,expectedHash}
 memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,until?}; memory.replace {find,fact,topic?,until?}; memory.remove {find,topic?}
 habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
-Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
+Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
 sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits, cards and notifyOnComplete:true require a Mono.
@@ -161,6 +166,7 @@ fn serve(
         return Err("Invalid app capability".into());
     }
     let (reply, result) = mpsc::channel();
+    let timeout = response_timeout(&wire.action, &wire.input);
     let request_id = wire.request_id;
     tx.send_blocking(Call {
         session: wire.session,
@@ -170,7 +176,7 @@ fn serve(
         reply,
     })
     .map_err(|_| "App closed")?;
-    let response = match result.recv_timeout(Duration::from_secs(60)) {
+    let response = match result.recv_timeout(timeout) {
         Ok(Ok(value)) => json!({"ok":true,"result":value,"requestId":request_id}),
         Ok(Err(error)) => json!({"ok":false,"error":error,"requestId":request_id}),
         Err(_) => {
@@ -221,35 +227,52 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             _ => return Err(format!("Unknown app argument: {arg}")),
         }
     }
-    call(action, input, request_id)
+    call(&action, input, &request_id, &std::env::vars().collect())
 }
 
-/// One authenticated request to the running app, with the capability this
-/// provider process inherited.
-fn call(action: String, input: Value, request_id: String) -> Result<Value, String> {
-    let endpoint: SocketAddr = std::env::var("MONOCODE_APP_ENDPOINT")
-        .map_err(|_| "App access is unavailable outside a Mono's provider process")?
+fn response_timeout(action: &str, input: &Value) -> Duration {
+    Duration::from_secs(if action == "threads.wait" {
+        input["timeoutSeconds"].as_u64().unwrap_or(50).min(50) + 10
+    } else if action == "control.set" {
+        // Raising access waits on the person.
+        300
+    } else {
+        60
+    })
+}
+
+pub fn call(
+    action: &str,
+    input: Value,
+    request_id: &str,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    let get = |key: &str| {
+        environment
+            .get(key)
+            .cloned()
+            .ok_or_else(|| format!("Missing {key}"))
+    };
+    let endpoint: SocketAddr = get("MONOCODE_APP_ENDPOINT")?
         .parse()
         .map_err(|_| "Invalid app endpoint")?;
     if !endpoint.ip().is_loopback() {
         return Err("App access requires a local endpoint".into());
     }
-    let token = std::env::var("MONOCODE_APP_TOKEN").map_err(|_| "App capability missing")?;
-    let session = std::env::var("MONOCODE_APP_SESSION")
-        .map_err(|_| "App session missing")?
-        .parse()
-        .map_err(|_| "Invalid app session")?;
+    let timeout = response_timeout(action, &input) + Duration::from_secs(5);
     let wire = Wire {
-        session,
-        token,
-        request_id,
-        action,
+        session: get("MONOCODE_APP_SESSION")?
+            .parse()
+            .map_err(|_| "Invalid app session")?,
+        token: get("MONOCODE_APP_TOKEN")?,
+        request_id: request_id.to_owned(),
+        action: action.to_owned(),
         input,
     };
     let mut stream =
         TcpStream::connect_timeout(&endpoint, Duration::from_secs(3)).map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(65)))
+        .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -375,7 +398,7 @@ fn mcp_response(request: Value) -> Option<Value> {
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .map_or_else(super::new_id, str::to_owned);
-                call(action.to_owned(), input, request_id)
+                call(action, input, &request_id, &std::env::vars().collect())
             } else {
                 Err("action is required".to_string())
             };
@@ -453,6 +476,26 @@ mod capability_tests {
             serde_json::from_str(&result).ok()
         })
     }
+    #[test]
+    fn wait_transport_timeout_is_bounded_and_has_reply_headroom() {
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":0})),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":50})),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":999})),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            response_timeout("threads.list", &json!({})),
+            Duration::from_secs(60)
+        );
+    }
+
     #[test]
     fn mcp_server_offers_one_app_tool_only_to_a_mono_with_app_access() {
         let mono = crate::agent::MonoContext {

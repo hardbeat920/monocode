@@ -19,6 +19,7 @@ mod provider_switch;
 mod remote_plans;
 pub(crate) mod selection;
 pub(crate) mod tasks;
+pub(crate) mod threads;
 mod tools;
 mod user_links;
 mod visuals;
@@ -755,6 +756,16 @@ pub(crate) struct TranscriptView {
     pub(crate) file_link_base: Option<String>,
     expanded: HashSet<usize>,
     agent_panels: tasks::AgentPanels,
+    thread_states: HashMap<i64, serde_json::Value>,
+    pub(crate) thread_expanded: HashSet<i64>,
+    /// Finished child threads the user removed from the spawn tree.
+    thread_dismissed: HashSet<i64>,
+    /// Threads that sent messages into this one, by session.
+    pub(crate) senders: HashMap<i64, threads::Sender>,
+    /// This chat is a subagent its lead drives, not a thread of its own.
+    pub(crate) subagent: bool,
+    /// The thread whose message opens the turn now starting.
+    pub(crate) live_sender: Option<i64>,
     /// User messages opened past their four-line clamp, by start.
     expanded_prompts: HashSet<usize>,
     /// Collapsed user messages whose later chunks are hidden, by start.
@@ -2527,6 +2538,12 @@ impl TranscriptView {
             file_link_base: None,
             expanded: HashSet::new(),
             agent_panels: Default::default(),
+            thread_states: HashMap::new(),
+            thread_expanded: HashSet::new(),
+            thread_dismissed: HashSet::new(),
+            senders: HashMap::new(),
+            subagent: false,
+            live_sender: None,
             expanded_prompts: HashSet::new(),
             clamped_prompts: HashSet::new(),
             phases: HashMap::new(),
@@ -2950,13 +2967,18 @@ impl TranscriptView {
         {
             let provider = self.provider.clone();
             let model = self.model.clone();
-            self.turns
+            let info = self
+                .turns
                 .entry(turn)
                 .or_insert_with(|| monocode_core::agent::TurnInfo {
                     provider,
                     model,
                     ..Default::default()
                 });
+            // Only the prompt that opened the turn; later steers are the user's.
+            if let Some(sender) = self.live_sender.take() {
+                info.sender = Some(sender);
+            }
         }
         if self.streaming {
             for prompt in known..self.source.len() {
@@ -5280,6 +5302,7 @@ impl TranscriptView {
                     && (!first
                         || self.clamped_prompts.contains(&message_start)
                         || self.prompt_lines(&text, window) > 4);
+                let from_thread = user && self.prompt_sender(message_start).is_some();
                 let bubble = div()
                     .when(photo_body.is_none(), |d| d.w_full())
                     .relative()
@@ -5317,10 +5340,26 @@ impl TranscriptView {
                                             bottom_left: px(if last { radius } else { 0. }),
                                             bottom_right: px(if last { radius } else { 0. }),
                                         };
-                                        window.paint_quad(
+                                        // Another thread's message is outlined, not filled,
+                                        // so it never reads as the user's own.
+                                        window.paint_quad(if from_thread {
+                                            gpui::quad(
+                                                bounds,
+                                                corners,
+                                                gpui::transparent_black(),
+                                                gpui::Edges {
+                                                    top: px(if first { 1. } else { 0. }),
+                                                    right: px(1.),
+                                                    bottom: px(if last { 1. } else { 0. }),
+                                                    left: px(1.),
+                                                },
+                                                content(0.22),
+                                                gpui::BorderStyle::Dashed,
+                                            )
+                                        } else {
                                             gpui::fill(bounds, user_bubble_fill())
-                                                .corner_radii(corners),
-                                        );
+                                                .corner_radii(corners)
+                                        });
                                         if let Some(burst) = burst.filter(burst::Burst::behind_text)
                                         {
                                             burst.paint(bounds, corners, now, window, cx);
@@ -5547,6 +5586,11 @@ impl TranscriptView {
             })
             .children(if first {
                 self.provider_separator(message_start)
+            } else {
+                None
+            })
+            .children(if first && user {
+                self.sender_label(message_start, cx)
             } else {
                 None
             })

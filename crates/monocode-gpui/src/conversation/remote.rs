@@ -21,7 +21,7 @@ impl State {
     }
 }
 impl Conversation {
-    pub(super) fn is_remote(&self) -> bool {
+    pub(crate) fn is_remote(&self) -> bool {
         self.summary.cwd.starts_with("remote://")
     }
     pub(crate) fn remote_connection_error(&mut self, error: &str, cx: &mut Context<Self>) {
@@ -285,11 +285,6 @@ impl Conversation {
         {
             self.status =
                 "Only /plan, /compact and saved drafts are supported by this remote host.".into();
-            cx.notify();
-            return true;
-        }
-        if self.settings.operator || self.settings.orchestrator {
-            self.status = "Operator and orchestration are not available on remote projects.".into();
             cx.notify();
             return true;
         }

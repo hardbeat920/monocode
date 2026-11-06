@@ -169,13 +169,10 @@ fn run_turn_using(
         transcript = locked(&store)?.load(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
-        settings.operator_enabled |= settings.operator;
         let mut persisted = settings.clone();
         persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
         persisted.plan = false;
-        persisted.operator = false;
-        persisted.orchestrator = false;
         let start = transcript.begin(if settings.internal_message {
             "mono-system"
         } else {
@@ -542,19 +539,6 @@ fn run_turn_using(
                     );
                 }
             }
-        }
-        if !raw_native_command && settings.orchestrator {
-            prompt = format!(
-                "{}\n\nUser request:\n{prompt}",
-                monocode_core::orchestration::INSTRUCTIONS
-            );
-        }
-        if !raw_native_command && settings.operator_enabled {
-            let cli = std::env::current_exe().map_err(|e| e.to_string())?;
-            prompt = format!(
-                "You have MonoCode app access for this project. Use the CLI: {} app ACTION --json JSON. Supported actions: models.list {{}}, sessions.list {{}}, sessions.read {{sessionId}}, sessions.start {{prompt,harness?,model?,title?,draft?,reveal?}}, sessions.send/draft {{sessionId,prompt}}, sessions.stop {{sessionId}}, folders.list {{}}, folders.move {{sessionId,folderId?,newFolderName?}}, notes.list {{}}, notes.read {{id}}, notes.write {{id?,title,body}}, worktrees.list {{}}. Scope is this thread's project. App credentials are in the environment; never print them. Respect the user’s request and selected access policy.\n\n{prompt}",
-                shlex_quote(&cli.to_string_lossy())
-            );
         }
         // Every foreground session receives an independent visual capability.
         // This happens after configuration was persisted, and Settings' env is

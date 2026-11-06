@@ -829,7 +829,11 @@ impl Shell {
             self.session_preview = None;
             self.preview_close = None;
         }
+        self.forget_former_worker(id, cx);
         self.sessions.remove(&id);
+        self.thread_parents.remove(&id);
+        self.agent_summary_writes.remove(&id);
+        self.thread_waiters.remove(&id);
         self.session_summaries.remove(&id);
         self.draft_sessions.remove(&id);
         self.history_recency.remove(&id);
@@ -1915,7 +1919,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn expanded_folders_use_compact_connected_rows_and_keep_operator_children(
+    fn expanded_folders_use_compact_connected_rows_and_list_started_sessions(
         cx: &mut TestAppContext,
     ) {
         let (window, a, b) = setup(cx);
@@ -1968,8 +1972,8 @@ mod tests {
         assert_eq!(second.left(), first.left());
         assert_eq!(second.size.height, px(28.));
         assert_eq!(row(visual, plain).unwrap().size.height, px(32.));
-        let started = row(visual, child).expect("a folder member keeps its Operator rail");
-        assert_eq!(started.left() - first.left(), px(30.));
+        let started = row(visual, child).expect("a session a folder member started is listed");
+        assert_eq!(started.left(), row(visual, plain).unwrap().left());
         window
             .update(visual, |shell, _, cx| {
                 shell.change_sidebar_option("compact-session-cards", cx);
@@ -1978,7 +1982,7 @@ mod tests {
         visual.run_until_parked();
         assert_eq!(row(visual, a).unwrap().size.height, px(28.));
         assert_eq!(row(visual, b).unwrap().size.height, px(28.));
-        assert_eq!(row(visual, child).unwrap().size.height, px(28.));
+        assert_eq!(row(visual, child).unwrap().size.height, px(80.));
         assert_eq!(row(visual, plain).unwrap().size.height, px(60.));
         window
             .update(visual, |_, window, _| {
@@ -2009,7 +2013,7 @@ mod tests {
                                 .as_solid()
                                 .is_some_and(|color| color == crate::theme::rail_color())
                     }),
-                    "the same spine as Operator rows connects folder members"
+                    "the same spine as lead rows connects folder members"
                 );
             })
             .unwrap();
@@ -2021,7 +2025,10 @@ mod tests {
         visual.refresh().unwrap();
         assert!(row(visual, a).is_none());
         assert!(row(visual, b).is_none());
-        assert!(row(visual, child).is_none());
+        assert!(
+            row(visual, child).is_some(),
+            "a started session is not a folder member, so it stays listed"
+        );
         window
             .update(visual, |shell, _, cx| {
                 shell.query = "new".into();

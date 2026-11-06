@@ -1,41 +1,6 @@
 use super::*;
 
 #[test]
-fn desktop_operator_access_restores_only_from_submitted_user_messages() {
-    for (block, enabled) in [
-        (
-            json!({"role":"user", "text":"Start a session", "monocode":true}),
-            true,
-        ),
-        (json!({"role":"user", "text":"/mono Start a session"}), true),
-        (
-            json!({"role":"user", "text":"/monocode Start a session"}),
-            true,
-        ),
-        (
-            json!({"role":"user", "text":"Start a session", "monocode":true, "draft":true}),
-            false,
-        ),
-        (
-            json!({"role":"user", "text":"Start a session", "monocode":true, "internal":true}),
-            false,
-        ),
-        (
-            json!({"role":"assistant", "text":"/mono Start a session", "monocode":true}),
-            false,
-        ),
-        (json!({"role":"user", "text":"Start a session"}), false),
-    ] {
-        let store = Store::open_monocode(Path::new(":memory:")).unwrap();
-        let (id, _) = saved(&store, json!([block]));
-        assert_eq!(
-            store.agent_settings(id).unwrap().unwrap().operator_enabled,
-            enabled
-        );
-    }
-}
-
-#[test]
 fn saved_turn_metrics_reload_with_the_same_revision() {
     // Without exact float parsing these reload one ULP away, and the next
     // save reports the conversation as changed in another window.

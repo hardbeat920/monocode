@@ -248,6 +248,15 @@ pub fn cached_name(kind: Kind, id: &str) -> Option<String> {
         .find_map(|(_, _, rows, _)| rows.iter().find(|m| m.id == id).map(|m| m.name.clone()))
 }
 /// Account-scoped catalog for immediate display while a refresh runs.
+/// The model `id` names: a catalog id, or the full id behind an alias, as
+/// `claude-sonnet-5-5` is for `sonnet`.
+pub fn find_model<'a>(models: &'a [Model], id: &str) -> Option<&'a Model> {
+    models.iter().find(|m| m.id == id).or_else(|| {
+        models
+            .iter()
+            .find(|m| m.alias_target.as_deref() == Some(id))
+    })
+}
 pub fn cached_models_for(kind: Kind, account: &crate::accounts::Profile) -> Option<Vec<Model>> {
     cache()
         .lock()

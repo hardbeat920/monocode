@@ -25,7 +25,19 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { DisplayedQuestionPrompt, Message, UsageLimitState, Mono, MonoSubsessions, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type {
+  DisplayedQuestionPrompt,
+  Message,
+  Mono,
+  MonoSubsessions,
+  Project,
+  QuestionPrompt,
+  QuestionReply,
+  SessionSummary,
+  Turn,
+  TurnItem,
+  UsageLimitState,
+} from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -55,6 +67,8 @@ type Workspace = {
   projects: Project[];
   monos: Mono[];
   sessions: SessionSummary[];
+  /** Subagents, apart from `sessions` so no list shows them. */
+  agents: SessionSummary[];
   watch: (id: string | null) => void;
   startSession: (
     projectId: string,
@@ -720,6 +734,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         : renamed[session.id]?.from === session.title
           ? { ...session, title: renamed[session.id].title }
           : session;
+    const all = [
+      ...selected.sessions,
+      ...Object.values(remembered).filter((session) => !known.has(session.id)),
+    ].flatMap((session) => edited(session) ?? []);
     return {
       projects: selected.projects,
       allProjects: catalog.projects,
@@ -731,10 +749,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           if (sameValue(mono[field], edit.from)) Object.assign(shown, { [field]: edit.value });
         return shown;
       }),
-      sessions: [
-        ...selected.sessions,
-        ...Object.values(remembered).filter((session) => !known.has(session.id)),
-      ].flatMap((session) => edited(session) ?? []),
+      sessions: all.filter((session) => !session.leadId),
+      agents: all.filter((session) => !!session.leadId),
       watch,
       startSession,
       sendMessage,

@@ -393,7 +393,7 @@ pub(crate) fn background_base() -> Hsla {
     base
 }
 /// `--zen-rail`: ink 14% over the opaque base, the tree rails under tool
-/// phases and orchestrator/operator rows. Opaque, so the curve and spine
+/// phases and lead rows. Opaque, so the curve and spine
 /// overlapping where they meet don't stack into a brighter pixel.
 pub(crate) fn rail_color() -> Hsla {
     let (base, ink) = (background_base().to_rgb(), content(1.).to_rgb());

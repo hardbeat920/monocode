@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Agents can reach the running app through `app_*` tools: panels, thread panes, composer staging, each thread's model, effort and access, worktrees, folders, notes and a set of settings. Raising a thread's access asks you first.
+
+### Removed
+
+- Operator mode and `/operator`. Every chat now has the app tools. Sending to or deleting another thread stays with Monos.
+- Orchestrator mode and `/orchestrator`, on the desktop and the phone. Any chat can start subagents instead. Chats from earlier runs stay under their lead, but unfinished runs can't be resumed.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added

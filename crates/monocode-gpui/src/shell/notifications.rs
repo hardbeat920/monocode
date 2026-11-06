@@ -404,7 +404,7 @@ impl Shell {
                     harness: Kind::from_id(&chat.summary.provider).label().to_owned(),
                     pending: chat.pending_notification_inputs(cx),
                     inbox_ask: false,
-                    orchestration_worker: self.orchestration_worker(chat.summary.id),
+                    former_worker: self.former_worker(chat.summary.id),
                     conversation_focused: false,
                 }
             })
@@ -512,7 +512,7 @@ impl Shell {
                 harness: Kind::from_id(&chat.summary.provider).label().to_owned(),
                 pending: chat.pending_notification_inputs(cx),
                 inbox_ask: false,
-                orchestration_worker: self.orchestration_worker(id),
+                former_worker: self.former_worker(id),
                 conversation_focused: self.window_active
                     && (self.workspace.active == Some(id) || mono_visible)
                     && self.notice_session_visible(id, cx)

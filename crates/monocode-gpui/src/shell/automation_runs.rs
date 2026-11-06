@@ -387,8 +387,6 @@ impl Shell {
         settings.worktree_cwd =
             (automation.workspace_mode == "existing").then(|| automation.worktree_cwd.clone());
         settings.plan = false;
-        settings.operator = false;
-        settings.orchestrator = false;
         settings.prepared_prompt = None;
         let store = self.store.clone();
         let launch = due.clone();
@@ -460,6 +458,8 @@ impl Shell {
                         }
                         let linked = summary.work_item.clone();
                         this.add(summary, cx);
+                        // An automation run does not start threads of its own.
+                        this.sessions[&id].update(cx, |view, _| view.managed = true);
                         if let Some(linked) = linked {
                             this.sessions[&id]
                                 .update(cx, |view, _| view.summary.work_item = Some(linked));

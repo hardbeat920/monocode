@@ -11,16 +11,12 @@ const ICON_SLOT: &str = "\u{2003}\u{2002}";
 pub(crate) enum Command {
     Draft,
     Plan,
-    Operator,
-    Orchestrator,
 }
 impl Command {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "draft" => Some(Self::Draft),
             "plan" => Some(Self::Plan),
-            "operator" => Some(Self::Operator),
-            "orchestrator" => Some(Self::Orchestrator),
             _ => None,
         }
     }
@@ -28,16 +24,12 @@ impl Command {
         match self {
             Self::Draft => "draft",
             Self::Plan => "plan",
-            Self::Operator => "operator",
-            Self::Orchestrator => "orchestrator",
         }
     }
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Self::Draft => "circle-dashed-hi",
             Self::Plan => "ai-idea",
-            Self::Operator => "cursor-magic",
-            Self::Orchestrator => "share",
         }
     }
     pub(crate) fn color(self) -> Hsla {
@@ -49,10 +41,6 @@ impl Command {
             (Self::Draft, _) => unreachable!(),
             (Self::Plan, true) => 0xfff085,
             (Self::Plan, false) => 0xa65f00,
-            (Self::Operator, true) => 0xb8e6fe,
-            (Self::Operator, false) => 0x0069a8,
-            (Self::Orchestrator, true) => 0xf6cfff,
-            (Self::Orchestrator, false) => 0xa800b7,
         })
         .into();
         if dark {
