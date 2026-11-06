@@ -1,5 +1,6 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
+import { useNavigation } from "expo-router";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -30,12 +31,14 @@ import {
 } from "./attachments";
 import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
+import { TypingPostureFocus } from "./TypingPostureFocus";
 import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
 /** Mid-turn the desktop steers with the message or queues it, as its setting says. */
 const BUSY_PLACEHOLDER = "Send a follow-up…";
+const OFFLINE_PLACEHOLDER = "Reconnecting to desktop…";
 
 const BUTTON = 36;
 /** Gap between the round buttons and the composer's edge. */
@@ -85,10 +88,13 @@ export function Composer({
   onModelPress,
   workspace,
   notice,
+  active = true,
   compact = false,
   reply,
   onClearReply,
 }: {
+  /** Only the visible route may focus its composer in response to folding. */
+  active?: boolean;
   /** Where this runs: the project, or the mono. */
   context: string;
   branch: string;
@@ -119,7 +125,9 @@ export function Composer({
   const colors = useColors();
   const styles = useStyles();
   const offline = useOffline();
-  const blocked = offline ? "offline" : notice ? "error" : null;
+  // Losing the desktop holds back only what needs it, Send and Stop; the
+  // person can keep writing. An error waits until it's back.
+  const blocked = !offline && !!notice;
   const input = useRef<TextInput>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -154,6 +162,28 @@ export function Composer({
   useEffect(() => {
     if (reply) input.current?.focus();
   }, [reply]);
+
+  // Lets go of the keyboard as the screen starts to leave, or as another
+  // covers it. A popped screen is unmounted without ever losing focus, and
+  // the native back button pops before JS hears of it, so this goes on the
+  // transition's start, while the field is still on screen. Left focused, the
+  // keyboard outlives the chat: the list behind rides it up, and the next
+  // chat's field can't take focus until it is left and entered again.
+  const navigation = useNavigation();
+  useEffect(() => {
+    const letGo = () => input.current?.blur();
+    const offStart = navigation.addListener(
+      "transitionStart" as never,
+      (event: { data?: { closing?: boolean } }) => {
+        if (event.data?.closing) letGo();
+      },
+    );
+    const offBlur = navigation.addListener("blur", letGo);
+    return () => {
+      offStart();
+      offBlur();
+    };
+  }, [navigation]);
 
   // Lets go of the keyboard as the field gives way.
   useEffect(() => {
@@ -252,7 +282,7 @@ export function Composer({
   // message, as a messaging app; a session's card lets go of it.
   const send = async () => {
     // The draft stays put until the desktop can take it.
-    if (!canSend || blocked) return;
+    if (!canSend || blocked || offline) return;
     const message = text.trim();
     const files = attachments;
     setSending(true);
@@ -276,6 +306,10 @@ export function Composer({
 
   return (
     <Animated.View style={containerStyle}>
+      <TypingPostureFocus
+        enabled={active && !blocked && !dictating && !sending}
+        onEnterTypingPosture={() => input.current?.focus()}
+      />
       <LiquidView fill row={false} borderRadius={RADIUS} style={StyleSheet.absoluteFill}>
         <View />
       </LiquidView>
@@ -355,7 +389,7 @@ export function Composer({
               ),
             )
           }
-          placeholder={busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
+          placeholder={offline ? OFFLINE_PLACEHOLDER : busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
           placeholderTextColor={colors.muted}
           multiline
           keyboardAppearance={scheme}
@@ -363,21 +397,7 @@ export function Composer({
           selectionColor={colors.accent}
           style={[styles.input, blocked && styles.hidden]}
         />
-        {blocked === "offline" ? (
-          <Animated.View
-            key="offline"
-            entering={FadeIn.duration(DICTATION_FADE.duration)}
-            exiting={FadeOut.duration(DICTATION_FADE.duration)}
-            accessibilityRole="text"
-            accessibilityLabel="Reconnecting to your desktop. Messages can't be sent until it's back."
-            style={styles.status}
-          >
-            <PulsingDot />
-            <Text style={styles.statusLabel} numberOfLines={1}>
-              Reconnecting to desktop
-            </Text>
-          </Animated.View>
-        ) : blocked === "error" && notice ? (
+        {blocked && notice ? (
           <Animated.View
             key="error"
             entering={FadeIn.duration(DICTATION_FADE.duration)}
@@ -450,14 +470,26 @@ export function Composer({
       >
         {/* A draft mid-turn sends; without one the button stops the turn. */}
         {canSend ? (
-          <RoundButton icon="send" label="Send" onPress={() => void send()} primary />
+          <RoundButton
+            icon="send"
+            label="Send"
+            hint={offline ? "Available once your desktop reconnects" : undefined}
+            onPress={() => void send()}
+            primary
+            disabled={offline}
+          />
         ) : busy && onStop ? (
-          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary>
+          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary disabled={offline}>
             <View style={styles.stop} />
           </RoundButton>
         ) : (
           <RoundButton icon="mic" label="Dictate" onPress={dictate} />
         )}
+        {offline && canSend ? (
+          <View pointerEvents="none" style={styles.sendStatus}>
+            <PulsingDot />
+          </View>
+        ) : null}
       </Animated.View>
 
       {dictating ? (
@@ -483,8 +515,8 @@ function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => v
   const colors = useColors();
   if (Platform.OS === "android") return (
     <ChoiceMenu label="Add photos or files" actions={[
-      { label: "Photo Library", onPress: onPhotos },
-      { label: "Files", onPress: onFiles },
+      { label: "Photo Library", icon: "image", onPress: onPhotos },
+      { label: "Files", icon: "folder", onPress: onFiles },
     ]}>
       <View style={styles.round}><Icon name="add" size={18} color={colors.content} /></View>
     </ChoiceMenu>
@@ -555,14 +587,18 @@ function AttachmentChip({
 function RoundButton({
   icon,
   label,
+  hint,
   onPress,
   primary = false,
+  disabled = false,
   children,
 }: {
   icon?: IconName;
   label: string;
+  hint?: string;
   onPress?: () => void;
   primary?: boolean;
+  disabled?: boolean;
   children?: ReactNode;
 }) {
   const colors = useColors();
@@ -571,12 +607,16 @@ function RoundButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       hitSlop={4}
       onPress={onPress}
       style={({ pressed }) => [
         styles.round,
         primary && styles.roundPrimary,
         pressed && styles.pressed,
+        disabled && styles.disabled,
       ]}
     >
       {children ??
@@ -786,6 +826,11 @@ const useStyles = themedStyles((colors) => ({
   },
   hidden: {
     opacity: 0,
+  },
+  sendStatus: {
+    position: "absolute",
+    top: 0,
+    right: 0,
   },
   disabled: {
     opacity: 0.4,

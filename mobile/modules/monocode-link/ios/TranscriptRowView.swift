@@ -221,15 +221,6 @@ private final class TranscriptDecorationCanvas: UIView {
         ? image?.withTintColor(mark.tint, renderingMode: .alwaysOriginal) : image)?.draw(
           in: mark.rect)
     }
-    if let rect = model.mascotRect {
-      for pixel in model.style.agentRects {
-        UIColor.transcriptHex(pixel.fill).setFill()
-        context.fill(
-          CGRect(
-            x: rect.minX + pixel.x * rect.width / 16, y: rect.minY + pixel.y * rect.height / 16,
-            width: pixel.w * rect.width / 16, height: pixel.h * rect.height / 16))
-      }
-    }
   }
 }
 
@@ -267,6 +258,14 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
   private let decoration = TranscriptDecorationCanvas()
   private let horizontal = UIScrollView()
   private var surfaces: [UIView] = []
+  /// A reaction's badge and its tail's dots, over the bubble's corner.
+  private let reaction = UIView()
+  private var reactionParts: [UIView] = []
+  private let reactionLabel = UILabel()
+  /// A working Mono's mascot beside its "Thinking…" line, flipping between
+  /// its rest and talk frames as PixelMascot does.
+  private let mascot = UIImageView()
+  private var mascotFrames: (rects: [TranscriptPixel], talk: [TranscriptPixel], size: CGSize)?
 
   /// Shows Liquid Glass inside a surface's view where the surface asks for it
   /// and the system has it, else hides any left from a reused row. True when
@@ -323,6 +322,19 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
     addSubview(horizontal)
     addSubview(stable)
     addSubview(label)
+    reaction.isUserInteractionEnabled = false
+    reaction.isHidden = true
+    for _ in 0..<3 {
+      let part = UIView()
+      part.layer.cornerCurve = .circular
+      reaction.addSubview(part)
+      reactionParts.append(part)
+    }
+    reaction.addSubview(reactionLabel)
+    addSubview(reaction)
+    mascot.isHidden = true
+    mascot.isUserInteractionEnabled = false
+    addSubview(mascot)
     horizontal.delegate = self
     horizontal.showsHorizontalScrollIndicator = false
     horizontal.alwaysBounceHorizontal = false
@@ -382,6 +394,11 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
       view.layer.borderWidth = surface.border == nil ? 0 : 1 / (window?.screen.scale ?? 3)
     }
     for index in model.surfaces.count..<surfaces.count { surfaces[index].isHidden = true }
+    configureMascot(model)
+    // One that lands on a message already on screen pops in, as a tapback.
+    configureReaction(
+      model.reactionBadge,
+      pop: old?.id == model.id && old?.reactionBadge == nil && presentationActive)
     decoration.frame = bounds
     decoration.model = model
     decoration.copied = copiedUntil.map { $0 > Date() } ?? false
@@ -454,6 +471,94 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
     }
     configureAccessibility()
   }
+  private func configureMascot(_ model: TranscriptRowModel) {
+    guard let rect = model.mascotRect, !model.style.agentRects.isEmpty else {
+      mascot.stopAnimating()
+      mascot.isHidden = true
+      return
+    }
+    mascot.isHidden = false
+    mascot.frame = rect
+    let style = model.style
+    if mascotFrames.map({ $0.rects != style.agentRects || $0.talk != style.agentTalkRects || $0.size != rect.size }) ?? true {
+      mascotFrames = (style.agentRects, style.agentTalkRects, rect.size)
+      let draw = { (pixels: [TranscriptPixel]) in
+        UIGraphicsImageRenderer(size: rect.size).image { context in
+          for pixel in pixels {
+            UIColor.transcriptHex(pixel.fill).setFill()
+            context.fill(
+              CGRect(
+                x: pixel.x * rect.width / 16, y: pixel.y * rect.height / 16,
+                width: pixel.w * rect.width / 16, height: pixel.h * rect.height / 16))
+          }
+        }
+      }
+      let rest = draw(style.agentRects)
+      mascot.stopAnimating()
+      mascot.image = rest
+      // 300ms a frame, as the desktop's and the header's mascots.
+      mascot.animationImages = style.agentTalkRects.isEmpty ? nil : [rest, draw(style.agentTalkRects)]
+      mascot.animationDuration = 0.6
+    }
+    animateMascot()
+  }
+  private func animateMascot() {
+    let working =
+      presentationActive && !mascot.isHidden && mascot.animationImages != nil
+      && !UIAccessibility.isReduceMotionEnabled
+    if working && !mascot.isAnimating {
+      mascot.startAnimating()
+    } else if !working && mascot.isAnimating {
+      mascot.stopAnimating()
+    }
+  }
+  private func configureReaction(_ value: TranscriptReaction?, pop: Bool) {
+    guard let value else {
+      reaction.layer.removeAllAnimations()
+      reaction.isHidden = true
+      return
+    }
+    let frame = value.frame
+    // Kept as is otherwise, so a frame arriving mid-pop doesn't cut it short.
+    if pop || reaction.isHidden {
+      reaction.layer.removeAllAnimations()
+      reaction.transform = .identity
+      reaction.alpha = 1
+    }
+    reaction.isHidden = false
+    reaction.bounds = CGRect(origin: .zero, size: frame.size)
+    reaction.center = CGPoint(x: frame.midX, y: frame.midY)
+    let hairline = 1 / (window?.screen.scale ?? 3)
+    // The tail first, so the badge sits over it.
+    for (part, rect) in zip(reactionParts, value.dots.reversed() + [value.badge]) {
+      part.frame = rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
+      part.backgroundColor = value.fill
+      part.layer.cornerRadius = min(rect.width, rect.height) / 2
+      part.layer.borderColor = value.edge.cgColor
+      part.layer.borderWidth = hairline
+    }
+    reactionLabel.attributedText = value.text
+    reactionLabel.frame = CGRect(
+      x: value.badge.midX - value.textSize.width / 2 - frame.minX,
+      y: value.badge.midY - value.textSize.height / 2 - frame.minY,
+      width: value.textSize.width, height: value.textSize.height)
+    guard pop, !UIAccessibility.isReduceMotionEnabled else { return }
+    // Grows out of its tail with a little overshoot, as Messages' do.
+    let origin = CGPoint(x: value.origin.x - frame.midX, y: value.origin.y - frame.midY)
+    reaction.transform = CGAffineTransform(translationX: origin.x, y: origin.y)
+      .scaledBy(x: 0.2, y: 0.2)
+      .translatedBy(x: -origin.x, y: -origin.y)
+    reaction.alpha = 0
+    UIView.animate(
+      withDuration: 0.5, delay: 0.08, usingSpringWithDamping: 0.6, initialSpringVelocity: 0,
+      options: [.allowUserInteraction, .beginFromCurrentState]
+    ) {
+      self.reaction.transform = .identity
+    }
+    UIView.animate(withDuration: 0.15, delay: 0.08, options: [.curveEaseOut, .allowUserInteraction]) {
+      self.reaction.alpha = 1
+    }
+  }
   func setPresentationActive(_ active: Bool) {
     guard active != presentationActive else { return }
     presentationActive = active
@@ -466,6 +571,7 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
     clock = nil
     shimmerBand.removeAllAnimations()
     shimmer.isHidden = true
+    animateMascot()
     guard active, let model, let live = model.liveLabel else { return }
     if live.shimmer { startShimmer(live) }
     if model.kind == "fold" && model.style.agent.isEmpty && model.action["live"] as? Bool == true
@@ -647,6 +753,12 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
     stable.layout = nil
     clearBursts()
     decoration.model = nil
+    reaction.layer.removeAllAnimations()
+    reaction.transform = .identity
+    reaction.alpha = 1
+    reaction.isHidden = true
+    mascot.stopAnimating()
+    mascot.isHidden = true
     shimmerBand.removeAllAnimations()
     onAction = nil
     onSelection = nil
@@ -709,7 +821,9 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
   private func configureAccessibility() {
     guard let model else { return }
     isAccessibilityElement = model.hits.count <= 1
-    accessibilityLabel = model.liveLabel?.text ?? model.text.string
+    accessibilityLabel =
+      (model.liveLabel?.text ?? model.text.string)
+      + (model.reactionBadge.map { ", reacted " + $0.text.string } ?? "")
     accessibilityTraits = model.hits.isEmpty ? .staticText : .button
     accessibilityHint = model.hits.first?.label ?? "Long press to select text"
     if model.hits.count > 1 {

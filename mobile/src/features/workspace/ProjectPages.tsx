@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 
 import { useScenePager } from "@/ui/ScenePager";
+import { useContentWidth } from "@/ui/ContentPane";
 import { SegmentedSwitch } from "@/ui/SegmentedSwitch";
 
 import { useInboxBadge } from "@/features/inbox/InboxProvider";
@@ -22,7 +23,7 @@ export function useProjectPages(key: string, active = true, inbox = false) {
   const view: ProjectView = views.includes(picked) ? picked : "chat";
   const setView = (next: ProjectView) => setViewFor({ key, view: next });
 
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const progress = useScenePager(
     views.indexOf(view),
     (page) => setView(views[page] ?? "chat"),
@@ -74,7 +75,7 @@ export function ProjectPages({
   /** The third, where the desktop has an Inbox. */
   inbox?: ReactNode;
 }) {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   return (
     <Animated.View
       style={[styles.pages, { width: width * pages.views.length }, pages.slide]}

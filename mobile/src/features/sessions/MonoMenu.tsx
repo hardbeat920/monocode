@@ -1,7 +1,8 @@
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
+import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 
@@ -21,6 +22,18 @@ export function MonoMenu({
   onReset: () => void;
   onDelete: () => void;
 }) {
+  // The SwiftUI menu has no Android view, so Android lists the actions in a sheet.
+  if (Platform.OS === "android") return (
+    <ChoiceMenu label="More" actions={[
+      { label: "View details", icon: "info", onPress: onDetails },
+      { label: "Reset conversation", icon: "refresh", onPress: onReset },
+      { label: "Delete Mono", icon: "trash", destructive: true, onPress: onDelete },
+    ]}>
+      <LiquidView borderRadius={SIZE / 2} innerStyle={styles.round}>
+        <Icon name="more" size={20} />
+      </LiquidView>
+    </ChoiceMenu>
+  );
   return (
     <View>
       <LiquidView borderRadius={SIZE / 2} innerStyle={styles.round}>

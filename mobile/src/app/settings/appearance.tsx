@@ -1,3 +1,4 @@
+import { Host as UniversalHost, Slider as UniversalSlider } from "@expo/ui";
 import { Host, Picker, Slider, Text as NativeText } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
@@ -11,6 +12,7 @@ import { Fragment, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -85,6 +87,32 @@ const SCHEMES = [
 /** Light, dark or the phone's own, as iOS's own segmented control. */
 function SchemeControl() {
   const [preference, setPreference] = useAppearancePreference();
+  const colors = useColors();
+  const styles = useStyles();
+  // SwiftUI's segmented picker has no Android view; a row of buttons stands in.
+  if (Platform.OS === "android") return (
+    <View style={styles.segments}>
+      {SCHEMES.map((option) => {
+        const selected = preference === option.value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              setPreference(option.value);
+            }}
+            style={[styles.segment, selected && { backgroundColor: colors.surfaceRaised }]}
+          >
+            <Text style={styles.segmentLabel}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
   return (
     <Host matchContents={{ vertical: true }}>
       <Picker
@@ -298,7 +326,16 @@ function BackgroundSection({ projectId }: { projectId: string }) {
         {settings.image ? (
           <>
             <View style={styles.visibility}>
-              <Host style={styles.slider}>
+              {Platform.OS === "android" ? (
+                <UniversalHost style={styles.slider}>
+                  <UniversalSlider
+                    value={settings.opacity}
+                    min={OPACITY_RANGE.min}
+                    max={OPACITY_RANGE.max}
+                    onValueChange={controls.setOpacity}
+                  />
+                </UniversalHost>
+              ) : <Host style={styles.slider}>
                 <Slider
                   value={settings.opacity}
                   min={OPACITY_RANGE.min}
@@ -310,7 +347,7 @@ function BackgroundSection({ projectId }: { projectId: string }) {
                     accessibilityLabel("Background visibility"),
                   ]}
                 />
-              </Host>
+              </Host>}
             </View>
             <View style={styles.divider} />
           </>
@@ -458,5 +495,22 @@ const useStyles = themedStyles((colors) => ({
   },
   slider: {
     height: 44,
+  },
+  segments: {
+    flexDirection: "row",
+    padding: 3,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+  },
+  segment: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  segmentLabel: {
+    color: colors.content,
+    fontSize: 14,
+    fontWeight: "500",
   },
 }));

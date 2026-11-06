@@ -1,3 +1,4 @@
+import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
 import { router, Stack, useIsFocused } from "expo-router";
 import {
   ConnectionNotice,
@@ -291,7 +292,7 @@ export function ProjectScreen({
       onPress={drawer.open}
     >
       {/* The drawer's button, as on every screen it opens from. */}
-      <Icon name="menu" size={22} color={colors.content} />
+      <Icon name="sidebar" size={22} color={colors.content} />
       {unread ? <UnreadDot /> : null}
     </ProjectHeaderButton>
   );
@@ -362,8 +363,12 @@ export function ProjectScreen({
           {sessionId && conversation.question ? (
             <QuestionCard conversationId={sessionId} prompt={conversation.question} />
           ) : null}
+          {sessionId && conversation.usageLimit ? (
+            <UsageLimitCard key={`usage:${sessionId}`} conversationId={sessionId} state={conversation.usageLimit} />
+          ) : null}
           <Composer
             key={sessionId ?? project.id}
+            active={focused && (sessionId != null || pages.view === "chat")}
             notice={sessionNotice}
             context={project.name}
             branch={sessionId ? (session?.branch ?? project.branch) : branch}

@@ -1210,7 +1210,7 @@ fn mono_badge_ticker_tracks_work_at_the_top_of_the_turn(cx: &mut TestAppContext)
         (
             "exec_command",
             r#"{"cmd":"cargo check"}"#,
-            "Running command…",
+            "Running a build…",
         ),
         ("Read", r#"{"file_path":"notes.md"}"#, "Reading file…"),
         ("Write", r#"{"file_path":"notes.md"}"#, "Editing file…"),

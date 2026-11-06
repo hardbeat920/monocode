@@ -155,21 +155,23 @@ impl TranscriptView {
         });
         cx.notify();
     }
+    pub(super) fn outline_visible_at(&self, width: gpui::Pixels) -> bool {
+        !self.mono
+            && !self.document
+            && self.visible
+            && self.outline.prompts.len() >= MIN_PROMPTS
+            && width >= px(MIN_PANE_WIDTH)
+    }
     pub(super) fn outline(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        let prompts = &self.outline.prompts;
-        if self.mono
-            || self.document
-            || !self.visible
-            || prompts.len() < MIN_PROMPTS
-            || f32::from(self.viewport.size.width) < MIN_PANE_WIDTH
-        {
+        if !self.outline_visible_at(self.viewport.size.width) {
             self.outline.tweens.clear();
             return None;
         }
+        let prompts = &self.outline.prompts;
         let budget = BAR_STACK_MAX
             .min((f32::from(self.viewport.size.height) * BAR_STACK_PANE_SHARE).floor());
         let active_ix = self

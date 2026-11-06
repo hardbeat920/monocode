@@ -13,6 +13,7 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+mod perf_scroll;
 pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
@@ -34,9 +35,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AvailableSpace, Bounds, ClipboardItem, Context, FollowMode, ListAlignment, ListOffset,
-    ListState, Pixels, Role, SharedString, Transformation, Window, canvas, div, list, percentage,
-    prelude::*, px, rgb, size,
+    AvailableSpace, Bounds, ClipboardItem, Context, Entity, FollowMode, ListAlignment, ListOffset,
+    ListState, Pixels, Role, SharedString, StyleRefinement, Window, canvas, div, list, prelude::*,
+    px, rgb, size,
 };
 use monocode_core::tool::{ToolCall, ToolState, tasks::Panel};
 use monocode_core::transcript::Row;
@@ -154,10 +155,6 @@ enum Body {
     Pending(usize),
     /// LaunchedSessionCard for a session the run started.
     Launch(i64),
-    /// SessionReview, the latest settled turn's recorded changes.
-    Review {
-        turn: usize,
-    },
     /// A commit pill turn's status line, then its card.
     GitAction(Arc<git_turns::GitCard>),
     Tool {
@@ -500,26 +497,41 @@ pub(crate) fn mono_work_label(source: &[Row], group: usize) -> String {
         .unwrap_or(source.len());
     let mut thought = 0usize;
     let mut latest = None;
+    let mut reasoning = None;
     for (ix, row) in source[turn..end].iter().enumerate() {
         if !row.first {
             continue;
         }
         match row.role.as_str() {
-            "assistant" | "reasoning" => {
+            "assistant" => {
                 thought += 1;
                 latest = None;
+                reasoning = None;
             }
-            "tool" => latest = Some(turn + ix),
+            "reasoning" => {
+                thought += 1;
+                latest = None;
+                reasoning = Some(turn + ix);
+            }
+            "tool" => {
+                latest = Some(turn + ix);
+                reasoning = None;
+            }
             _ => {}
         }
     }
-    let Some(tool) = latest.and_then(|at| {
+    let message = |at: usize| -> String {
         let end = (at + 1..source.len())
             .find(|&i| source[i].first)
             .unwrap_or(source.len());
-        let text: String = source[at..end].iter().map(|r| r.text.as_str()).collect();
-        serde_json::from_str::<ToolCall>(&text).ok()
-    }) else {
+        source[at..end].iter().map(|r| r.text.as_str()).collect()
+    };
+    // A reasoning summary's own heading says what it is working on.
+    if let Some(heading) = reasoning.and_then(|at| reasoning_heading(&message(at))) {
+        return format!("{heading}…");
+    }
+    let Some(tool) = latest.and_then(|at| serde_json::from_str::<ToolCall>(&message(at)).ok())
+    else {
         return THINKING[thought.saturating_sub(1) % THINKING.len()].into();
     };
     if tool.is_milestone() {
@@ -531,15 +543,80 @@ pub(crate) fn mono_work_label(source: &[Row], group: usize) -> String {
             "Compacting context…".into()
         };
     }
-    match tool.summary().0.as_str() {
-        "Run" => "Running command…",
-        "Edit" | "Write" => "Editing file…",
-        "Read" => "Reading file…",
-        "Find" | "List" | "Search" | "Glob" | "Grep" => "Exploring project…",
-        "Agent" | "Task" => "Running agent…",
-        _ => "Using tool…",
+    tool_status(&tool)
+}
+/// A reasoning summary's heading, as Codex writes them (`**Finding the repo**`),
+/// when it is short enough for a status line.
+fn reasoning_heading(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let heading = line
+        .strip_prefix("**")
+        .and_then(|l| l.strip_suffix("**"))
+        .or_else(|| line.strip_prefix('#').map(|l| l.trim_start_matches('#')))?
+        .trim()
+        .trim_end_matches(['.', ':', '…']);
+    let words = heading.split_whitespace().count();
+    ((1..=8).contains(&words) && heading.chars().count() <= 60).then(|| heading.to_owned())
+}
+/// What a running tool is doing, in the user's words where we can tell.
+fn tool_status(tool: &ToolCall) -> String {
+    let shown = tool.presentation();
+    let app = monocode_core::tool::app_tool(&tool.name)
+        || shown
+            .command
+            .as_deref()
+            .and_then(monocode_core::tool::app_cli_action)
+            .is_some();
+    if app {
+        return format!("{} {}…", shown.action, shown.target);
     }
-    .into()
+    let (action, _) = tool.summary();
+    match action.as_str() {
+        "Run" => {
+            // The model's own one-line description of the command, when given.
+            if let Some(description) = shown
+                .description
+                .as_deref()
+                .map(|d| d.trim().trim_end_matches(['.', '…']))
+                .filter(|d| !d.is_empty() && d.chars().count() <= 60)
+            {
+                return format!("{description}…");
+            }
+            command_status(shown.command.as_deref().unwrap_or("")).into()
+        }
+        "Edit" | "Write" => "Editing file…".into(),
+        "Read" => "Reading file…".into(),
+        "Search" => "Searching the web…".into(),
+        "Find" | "List" | "Glob" | "Grep" => "Exploring project…".into(),
+        "Agent" | "Task" => "Running agent…".into(),
+        _ => mcp_status(&tool.name).unwrap_or_else(|| "Using tool…".into()),
+    }
+}
+/// A status for a shell command the model did not describe.
+fn command_status(command: &str) -> &'static str {
+    let mut words = command.split_whitespace();
+    match (words.next().unwrap_or(""), words.next().unwrap_or("")) {
+        ("gh", "pr") => "Looking at pull requests…",
+        ("gh", "issue") => "Looking at issues…",
+        ("gh", "run" | "workflow") => "Checking CI…",
+        ("gh", "search" | "repo") => "Searching GitHub…",
+        ("gh", _) => "Checking GitHub…",
+        ("git", _) => "Checking git…",
+        ("curl" | "wget", _) => "Fetching from the web…",
+        ("npm" | "bun" | "pnpm" | "yarn" | "cargo" | "make", _) => "Running a build…",
+        _ => "Running command…",
+    }
+}
+/// `mcp__github__search_repositories` → "Search repositories…".
+fn mcp_status(name: &str) -> Option<String> {
+    let tool = name
+        .strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map(|(_, tool)| tool)?;
+    let words = tool.replace(['_', '-'], " ");
+    let mut chars = words.trim().chars();
+    let first = chars.next()?;
+    Some(format!("{}{}…", first.to_uppercase(), chars.as_str()))
 }
 /// isEmojiOnlyMessage: up to three emoji, which read as a reaction.
 pub(crate) fn is_emoji_only(text: &str) -> bool {
@@ -635,10 +712,6 @@ pub(crate) struct TranscriptView {
     taken: Vec<TakenMessage>,
     pending_entrances: HashMap<String, Instant>,
     launches: HashMap<i64, LaunchView>,
-    /// The session's latestTurnAccessory card.
-    review: Option<gpui::AnyView>,
-    /// The card has changes or an error to show, so it takes a row.
-    review_shown: bool,
     /// A clock for the tool and task shimmers.
     started_at: Instant,
     /// One clock per frame for row motion. The list measures rows and the
@@ -650,9 +723,14 @@ pub(crate) struct TranscriptView {
     messages: Vec<Message>,
     rows: Vec<UiRow>,
     streaming: bool,
+    perf_scroll: perf_scroll::PerfScroll,
     chat_layout: bool,
     anchor_prompts: bool,
     smooth_reveal: bool,
+    /// Tool groups open only when clicked, even while running.
+    collapse_groups: bool,
+    /// Finished replies fold their work under "worked for".
+    fold_work: bool,
     search_match: Option<(usize, String)>,
     highlights: HashMap<u64, Option<Arc<HighlightedDocument>>>,
     highlighting: HashSet<u64>,
@@ -667,6 +745,10 @@ pub(crate) struct TranscriptView {
     note_feedback: HashMap<usize, Result<(), String>>,
     action_anchors: HashMap<(usize, &'static str), AnchorSlot>,
     hovered_action: Option<(usize, &'static str)>,
+    /// Each work phase's tile, its own view so a hover redraws only it.
+    phase_tiles: HashMap<usize, Entity<crate::phase_tile::PhaseTile>>,
+    /// Each reply's "worked for" tile, keyed by turn.
+    work_tiles: HashMap<usize, Entity<crate::phase_tile::PhaseTile>>,
     pub(crate) target_action: Option<(usize, monocode_core::response::TransferKind)>,
     document: bool,
     side_question: bool,
@@ -1145,6 +1227,8 @@ impl TranscriptView {
         let Some((mascot, color, name)) = self.mono_look.clone() else {
             return div().into_any_element();
         };
+        // As a model's "Worked for" line: the Mono's mascot on a tile, then
+        // its name.
         let pill = div()
             .debug_selector(|| "mono-signature-pill".into())
             .flex()
@@ -1152,28 +1236,16 @@ impl TranscriptView {
             .flex_shrink_0()
             .max_w(px(320.))
             .items_center()
-            .gap_1p5()
-            .rounded_full()
-            .bg(content(0.07))
-            .py(px(2.))
-            .pl_2()
-            .pr_3()
+            .gap(px(8.))
             .child(
-                div()
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .child(crate::monos::avatar::avatar(
-                        &mascot, color, "idle", 14., true,
-                    )),
+                crate::tab_tile::mark_tile(
+                    &crate::tab_tile::ACTIVITY_TILE,
+                    crate::tab_tile::Face::Neutral,
+                    crate::monos::avatar::avatar(&mascot, color, "idle", 14., true),
+                )
+                .flex_shrink_0(),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(content(0.8))
-                    .child(name),
-            );
+            .child(div().min_w_0().truncate().child(name));
         div()
             .id(("mono-turn-header", turn))
             .flex()
@@ -1823,7 +1895,7 @@ impl TranscriptView {
                     .relative()
                     .w_full()
                     .max_w(px(COLUMN))
-                    .px_4()
+                    .px(px(COLUMN_PAD))
                     .pt(px(top))
                     .pb(px(bottom))
                     .child(crate::monos::cards::launch(id, view.as_ref(), cx)),
@@ -1845,55 +1917,6 @@ impl TranscriptView {
             _ => 12.,
         };
         (top, bottom)
-    }
-    /// The session's review card, under the latest settled turn only.
-    pub(crate) fn set_review(&mut self, review: gpui::AnyView) {
-        self.review = Some(review);
-    }
-    /// The card gained or lost its content; the latest turn makes room for it.
-    pub(crate) fn set_review_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
-        if self.review_shown == shown {
-            return;
-        }
-        self.review_shown = shown;
-        if !self.messages.is_empty() {
-            let start = self
-                .source
-                .iter()
-                .rposition(|r| r.is_prompt())
-                .map_or(0, |i| i + 1);
-            self.rebuild(start, cx);
-        }
-        cx.notify();
-    }
-    fn review_row(&self, turn: usize) -> gpui::AnyElement {
-        let latest = self
-            .source
-            .iter()
-            .rposition(|r| r.is_prompt())
-            .map_or(0, |i| i + 1);
-        let Some(review) = self
-            .review
-            .clone()
-            .filter(|_| !self.streaming && turn == latest)
-        else {
-            return div().into_any_element();
-        };
-        div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .max_w(px(COLUMN))
-                    .px_4()
-                    .pt_1()
-                    .pb_2()
-                    .child(review),
-            )
-            .into_any_element()
     }
     /// A queued message's bubble, as UserMessageBlock draws one, with its
     /// delivery line when it could not be sent.
@@ -1947,7 +1970,7 @@ impl TranscriptView {
                     .max_w(px(COLUMN))
                     .min_w_0()
                     .pl(px(56.))
-                    .pr(px(16.))
+                    .pr(px(COLUMN_PAD))
                     .pt_1()
                     .pb(px(if stacked { 0. } else { 20. }))
                     .flex()
@@ -2058,7 +2081,7 @@ impl TranscriptView {
                         .w_full()
                         .max_w(px(COLUMN))
                         .min_w_0()
-                        .px_4()
+                        .px(px(COLUMN_PAD))
                         .child(self.mono_header(self.source.len(), Some("Thinking…".into()), cx)),
                 )
             })
@@ -2469,8 +2492,6 @@ impl TranscriptView {
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
             launches: HashMap::new(),
-            review: None,
-            review_shown: false,
             started_at: Instant::now(),
             frame_now: Instant::now(),
             measurements: Default::default(),
@@ -2478,9 +2499,12 @@ impl TranscriptView {
             messages: Vec::new(),
             rows: Vec::new(),
             streaming: false,
+            perf_scroll: Default::default(),
             chat_layout: true,
             anchor_prompts: true,
             smooth_reveal: true,
+            collapse_groups: false,
+            fold_work: true,
             search_match: None,
             highlights: HashMap::new(),
             highlighting: HashSet::new(),
@@ -2495,6 +2519,8 @@ impl TranscriptView {
             note_feedback: HashMap::new(),
             action_anchors: HashMap::new(),
             hovered_action: None,
+            phase_tiles: HashMap::new(),
+            work_tiles: HashMap::new(),
             target_action: None,
             document: false,
             side_question: false,
@@ -2562,9 +2588,13 @@ impl TranscriptView {
         if self.chat_layout == chat
             && self.anchor_prompts == anchor_prompts
             && self.smooth_reveal == p.paced_reveal
+            && self.collapse_groups == p.collapse_tool_groups
+            && self.fold_work == p.fold_finished_work
         {
             return;
         }
+        self.collapse_groups = p.collapse_tool_groups;
+        self.fold_work = p.fold_finished_work;
         self.chat_layout = chat;
         self.anchor_prompts = anchor_prompts;
         self.smooth_reveal = p.paced_reveal;
@@ -3287,12 +3317,17 @@ impl TranscriptView {
                 git_card = self.git_card(turn, turn_end, final_answer);
                 git_live_shown = false;
             }
-            let folded = !is_prompt
+            let folded = self.fold_work
+                && !is_prompt
                 && !activity.pinned.contains(&at)
                 && has_work
                 && ready
                 && final_answer.is_some_and(|answer| at < answer)
-                && !self.work_folds.get(&turn).copied().unwrap_or(false);
+                && !self
+                    .work_folds
+                    .get(&turn)
+                    .copied()
+                    .unwrap_or(!self.fold_work);
             if !self.document
                 && !is_prompt
                 && !stopped_notice
@@ -3324,7 +3359,8 @@ impl TranscriptView {
                     key: (0, 0),
                     body: Body::WorkLine {
                         turn,
-                        expandable: has_work && ready,
+                        // Unfolded work is always shown; the header only labels it.
+                        expandable: has_work && ready && self.fold_work,
                     },
                     message,
                     first: false,
@@ -3335,13 +3371,23 @@ impl TranscriptView {
                 });
             }
             let phase = activity.at(at);
-            let grouped = phase.is_some_and(|group| group.steps > 1);
+            // A lone tool call gets the same header as a run of them ("Ran a
+            // command"), opened to see the step. A milestone stays its own
+            // line, and a lone thought is shown as it is.
+            let grouped = phase.is_some_and(|group| {
+                group.steps > 1 || (group.calls.len() == 1 && !group.calls[0].is_milestone())
+            });
             let active = phase.is_some_and(|group| {
                 self.streaming
                     && (group.end == self.source.len() || awaiting_answer == Some(group.end))
             });
             let phase_open = phase.is_none_or(|group| {
-                !grouped || self.phases.get(&group.start).copied().unwrap_or(active)
+                !grouped
+                    || self
+                        .phases
+                        .get(&group.start)
+                        .copied()
+                        .unwrap_or(self.phase_opens(active))
             });
             // A running pill turn shows one status line in place of its work
             // and prose; a settled one's card leads its reply.
@@ -3670,7 +3716,10 @@ impl TranscriptView {
                     }
                 };
                 row.key = (at, ordinal);
-                row.work = has_work
+                // Unfolded work lays out like the answer: no rail, indent or
+                // dimmed text. Tool groups keep their own connectors.
+                row.work = self.fold_work
+                    && has_work
                     && ready
                     && role != "visual"
                     && !activity.pinned.contains(&at)
@@ -3695,7 +3744,14 @@ impl TranscriptView {
                 parser,
                 markdown_blocks,
                 user_link,
-                under_line: has_work && final_answer == Some(at),
+                // Only a settled turn folds its work under the receipt line.
+                // While it streams, the newest reply is the answer so far but
+                // still follows open tool rows, so it keeps prose's 12px gap
+                // instead of jumping when the next tool or the end arrives.
+                under_line: has_work
+                    && final_answer == Some(at)
+                    && self.fold_work
+                    && !(self.streaming && turn_end == self.source.len()),
                 turn: if self.mono {
                     self.mono_group_start(turn)
                 } else {
@@ -3770,22 +3826,6 @@ impl TranscriptView {
                 && end == turn_end
                 && !(self.mono && self.mono_next_run_continues(turn, turn_end))
             {
-                if !self.mono
-                    && self.review_shown
-                    && self.review.is_some()
-                    && turn_end == self.source.len()
-                {
-                    self.rows.push(UiRow {
-                        key: (at, usize::MAX - 2),
-                        body: Body::Review { turn },
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
                 self.rows.push(UiRow {
                     key: (at, usize::MAX - 1),
                     body: Body::Actions {
@@ -3893,7 +3933,13 @@ impl TranscriptView {
                 .get(&current_turn)
                 .copied()
                 .flatten()
-                .filter(|_| !self.work_folds.get(&current_turn).copied().unwrap_or(false))
+                .filter(|_| {
+                    !self
+                        .work_folds
+                        .get(&current_turn)
+                        .copied()
+                        .unwrap_or(!self.fold_work)
+                })
                 .filter(|_| layout_changed)
                 .map(|answer| current_turn..answer);
             if replaced_work.is_some() {
@@ -3915,7 +3961,11 @@ impl TranscriptView {
                 Body::Phase { group, active, .. }
                     if active
                         || (self.phase_scrolls.contains_key(&group)
-                            && !self.phases.get(&group).copied().unwrap_or(active)) =>
+                            && !self
+                                .phases
+                                .get(&group)
+                                .copied()
+                                .unwrap_or(self.phase_opens(active))) =>
                 {
                     Some(group)
                 }
@@ -3924,10 +3974,11 @@ impl TranscriptView {
             .collect();
         // A closing live phase keeps its bounded window for the exit. Once
         // settled, an explicitly opened group returns to virtualized rows.
+        let opens_running = self.phase_opens(true);
         for (&group, scroll) in &mut self.phase_scrolls {
             let enabled = self.visible && self.rows.iter().any(|row| {
                 matches!(row.body, Body::Phase { group: id, active: true, .. } if id == group)
-            }) && self.phases.get(&group).copied().unwrap_or(true);
+            }) && self.phases.get(&group).copied().unwrap_or(opens_running);
             scroll.enable(enabled);
         }
         self.index_messages();
@@ -4119,7 +4170,6 @@ impl TranscriptView {
                     | Body::MonoDivider
                     | Body::Pending(_)
                     | Body::Launch(_)
-                    | Body::Review { .. }
                     | Body::SavedDraft
             ) {
                 return false;
@@ -4581,7 +4631,6 @@ impl TranscriptView {
             Body::SavedDraft => return self.saved_draft_row(cx),
             Body::Pending(i) => return self.pending_row(i, cx),
             Body::Launch(id) => return self.launch_row(ix, id, cx),
-            Body::Review { turn } => return self.review_row(turn),
             _ => {}
         }
         let group = self.motions.get(&self.rows[ix].key).and_then(|m| m.group);
@@ -4640,7 +4689,11 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let header = self.row_body(ix, true, window, cx);
-        let open = self.phases.get(&group).copied().unwrap_or(active);
+        let open = self
+            .phases
+            .get(&group)
+            .copied()
+            .unwrap_or(self.phase_opens(active));
         let indices: Vec<_> = (ix + 1..self.rows.len())
             .take_while(|&i| self.rows[i].phase_group() == Some(group))
             .collect();
@@ -4819,9 +4872,7 @@ impl TranscriptView {
                 crate::monos::cards::render(value, chosen.as_deref(), cx)
             }
             Body::MonoDivider => mono_divider::render(),
-            Body::Pending(_) | Body::Launch(_) | Body::Review { .. } | Body::SavedDraft => {
-                div().into_any_element()
-            }
+            Body::Pending(_) | Body::Launch(_) | Body::SavedDraft => div().into_any_element(),
             Body::Actions { turn, complete } => {
                 // Tighten only a visible Mono reply followed by a user bubble;
                 // stacked user messages keep their existing spacing.
@@ -4862,7 +4913,11 @@ impl TranscriptView {
                     elapsed.map(|duration| duration.as_millis() as u64),
                     live,
                 );
-                let open = self.work_folds.get(&turn).copied().unwrap_or(false);
+                let open = self
+                    .work_folds
+                    .get(&turn)
+                    .copied()
+                    .unwrap_or(!self.fold_work);
                 let label = if expandable {
                     if open {
                         "Hide the work".into()
@@ -4872,6 +4927,30 @@ impl TranscriptView {
                 } else {
                     title.clone()
                 };
+                let provider: SharedString = self
+                    .turns
+                    .get(&turn)
+                    .map(|info| info.provider.as_str())
+                    .filter(|provider| !provider.is_empty())
+                    .unwrap_or(self.provider.as_str())
+                    .to_owned()
+                    .into();
+                let work_tile = self
+                    .work_tiles
+                    .entry(turn)
+                    .or_insert_with(|| cx.new(|_| crate::phase_tile::PhaseTile::new(turn)))
+                    .clone();
+                // Only a fold that opens shows the chevron; a header that just
+                // labels unfolded work keeps the logo.
+                work_tile.update(cx, |tile, cx| {
+                    tile.set(
+                        crate::phase_tile::Mark::Provider(provider),
+                        false,
+                        open && expandable,
+                        if open { 1. } else { 0. },
+                        cx,
+                    )
+                });
                 div()
                     .id(("work-fold", turn))
                     .role(if expandable {
@@ -4884,50 +4963,27 @@ impl TranscriptView {
                     .group("work-fold")
                     .flex()
                     .items_center()
-                    .gap_1p5()
+                    .gap(px(8.))
                     .py_1()
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .text_color(content(0.5))
+                    // The provider's tile; an open fold turns it into the
+                    // chevron, as a tool group's tile does.
                     .child(
-                        div()
-                            .relative()
-                            .size(px(14.))
-                            .flex_shrink_0()
-                            .when(!open, |d| {
-                                d.child(
-                                    provider_icon(
-                                        self.turns
-                                            .get(&turn)
-                                            .map(|info| info.provider.as_str())
-                                            .filter(|provider| !provider.is_empty())
-                                            .unwrap_or(self.provider.as_str()),
-                                        14.,
-                                    )
-                                    .when(expandable, |i| {
-                                        i.group_hover("work-fold", |s| s.opacity(0.))
-                                    }),
-                                )
-                            })
-                            .when(expandable, |d| {
-                                d.child(
-                                    icon(
-                                        if open {
-                                            "chevron-down"
-                                        } else {
-                                            "chevron-right"
-                                        },
-                                        14.,
-                                    )
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .when(!open, |i| {
-                                        i.opacity(0.).group_hover("work-fold", |s| s.opacity(1.))
-                                    }),
-                                )
-                            }),
+                        work_tile.clone().cached(
+                            StyleRefinement::default()
+                                .w(px(crate::tab_tile::ACTIVITY_TILE.w))
+                                .h(px(crate::tab_tile::ACTIVITY_TILE.h))
+                                .flex_shrink_0(),
+                        ),
                     )
+                    .when(expandable, |d| {
+                        let tile = work_tile.clone();
+                        d.on_hover(move |hovered: &bool, _, cx| {
+                            tile.update(cx, |tile, cx| tile.hover(*hovered, cx));
+                        })
+                    })
                     .child(div().min_w_0().flex_1().truncate().child(
                         if live && !cx.reduce_motion() {
                             crate::activity::shimmer(
@@ -4954,12 +5010,32 @@ impl TranscriptView {
                 icon: glyph,
                 active,
             } => {
-                let open = self.phases.get(&group).copied().unwrap_or(active);
+                let open = self
+                    .phases
+                    .get(&group)
+                    .copied()
+                    .unwrap_or(self.phase_opens(active));
                 let rotation = self
                     .motions
                     .values()
                     .find(|m| m.group == Some(group))
                     .map_or(if open { 1. } else { 0. }, |m| m.rotation(self.frame_now));
+                let phase_tile = self
+                    .phase_tiles
+                    .entry(group)
+                    .or_insert_with(|| cx.new(|_| crate::phase_tile::PhaseTile::new(group)))
+                    .clone();
+                let spinning = active && !cx.reduce_motion();
+                // A running phase keeps its spinner unless pointed at.
+                phase_tile.update(cx, |tile, cx| {
+                    tile.set(
+                        crate::phase_tile::Mark::Work(glyph),
+                        spinning,
+                        open && !active,
+                        rotation,
+                        cx,
+                    )
+                });
                 div()
                     .id(("phase", group))
                     .role(Role::Button)
@@ -4971,46 +5047,20 @@ impl TranscriptView {
                     .group("activity-phase")
                     .flex()
                     .items_center()
-                    .gap_1p5()
+                    .gap(px(8.))
                     .py_1()
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .text_color(content(0.5))
+                    // The tile animates itself; the transcript only tells it
+                    // what the phase is doing.
                     .child(
-                        div()
-                            .relative()
-                            .size(px(14.))
-                            .flex_shrink_0()
-                            .child(if active && !cx.reduce_motion() {
-                                // The compaction step's dots stand in for the
-                                // group's icon until its work settles.
-                                div()
-                                    .size_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(crate::session_mark::spinner(
-                                        ("phase-loader", group),
-                                        crate::pulse::Rate::Half,
-                                    ))
-                                    .group_hover("activity-phase", |s| s.opacity(0.))
-                                    .into_any_element()
-                            } else {
-                                crate::activity::glyph(glyph, 14.)
-                                    .group_hover("activity-phase", |s| s.opacity(0.))
-                                    .into_any_element()
-                            })
-                            .child(
-                                icon("chevron-right", 14.)
-                                    .with_transformation(Transformation::rotate(percentage(
-                                        rotation * 0.25,
-                                    )))
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .opacity(0.)
-                                    .group_hover("activity-phase", |s| s.opacity(1.)),
-                            ),
+                        phase_tile.clone().cached(
+                            StyleRefinement::default()
+                                .w(px(crate::tab_tile::ACTIVITY_TILE.w))
+                                .h(px(crate::tab_tile::ACTIVITY_TILE.h))
+                                .flex_shrink_0(),
+                        ),
                     )
                     .child(div().min_w_0().flex_1().truncate().child(
                         if active && !cx.reduce_motion() {
@@ -5023,6 +5073,12 @@ impl TranscriptView {
                         },
                     ))
                     .hover(|s| s.text_color(content(0.8)))
+                    .on_hover({
+                        let tile = phase_tile.clone();
+                        move |hovered: &bool, _, cx| {
+                            tile.update(cx, |tile, cx| tile.hover(*hovered, cx));
+                        }
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_phase(group, !open, cx);
                     }))
@@ -5038,44 +5094,50 @@ impl TranscriptView {
                 // a second step joins it. It keeps spinning after it settles,
                 // until whatever comes next arrives, so the hand-off to the
                 // group header never drops the loader.
-                let loading = group.is_none()
-                    && (call.state == ToolState::Running || live)
-                    && !call.is_milestone()
-                    && call.panel().is_none()
-                    && !cx.reduce_motion();
+                let tiled = group.is_none() && !call.is_milestone() && call.panel().is_none();
+                let loading =
+                    tiled && (call.state == ToolState::Running || live) && !cx.reduce_motion();
                 div()
                     .relative()
                     .w_full()
                     .when(group.is_some(), |d| {
-                        d.pl(px(20.)).child(crate::activity::rail(tail))
+                        d.pl(px(crate::activity::TILE_RAIL_INDENT))
+                            .child(crate::activity::tile_rail(tail))
                     })
-                    .when(loading, |d| {
-                        d.flex().items_start().gap_1p5().child(
+                    // A lone step leads with a tile like a group's, coloured by
+                    // the kind of work; while it runs, its spinner sits there.
+                    .when(tiled, |d| {
+                        let tile = crate::tab_tile::ACTIVITY_TILE;
+                        let lead = if loading {
+                            crate::tab_tile::mark_tile(
+                                &tile,
+                                crate::tab_tile::Face::Neutral,
+                                crate::session_mark::spinner(
+                                    ("tool-loader", message_start),
+                                    crate::pulse::Rate::Half,
+                                ),
+                            )
+                        } else {
+                            let glyph =
+                                crate::activity::summary(std::slice::from_ref(&*call), false).1;
+                            let (face, mark, _) = crate::tab_tile::activity_face(glyph);
+                            crate::tab_tile::mark_tile(&tile, face, mark)
+                        };
+                        d.flex().items_start().gap(px(8.)).child(
                             div()
                                 .h(px(28.))
                                 .flex_shrink_0()
                                 .opacity(step_opacity)
                                 .flex()
                                 .items_center()
-                                .child(
-                                    div()
-                                        .size(px(14.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_color(content(0.5))
-                                        .child(crate::session_mark::spinner(
-                                            ("tool-loader", message_start),
-                                            crate::pulse::Rate::Half,
-                                        )),
-                                ),
+                                .child(lead),
                         )
                     })
                     .child(
                         div()
-                            .when(loading, |d| d.min_w_0().flex_1())
+                            .when(tiled, |d| d.min_w_0().flex_1())
                             .opacity(step_opacity)
-                            .child(self.tool(*call, message_start, cx)),
+                            .child(self.tool(*call, message_start, tiled, cx)),
                     )
                     .into_any_element()
             }
@@ -5401,9 +5463,9 @@ impl TranscriptView {
             div()
                 .relative()
                 .w_full()
-                .pl(px(20.))
+                .pl(px(crate::activity::TILE_RAIL_INDENT))
                 .when(!tail || thought_header, |d| {
-                    d.child(crate::activity::rail_branch(tail, thought_header))
+                    d.child(crate::activity::tile_rail_branch(tail, thought_header))
                 })
                 .child(body)
                 .into_any_element()
@@ -5421,10 +5483,26 @@ impl TranscriptView {
                     ..
                 }
             );
+        // Unfolded work that opens with a tool group: the header's tile
+        // connects down into that group's tile.
+        let leads_into_group = !self.fold_work
+            && matches!(self.rows[ix].body, Body::WorkLine { .. })
+            && matches!(
+                self.rows.get(ix + 1).map(|r| &r.body),
+                Some(Body::Phase { .. })
+            );
         let receipt_open = match self.rows[ix].body {
-            Body::WorkLine { turn, .. } => self.work_folds.get(&turn).copied().unwrap_or(false),
-            _ => false,
+            // Only folding work hangs it from the header on a rail.
+            Body::WorkLine { turn, .. } if self.fold_work => {
+                self.work_folds.get(&turn).copied().unwrap_or(false)
+            }
+            _ => leads_into_group,
         };
+        // The other end of that connector: from the row's top into the tile.
+        let joined_to_header = !self.fold_work
+            && matches!(self.rows[ix].body, Body::Phase { .. })
+            && ix > 0
+            && matches!(self.rows[ix - 1].body, Body::WorkLine { .. });
         let prose = matches!(self.rows[ix].body, Body::Markdown(..));
         let rail_branch = matches!(self.rows[ix].body, Body::Phase { .. })
             || (!nested_phase && (thought_header || (prose && first_prose)))
@@ -5483,7 +5561,7 @@ impl TranscriptView {
                             .w_full()
                             .max_w(px(COLUMN))
                             .min_w_0()
-                            .px_4()
+                            .px(px(COLUMN_PAD))
                             .pt(px(if card && self.mono {
                                 card_top
                             } else if first && !is_tool && !prose {
@@ -5512,7 +5590,7 @@ impl TranscriptView {
                             .when(user && self.chat_layout, |d| {
                                 d.pl(px(56.)).flex().justify_end()
                             })
-                            .when(user && self.mono, |d| d.pr(px(16.)))
+                            .when(user && self.mono, |d| d.pr(px(COLUMN_PAD)))
                             .child(
                                 div()
                                     .relative()
@@ -5522,25 +5600,39 @@ impl TranscriptView {
                                     .when(user && !self.chat_layout, |d| d.w_full())
                                     .when(!user, |d| d.w_full())
                                     .when(row.work, |d| {
-                                        d.pl(px(20.)).pb(px(bottom)).when(
-                                            !nested_phase || !row.work_tail,
-                                            |d| {
-                                                d.child(crate::activity::rail_branch(
+                                        d.pl(px(crate::activity::TILE_RAIL_INDENT))
+                                            .pb(px(bottom))
+                                            .when(!nested_phase || !row.work_tail, |d| {
+                                                d.child(crate::activity::tile_rail_branch(
                                                     row.work_tail,
                                                     rail_branch,
                                                 ))
-                                            },
-                                        )
+                                            })
                                     })
                                     .when(receipt_open, |d| {
                                         d.child(
                                             div()
                                                 .absolute()
-                                                .left(px(6.))
-                                                .top(px(22.))
+                                                // From under the header's tile,
+                                                // down its centre.
+                                                .left(px(crate::activity::TILE_RAIL_X))
+                                                .top(px(4. + crate::tab_tile::ACTIVITY_TILE.h))
                                                 .bottom(px(-4.))
                                                 .w(px(1.))
-                                                .bg(rgb(0x323232)),
+                                                .bg(crate::theme::rail_color()),
+                                        )
+                                    })
+                                    .when(joined_to_header, |d| {
+                                        // A tool group's tile sits 5px into its
+                                        // row; the line meets it there.
+                                        d.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(crate::activity::TILE_RAIL_X))
+                                                .top_0()
+                                                .h(px(5.))
+                                                .w(px(1.))
+                                                .bg(crate::theme::rail_color()),
                                         )
                                     })
                                     .child(body),
@@ -5703,17 +5795,25 @@ impl TranscriptView {
     /// Wrapped lines of a user message's text at the bubble's text width.
     fn prompt_lines(&self, text: &str, window: &Window) -> usize {
         let column = self.viewport.size.width.min(px(COLUMN));
-        // Row padding (`pl-14 pr-4` in the chat layout, `px-4` otherwise),
-        // the bubble's 36rem cap and its `px-3`.
+        // Row padding (`pl-14` and `COLUMN_PAD` in the chat layout,
+        // `COLUMN_PAD` both sides otherwise), the bubble's 36rem cap and its
+        // `px-3`.
         let bubble = if self.chat_layout {
-            (column - px(72.)).min(PROMPT_BUBBLE_MAX)
+            (column - px(56. + COLUMN_PAD)).min(PROMPT_BUBBLE_MAX)
         } else {
-            column - px(32.)
+            column - px(2. * COLUMN_PAD)
         };
         let text = SharedString::from(text.trim_end().to_owned());
         measurements::shape_prompt(text, Some(bubble - PROMPT_PAD_X), window)
             .map(|line| line.wrap_boundaries.len() + 1)
             .sum()
+    }
+    /// How far phase `group`'s tile has morphed into its chevron, eased:
+    /// 0 is the tile, 1 the chevron.
+    /// Whether a tool group nobody has opened or closed shows its steps: a
+    /// running one does, unless groups are set to stay collapsed.
+    fn phase_opens(&self, active: bool) -> bool {
+        active && !self.collapse_groups
     }
     fn toggle_phase(&mut self, group: usize, open: bool, cx: &mut Context<Self>) {
         self.phase_toggle = Some(group);
@@ -5725,6 +5825,7 @@ impl TranscriptView {
 impl gpui::EventEmitter<ResponseRequest> for TranscriptView {}
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.perf_scroll(window, cx);
         let top = self.list.logical_scroll_top();
         // Rows that don't fill the viewport can't scroll, so their top being
         // on screen asks for older turns too. Layout must have run first.
@@ -5758,7 +5859,6 @@ impl Render for TranscriptView {
                 // The list holds its state borrow while delivering the event.
                 // Read the final scroll geometry in our trailing layout probe.
                 .set_scroll_handler(cx.listener(|this, _, _, cx| {
-                    this.reflow.scrolled();
                     this.selection.clear();
                     this.history_requested =
                         this.history_start > 0 || this.history_before.is_some();
@@ -5821,6 +5921,16 @@ impl Render for TranscriptView {
                     move |bounds, window, cx| {
                         let _ = view.update(cx, |this, cx| {
                             if this.viewport != bounds {
+                                // Layout learns the width after the outline
+                                // was built. Redraw after this frame only if
+                                // its visibility changes; an extra layout
+                                // otherwise advances chat motion needlessly.
+                                if this.outline_visible_at(this.viewport.size.width)
+                                    != this.outline_visible_at(bounds.size.width)
+                                {
+                                    let view = cx.entity();
+                                    cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
+                                }
                                 this.selection.clear();
                                 this.viewport = bounds;
                                 this.list
@@ -5889,7 +5999,7 @@ impl Render for TranscriptView {
                             div()
                                 .w_full()
                                 .max_w(px(crate::theme::COLUMN))
-                                .px(px(16.))
+                                .px(px(COLUMN_PAD))
                                 .flex()
                                 .map(|d| {
                                     if beside_pill {
@@ -5964,6 +6074,88 @@ fn paint_edge_fade(bounds: Bounds<Pixels>, begin: bool, window: &mut Window) {
     // a seam above the composer. Only the Metal backend supports a real mask.
     #[cfg(not(target_os = "macos"))]
     let _ = (bounds, begin, window);
+}
+
+#[cfg(test)]
+mod mono_status_tests {
+    use super::*;
+
+    fn row(role: &str, text: &str) -> Row {
+        Row {
+            role: role.into(),
+            text: text.into(),
+            first: true,
+            sent_at: None,
+        }
+    }
+    fn tool(name: &str, input: serde_json::Value) -> Row {
+        let mut call = ToolCall::new("t", name);
+        call.input = input.to_string();
+        row("tool", &serde_json::to_string(&call).unwrap())
+    }
+    fn label(rows: Vec<Row>) -> String {
+        mono_work_label(&rows, 0)
+    }
+
+    #[test]
+    fn status_says_what_the_mono_is_doing() {
+        let prompt = row("user", "Review the open PRs");
+        assert_eq!(
+            label(vec![
+                prompt.clone(),
+                row("reasoning", "**Finding the Monocode repo**\n\nLooking…")
+            ]),
+            "Finding the Monocode repo…"
+        );
+        // Raw thinking prose has no heading, so it stays generic.
+        assert_eq!(
+            label(vec![
+                prompt.clone(),
+                row("reasoning", "The user wants me to look at PRs.")
+            ]),
+            "Thinking…"
+        );
+        assert_eq!(
+            label(vec![
+                prompt.clone(),
+                tool(
+                    "Bash",
+                    serde_json::json!({"command":"gh pr list","description":"List open PRs"})
+                )
+            ]),
+            "List open PRs…"
+        );
+        assert_eq!(
+            label(vec![
+                prompt.clone(),
+                tool(
+                    "Bash",
+                    serde_json::json!({"command":"gh pr list --state open"})
+                )
+            ]),
+            "Looking at pull requests…"
+        );
+        assert_eq!(
+            label(vec![
+                prompt.clone(),
+                tool(
+                    "mcp__monocode_app__app",
+                    serde_json::json!({"action":"memory.add","input":{"fact":"x"}})
+                )
+            ]),
+            "Remembering that…"
+        );
+        assert_eq!(
+            label(vec![
+                prompt,
+                tool(
+                    "mcp__github__search_repositories",
+                    serde_json::json!({"query":"monocode"})
+                )
+            ]),
+            "Search repositories…"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -1801,6 +1801,7 @@ impl Monos {
             .as_ref()
             .map(|v| v.read(cx).mono_model_options())
             .unwrap_or_default();
+        let sub = self.subsession_choice(mono, cx);
         let access_icon = match mode {
             AccessMode::FullAccess => "shield-alert",
             AccessMode::Auto => "sparkles",
@@ -1900,7 +1901,19 @@ impl Monos {
                     self.switch("mono-show-started",mono.show_started_sessions_in_sidebar,false,|m,on|m.show_started_sessions_in_sidebar=on,cx)))
                 .child(switch_setting("Group in a folder",&format!("Sessions it starts go in a “{}” folder in your project sidebar.",mono.label()),!mono.show_started_sessions_in_sidebar,
                     self.switch("mono-group-started",mono.show_started_sessions_in_sidebar&&mono.use_sidebar_folders,!mono.show_started_sessions_in_sidebar,|m,on|m.use_sidebar_folders=on,cx))
-                    .border_t_1().border_color(content(0.04))))
+                    .border_t_1().border_color(content(0.04)))
+                .child(setting("Model",Some("For sessions it starts without naming one."),
+                    div().id("mono-subsession-model").role(Role::Button).aria_label(format!("Model for sessions it starts, {}",sub.model_label))
+                        .h(px(28.)).px_1p5().mx(px(-6.)).rounded_md().flex().items_center().gap_2()
+                        .text_size(px(12.)).text_color(content(0.85)).hover(|s|s.bg(content(0.06)))
+                        .child(self.subsession_model_anchor.probe())
+                        .when_some(sub.provider,|d,kind|d.child(provider_icon(kind.id(),14.))).child(sub.model_label.clone())
+                        .on_click(cx.listener(|this,_,w,cx|this.open_subsession_model_picker(w,cx))).into_any_element())
+                    .border_t_1().border_color(content(0.04)))
+                .when(!sub.efforts.is_empty(),|d|d.child(setting("Effort",None,
+                    plain(SharedString::from("mono-subsession-effort"),sub.effort_label.clone()).child(self.subsession_effort_anchor.probe())
+                        .on_click(cx.listener(|this,_,w,cx|this.open_subsession_effort_picker(w,cx))).into_any_element())
+                    .border_t_1().border_color(content(0.04)))))
             .child(heading("Heartbeat",Some("When it has been quiet for a while, it looks over its recent work, sessions you left, your notes and inbox, and suggests what to do next. It never acts without asking.")))
             .child(card()
                 .child(switch_setting("Check in on its own","Quiet check-ins leave nothing behind; you only hear from it when it has an idea.",false,
@@ -2128,6 +2141,196 @@ impl Monos {
         });
         cx.notify();
     }
+    /// What sessions it starts run on, as its settings show it.
+    fn subsession_choice(&self, mono: &Mono, cx: &App) -> SubsessionChoice {
+        let set = mono.subsessions.clone().unwrap_or_default();
+        let chat = self.chat();
+        let own = chat
+            .as_ref()
+            .map(|v| v.read(cx).summary.provider.clone())
+            .unwrap_or_else(|| "codex".into());
+        let kind = Kind::from_id(set.harness.as_deref().unwrap_or(&own));
+        let profile = chat
+            .as_ref()
+            .filter(|v| v.read(cx).summary.provider == kind.id())
+            .map(|v| v.read(cx).settings.account.clone())
+            .or_else(|| {
+                let project = chat.as_ref().map(|v| v.read(cx).summary.cwd.clone())?;
+                crate::accounts::get(cx).map(|c| c.read(cx).selected(kind, &project))
+            })
+            .unwrap_or_default();
+        let models = monocode_core::catalog::cached_models_for(kind, &profile).unwrap_or_default();
+        // Inherited, its effort levels are those of the Mono's own model.
+        let model = if set.harness.is_some() {
+            set.model.clone()
+        } else {
+            chat.as_ref().and_then(|v| v.read(cx).mono_model())
+        };
+        let entry = model
+            .as_deref()
+            .and_then(|id| models.iter().find(|m| m.id == id));
+        let entry = entry.or_else(|| {
+            set.harness
+                .is_some()
+                .then(|| models.iter().find(|m| m.default).or(models.first()))
+                .flatten()
+        });
+        let model_label = match &set.harness {
+            None => format!("Same as {}", mono.label()),
+            Some(_) => entry
+                .map(|m| m.name.clone())
+                .or(set.model.clone())
+                .unwrap_or_else(|| kind.label().into()),
+        };
+        let efforts = entry
+            .map(|m| monocode_core::app_access::effort_choices(kind, m))
+            .unwrap_or_default();
+        let effort_label = match &set.effort {
+            Some(effort) => efforts
+                .iter()
+                .find(|(value, _)| value == effort)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| effort.clone()),
+            None if set.harness.is_none() => format!("Same as {}", mono.label()),
+            None => "Model default".into(),
+        };
+        SubsessionChoice {
+            provider: set.harness.is_some().then_some(kind),
+            kind,
+            profile,
+            current_model: entry.map(|m| m.id.clone()),
+            model_label: model_label.into(),
+            efforts,
+            effort_label: effort_label.into(),
+        }
+    }
+    fn set_subsessions(
+        &mut self,
+        change: impl FnOnce(&mut monocode_core::mono::Subsessions),
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.active.clone()
+            && let Some(mono) = self.roster.get_mut(&id)
+        {
+            let mut next = mono.subsessions.clone().unwrap_or_default();
+            change(&mut next);
+            mono.subsessions = next.normalized();
+            self.save(cx);
+            self.changed(cx);
+        }
+    }
+    fn open_subsession_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mono) = self.current().cloned() else {
+            return;
+        };
+        let inherited = mono
+            .subsessions
+            .as_ref()
+            .is_none_or(|s| s.harness.is_none());
+        let choice = self.subsession_choice(&mono, cx);
+        let project = self
+            .chat()
+            .map(|v| v.read(cx).summary.cwd.clone())
+            .unwrap_or_default();
+        let current = (!inherited).then_some(choice.current_model).flatten();
+        let list =
+            cx.new(|cx| ModelList::new_for(choice.kind, current, &project, choice.profile, cx));
+        let focus = list.read(cx).search_focus(cx);
+        let picked = cx.subscribe(&list, |this, _, picked: &ModelPicked, cx| {
+            let harness = picked.0.id().to_owned();
+            let model = picked.1.clone();
+            this.set_subsessions(
+                |s| {
+                    // An effort set for another model may not fit this one.
+                    if s.harness.as_deref() != Some(harness.as_str()) || s.model != model {
+                        s.effort = None;
+                    }
+                    s.harness = Some(harness);
+                    s.model = model;
+                },
+                cx,
+            );
+            this.picker = None;
+            cx.notify();
+        });
+        let items = vec![
+            MenuAction::new("subsessions:inherit", format!("Same as {}", mono.label()))
+                .checked(inherited)
+                .into(),
+            MenuItem::Separator,
+            MenuItem::Custom(list.into(), focus),
+        ];
+        let menu = cx.new(|cx| Menu::new("Model", items, window, cx).width(400.));
+        let closed = cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
+            if let MenuEvent::Picked(id, _) = event
+                && id == "subsessions:inherit"
+            {
+                this.set_subsessions(
+                    |s| {
+                        s.harness = None;
+                        s.model = None;
+                        s.effort = None;
+                    },
+                    cx,
+                );
+            }
+            this.picker = None;
+            cx.notify();
+        });
+        self.picker = Some(OpenPicker {
+            menu,
+            anchor: Anchor::Slot(self.subsession_model_anchor.clone()),
+            width: 400.,
+            align: crate::popover::Align::Start,
+            _events: vec![picked, closed],
+        });
+        cx.notify();
+    }
+    fn open_subsession_effort_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mono) = self.current().cloned() else {
+            return;
+        };
+        let choice = self.subsession_choice(&mono, cx);
+        let effort = mono.subsessions.as_ref().and_then(|s| s.effort.clone());
+        let unset = if mono
+            .subsessions
+            .as_ref()
+            .is_none_or(|s| s.harness.is_none())
+        {
+            format!("Same as {}", mono.label())
+        } else {
+            "Model default".into()
+        };
+        let mut items: Vec<MenuItem> = vec![
+            MenuAction::new("effort:", unset)
+                .checked(effort.is_none())
+                .into(),
+        ];
+        items.extend(choice.efforts.iter().map(|(value, name)| {
+            MenuAction::new(format!("effort:{value}"), name.clone())
+                .checked(effort.as_deref() == Some(value.as_str()))
+                .into()
+        }));
+        let menu = cx.new(|cx| Menu::new("Effort", items, window, cx));
+        let picked = cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
+            if let MenuEvent::Picked(id, _) = event
+                && let Some(value) = id.strip_prefix("effort:")
+            {
+                let value = (!value.is_empty()).then(|| value.to_owned());
+                this.set_subsessions(|s| s.effort = value, cx);
+            }
+            this.picker = None;
+            cx.notify();
+        });
+        self.picker = Some(OpenPicker {
+            menu,
+            anchor: Anchor::Slot(self.subsession_effort_anchor.clone()),
+            width: 228.,
+            align: crate::popover::Align::Start,
+            _events: vec![picked],
+        });
+        cx.notify();
+    }
     fn open_model_option(
         &mut self,
         label: SharedString,
@@ -2330,4 +2533,16 @@ impl Monos {
             }
         }
     }
+}
+
+/// The model and effort for sessions a Mono starts, as its settings show it.
+struct SubsessionChoice {
+    /// Set only when a provider is picked; inherited shows no logo.
+    provider: Option<Kind>,
+    kind: Kind,
+    profile: monocode_core::accounts::Profile,
+    current_model: Option<String>,
+    model_label: SharedString,
+    efforts: Vec<(String, String)>,
+    effort_label: SharedString,
 }

@@ -171,7 +171,16 @@ export function NativeTranscript({
               return [...layers.body, ...layers.open];
             })()
           : [],
-        scale: fontScale,
+        // Its talking frame, swapped in while it works.
+        agentTalkRects: agent
+          ? (() => {
+              const layers = pixelLayers(agent.mascot, agent.color, true);
+              return [...layers.body, ...layers.open];
+            })()
+          : [],
+        // A Mono's chat reads a size up: 17 for the body's 16, and the rest
+        // in step, its line heights too.
+        scale: agent ? (fontScale * 17) / 16 : fontScale,
         pixelRatio,
         collapsed,
       }),
