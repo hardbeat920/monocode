@@ -598,9 +598,12 @@ impl Pieces {
             Some(selection) => selection.offset(range.start).wrap(word, layout, child),
             None => child,
         };
+        // GPUI measures a text leaf's min-content width unwrapped, so as a
+        // bare flex item it can't shrink below its longest line. A whole
+        // chunk would overflow the bubble instead of wrapping.
         div()
             .flex()
-            .child(child)
+            .child(div().min_w_0().child(child))
             .when(gap, |d| d.child(space()))
             .into_any_element()
     }
@@ -702,6 +705,50 @@ fn skeleton() -> AnyElement {
 mod tests {
     use super::*;
     use gpui::{Bounds, TestAppContext, WindowBounds, WindowOptions, point, size};
+
+    #[gpui::test]
+    fn a_prompt_with_a_plain_link_wraps_inside_its_bubble(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(900.), px(600.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                let mut source = monocode_core::transcript::Transcript::default();
+                source.begin("user");
+                source.append(&format!(
+                    "{}see https://github.com/spacedriveapp/spacedrive for ideas",
+                    "a long sentence that needs several lines ".repeat(8)
+                ));
+                view.patch(0, source.rows, cx);
+            })
+            .unwrap();
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, window, _| {
+                assert!(view.messages[0].user_link.is_some());
+                let bubble = window
+                    .painted_quads()
+                    .into_iter()
+                    .find(|quad| quad.background == user_bubble_fill().into())
+                    .unwrap();
+                // Unwrapped, the text runs past the bubble on one 20px line.
+                let lines = (bubble.bounds.size.height.0 / window.scale_factor() - 16.) / 20.;
+                assert!(lines >= 3., "the prompt wraps: {lines} lines");
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     fn a_pasted_pull_request_becomes_an_unclamped_chip_with_a_hover_card(cx: &mut TestAppContext) {

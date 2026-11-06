@@ -231,21 +231,23 @@ impl Monos {
             if prompt.await.ok() != Some(1) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.chats.remove(&id) {
-                    view.update(cx, |v, cx| v.mono_stop(cx));
-                }
-                if let Some(mono) = this.roster.get_mut(&id) {
-                    mono.session_id = None;
-                    mono.unavailable_session = None;
-                    mono.seen_rows = 0;
-                    mono.outbox.clear();
-                }
-                this.save(cx);
-                this.ensure_chat(&id, cx);
-            });
+            let _ = this.update(cx, |this, cx| this.clear_conversation(&id, cx));
         })
         .detach();
+    }
+    /// Starts the Mono's chat afresh, once confirmed here or on the phone.
+    pub(super) fn clear_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.chats.remove(id) {
+            view.update(cx, |v, cx| v.mono_stop(cx));
+        }
+        if let Some(mono) = self.roster.get_mut(id) {
+            mono.session_id = None;
+            mono.unavailable_session = None;
+            mono.seen_rows = 0;
+            mono.outbox.clear();
+        }
+        self.save(cx);
+        self.ensure_chat(id, cx);
     }
     pub(super) fn delete_mono(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
@@ -260,20 +262,22 @@ impl Monos {
             if prompt.await.ok() != Some(1) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.chats.remove(&id) {
-                    view.update(cx, |v, cx| v.mono_stop(cx));
-                }
-                for run in this.running.values().filter(|r| r.mono == id) {
-                    run.view.update(cx, |v, cx| v.mono_stop(cx));
-                }
-                this.roster.monos.retain(|m| m.id != id);
-                if this.active.as_ref() == Some(&id) {
-                    this.active = None;
-                }
-                this.save(cx);
-            });
+            let _ = this.update(cx, |this, cx| this.remove_mono(&id, cx));
         })
         .detach();
+    }
+    /// Takes the Mono off the roster, once confirmed here or on the phone.
+    pub(super) fn remove_mono(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.chats.remove(id) {
+            view.update(cx, |v, cx| v.mono_stop(cx));
+        }
+        for run in self.running.values().filter(|r| r.mono == id) {
+            run.view.update(cx, |v, cx| v.mono_stop(cx));
+        }
+        self.roster.monos.retain(|m| m.id != id);
+        if self.active.as_deref() == Some(id) {
+            self.active = None;
+        }
+        self.save(cx);
     }
 }

@@ -370,11 +370,9 @@ impl Render for ImageLightbox {
                     |_, _, _| {},
                     |bounds, _, window, _| {
                         let quad = gpui::fill(bounds, black(0.85));
-                        #[cfg(target_os = "macos")]
-                        let quad =
-                            quad.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
-                                4. * window.scale_factor(),
-                            ));
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
+                        let quad = quad
+                            .border_color(gpui::backdrop_blur_marker(4. * window.scale_factor()));
                         window.paint_quad(quad);
                     },
                 )
@@ -446,17 +444,15 @@ impl Render for ImageLightbox {
                         canvas(
                             |_, _, _| {},
                             |bounds, _, window, _| {
-                                #[cfg(target_os = "macos")]
+                                #[cfg(any(target_os = "macos", target_os = "windows"))]
                                 window.paint_quad(
                                     gpui::fill(bounds, gpui::transparent_black())
                                         .corner_radii(px(18.))
-                                        .border_color(
-                                            gpui_apple::metal_renderer::backdrop_blur_marker(
-                                                12. * window.scale_factor(),
-                                            ),
-                                        ),
+                                        .border_color(gpui::backdrop_blur_marker(
+                                            12. * window.scale_factor(),
+                                        )),
                                 );
-                                #[cfg(not(target_os = "macos"))]
+                                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                                 let _ = (bounds, window);
                             },
                         )

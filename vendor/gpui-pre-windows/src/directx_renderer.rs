@@ -1,6 +1,7 @@
 use std::{
     slice,
     sync::{Arc, OnceLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -28,6 +29,11 @@ const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
 const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
+// Monocode: the widest backdrop blur, in device pixels. Bounds the shader's
+// loop when a caller asks for more; popovers use 24pt.
+const BACKDROP_MAX_SIGMA: f32 = 96.;
+/// Backdrop scratch textures unused this long are released.
+const BACKDROP_SCRATCH_IDLE: Duration = Duration::from_secs(10);
 
 pub(crate) struct FontInfo {
     pub gamma_ratios: [f32; 4],
@@ -45,6 +51,8 @@ pub(crate) struct DirectXRenderer {
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
+    /// Monocode: frosted popovers, created the first time a quad asks.
+    backdrop: Option<BackdropBlur>,
 
     width: u32,
     height: u32,
@@ -98,6 +106,33 @@ struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
     batch_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
+}
+
+/// Monocode: the shaders and scratch textures behind
+/// [`DirectXRenderer::blur_backdrop`]. Device-local, so a lost device drops it.
+struct BackdropBlur {
+    blur_vertex: ID3D11VertexShader,
+    blur_fragment: ID3D11PixelShader,
+    composite_vertex: ID3D11VertexShader,
+    composite_fragment: ID3D11PixelShader,
+    params: Option<ID3D11Buffer>,
+    sampler: Option<ID3D11SamplerState>,
+    /// The composite overwrites its target outright, mixing the original
+    /// back in itself for the antialiased rounded edge.
+    overwrite: ID3D11BlendState,
+    scratch: Option<BackdropScratch>,
+    used: Instant,
+}
+
+/// The snapshot of the region around the glass, and its horizontal blur.
+/// They only grow, so glass of several sizes in one frame shares them.
+struct BackdropScratch {
+    width: u32,
+    height: u32,
+    original: ID3D11Texture2D,
+    original_srv: Option<ID3D11ShaderResourceView>,
+    horizontal_rtv: Option<ID3D11RenderTargetView>,
+    horizontal_srv: Option<ID3D11ShaderResourceView>,
 }
 
 struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
@@ -191,6 +226,7 @@ impl DirectXRenderer {
             pipelines,
             direct_composition,
             font_info: Self::get_font_info(),
+            backdrop: None,
             width: 1,
             height: 1,
             skip_draws: false,
@@ -283,6 +319,7 @@ impl DirectXRenderer {
             }
 
             self.direct_composition.take();
+            self.backdrop.take();
             self.devices.take();
         }
 
@@ -356,6 +393,11 @@ impl DirectXRenderer {
             _ => [0.0f32; 4],
         })?;
         self.upload_scene_buffers(scene)?;
+        if let Some(backdrop) = &mut self.backdrop
+            && backdrop.used.elapsed() >= BACKDROP_SCRATCH_IDLE
+        {
+            backdrop.scratch = None;
+        }
 
         let annotation = self
             .devices
@@ -368,7 +410,7 @@ impl DirectXRenderer {
                 .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
             match batch {
                 PrimitiveBatch::Shadows(range) => self.draw_shadows(range.start, range.len()),
-                PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
+                PrimitiveBatch::Quads(range) => self.draw_quads_over_backdrops(scene, range),
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
                     self.draw_paths_to_intermediate(paths)?;
@@ -610,6 +652,172 @@ impl DirectXRenderer {
             start as u32,
             len as u32,
         )
+    }
+
+    /// Monocode: a quad marked with [`backdrop_blur_marker`] first frosts
+    /// what is already drawn behind it, so the batch splits around each one.
+    fn draw_quads_over_backdrops(
+        &mut self,
+        scene: &Scene,
+        range: std::ops::Range<usize>,
+    ) -> Result<()> {
+        let mut start = range.start;
+        for ix in range.clone() {
+            let quad = &scene.quads[ix];
+            let Some(sigma) = backdrop_blur_sigma(quad) else {
+                continue;
+            };
+            self.draw_quads(start, ix - start)?;
+            // A failed blur leaves the plain tint, as on a renderer without one.
+            self.blur_backdrop(quad, sigma)
+                .context("Blurring backdrop")
+                .log_err();
+            start = ix;
+        }
+        self.draw_quads(start, range.end - start)
+    }
+
+    /// Replaces the pixels inside `quad`'s rounded bounds with a Gaussian blur
+    /// (`sigma` device pixels) of what is already drawn there and around it,
+    /// like CSS `backdrop-filter: blur()` and the Metal renderer. The quad
+    /// itself is drawn afterwards. Full resolution with clamped edges:
+    /// downsampled or sparse-tap blurs ghost text that sits under the glass.
+    fn blur_backdrop(&mut self, quad: &Quad, sigma: f32) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let viewport = [resources.viewport.Width, resources.viewport.Height];
+        let sigma = sigma.min(BACKDROP_MAX_SIGMA);
+        // Frosting stops where the quad is clipped, like the quad itself: a
+        // pinned header pushed under a toolbar must not blur the toolbar.
+        let bounds = quad.bounds.intersect(&quad.content_mask.bounds);
+        if bounds.size.width.0 <= 0. || bounds.size.height.0 <= 0. || sigma <= 0. {
+            return Ok(());
+        }
+        // The gaussian reaches about 3 sigma, so snapshot that much around
+        // the glass: the blur near its edges then averages the backdrop
+        // beyond them instead of fading.
+        let bleed = (sigma * 3.).ceil() + 2.;
+        let left = (bounds.origin.x.0 - bleed).floor().max(0.);
+        let top = (bounds.origin.y.0 - bleed).floor().max(0.);
+        let right = (bounds.origin.x.0 + bounds.size.width.0 + bleed)
+            .ceil()
+            .min(viewport[0]);
+        let bottom = (bounds.origin.y.0 + bounds.size.height.0 + bleed)
+            .ceil()
+            .min(viewport[1]);
+        if right - left < 1. || bottom - top < 1. {
+            return Ok(());
+        }
+        let (width, height) = ((right - left) as u32, (bottom - top) as u32);
+
+        if self.backdrop.is_none() {
+            self.backdrop = Some(BackdropBlur::new(&devices.device)?);
+        }
+        let backdrop = self.backdrop.as_mut().expect("just ensured the backdrop");
+        backdrop.used = Instant::now();
+        if let Some((grown_width, grown_height)) = match &backdrop.scratch {
+            None => Some((width, height)),
+            Some(scratch) if scratch.width < width || scratch.height < height => {
+                Some((scratch.width.max(width), scratch.height.max(height)))
+            }
+            Some(_) => None,
+        } {
+            backdrop.scratch = None;
+            backdrop.scratch = Some(BackdropScratch::new(
+                &devices.device,
+                grown_width.next_multiple_of(64),
+                grown_height.next_multiple_of(64),
+            )?);
+        }
+        let scratch = backdrop.scratch.as_ref().expect("just ensured the scratch");
+        let context = &devices.device_context;
+        let render_target = resources
+            .render_target
+            .as_ref()
+            .context("render target missing")?;
+        let params = backdrop
+            .params
+            .as_ref()
+            .context("backdrop params missing")?;
+        let region = [width as f32, height as f32];
+        let mut pass = BackdropParams {
+            rect_origin: [0., 0.],
+            rect_size: region,
+            target_size: region,
+            region_origin: [0., 0.],
+            region_size: region,
+            bounds_origin: [bounds.origin.x.0, bounds.origin.y.0],
+            bounds_size: [bounds.size.width.0, bounds.size.height.0],
+            corner_radius: quad.corner_radii.top_left.0,
+            sigma,
+            texture_size: [scratch.width as f32, scratch.height as f32],
+            _pad: [0.; 2],
+        };
+
+        let source = D3D11_BOX {
+            left: left as u32,
+            top: top as u32,
+            front: 0,
+            right: right as u32,
+            bottom: bottom as u32,
+            back: 1,
+        };
+        unsafe {
+            context.CopySubresourceRegion(
+                &scratch.original,
+                0,
+                0,
+                0,
+                0,
+                render_target,
+                0,
+                Some(&source as *const D3D11_BOX),
+            );
+        }
+
+        // Horizontal pass, over the whole snapshot into the scratch.
+        update_buffer(context, params, &[pass])?;
+        unsafe {
+            context.OMSetRenderTargets(Some(slice::from_ref(&scratch.horizontal_rtv)), None);
+            context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                TopLeftX: 0.,
+                TopLeftY: 0.,
+                Width: region[0],
+                Height: region[1],
+                MinDepth: 0.,
+                MaxDepth: 1.,
+            }]));
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            context.VSSetShader(&backdrop.blur_vertex, None);
+            context.PSSetShader(&backdrop.blur_fragment, None);
+            context.OMSetBlendState(&backdrop.overwrite, None, 0xFFFFFFFF);
+            context.VSSetConstantBuffers(2, Some(slice::from_ref(&backdrop.params)));
+            context.PSSetConstantBuffers(2, Some(slice::from_ref(&backdrop.params)));
+            context.PSSetSamplers(1, Some(slice::from_ref(&backdrop.sampler)));
+            context.PSSetShaderResources(2, Some(slice::from_ref(&scratch.original_srv)));
+            context.Draw(4, 0);
+        }
+
+        // Vertical pass, written back inside the glass's bounds.
+        pass.rect_origin = pass.bounds_origin;
+        pass.rect_size = pass.bounds_size;
+        pass.target_size = viewport;
+        pass.region_origin = [left, top];
+        update_buffer(context, params, &[pass])?;
+        unsafe {
+            context.OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
+            context.RSSetViewports(Some(slice::from_ref(&resources.viewport)));
+            context.VSSetShader(&backdrop.composite_vertex, None);
+            context.PSSetShader(&backdrop.composite_fragment, None);
+            context.PSSetShaderResources(
+                2,
+                Some(&[scratch.original_srv.clone(), scratch.horizontal_srv.clone()]),
+            );
+            context.Draw(4, 0);
+            // Unbound, so the next blur can render into the scratch again.
+            context.PSSetShaderResources(2, Some(&[None, None]));
+        }
+        Ok(())
     }
 
     fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
@@ -1011,6 +1219,113 @@ impl DirectXRenderPipelines {
     }
 }
 
+impl BackdropBlur {
+    fn new(device: &ID3D11Device) -> Result<Self> {
+        let shader = |module, target| -> Result<_> {
+            let raw = RawShaderBytes::new(module, target)?;
+            Ok(raw.as_bytes().to_vec())
+        };
+        let blur_vertex = create_vertex_shader(
+            device,
+            &shader(ShaderModule::BackdropBlur, ShaderTarget::Vertex)?,
+        )?;
+        let blur_fragment = create_fragment_shader(
+            device,
+            &shader(ShaderModule::BackdropBlur, ShaderTarget::Fragment)?,
+        )?;
+        let composite_vertex = create_vertex_shader(
+            device,
+            &shader(ShaderModule::BackdropComposite, ShaderTarget::Vertex)?,
+        )?;
+        let composite_fragment = create_fragment_shader(
+            device,
+            &shader(ShaderModule::BackdropComposite, ShaderTarget::Fragment)?,
+        )?;
+        let params = create_constant_buffer::<BackdropParams>(device)?;
+        let sampler = unsafe {
+            let desc = D3D11_SAMPLER_DESC {
+                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+                AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+                MipLODBias: 0.0,
+                MaxAnisotropy: 1,
+                ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+                BorderColor: [0.0; 4],
+                MinLOD: 0.0,
+                MaxLOD: D3D11_FLOAT32_MAX,
+            };
+            let mut output = None;
+            device.CreateSamplerState(&desc, Some(&mut output))?;
+            output
+        };
+        let overwrite = unsafe {
+            let mut desc = D3D11_BLEND_DESC::default();
+            desc.RenderTarget[0].BlendEnable = false.into();
+            desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
+            let mut state = None;
+            device.CreateBlendState(&desc, Some(&mut state))?;
+            state.context("Creating backdrop blend state")?
+        };
+        Ok(Self {
+            blur_vertex,
+            blur_fragment,
+            composite_vertex,
+            composite_fragment,
+            params,
+            sampler,
+            overwrite,
+            scratch: None,
+            used: Instant::now(),
+        })
+    }
+}
+
+impl BackdropScratch {
+    fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self> {
+        let texture = |bind: D3D11_BIND_FLAG| -> Result<ID3D11Texture2D> {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: bind.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut output = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut output))? };
+            output.context("Creating backdrop texture")
+        };
+        let original = texture(D3D11_BIND_SHADER_RESOURCE)?;
+        let horizontal = texture(D3D11_BIND_FLAG(
+            D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0,
+        ))?;
+        let mut original_srv = None;
+        let mut horizontal_srv = None;
+        let mut horizontal_rtv = None;
+        unsafe {
+            device.CreateShaderResourceView(&original, None, Some(&mut original_srv))?;
+            device.CreateShaderResourceView(&horizontal, None, Some(&mut horizontal_srv))?;
+            device.CreateRenderTargetView(&horizontal, None, Some(&mut horizontal_rtv))?;
+        }
+        Ok(Self {
+            width,
+            height,
+            original,
+            original_srv,
+            horizontal_rtv,
+            horizontal_srv,
+        })
+    }
+}
+
 impl DirectComposition {
     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
         let comp_device = get_comp_device(dxgi_device)?;
@@ -1084,6 +1399,25 @@ struct BatchParams {
 }
 
 const _: () = assert!(std::mem::size_of::<BatchParams>() == 16);
+
+/// `BackdropParams` in shaders.hlsl: five 16-byte registers.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+struct BackdropParams {
+    rect_origin: [f32; 2],
+    rect_size: [f32; 2],
+    target_size: [f32; 2],
+    region_origin: [f32; 2],
+    region_size: [f32; 2],
+    bounds_origin: [f32; 2],
+    bounds_size: [f32; 2],
+    corner_radius: f32,
+    sigma: f32,
+    texture_size: [f32; 2],
+    _pad: [f32; 2],
+}
+
+const _: () = assert!(std::mem::size_of::<BackdropParams>() == 80);
 
 struct PipelineState<T> {
     label: &'static str,
@@ -1717,6 +2051,8 @@ pub(crate) mod shader_resources {
         SubpixelSprite,
         PolychromeSprite,
         EmojiRasterization,
+        BackdropBlur,
+        BackdropComposite,
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1793,6 +2129,14 @@ pub(crate) mod shader_resources {
                 ShaderModule::EmojiRasterization => match target {
                     ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
                     ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
+                },
+                ShaderModule::BackdropBlur => match target {
+                    ShaderTarget::Vertex => BACKDROP_BLUR_VERTEX_BYTES,
+                    ShaderTarget::Fragment => BACKDROP_BLUR_FRAGMENT_BYTES,
+                },
+                ShaderModule::BackdropComposite => match target {
+                    ShaderTarget::Vertex => BACKDROP_COMPOSITE_VERTEX_BYTES,
+                    ShaderTarget::Fragment => BACKDROP_COMPOSITE_FRAGMENT_BYTES,
                 },
             };
             Self { inner: bytes }
@@ -1881,6 +2225,8 @@ pub(crate) mod shader_resources {
                 ShaderModule::SubpixelSprite => "subpixel_sprite",
                 ShaderModule::PolychromeSprite => "polychrome_sprite",
                 ShaderModule::EmojiRasterization => "emoji_rasterization",
+                ShaderModule::BackdropBlur => "backdrop_blur",
+                ShaderModule::BackdropComposite => "backdrop_composite",
             }
         }
     }

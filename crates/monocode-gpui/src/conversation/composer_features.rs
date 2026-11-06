@@ -206,6 +206,7 @@ impl Conversation {
         }
         self.attaching = true;
         let store = self.store.clone();
+        let id = self.summary.id;
         let mut all = self.attachments.clone();
         let existing = all.len();
         let work = cx.background_executor().spawn(async move {
@@ -215,11 +216,10 @@ impl Conversation {
             {
                 return Err("Attach up to 20 files totalling 20 MB.".to_owned());
             }
+            // Kept with the conversation so deleting it removes them.
             let root = locked(&store)?
-                .data_dir()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("attachments");
+                .thread_attachments_dir(id)?
+                .unwrap_or_else(|| std::env::temp_dir().join("monocode-attachments"));
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             for image in images {
                 let path = root.join(format!(

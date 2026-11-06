@@ -2,7 +2,7 @@ import { View } from "react-native";
 
 import { withAlpha, themedStyles } from "@/ui/theme";
 
-import { BULB, PIXEL_GRID, pixelLayers, type PixelRect } from "./pixelMascots";
+import { BULB, PIXEL_GRID, pixelLayers, pixelOffset, type PixelRect } from "./pixelMascots";
 import { useFrameToggle } from "./useFrameToggle";
 
 /** What a mascot's agent is doing, as on desktop. */
@@ -38,20 +38,26 @@ export function PixelMascot({
   color,
   status = "idle",
   size = 22,
+  centered = false,
 }: {
   name: string;
   color: string;
   status?: MascotStatus;
   size?: number;
+  /** Centres the figure itself in its square, as a picker's tiles want. */
+  centered?: boolean;
 }) {
   const talking = useFrameToggle(status === "working");
   const layers = pixelLayers(name, color, talking);
   const unit = size / PIXEL_GRID;
+  const offset = centered ? pixelOffset(name) : { x: 0, y: 0 };
 
   return (
     <View style={{ width: size, height: size }} accessibilityElementsHidden>
-      <Rects rects={layers.body} unit={unit} />
-      <Rects rects={layers.open} unit={unit} />
+      <View style={{ position: "absolute", left: offset.x * unit, top: offset.y * unit, width: size, height: size }}>
+        <Rects rects={layers.body} unit={unit} />
+        <Rects rects={layers.open} unit={unit} />
+      </View>
       {status === "needs-you" ? (
         <View style={{ position: "absolute", left: 12.5 * unit, top: -2.5 * unit }}>
           <Rects rects={BULB} unit={unit} />

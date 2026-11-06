@@ -59,6 +59,30 @@ pub struct GeneratedTitle {
     pub work_item: Option<WorkItemHint>,
 }
 
+/// The model a background chore runs on: session titles, worktree branch
+/// names, commit messages and pull request text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextModel {
+    pub kind: Kind,
+    pub model: Option<String>,
+    pub account: crate::accounts::Profile,
+}
+impl TextModel {
+    /// The harness's own quick model, on the session's account.
+    pub fn automatic(kind: Kind, account: crate::accounts::Profile) -> Self {
+        let model = match kind {
+            Kind::Codex => Some("gpt-5.6-luna".into()),
+            Kind::Claude => Some("claude-haiku-4-5".into()),
+            _ => None,
+        };
+        Self {
+            kind,
+            model,
+            account,
+        }
+    }
+}
+
 pub fn supports(kind: Kind) -> bool {
     matches!(
         kind,
@@ -138,34 +162,33 @@ pub fn generate(
     message: &str,
     cancel: Arc<AtomicBool>,
 ) -> Option<GeneratedTitle> {
-    generate_for(kind, cwd, message, Default::default(), cancel)
+    generate_for(
+        TextModel::automatic(kind, Default::default()),
+        cwd,
+        message,
+        cancel,
+    )
 }
 pub fn generate_for(
-    kind: Kind,
+    text: TextModel,
     cwd: &Path,
     message: &str,
-    account: crate::accounts::Profile,
     cancel: Arc<AtomicBool>,
 ) -> Option<GeneratedTitle> {
-    if !supports(kind) {
+    if !supports(text.kind) {
         return None;
     }
-    let binary = provider::resolve(kind)?;
-    let model = match kind {
-        Kind::Codex => Some("gpt-5.6-luna".into()),
-        Kind::Claude => Some("claude-haiku-4-5".into()),
-        _ => None,
-    };
+    let binary = provider::resolve(text.kind)?;
     let output = provider::run_text(
         Request {
-            kind,
+            kind: text.kind,
             binary,
             cwd: cwd.into(),
             prompt: prompt(message),
             provider_id: None,
-            model,
+            model: text.model,
             settings: Settings {
-                account,
+                account: text.account,
                 ..Default::default()
             },
         },

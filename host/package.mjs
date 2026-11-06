@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { resolve, join } from "node:path";
+import { ensureRuntimeArchive } from "./runtime-download.mjs";
 
 // Official Node release checksums, pinned so release builds are reproducible.
 // https://nodejs.org/dist/v24.21.0/SHASUMS256.txt
@@ -66,27 +67,11 @@ for (const target of targets) {
   const extension = windows ? "zip" : "tar.gz";
   const stem = `node-v${nodeVersion}-${target.replace("win32-", "win-")}`;
   const archive = join(cache, `${stem}.${extension}`);
-  let bytes;
-  try {
-    bytes = await readFile(archive);
-  } catch {
-    /* first download */
-  }
-  if (
-    !bytes ||
-    createHash("sha256").update(bytes).digest("hex") !== runtimes[target]
-  ) {
-    const response = await fetch(
-      `https://nodejs.org/dist/v${nodeVersion}/${stem}.${extension}`,
-      { signal: AbortSignal.timeout(120_000) },
-    );
-    if (!response.ok)
-      throw new Error(`Runtime download failed: HTTP ${response.status}`);
-    bytes = Buffer.from(await response.arrayBuffer());
-    if (createHash("sha256").update(bytes).digest("hex") !== runtimes[target])
-      throw new Error("Node runtime checksum mismatch");
-    await writeFile(archive, bytes);
-  }
+  await ensureRuntimeArchive({
+    archive,
+    url: `https://nodejs.org/dist/v${nodeVersion}/${stem}.${extension}`,
+    checksum: runtimes[target],
+  });
   const folder = join(output, target);
   await rm(folder, { recursive: true, force: true });
   await mkdir(folder, { recursive: true });

@@ -72,6 +72,11 @@ const SCRATCH_IDLE: Duration = Duration::from_secs(2);
 
 static SCRATCH_BYTES: AtomicU64 = AtomicU64::new(0);
 static INSTANCE_BUFFER_BYTES: AtomicU64 = AtomicU64::new(DEFAULT_INSTANCE_BUFFER_SIZE as u64);
+/// Bumped to make each renderer give back its spare GPU memory on its next
+/// frame.
+static TRIM_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RENDERERS: AtomicU64 = AtomicU64::new(0);
+static DRAWABLE_PIXELS: AtomicU64 = AtomicU64::new(0);
 
 /// GPU memory, for diagnostics.
 #[derive(Clone, Copy, Debug, Default)]
@@ -82,6 +87,14 @@ pub struct GpuMemory {
     pub instance_buffer: u64,
     /// Effect textures the renderers keep between frames.
     pub scratch: u64,
+    /// Live renderers, one per open window.
+    pub renderers: u64,
+    /// Drawable pixels summed over windows; each window keeps a path texture
+    /// and up to three drawables of this size at 4 bytes a pixel.
+    pub drawable_pixels: u64,
+    pub atlas: crate::metal_atlas::AtlasMemory,
+    /// How many times [`trim`] ran.
+    pub trims: u64,
 }
 
 pub fn gpu_memory() -> GpuMemory {
@@ -90,7 +103,17 @@ pub fn gpu_memory() -> GpuMemory {
             .map_or(0, |device| device.current_allocated_size()),
         instance_buffer: INSTANCE_BUFFER_BYTES.load(Ordering::Relaxed),
         scratch: SCRATCH_BYTES.load(Ordering::Relaxed),
+        renderers: RENDERERS.load(Ordering::Relaxed),
+        drawable_pixels: DRAWABLE_PIXELS.load(Ordering::Relaxed),
+        atlas: crate::metal_atlas::atlas_memory(),
+        trims: TRIM_GENERATION.load(Ordering::Relaxed),
     }
+}
+
+/// Ask every renderer to drop its instance buffers back to the default size on
+/// its next frame. Effect and path textures already go once unused.
+pub fn trim() {
+    TRIM_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
@@ -180,8 +203,57 @@ impl InstanceBufferPool {
     }
 }
 
+impl Drop for MetalRenderer {
+    fn drop(&mut self) {
+        RENDERERS.fetch_sub(1, Ordering::Relaxed);
+        DRAWABLE_PIXELS.fetch_sub(self.drawable_pixels, Ordering::Relaxed);
+    }
+}
+
+/// Monocode: whether drawn frames reach the screen. A window can keep
+/// drawing every frame while the compositor shows none of them (seen after a
+/// file drop, until a resize); Metal reports a presented time of 0 for each
+/// frame that was never shown.
+#[derive(Default)]
+pub struct PresentStats {
+    presented: AtomicU64,
+    skipped: AtomicU64,
+    /// Consecutive frames not shown, reset by the next one that is.
+    skipped_streak: AtomicU64,
+}
+
+impl PresentStats {
+    pub fn presented(&self) -> u64 {
+        self.presented.load(Ordering::Relaxed)
+    }
+    pub fn skipped(&self) -> u64 {
+        self.skipped.load(Ordering::Relaxed)
+    }
+    pub fn skipped_streak(&self) -> u64 {
+        self.skipped_streak.load(Ordering::Relaxed)
+    }
+    fn record(&self, shown: bool) {
+        if shown {
+            self.presented.fetch_add(1, Ordering::Relaxed);
+            self.skipped_streak.store(0, Ordering::Relaxed);
+        } else {
+            self.skipped.fetch_add(1, Ordering::Relaxed);
+            self.skipped_streak.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Monocode: logs a main-thread wait long enough to freeze the window.
+fn log_slow(what: &str, since: Instant) {
+    let elapsed = since.elapsed();
+    if elapsed >= Duration::from_millis(150) {
+        log::warn!("renderer blocked {}ms {what}", elapsed.as_millis());
+    }
+}
+
 pub struct MetalRenderer {
     device: metal::Device,
+    present_stats: Arc<PresentStats>,
     layer: Option<metal::MetalLayer>,
     is_apple_gpu: bool,
     is_unified_memory: bool,
@@ -218,7 +290,12 @@ pub struct MetalRenderer {
     core_video_texture_cache: CFRetained<CVMetalTextureCache>,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
+    /// Paths need a window-sized texture; it is made by the first frame that
+    /// draws one and dropped once none has for a while.
+    paths_used: Option<Instant>,
+    trim_generation: u64,
     path_sample_count: u32,
+    drawable_pixels: u64,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
@@ -267,6 +344,13 @@ impl MetalRenderer {
         // Support direct-to-display rendering if the window is not transparent
         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
         layer.set_opaque(!transparent);
+        // Monocode: keep Core Animation's default of three drawables. With
+        // two, a frame drawn while the window server still holds both (one
+        // shown, one queued) blocks the main thread in `nextDrawable` until
+        // its 1s timeout. That happened on every screenshot thumbnail drop:
+        // the window turning key draws synchronously while the overlay holds
+        // the previous frames, freezing the window for a second. The third
+        // drawable costs one window of pixels.
         layer.set_maximum_drawable_count(3);
         // Monocode: backdrop blur copies already drawn pixels out of the
         // drawable, so it must stay readable in every build, not only for
@@ -502,8 +586,10 @@ impl MetalRenderer {
             CFRetained::from_raw(ptr::NonNull::new(cache).expect("CoreVideo returned a null cache"))
         };
 
+        RENDERERS.fetch_add(1, Ordering::Relaxed);
         Self {
             device,
+            present_stats: Arc::default(),
             layer,
             presents_with_transaction: false,
             is_apple_gpu,
@@ -535,7 +621,10 @@ impl MetalRenderer {
             core_video_texture_cache,
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
+            paths_used: None,
+            trim_generation: 0,
             path_sample_count: PATH_SAMPLE_COUNT,
+            drawable_pixels: 0,
             #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
             headless_render_target: None,
         }
@@ -563,14 +652,32 @@ impl MetalRenderer {
         }
     }
 
+    pub fn present_stats(&self) -> &Arc<PresentStats> {
+        &self.present_stats
+    }
+
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
         if let Some(layer) = &self.layer {
             layer.set_drawable_size(CGSize::new(size.width.0 as f64, size.height.0 as f64));
         }
-        self.update_path_intermediate_textures(size);
+        let pixels = (size.width.0.max(0) as u64) * (size.height.0.max(0) as u64);
+        DRAWABLE_PIXELS.fetch_sub(self.drawable_pixels, Ordering::Relaxed);
+        DRAWABLE_PIXELS.fetch_add(pixels, Ordering::Relaxed);
+        self.drawable_pixels = pixels;
     }
 
+    /// Make the path textures for a frame of `size` that draws paths.
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
+        self.paths_used = Some(Instant::now());
+        if self
+            .path_intermediate_texture
+            .as_ref()
+            .is_some_and(|texture| {
+                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
+            })
+        {
+            return;
+        }
         // We are uncertain when this happens, but sometimes size can be 0 here. Most likely before
         // the layout pass on window creation. Zero-sized texture creation causes SIGABRT.
         // https://github.com/zed-industries/zed/issues/36229
@@ -634,7 +741,11 @@ impl MetalRenderer {
             (viewport_size.width.ceil() as i32).into(),
             (viewport_size.height.ceil() as i32).into(),
         );
-        let drawable = if let Some(drawable) = layer.next_drawable() {
+        // Monocode: log main-thread waits, which freeze the whole window.
+        let waited = Instant::now();
+        let next_drawable = layer.next_drawable();
+        log_slow("waiting for a drawable", waited);
+        let drawable = if let Some(drawable) = next_drawable {
             drawable
         } else {
             log::error!(
@@ -652,9 +763,26 @@ impl MetalRenderer {
             }
         };
 
+        {
+            let stats = self.present_stats.clone();
+            let block = RcBlock::new(move |drawable: ptr::NonNull<AnyObject>| {
+                // SAFETY: Metal passes the drawable this handler was added to.
+                let time: f64 = unsafe { msg_send![drawable.as_ref(), presentedTime] };
+                stats.record(time > 0.0);
+            });
+            // SAFETY: `addPresentedHandler:` copies the block; the drawable is
+            // a valid CAMetalDrawable that has not been presented yet.
+            unsafe {
+                let drawable: &AnyObject = &*drawable.as_ptr().cast();
+                let _: () = msg_send![drawable, addPresentedHandler: &*block];
+            }
+        }
+
         if self.presents_with_transaction {
             command_buffer.commit();
+            let waited = Instant::now();
             command_buffer.wait_until_scheduled();
+            log_slow("waiting for the GPU to schedule a frame", waited);
             drawable.present();
         } else {
             command_buffer.present_drawable(drawable);
@@ -685,6 +813,9 @@ impl MetalRenderer {
                 scene.surfaces.len(),
             )
         })?;
+        if !scene.paths.is_empty() {
+            self.update_path_intermediate_textures(viewport_size);
+        }
         let command_buffer = self.draw_primitives_to_texture(
             scene,
             &instance_bindings,
@@ -694,6 +825,13 @@ impl MetalRenderer {
         )?;
 
         let used = writer.used();
+        let trim_generation = TRIM_GENERATION.load(Ordering::Relaxed);
+        if self.trim_generation != trim_generation {
+            self.trim_generation = trim_generation;
+            self.instance_buffer_pool
+                .lock()
+                .reset(DEFAULT_INSTANCE_BUFFER_SIZE);
+        }
         self.instance_buffer_pool.lock().note_frame(used);
         self.release_idle_scratch();
 
@@ -858,10 +996,16 @@ impl MetalRenderer {
             self.background_blur_used.pop();
             self.background_blurs.pop();
         }
-        self.background_blurs.truncate(self.background_blur_used.len());
+        self.background_blurs
+            .truncate(self.background_blur_used.len());
         if self.backdrop_used.as_ref().is_none_or(idle) {
             self.backdrop_scratch = None;
             self.backdrop_used = None;
+        }
+        if self.paths_used.as_ref().is_none_or(idle) {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+            self.paths_used = None;
         }
         let bytes = self
             .edge_fade_scratch
@@ -869,7 +1013,11 @@ impl MetalRenderer {
             .chain(&self.background_blurs)
             .chain(&self.backdrop_scratch)
             .map(|(a, b)| texture_bytes(a) + texture_bytes(b))
-            .sum::<u64>();
+            .sum::<u64>()
+            + self
+                .path_intermediate_texture
+                .as_ref()
+                .map_or(0, |texture| texture_bytes(texture));
         // Several windows share the total; the last frame's renderer reports.
         SCRATCH_BYTES.store(bytes, Ordering::Relaxed);
     }
@@ -2026,11 +2174,10 @@ fn build_pipeline_state(
         .expect("could not create render pipeline state")
 }
 
-// Monocode: frosted popovers. A quad marked with this border colour (and no
-// border width) asks the renderer to blur the backdrop beneath it first.
-const BACKDROP_MARKER_HUE: f32 = 0.707_106_77;
-const BACKDROP_MARKER_SATURATION: f32 = 0.577_215_7;
-const BACKDROP_MAX_SIGMA: f32 = 4096.;
+// Monocode: frosted popovers. The marker lives in gpui so every renderer
+// that frosts agrees on it.
+pub use gpui::backdrop_blur_marker;
+use gpui::backdrop_blur_sigma as backdrop_sigma;
 const EDGE_FADE_BEGIN: f32 = 0.271828;
 const EDGE_FADE_END: f32 = 0.314159;
 const HORIZONTAL_FADE_BEGIN: f32 = 0.161803;
@@ -2183,28 +2330,6 @@ fn copy_fade_region(
         metal::MTLOrigin { x: 0, y: 0, z: 0 },
     );
     blit.end_encoding();
-}
-
-/// The border colour that marks a quad as frosted glass: before drawing it,
-/// the renderer blurs what is already drawn behind it by `sigma` device
-/// pixels, like CSS `backdrop-filter: blur()`. Its background then tints the
-/// glass. Give the quad no border width.
-pub fn backdrop_blur_marker(sigma: f32) -> Hsla {
-    Hsla {
-        h: BACKDROP_MARKER_HUE,
-        s: BACKDROP_MARKER_SATURATION,
-        l: (sigma / BACKDROP_MAX_SIGMA).clamp(0., 1.),
-        a: 0.,
-    }
-}
-
-fn backdrop_sigma(quad: &Quad) -> Option<f32> {
-    let color = quad.border_color;
-    (color.h == BACKDROP_MARKER_HUE
-        && color.s == BACKDROP_MARKER_SATURATION
-        && color.a == 0.
-        && color.l > 0.)
-        .then_some(color.l * BACKDROP_MAX_SIGMA)
 }
 
 #[repr(C)]
@@ -2375,7 +2500,11 @@ struct InstanceBufferWriter {
 
 impl InstanceBufferWriter {
     fn used(&self) -> usize {
-        self.filled.iter().map(|(_, written)| *written).sum::<usize>() + self.offset
+        self.filled
+            .iter()
+            .map(|(_, written)| *written)
+            .sum::<usize>()
+            + self.offset
     }
 
     fn new(

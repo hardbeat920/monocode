@@ -5,6 +5,7 @@
 
 mod accounts;
 mod activity;
+mod app_log;
 mod app_menu;
 mod arcade;
 mod assets;
@@ -26,17 +27,20 @@ mod file_editor;
 mod file_icons;
 mod fixtures;
 mod fonts;
+mod frame_log;
 mod fs_watch;
 mod git_cache;
 mod git_graph;
 mod git_picker;
 mod git_status;
+mod gpu_trim;
 #[cfg(target_os = "macos")]
 mod hang_watchdog;
 mod history;
 mod image_lightbox;
 mod image_memory;
 mod inbox;
+mod ink_field;
 mod input;
 mod markdown;
 mod markdown_model;
@@ -52,12 +56,14 @@ mod notifications;
 mod pane_layout;
 mod pane_motion;
 mod particle_text;
+mod phase_tile;
 mod pickers;
 mod popover;
 mod project_background;
 mod project_search;
 mod project_settings;
 mod project_tabs;
+mod project_theme;
 mod pulse;
 mod questions;
 mod quick_composer;
@@ -70,6 +76,7 @@ mod review;
 mod right_panel;
 mod runtime;
 mod search;
+mod send_morph;
 mod session_mark;
 mod session_review;
 mod settings;
@@ -78,6 +85,7 @@ mod sound;
 mod syntax;
 mod tab_label;
 mod tab_motion;
+mod tab_tile;
 mod terminal;
 mod theme;
 #[cfg(target_os = "macos")]
@@ -85,6 +93,8 @@ mod traffic_lights;
 mod transcript;
 mod usage_footer;
 mod visuals;
+#[cfg(test)]
+mod wheel_glide_tests;
 mod window_state;
 mod workspace;
 mod worktree_switcher;
@@ -196,6 +206,13 @@ fn main() {
     }
     if cli_args.first().is_some_and(|a| a == "visual-mcp") {
         if let Err(error) = monocode_core::visual_bridge::mcp_stdio() {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if cli_args.first().is_some_and(|a| a == "app-mcp") {
+        if let Err(error) = monocode_core::mono::bridge::mcp_stdio() {
             eprintln!("{error}");
             std::process::exit(1);
         }
@@ -419,6 +436,7 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
+    app_log::init();
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
@@ -430,6 +448,8 @@ fn main() {
             image_memory::init(cx);
             #[cfg(target_os = "macos")]
             memory_log::start(cx);
+            frame_log::start(cx);
+            gpu_trim::start(cx);
             #[cfg(target_os = "macos")]
             hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
             input::bind(cx);
@@ -475,7 +495,9 @@ fn main() {
                     app_owns_titlebar_drag: cfg!(target_os = "macos"),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Monocode Native".into()),
-                        appears_transparent: cfg!(target_os = "macos"),
+                        // Windows also drops its caption: the app's drag areas
+                        // hit-test as the caption and the frame still resizes.
+                        appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
                         traffic_light_position: if cfg!(target_os = "macos") {
                             // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
@@ -487,6 +509,27 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    // Install the menu one frame later, after the first frame presents.
+                    window.on_next_frame(|window, _| {
+                        window.on_next_frame(|_, cx| app_menu::ready(cx));
+                    });
+                    // Off the launch path: it lists every conversation folder.
+                    let cleanup = db.clone();
+                    window.on_next_frame(move |_, cx| {
+                        cx.background_executor()
+                            .spawn(async move {
+                                let result = cleanup
+                                    .lock()
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|store| store.sweep_thread_dirs());
+                                if let Err(error) = result {
+                                    eprintln!(
+                                        "Cannot clean up deleted conversations' files: {error}"
+                                    );
+                                }
+                            })
+                            .detach();
+                    });
                     let shell = cx.new(|cx| {
                         shell::Shell::new_with_metadata(
                             db,

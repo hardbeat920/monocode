@@ -49,9 +49,35 @@ describe("watch frames", () => {
     expect(applyFrames([], [{ order: ["a"], turns: [] }])).toBeNull();
   });
 
+  it("preserves question transitions in a burst, including clears before reused IDs", () => {
+    const question = {
+      requestId: 4,
+      questions: [{ id: "q", prompt: "Which?", multiSelect: false, allowCustom: true, options: [] }],
+    };
+    expect(applyFrames([], [{ order: [], turns: [] }])!.questions).toEqual([]);
+    expect(applyFrames([], [{ order: [], turns: [], question }])!.questions).toEqual([question]);
+    expect(
+      applyFrames([], [
+        { order: [], turns: [], question },
+        { order: [], turns: [], question: null },
+        { order: [], turns: [], question },
+      ])!.questions,
+    ).toEqual([question, null, question]);
+  });
+
   it("carries an error until the next good frame", () => {
     expect(
       applyFrames([], [{ error: "Mono is no longer available" }])!.error,
     ).toBe("Mono is no longer available");
   });
+  it("applies usage state transitions without transcript edits and preserves explicit clears", () => {
+    const usageLimit = { token: "a", resumeAtReset: false, canResume: false, canAutoResume: true,
+      resetsAt: 123456, resetLabel: "Resets tomorrow", limitation: "Keep desktop running" };
+    expect(applyFrames([], [{ usageLimit }])!.usageLimit).toEqual(usageLimit);
+    expect(applyFrames([], [{}])!.usageLimit).toBeUndefined();
+    const armed = { ...usageLimit, token: "b", resumeAtReset: true };
+    expect(applyFrames([], [{ usageLimit }, { usageLimit: armed }])!.usageLimit).toEqual(armed);
+    expect(applyFrames([], [{ usageLimit: armed }, { usageLimit: null }])!.usageLimit).toBeNull();
+  });
+
 });

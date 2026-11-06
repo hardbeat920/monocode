@@ -1,4 +1,5 @@
-//! Queued messages and tool approvals share the ledge above the composer.
+//! Queued messages, tool approvals and the session's changes share the
+//! ledge above the composer.
 //! Entrances grow upward from its edge without scaling the clipped contents.
 use crate::{pane_motion::PaneSlide, reveal::Disclosure, theme::content};
 use gpui::{AnyElement, Div, IntoElement, Pixels, Stateful, Window, div, prelude::*, px};
@@ -23,6 +24,11 @@ pub(super) fn shelf(id: &'static str) -> Stateful<Div> {
 }
 
 pub(super) fn card(id: &'static str, classic_layout: bool) -> Stateful<Div> {
+    frame(classic_layout).id(id).px(px(10.)).py(px(2.))
+}
+
+/// The ledge card's edge and fill, for contents that bring their own padding.
+pub(super) fn frame(classic_layout: bool) -> Div {
     let border_alpha = if classic_layout {
         0.1
     } else if content(1.).l > 0.5 {
@@ -31,14 +37,11 @@ pub(super) fn card(id: &'static str, classic_layout: bool) -> Stateful<Div> {
         0.08
     };
     div()
-        .id(id)
         .rounded_t(px(10.))
         .border_1()
         .border_b_0()
         .border_color(content(border_alpha))
         .bg(content(0.03))
-        .px(px(10.))
-        .py(px(2.))
 }
 
 impl Motion {
@@ -115,7 +118,12 @@ impl Motion {
     }
 }
 
-fn reveal(child: impl IntoElement, width: Pixels, progress: f32, window: &Window) -> AnyElement {
+pub(super) fn reveal(
+    child: impl IntoElement,
+    width: Pixels,
+    progress: f32,
+    window: &Window,
+) -> AnyElement {
     window.request_animation_frame();
     div()
         .w_full()

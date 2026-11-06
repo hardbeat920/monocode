@@ -121,6 +121,9 @@ impl Origin {
 /// A chip covers 36px at up to 3x, so it keeps a sprite this tall, never the
 /// full image. Opening the lightbox decodes the original separately.
 const THUMBNAIL_SIDE: u32 = 108;
+/// A Mono chat's sent photo fits a 240px square, kept at 2x.
+pub(crate) const PHOTO_SIDE: f32 = 240.;
+const PHOTO_PIXELS: u32 = 480;
 
 /// Images are decoded off-thread when their chip is first built. Releasing the
 /// entity frees the GPU sprite too; GPUI keeps atlas entries until told.
@@ -129,10 +132,23 @@ pub(crate) struct Photo {
     bytes: usize,
     mime: SharedString,
     source: Option<ImageSource>,
+    /// Shown whole at its own shape, like a photo in a messaging app, rather
+    /// than cropped into a square chip.
+    whole: bool,
+    /// The decoded sprite's pixel size, which gives a whole photo its shape.
+    shape: Option<(u32, u32)>,
 }
 
 impl Photo {
     pub(crate) fn new(origin: Origin, mime: SharedString, cx: &mut Context<Self>) -> Self {
+        Self::build(origin, mime, false, cx)
+    }
+
+    pub(crate) fn whole(origin: Origin, mime: SharedString, cx: &mut Context<Self>) -> Self {
+        Self::build(origin, mime, true, cx)
+    }
+
+    fn build(origin: Origin, mime: SharedString, whole: bool, cx: &mut Context<Self>) -> Self {
         let format = match mime.as_ref() {
             "image/jpeg" | "image/jpg" => gpui::ImageFormat::Jpeg,
             "image/gif" => gpui::ImageFormat::Gif,
@@ -145,31 +161,37 @@ impl Photo {
         let read = origin.clone();
         let work = cx.background_executor().spawn(async move {
             let bytes = read.read()?;
-            Ok::<_, String>(
-                match monocode_core::composer::thumbnail_bgra(&bytes, THUMBNAIL_SIDE) {
-                    Ok(pixels) => Ok(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-                        pixels,
-                    )]))),
-                    // SVG and formats the decoder lacks still go through GPUI.
-                    Err(_) => Err(Arc::new(gpui::Image::from_bytes(format, bytes))),
-                },
-            )
+            let decoded = if whole {
+                monocode_core::composer::fit_bgra(&bytes, PHOTO_PIXELS)
+            } else {
+                monocode_core::composer::thumbnail_bgra(&bytes, THUMBNAIL_SIDE)
+            };
+            Ok::<_, String>(match decoded {
+                Ok(pixels) => Ok((
+                    pixels.dimensions(),
+                    Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)])),
+                )),
+                // SVG and formats the decoder lacks still go through GPUI.
+                Err(_) => Err(Arc::new(gpui::Image::from_bytes(format, bytes))),
+            })
         });
         cx.spawn(async move |this, cx| {
-            let source = work.await.ok().map(|decoded| match decoded {
-                Ok(sprite) => ImageSource::Render(sprite),
-                Err(encoded) => ImageSource::from(encoded),
-            });
+            let (shape, source) = match work.await {
+                Ok(Ok((shape, sprite))) => (Some(shape), Some(ImageSource::Render(sprite))),
+                Ok(Err(encoded)) => (None, Some(ImageSource::from(encoded))),
+                Err(_) => (None, None),
+            };
             let _ = this.update(cx, |this, cx| {
+                this.shape = shape;
                 this.source = source;
                 cx.notify();
             });
         })
         .detach();
-        cx.on_release(|this, cx| match this.source.take() {
-            Some(ImageSource::Render(image)) => cx.drop_image(image, None),
-            Some(source) => source.remove_asset(cx),
-            None => {}
+        cx.on_release(|this, cx| {
+            if let Some(source) = this.source.take() {
+                source.evict(cx);
+            }
         })
         .detach();
         Self {
@@ -183,6 +205,8 @@ impl Photo {
             origin,
             mime,
             source: None,
+            whole,
+            shape: None,
         }
     }
 
@@ -191,8 +215,42 @@ impl Photo {
     }
 }
 
+/// A whole photo's size: its own shape inside the photo square. Formats
+/// decoded by GPUI, such as SVG, fill the square.
+fn photo_size(shape: Option<(u32, u32)>) -> (f32, f32) {
+    match shape {
+        Some((w, h)) if w > 0 && h > 0 => {
+            let scale = PHOTO_SIDE / w.max(h) as f32;
+            ((w as f32 * scale).round(), (h as f32 * scale).round())
+        }
+        _ => (PHOTO_SIDE, PHOTO_SIDE),
+    }
+}
+
 impl Render for Photo {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.whole {
+            // AttachmentChip's `photo`: max-h-60 max-w-60 rounded-2xl.
+            let (width, height) = photo_size(self.shape);
+            let frame = div()
+                .w(px(width))
+                .h(px(height))
+                .flex_shrink_0()
+                .rounded(px(16.))
+                .overflow_hidden();
+            return match &self.source {
+                Some(source) => frame
+                    .child(
+                        gpui::img(source.clone())
+                            .size_full()
+                            .rounded(px(16.))
+                            .object_fit(gpui::ObjectFit::Cover),
+                    )
+                    .into_any_element(),
+                // Until it decodes, a quiet square holds the photo's place.
+                None => frame.bg(content(0.06)).into_any_element(),
+            };
+        }
         if let Some(source) = &self.source {
             attachment_thumbnail(source.clone())
         } else {
@@ -223,75 +281,8 @@ impl TranscriptView {
             .gap_1p5()
             .children(files.iter().enumerate().map(|(ix, file)| {
                 if file.image {
-                    let photo = if let Some(origin) = Origin::of(file) {
-                        let key = format!("{key}-{ix}");
-                        let cached = self
-                            .attachment_images
-                            .get(&key)
-                            .filter(|photo| photo.read(cx).matches(&origin, &file.mime))
-                            .cloned();
-                        let photo = cached.unwrap_or_else(|| {
-                            let photo = cx.new(|cx| Photo::new(origin, file.mime.clone(), cx));
-                            self.attachment_images.insert(key.clone(), photo.clone());
-                            // Bound decoded image ownership while scrolling long histories.
-                            while self.attachment_images.len() > 32
-                                || self
-                                    .attachment_images
-                                    .values()
-                                    .map(|photo| photo.read(cx).bytes)
-                                    .sum::<usize>()
-                                    > 64 * 1024 * 1024
-                            {
-                                let Some(old) = self
-                                    .attachment_images
-                                    .keys()
-                                    .find(|old| **old != key)
-                                    .cloned()
-                                else {
-                                    break;
-                                };
-                                self.attachment_images.remove(&old);
-                            }
-                            photo
-                        });
-                        photo.into_any_element()
-                    } else {
-                        icon("file", 16.).into_any_element()
-                    };
-                    let source = file
-                        .data
-                        .as_ref()
-                        .map(|data| crate::image_lightbox::Source::Embedded {
-                            data: data.clone(),
-                            mime: file.mime.clone(),
-                        })
-                        .or_else(|| file.path.clone().map(crate::image_lightbox::Source::Path));
-                    let alt = file.name.clone();
-                    div()
-                        .id(SharedString::from(format!("attachment-{key}-{ix}")))
+                    self.image_tile(file, key, ix, false, cx)
                         .size(px(36.))
-                        .flex_shrink_0()
-                        .role(Role::Button)
-                        .focusable()
-                        .debug_selector(move || format!("transcript-image-{ix}"))
-                        .aria_label(format!("Open {} full screen", file.name))
-                        .when_some(source, |d, source| {
-                            d.cursor(gpui::CursorStyle::PointingHand)
-                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation()
-                                })
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    window.dispatch_action(
-                                        Box::new(crate::image_lightbox::Open {
-                                            source: source.clone(),
-                                            alt: alt.clone(),
-                                        }),
-                                        cx,
-                                    );
-                                })
-                        })
-                        .child(photo)
                         .into_any_element()
                 } else {
                     div()
@@ -317,5 +308,184 @@ impl TranscriptView {
                 }
             }))
             .into_any_element()
+    }
+
+    /// A Mono chat's sent images, shown whole above the bubble like photos
+    /// in a messaging app.
+    pub(super) fn photo_row(
+        &mut self,
+        files: &[Attachment],
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .max_w_full()
+            .flex()
+            .flex_wrap()
+            .justify_end()
+            .gap_1p5()
+            .children(files.iter().enumerate().map(|(ix, file)| {
+                self.image_tile(file, &format!("photo-{key}"), ix, true, cx)
+                    .rounded(px(16.))
+                    .into_any_element()
+            }))
+            .into_any_element()
+    }
+
+    /// An image that opens full screen. Its decoded sprite is cached by `key`
+    /// and position, within a bound on how many and how large.
+    fn image_tile(
+        &mut self,
+        file: &Attachment,
+        key: &str,
+        ix: usize,
+        whole: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let photo = if let Some(origin) = Origin::of(file) {
+            let key = format!("{key}-{ix}");
+            let cached = self
+                .attachment_images
+                .get(&key)
+                .filter(|photo| photo.read(cx).matches(&origin, &file.mime))
+                .cloned();
+            let photo = cached.unwrap_or_else(|| {
+                let mime = file.mime.clone();
+                let photo = cx.new(|cx| {
+                    if whole {
+                        Photo::whole(origin, mime, cx)
+                    } else {
+                        Photo::new(origin, mime, cx)
+                    }
+                });
+                self.attachment_images.insert(key.clone(), photo.clone());
+                // Bound decoded image ownership while scrolling long histories.
+                while self.attachment_images.len() > 32
+                    || self
+                        .attachment_images
+                        .values()
+                        .map(|photo| photo.read(cx).bytes)
+                        .sum::<usize>()
+                        > 64 * 1024 * 1024
+                {
+                    let Some(old) = self
+                        .attachment_images
+                        .keys()
+                        .find(|old| **old != key)
+                        .cloned()
+                    else {
+                        break;
+                    };
+                    self.attachment_images.remove(&old);
+                }
+                photo
+            });
+            photo.into_any_element()
+        } else {
+            icon("file", 16.).into_any_element()
+        };
+        let source = file
+            .data
+            .as_ref()
+            .map(|data| crate::image_lightbox::Source::Embedded {
+                data: data.clone(),
+                mime: file.mime.clone(),
+            })
+            .or_else(|| file.path.clone().map(crate::image_lightbox::Source::Path));
+        let alt = file.name.clone();
+        div()
+            .id(SharedString::from(format!("attachment-{key}-{ix}")))
+            .flex_shrink_0()
+            .role(Role::Button)
+            .focusable()
+            .debug_selector(move || format!("transcript-image-{ix}"))
+            .aria_label(format!("Open {} full screen", file.name))
+            .when_some(source, |d, source| {
+                d.cursor(gpui::CursorStyle::PointingHand)
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        window.dispatch_action(
+                            Box::new(crate::image_lightbox::Open {
+                                source: source.clone(),
+                                alt: alt.clone(),
+                            }),
+                            cx,
+                        );
+                    })
+            })
+            .child(photo)
+    }
+}
+
+/// Splits a Mono chat message's files into the images shown whole above its
+/// bubble and the files that stay inside it.
+pub(super) fn split_photos(files: &[Attachment]) -> (Vec<Attachment>, Vec<Attachment>) {
+    files
+        .iter()
+        .cloned()
+        .partition(|file| file.image && Origin::of(file).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn photos_keep_their_shape_inside_the_photo_square() {
+        assert_eq!(super::photo_size(Some((1920, 1080))), (240., 135.));
+        assert_eq!(super::photo_size(Some((300, 900))), (80., 240.));
+        assert_eq!(super::photo_size(None), (240., 240.));
+    }
+
+    #[test]
+    fn only_images_with_pixels_leave_the_bubble() {
+        let files = [
+            serde_json::json!({"kind": "image", "name": "shot.png", "path": "/tmp/shot.png"}),
+            serde_json::json!({"kind": "image", "name": "lost.png"}),
+            serde_json::json!({"name": "notes.txt", "path": "/tmp/notes.txt"}),
+        ]
+        .map(super::Attachment::from_value);
+        let (photos, rest) = super::split_photos(&files);
+        let names = |files: &[super::Attachment]| {
+            files.iter().map(|f| f.name.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(names(&photos), ["shot.png"]);
+        assert_eq!(names(&rest), ["lost.png", "notes.txt"]);
+    }
+
+    use gpui::{
+        Context, ImageSource, ImgResourceLoader, IntoElement, Render, Resource, Styled,
+        TestAppContext, Window, img, px,
+    };
+
+    struct Viewer(ImageSource);
+
+    impl Render for Viewer {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            img(self.0.clone()).size(px(2.))
+        }
+    }
+
+    #[gpui::test]
+    fn evicting_a_decoded_source_frees_its_sprite(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join(format!("photo-evict-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let resource = Resource::Path(path.clone().into());
+        let source = ImageSource::Resource(resource.clone());
+        let (_view, cx) = cx.add_window_view(|_, _| Viewer(source.clone()));
+        cx.run_until_parked();
+        let image = cx
+            .update(|_, cx| cx.fetch_asset::<ImgResourceLoader>(&resource))
+            .and_then(Result::ok)
+            .expect("the image should have decoded");
+        assert!(cx.update(|window, _| window.has_image_atlas_entry(&image)));
+
+        // Views release their images from outside any window update.
+        let app: &TestAppContext = cx;
+        app.update(|cx| source.evict(cx));
+        assert!(!cx.update(|window, _| window.has_image_atlas_entry(&image)));
+        assert!(!cx.update(|_, cx| source.is_asset_cached(cx)));
+        let _ = std::fs::remove_file(path);
     }
 }

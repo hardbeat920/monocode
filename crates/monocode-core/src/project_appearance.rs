@@ -23,6 +23,9 @@ pub struct ProjectAppearance {
     pub mascot: Option<String>,
     pub logo: Option<String>,
     pub background: Option<Background>,
+    /// Colors this project uses instead of the app-wide Appearance settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ProjectTheme>,
 }
 impl ProjectAppearance {
     pub fn label(&self, project: &str) -> String {
@@ -61,6 +64,48 @@ impl ProjectAppearance {
             background.normalize();
         }
         self.background = self.background.take().filter(|b| !b.path.trim().is_empty());
+        if let Some(theme) = &mut self.theme {
+            theme.normalize();
+        }
+    }
+}
+
+/// A project's own copy of the Appearance page's color settings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectTheme {
+    pub workspace_theme: String,
+    /// `#rrggbb`, or `None` for the workspace theme's own accent.
+    pub accent_color: Option<String>,
+    pub hue: u32,
+    pub saturation: u32,
+    pub dark_lightness: u32,
+}
+impl Default for ProjectTheme {
+    fn default() -> Self {
+        Self {
+            workspace_theme: "default".into(),
+            accent_color: None,
+            hue: 240,
+            saturation: 0,
+            dark_lightness: 9,
+        }
+    }
+}
+impl ProjectTheme {
+    pub fn normalize(&mut self) {
+        self.hue = self.hue.min(360);
+        self.saturation = self.saturation.min(100);
+        self.dark_lightness = self.dark_lightness.min(30);
+        self.accent_color = self.accent_color.take().filter(|hex| {
+            hex.len() == 7
+                && hex
+                    .strip_prefix('#')
+                    .is_some_and(|h| h.chars().all(|c| c.is_ascii_hexdigit()))
+        });
+        if self.workspace_theme.trim().is_empty() {
+            self.workspace_theme = "default".into();
+        }
     }
 }
 

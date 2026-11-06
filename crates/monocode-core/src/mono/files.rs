@@ -10,6 +10,7 @@
 //!     ├── SOUL.md           who it is; edited by the user or at their request
 //!     ├── MEMORY.md         what it has learned; loads into every turn
 //!     ├── habits.json       what it does on its own, on a schedule
+//!     ├── heartbeat.json    when it last checked in and what it raised
 //!     └── memory/           topic notes read on demand, and archive.md
 //! ```
 //!
@@ -29,6 +30,7 @@ const SOUL_FILE: &str = "SOUL.md";
 const MEMORY_FILE: &str = "MEMORY.md";
 const MEMORY_DIR: &str = "memory";
 const HABITS_FILE: &str = "habits.json";
+const HEARTBEAT_FILE: &str = "heartbeat.json";
 /// Larger than anything that would load: the soul and memory both have far
 /// smaller prompt budgets, this only stops a runaway write.
 const FILE_MAX: usize = 256 * 1024;
@@ -80,10 +82,10 @@ pub struct AgentFiles {
 }
 
 /// The files the app reads and writes for an agent, relative to its folder:
-/// SOUL.md, MEMORY.md, habits.json, or one `memory/<name>.md`. Nothing nested, nothing
+/// SOUL.md, MEMORY.md, habits.json, heartbeat.json, or one `memory/<name>.md`. Nothing nested, nothing
 /// hidden, so a path from the agent's CLI can never leave the folder.
 fn resolve_file(dir: &Path, relative: &str) -> Result<PathBuf, String> {
-    if relative == SOUL_FILE || relative == MEMORY_FILE || relative == HABITS_FILE {
+    if [SOUL_FILE, MEMORY_FILE, HABITS_FILE, HEARTBEAT_FILE].contains(&relative) {
         return Ok(dir.join(relative));
     }
     let name = relative

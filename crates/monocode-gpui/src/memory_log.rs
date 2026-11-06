@@ -32,12 +32,23 @@ fn sample() -> String {
     let gpu = gpui_apple::metal_renderer::gpu_memory();
     let mb = |bytes: u64| bytes as f64 / (1024. * 1024.);
     format!(
-        "{} footprint={:.1}MB gpu={:.1}MB instance_buffer={:.1}MB effect_textures={:.1}MB",
+        "{} footprint={:.1}MB gpu={:.1}MB instance_buffer={:.1}MB effect_textures={:.1}MB \
+         windows={} drawables={:.1}MP atlas_mono={:.1}MB atlas_poly={:.1}MB atlas_textures={} \
+         glyphs={:.1}MB svgs={:.1}MB images={:.1}MB trims={}",
         chrono::Local::now().format("%H:%M:%S"),
         mb(footprint()),
         mb(gpu.allocated),
         mb(gpu.instance_buffer),
         mb(gpu.scratch),
+        gpu.renderers,
+        gpu.drawable_pixels as f64 / 1e6,
+        mb(gpu.atlas.monochrome),
+        mb(gpu.atlas.polychrome),
+        gpu.atlas.textures,
+        mb(gpu.atlas.glyph_tiles),
+        mb(gpu.atlas.svg_tiles),
+        mb(gpu.atlas.image_tiles),
+        gpu.trims,
     )
 }
 

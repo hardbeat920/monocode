@@ -20,6 +20,10 @@ impl Conversation {
         if self.git_action_command(&text, cx) {
             return true;
         }
+        if let Some(request) = monocode_core::composer::consume_command(&text, "visualize") {
+            self.visualize_command(&text, request, cx);
+            return true;
+        }
         if let Some(question) = monocode_core::composer::consume_command(&text, "btw") {
             let question = question.trim().to_owned();
             self.open_btw(question, false, cx);
@@ -30,6 +34,39 @@ impl Conversation {
         }
         self.compact_context(cx);
         true
+    }
+
+    fn visualize_command(&mut self, text: &str, request: &str, cx: &mut Context<Self>) {
+        if self.input.read(cx).is_composing() {
+            return;
+        }
+        if self.busy || self.stopping || !self.follow_ups.state.messages.is_empty() {
+            self.status = "Wait for the current turn and queued messages before /visualize.".into();
+            cx.notify();
+            return;
+        }
+        if !self.history_ready()
+            || self.attaching
+            || self.account_switching
+            || self.preparing_worktree
+            || self.is_remote()
+            || self.settings.mono.is_some()
+            || self.settings.worktree_removed
+        {
+            self.status = "/visualize is not available in this session.".into();
+            cx.notify();
+            return;
+        }
+        let request = self.completion.read(cx).prepare_prompt(request);
+        let attachments = std::mem::take(&mut self.attachments);
+        let mut message = self.message(text.to_owned(), attachments, None, cx);
+        message.prepared_prompt = Some(monocode_core::visual_bridge::requested_prompt(&request));
+        self.input.update(cx, |input, cx| {
+            input.take(cx);
+        });
+        self.completion
+            .update(cx, |completion, cx| completion.dismiss(cx));
+        self.launch_message(message, cx);
     }
 
     pub(super) fn compact_context(&mut self, cx: &mut Context<Self>) {
@@ -221,5 +258,71 @@ impl Conversation {
         })
         .detach();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use monocode_core::store::Store;
+    use std::{path::PathBuf, sync::Mutex};
+
+    #[gpui::test]
+    fn visualize_command_preserves_rejected_drafts_and_starts_an_explicit_turn(
+        cx: &mut TestAppContext,
+    ) {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let mut summary = store.create("codex", "/missing/visual-command").unwrap();
+        summary.provider = "fixture".into();
+        let window = cx.update(|cx| {
+            input::bind(cx);
+            crate::popover::bind(cx);
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                    view.loaded = true;
+                    view.summary.has_messages = true;
+                    view
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |view, _, cx| {
+                for text in ["/visualizer", "Explain /visualize", "> /visualize"] {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(text.into(), cx));
+                    assert!(!view.handle_local_command(cx));
+                }
+                view.busy = true;
+                view.attachments = vec![PathBuf::from("/tmp/visual-context.txt")];
+                view.input
+                    .update(cx, |input, cx| input.set_text("/visualize".into(), cx));
+                view.send(cx);
+                assert!(view.follow_ups.state.messages.is_empty());
+                assert_eq!(view.input.read(cx).content, "/visualize");
+                assert_eq!(view.attachments.len(), 1);
+                assert!(view.status.contains("Wait for the current turn"));
+
+                view.busy = false;
+                view.attachments.clear();
+                view.input.update(cx, |input, cx| {
+                    input.set_text("/Visualize Compare the two approaches".into(), cx)
+                });
+                view.send(cx);
+                assert!(view.busy);
+                assert!(view.input.read(cx).content.is_empty());
+                let rows = view.transcript.read(cx).source_rows();
+                assert_eq!(
+                    rows.iter()
+                        .filter(|row| row.is_prompt())
+                        .map(|row| row.text.as_str())
+                        .collect::<String>(),
+                    "/Visualize Compare the two approaches"
+                );
+            })
+            .unwrap();
     }
 }

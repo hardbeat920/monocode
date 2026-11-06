@@ -42,6 +42,15 @@ fn live_elapsed(ms: u64) -> String {
     }
 }
 
+/// Milliseconds until `live_elapsed` shows something else for a run this old:
+/// labels count seconds for the first hour and minutes after that.
+fn next_label_change(ms: u64) -> u64 {
+    // live_elapsed rounds to the nearest second.
+    let shown = ms + 500;
+    let step = if shown >= 3_600_000 { 60_000 } else { 1_000 };
+    step - shown % step
+}
+
 impl Shell {
     fn live_agents(&self, cx: &App) -> Vec<LiveAgent> {
         let mut agents: Vec<_> = self
@@ -92,15 +101,32 @@ impl Shell {
         self.live_marks
             .retain(|id, _| shown && agents.iter().any(|a| a.id == *id && !a.done));
         let ticking = shown && agents.iter().any(|a| !a.done && a.started_at.is_some());
+        let now = monocode_core::time::now_ms();
+        self.live_next_change = agents
+            .iter()
+            .filter(|a| !a.done)
+            .filter_map(|a| a.started_at)
+            .map(|at| next_label_change(now.saturating_sub(at)))
+            .min()
+            .unwrap_or(1000);
         if !ticking {
             self.live_tick = None;
         } else if self.live_tick.is_none() {
             self.live_tick = Some(cx.spawn(async move |this, cx| {
                 loop {
+                    let Ok(wait) = this.update(cx, |this, _| this.live_next_change) else {
+                        break;
+                    };
                     cx.background_executor()
-                        .timer(std::time::Duration::from_secs(1))
+                        .timer(std::time::Duration::from_millis(wait.max(50)))
                         .await;
-                    if this.update(cx, |this, cx| this.notify_sidebar(cx)).is_err() {
+                    // The card only matters while someone is looking at the app.
+                    let result = this.update(cx, |this, cx| {
+                        if crate::pulse::app_active(cx) {
+                            this.notify_sidebar(cx);
+                        }
+                    });
+                    if result.is_err() {
                         break;
                     }
                 }
