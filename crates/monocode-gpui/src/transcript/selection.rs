@@ -32,6 +32,7 @@ struct State {
     quote: bool,
     drag: Option<Drag>,
     menu: Option<Point<Pixels>>,
+    copied: Option<std::time::Instant>,
     layouts: HashMap<((usize, usize), usize, usize), Fragment>,
 }
 struct Fragment {
@@ -77,6 +78,7 @@ impl Selection {
         state.head = None;
         state.drag = None;
         state.menu = None;
+        state.copied = None;
         state.layouts.clear();
     }
     pub(super) fn begin_frame(&self) {
@@ -114,6 +116,7 @@ impl Selection {
     }
 }
 const MENU_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+const COPIED_DELAY: std::time::Duration = std::time::Duration::from_millis(700);
 /// The top centre of the selection's first line, as React anchors to the
 /// range's first client rect rather than the pointer.
 fn menu_anchor(state: &State) -> Option<Point<Pixels>> {
@@ -250,6 +253,7 @@ impl TextSelection {
                         moved: false,
                     });
                     state.menu = None;
+                    state.copied = None;
                     drop(state);
                     if let Some(focus) = &view.selection_focus {
                         window.focus(focus, cx)
@@ -538,10 +542,31 @@ impl TranscriptView {
             cx.stop_propagation()
         }
     }
+    /// Copy from the menu, show "Copied" briefly, then close it.
+    fn copy_menu_selection(&mut self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let born = std::time::Instant::now();
+        self.selection.0.borrow_mut().copied = Some(born);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_DELAY).await;
+            let _ = this.update(cx, |this, cx| {
+                let state = this.selection.0.borrow();
+                let pending = state.copied == Some(born) && state.menu.is_some();
+                drop(state);
+                if pending {
+                    this.selection.clear();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
     pub(super) fn selection_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.selection.0.borrow();
         let position = state.menu?;
         let quote = state.quote;
+        let copied = state.copied.is_some();
         let response = state.response;
         drop(state);
         let text = self.selected_text()?;
@@ -579,11 +604,14 @@ impl TranscriptView {
             .flex_col()
             .gap(px(2.))
             .child(
-                button("selection-copy", "Copy", "copy").on_click(cx.listener(
-                    move |_, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                    },
-                )),
+                button(
+                    "selection-copy",
+                    if copied { "Copied" } else { "Copy" },
+                    if copied { "check" } else { "copy" },
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.copy_menu_selection(copy.clone(), cx)),
+                ),
             )
             .when(quote, |d| {
                 d.child(
@@ -673,6 +701,104 @@ mod tests {
             {let mut selection=view.selection.0.borrow_mut();let anchor=selection.anchor;selection.anchor=selection.head;selection.head=anchor;}
             assert_eq!(view.selected_text().as_deref(),Some("café.\nlet x = 1;"));
             view.selection.clear();assert!(view.selected_text().is_none());
+        });
+    }
+    fn select_hello(
+        view: &mut TranscriptView,
+        cx: &mut Context<TranscriptView>,
+    ) -> ((usize, usize), String) {
+        view.patch(
+            0,
+            vec![Row {
+                role: "assistant".into(),
+                text: "Hello **café**.".into(),
+                first: true,
+                sent_at: None,
+            }],
+            cx,
+        );
+        let key = view
+            .rows
+            .iter()
+            .find(|row| matches!(&row.body, Body::Markdown(_)))
+            .unwrap()
+            .key;
+        {
+            let mut selection = view.selection.0.borrow_mut();
+            selection.response = 0;
+            selection.quote = true;
+            selection.anchor = Some(Position { row: key, byte: 0 });
+            selection.head = Some(Position { row: key, byte: 5 });
+            selection.menu = Some(gpui::point(px(10.), px(10.)));
+        }
+        (key, view.selected_text().unwrap())
+    }
+    #[gpui::test]
+    fn menu_copy_shows_copied_then_closes_the_menu(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let (_, text) = select_hello(view, cx);
+            assert_eq!(text, "Hello");
+            view.copy_menu_selection(text, cx);
+            assert!(view.selection.0.borrow().copied.is_some());
+            assert!(view.selection.0.borrow().menu.is_some());
+            assert!(view.selection_menu(cx).is_some());
+        });
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("Hello")
+        );
+        cx.executor().advance_clock(COPIED_DELAY / 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(view.selection.0.borrow().copied.is_some());
+            assert!(view.selection.0.borrow().menu.is_some());
+        });
+        cx.executor().advance_clock(COPIED_DELAY);
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            let state = view.selection.0.borrow();
+            assert!(state.copied.is_none() && state.menu.is_none() && state.anchor.is_none());
+            drop(state);
+            assert!(view.selected_text().is_none());
+            assert!(view.selection_menu(cx).is_none());
+        });
+    }
+    #[gpui::test]
+    fn menu_copy_timer_leaves_a_newer_selection_alone(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let (key, text) = select_hello(view, cx);
+            view.copy_menu_selection(text, cx);
+            // A new press resets the feedback and selects another range.
+            let mut state = view.selection.0.borrow_mut();
+            state.copied = None;
+            state.menu = None;
+            state.anchor = Some(Position { row: key, byte: 6 });
+            state.head = Some(Position { row: key, byte: 10 });
+        });
+        cx.executor().advance_clock(COPIED_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(view.selection.0.borrow().anchor.is_some())
+        });
+    }
+    #[gpui::test]
+    fn menu_copy_timer_keeps_the_selection_after_an_outside_dismiss(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let (_, text) = select_hello(view, cx);
+            view.copy_menu_selection(text, cx);
+            // The popover's on_dismiss only closes the menu.
+            view.selection.0.borrow_mut().menu = None;
+        });
+        cx.executor().advance_clock(COPIED_DELAY * 2);
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            let state = view.selection.0.borrow();
+            assert!(state.anchor.is_some() && state.head.is_some());
         });
     }
     #[test]
