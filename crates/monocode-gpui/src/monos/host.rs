@@ -520,6 +520,11 @@ impl Monos {
                     Ok(json!({"accepted":true}))
                 }
             }
+            "terminals.list" | "terminals.read" => self
+                .owner
+                .upgrade()
+                .ok_or_else(|| "MonoCode is closing".to_owned())
+                .and_then(|o| o.read(cx).app_terminals(&project, &action, &input, cx)),
             "folders.list" => Ok(json!(
                 self.owner
                     .upgrade()

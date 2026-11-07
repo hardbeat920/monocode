@@ -176,6 +176,8 @@ impl Shell {
                     | "notes.list"
                     | "notes.read"
                     | "worktrees.list"
+                    | "terminals.list"
+                    | "terminals.read"
             )
         {
             return Err("This thread's access policy allows read-only app actions.".into());
@@ -537,6 +539,9 @@ impl Shell {
                 );
                 return;
             }
+            "terminals.list" | "terminals.read" => {
+                self.app_terminals(&project, &action, &input, cx)
+            }
             "folders.list" => Ok(
                 json!({"cwd":project,"folders":self.groups.get(&project).cloned().unwrap_or_default().folders.iter().map(|f|json!({"id":f.id,"name":f.name,"sessionIds":f.session_ids})).collect::<Vec<_>>()}),
             ),
@@ -617,6 +622,8 @@ fn mutating(action: &str) -> bool {
             | "notes.list"
             | "notes.read"
             | "worktrees.list"
+            | "terminals.list"
+            | "terminals.read"
     )
 }
 fn worktree_json(tree: &monocode_core::git::Worktree) -> Value {

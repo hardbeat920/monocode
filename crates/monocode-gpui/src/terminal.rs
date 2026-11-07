@@ -699,6 +699,52 @@ impl Terminal {
         }
     }
 }
+impl Terminal {
+    /// The buffer as plain text, oldest scrollback first: soft-wrapped rows
+    /// joined into their logical line, trailing blank lines dropped.
+    pub(crate) fn output_lines(&self) -> Vec<String> {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let mut lines: Vec<String> = Vec::new();
+        let mut continued = false;
+        let last = grid.columns().saturating_sub(1);
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let row = &grid[alacritty_terminal::index::Line(line)];
+            let mut text = String::new();
+            for column in 0..grid.columns() {
+                let cell = &row[Column(column)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                text.push(cell.c);
+                if let Some(zerowidth) = cell.zerowidth() {
+                    text.extend(zerowidth);
+                }
+            }
+            let wraps = row[Column(last)].flags.contains(Flags::WRAPLINE);
+            if !wraps {
+                text.truncate(text.trim_end().len());
+            }
+            match lines.last_mut() {
+                Some(previous) if continued => previous.push_str(&text),
+                _ => lines.push(text),
+            }
+            continued = wraps;
+        }
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        lines
+    }
+    /// A full-screen program (vim, htop, an agent TUI) holds the terminal.
+    pub(crate) fn full_screen(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::ALT_SCREEN)
+    }
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {

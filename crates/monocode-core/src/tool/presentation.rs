@@ -403,6 +403,7 @@ pub fn app_activity(action: &str, running: bool) -> (&'static str, &'static str)
         "artifacts.list" | "artifacts.read" => ("Reading", "Read", "documents"),
         "notes.write" => ("Writing", "Wrote", "a note"),
         "notes.list" | "notes.read" => ("Reading", "Read", "notes"),
+        "terminals.list" | "terminals.read" => ("Reading", "Read", "terminal output"),
         "habits.list" => ("Checking", "Checked", "habits"),
         "habits.run" => ("Running", "Ran", "a habit"),
         a if a.starts_with("habits.") => ("Updating", "Updated", "habits"),

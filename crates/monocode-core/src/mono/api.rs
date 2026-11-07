@@ -3,7 +3,8 @@ use serde_json::Value;
 pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     let fields=match action{
         "models.list"|"soul.read"|"habits.list"=>"",
-        "sessions.list"|"folders.list"|"worktrees.list"=>"project",
+        "sessions.list"|"folders.list"|"worktrees.list"|"terminals.list"=>"project",
+        "terminals.read"=>"terminalId lines maxChars project",
         "sessions.read"=>"sessionId project before limit maxChars",
         "sessions.start"=>"prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete",
         "sessions.send"=>"sessionId prompt project notifyOnComplete",
@@ -28,7 +29,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         {
             return Err(format!("{key} must be true or false"));
         }
-        if ["limit", "offset", "maxChars", "number"].contains(&key.as_str())
+        if ["limit", "offset", "maxChars", "number", "lines"].contains(&key.as_str())
             && value.as_u64().is_none()
         {
             return Err(format!("{key} must be a non-negative integer"));
@@ -36,7 +37,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         if key == "before" && !value.is_string() && value.as_u64().is_none() {
             return Err("before must be a turn ID".into());
         }
-        if matches!(key.as_str(), "id" | "sessionId" | "besideSessionId")
+        if matches!(key.as_str(), "id" | "sessionId" | "besideSessionId" | "terminalId")
             && !value.is_string()
             && value.as_u64().is_none()
         {
@@ -53,7 +54,9 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "offset",
             "maxChars",
             "number",
+            "lines",
             "id",
+            "terminalId",
             "sessionId",
             "besideSessionId",
             "modelSettings",
