@@ -28,82 +28,6 @@ const BADGE_TILE: TileSize = TileSize {
     h: 17.,
     radius: 5.,
 };
-/// Lines a card's preview keeps from the end of its thread.
-const PREVIEW_LINES: usize = 5;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum LineKind {
-    User,
-    Agent,
-    Activity,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct PreviewLine {
-    kind: LineKind,
-    text: String,
-}
-
-/// The last messages of a thread: rows that continue a message (`first`
-/// false) join the one before, reasoning and tool calls show as one-line
-/// activity, and markup is flattened to a line of plain text.
-fn preview_lines(rows: &[monocode_core::transcript::Row]) -> Vec<PreviewLine> {
-    let mut lines: Vec<PreviewLine> = Vec::new();
-    let start = rows.len().saturating_sub(PREVIEW_LINES * 8);
-    let mut open = false;
-    for row in &rows[start..] {
-        if !row.first && open {
-            if let Some(last) = lines.last_mut() {
-                last.text.push_str(&row.text);
-            }
-            continue;
-        }
-        let kind = match row.role.as_str() {
-            "user" => LineKind::User,
-            "assistant" => LineKind::Agent,
-            "tool" | "reasoning" => LineKind::Activity,
-            _ => {
-                open = false;
-                continue;
-            }
-        };
-        open = true;
-        lines.push(PreviewLine {
-            kind,
-            text: row.text.clone(),
-        });
-    }
-    let mut lines: Vec<PreviewLine> = lines
-        .into_iter()
-        .filter_map(|mut line| {
-            let flat = line
-                .text
-                .split_whitespace()
-                .map(|word| word.trim_matches(|c| matches!(c, '*' | '`' | '#' | '_')))
-                .filter(|word| !word.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ");
-            if flat.is_empty() {
-                return None;
-            }
-            line.text = match line.kind {
-                LineKind::Activity => flat.chars().take(60).collect(),
-                _ => flat.chars().take(220).collect(),
-            };
-            Some(line)
-        })
-        .collect();
-    // Back-to-back tool calls fold to the latest one.
-    lines.dedup_by(|b, a| {
-        a.kind == LineKind::Activity && b.kind == LineKind::Activity && {
-            std::mem::swap(a, b);
-            true
-        }
-    });
-    let keep = lines.len().saturating_sub(PREVIEW_LINES);
-    lines.split_off(keep)
-}
-
 pub(super) fn bind(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("alt-tab", StepSwitcher, Some("Workspace")),
@@ -138,8 +62,7 @@ pub(super) struct Open {
     index: usize,
     focus: FocusHandle,
     restore: Option<FocusHandle>,
-    /// Previews of chats that are not loaded, read once when the switcher opens.
-    stored: HashMap<i64, Vec<PreviewLine>>,
+    _deactivate: Subscription,
 }
 
 /// Window pixels (RGBA) to a card-sized BGRA sprite.
@@ -181,6 +104,32 @@ fn step(index: usize, len: usize, delta: isize) -> usize {
 }
 
 impl Shell {
+    /// A session can vanish under the open switcher (a mobile delete).
+    fn switcher_session_live(&self, id: i64) -> bool {
+        self.session_summaries.contains_key(&id) && !self.deleting.contains(&id)
+    }
+
+    /// Drops cards whose session went away, keeping the highlight in range.
+    fn prune_switcher(&mut self) {
+        let live: Vec<bool> = match &self.tab_switcher {
+            Some(open) => open
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    Entry::Session(id) => self.switcher_session_live(*id),
+                    Entry::Project(_) => true,
+                })
+                .collect(),
+            None => return,
+        };
+        let Some(open) = self.tab_switcher.as_mut() else {
+            return;
+        };
+        let mut keep = live.into_iter();
+        open.entries.retain(|_| keep.next().unwrap_or(false));
+        open.index = open.index.min(open.entries.len().saturating_sub(1));
+    }
+
     pub(super) fn switcher_available(&self) -> bool {
         !self.workspace.classic_layout && self.settings.is_none()
     }
@@ -227,6 +176,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self.workspace.classic_layout
+            || self.app_view_open()
             || self.tab_switcher.is_some()
             || self.settings.is_some()
             || id <= 0
@@ -336,19 +286,13 @@ impl Shell {
         }
         self.close_menu(cx);
         self.close_preview(cx);
-        // Chats that were never opened this run are read from the store once.
-        let stored: HashMap<i64, Vec<PreviewLine>> = match locked(&self.store) {
-            Ok(store) => entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    Entry::Session(id) if !self.sessions.contains_key(id) => Some(*id),
-                    _ => None,
-                })
-                .take(16)
-                .filter_map(|id| Some((id, preview_lines(&store.load(id).ok()?.rows))))
-                .collect(),
-            Err(_) => HashMap::new(),
-        };
+        // Option let go in another app never reaches this window: close
+        // instead of leaving the dimmed switcher up for the return.
+        let _deactivate = cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.dismiss_switcher(window, cx);
+            }
+        });
         let focus = cx.focus_handle();
         let restore = window.focused(cx);
         window.focus(&focus, cx);
@@ -357,7 +301,7 @@ impl Shell {
             index,
             focus,
             restore,
-            stored,
+            _deactivate,
         });
         cx.notify();
         // Option already up: a tap that beat the first frame switches at once.
@@ -377,7 +321,8 @@ impl Shell {
         };
         cx.notify();
         match open.entries.get(index.unwrap_or(open.index)).cloned() {
-            Some(Entry::Session(id)) => self.open(id, window, cx),
+            Some(Entry::Session(id)) if self.switcher_session_live(id) => self.open(id, window, cx),
+            Some(Entry::Session(_)) => self.dismiss_focus(open.restore, window, cx),
             Some(Entry::Project(path)) => self.select_project(path, window, cx),
             None => self.dismiss_focus(open.restore, window, cx),
         }
@@ -414,161 +359,6 @@ impl Shell {
         }
     }
 
-    /// The thread's last few lines, oldest first: the live transcript when the
-    /// chat is loaded, otherwise the snapshot taken when the switcher opened.
-    fn switcher_preview(&self, id: i64, cx: &App) -> Vec<PreviewLine> {
-        match self.sessions.get(&id) {
-            Some(view) => preview_lines(view.read(cx).transcript.read(cx).source_rows()),
-            None => self
-                .tab_switcher
-                .as_ref()
-                .and_then(|open| open.stored.get(&id).cloned())
-                .unwrap_or_default(),
-        }
-    }
-
-    /// The card's picture: the chat page drawn small, with the same parts in
-    /// the same places — title bar, centred transcript column and composer —
-    /// rather than a zoomed-in crop of the text.
-    fn mini_page(
-        &self,
-        entry: &Entry,
-        project_label: &str,
-        lines: Vec<PreviewLine>,
-        aspect: f32,
-    ) -> AnyElement {
-        const W: f32 = PAGE_WIDTH;
-        const TEXT: f32 = 5.;
-        const LEADING: f32 = 7.;
-        let height = (W * aspect).round();
-        let column = W * 0.68;
-        let composer = |grow: bool| {
-            div()
-                .w(px(column))
-                .h(px(if grow { 16. } else { 12. }))
-                .flex_shrink_0()
-                .rounded(px(4.))
-                .bg(content(0.07))
-                .border_1()
-                .border_color(content(0.1))
-                .px(px(4.))
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .w(px(column * 0.35))
-                        .h(px(2.))
-                        .rounded(px(1.))
-                        .bg(content(0.2)),
-                )
-        };
-        let title_bar = div()
-            .h(px(9.))
-            .flex_shrink_0()
-            .px(px(4.))
-            .flex()
-            .items_center()
-            .gap(px(3.))
-            .border_b_1()
-            .border_color(content(0.06))
-            .child(
-                div()
-                    .w(px(W * 0.22))
-                    .h(px(2.))
-                    .rounded(px(1.))
-                    .bg(content(0.22)),
-            );
-        let body = if lines.is_empty() {
-            let heading = match entry {
-                Entry::Project(_) => format!("Open {project_label}"),
-                Entry::Session(_) => format!("What should we work on in {project_label}?"),
-            };
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(4.))
-                .child(
-                    div()
-                        .w(px(column))
-                        .text_size(px(6.5))
-                        .line_height(px(8.))
-                        .text_color(content(0.85))
-                        .truncate()
-                        .child(heading),
-                )
-                .child(composer(true))
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .pb(px(4.))
-                .child(
-                    div()
-                        .w(px(column))
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .flex()
-                        .flex_col()
-                        .justify_end()
-                        .gap(px(3.))
-                        .children(lines.into_iter().map(|line| {
-                            match line.kind {
-                                LineKind::User => div()
-                                    .ml_auto()
-                                    .max_w(px(column * 0.75))
-                                    .rounded(px(2.5))
-                                    .bg(user_bubble_fill())
-                                    .px(px(2.5))
-                                    .py(px(1.))
-                                    .text_size(px(TEXT))
-                                    .line_height(px(LEADING))
-                                    .text_color(content(0.8))
-                                    .line_clamp(2)
-                                    .child(line.text)
-                                    .into_any_element(),
-                                LineKind::Agent => div()
-                                    .text_size(px(TEXT))
-                                    .line_height(px(LEADING))
-                                    .text_color(content(0.7))
-                                    .line_clamp(4)
-                                    .child(line.text)
-                                    .into_any_element(),
-                                LineKind::Activity => div()
-                                    .text_size(px(TEXT))
-                                    .line_height(px(LEADING))
-                                    .text_color(content(0.38))
-                                    .truncate()
-                                    .child(line.text)
-                                    .into_any_element(),
-                            }
-                        })),
-                )
-                .child(div().h(px(4.)).flex_shrink_0())
-                .child(composer(false))
-        };
-        div()
-            .w(px(W))
-            .h(px(height))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .rounded(px(6.))
-            .bg(pane_fill())
-            .border_1()
-            .border_color(content(0.08))
-            .flex()
-            .flex_col()
-            .child(title_bar)
-            .child(body)
-            .into_any_element()
-    }
-
     fn switcher_card(
         &self,
         ix: usize,
@@ -577,7 +367,7 @@ impl Shell {
         aspect: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (project, title, provider, status, lines) = match entry {
+        let (project, title, provider, status) = match entry {
             Entry::Session(id) => {
                 let s = self.session_metadata(*id, cx);
                 let status = if s.needs_approval() {
@@ -606,16 +396,9 @@ impl Shell {
                     },
                     Some(s.summary.provider.clone()),
                     status,
-                    self.switcher_preview(*id, cx),
                 )
             }
-            Entry::Project(path) => (
-                path.clone(),
-                self.project_label(path),
-                None,
-                None,
-                Vec::new(),
-            ),
+            Entry::Project(path) => (path.clone(), self.project_label(path), None, None),
         };
         let project_label = self.project_label(&project);
         let mascot = self.project_mark(&project, 14.);
@@ -634,7 +417,15 @@ impl Shell {
                 .border_1()
                 .border_color(content(0.08))
                 .into_any_element(),
-            None => self.mini_page(entry, &project_label, lines, aspect),
+            // Not photographed yet: the bare page surface, never a skeleton.
+            None => div()
+                .w(px(PAGE_WIDTH))
+                .h(px((PAGE_WIDTH * aspect).round()))
+                .rounded(px(6.))
+                .bg(pane_fill())
+                .border_1()
+                .border_color(content(0.08))
+                .into_any_element(),
         };
         // The provider badge rides the preview's corner, half outside it, so
         // the rounded clip never cuts it.
@@ -725,6 +516,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         self.ensure_thumb_poll(window, cx);
+        self.prune_switcher();
         let open = self.tab_switcher.as_ref()?;
         let viewport = window.viewport_size();
         let max_width = viewport.width.as_f32() - 48.;
@@ -810,41 +602,6 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
-
-    #[test]
-    fn preview_joins_streamed_rows_and_folds_tool_runs() {
-        use monocode_core::transcript::Row;
-        let row = |role: &str, text: &str, first: bool| Row {
-            role: role.into(),
-            text: text.into(),
-            first,
-            sent_at: None,
-        };
-        let lines = preview_lines(&[
-            row("user", "Fix the **build**", true),
-            row("tool", "cargo check", true),
-            row("tool", "cargo test", true),
-            row("assistant", "All ", true),
-            row("assistant", "green.", false),
-        ]);
-        assert_eq!(
-            lines,
-            vec![
-                PreviewLine {
-                    kind: LineKind::User,
-                    text: "Fix the build".into()
-                },
-                PreviewLine {
-                    kind: LineKind::Activity,
-                    text: "cargo test".into()
-                },
-                PreviewLine {
-                    kind: LineKind::Agent,
-                    text: "All green.".into()
-                },
-            ]
-        );
-    }
 
     #[test]
     fn recency_leads_and_the_rest_keep_tab_order() {

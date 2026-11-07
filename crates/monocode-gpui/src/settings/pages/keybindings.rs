@@ -157,6 +157,18 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: "Session: Switcher",
+        keys: "⌥Tab",
+        when: "Focused layout",
+        fixed: false,
+    },
+    Binding {
+        command: "Session: Switcher Back",
+        keys: "⌥⇧Tab",
+        when: "Focused layout",
+        fixed: false,
+    },
+    Binding {
         command: "Tab: Back",
         keys: "⌘[",
         when: "Always",

@@ -94,6 +94,9 @@ fn command(binding: &KeyBinding) -> Option<&'static str> {
         "workspace::ZoomOut" | "image_lightbox::ZoomOut" => "View: Zoom Out",
         "workspace::ResetZoom" | "image_lightbox::ResetZoom" => "View: Reset Zoom",
         "workspace::Reload" => "View: Reload",
+        // Opening (Workspace) and stepping (TabSwitcher) rebind together.
+        "tab_switcher::StepSwitcher" if keys == "alt-tab" => "Session: Switcher",
+        "tab_switcher::StepSwitcherBack" if keys == "alt-shift-tab" => "Session: Switcher Back",
         _ => return None,
     })
 }
