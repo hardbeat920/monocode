@@ -49,6 +49,8 @@ zed-version = "0.2.2"
 zed-rev = "93d745668805029476e6d7fbb19652116fed51de"
 
 [features]
+# Lets the app read back its own rendered frame (window thumbnails).
+frame-capture = []
 bench = ["bench-support"]
 bench-support = [
     "profiler",
