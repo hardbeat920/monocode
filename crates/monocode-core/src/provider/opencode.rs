@@ -1,5 +1,6 @@
 //! Native OpenCode HTTP/SSE transport, ported from the Tauri adapter.
-//! v1 owns a local `serve` child; v2 connects to OpenCode's managed service.
+//! v1 owns a local `serve` child; v2 connects to OpenCode's managed service,
+//! except for threads with app access, which need their own `serve` child.
 use super::*;
 use std::collections::VecDeque;
 use std::sync::{atomic::AtomicUsize, OnceLock};
@@ -29,6 +30,7 @@ impl Drop for StreamStop {
 struct Server {
     child: std::process::Child,
     url: String,
+    password: Option<String>,
     _registration: process::Registration,
     _account: crate::accounts::Tracked,
 }
@@ -262,13 +264,22 @@ fn service_url(output: &str) -> Option<String> {
         .find(|line| re.is_match(line))
         .map(|line| line.trim_end_matches('/').into())
 }
+/// OpenCode's shared v2 service is started once, outside any thread, so its
+/// shell tools never see a thread's app credentials. Threads with app access
+/// (/operator and Monos) run their own `serve` child instead.
+fn shared_service(request: &Request, v2: bool) -> bool {
+    v2 && !request
+        .settings
+        .environment
+        .contains_key("MONOCODE_APP_ENDPOINT")
+}
 fn connect(
     request: &Request,
     cancel: &AtomicBool,
     v2: bool,
 ) -> Result<(Client, Option<Server>), String> {
     let directory = request.cwd.to_string_lossy().into_owned();
-    if v2 {
+    if shared_service(request, v2) {
         let mut url = exec(request, &["service", "status"], cancel)
             .ok()
             .and_then(|output| service_url(&output));
@@ -301,7 +312,12 @@ fn connect(
             {
                 process::mark_idle(found.server.child.id(), false);
                 return Ok((
-                    Client::new(found.server.url.clone(), directory, false, None),
+                    Client::new(
+                        found.server.url.clone(),
+                        directory,
+                        v2,
+                        found.server.password.clone(),
+                    ),
                     Some(found.server),
                 ));
             }
@@ -310,7 +326,13 @@ fn connect(
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     drop(listener);
-    let mut child = command(request)?
+    // v2 `serve` requires Basic auth; choose the password instead of parsing it.
+    let password = v2.then(|| uuid::Uuid::new_v4().simple().to_string());
+    let mut command = command(request)?;
+    if let Some(password) = &password {
+        command.env("OPENCODE_SERVER_PASSWORD", password);
+    }
+    let mut child = command
         .args(["serve", "--hostname=127.0.0.1", &format!("--port={port}")])
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -341,6 +363,7 @@ fn connect(
     let mut server = Server {
         child,
         url: String::new(),
+        password,
         _registration: registration,
         _account: account,
     };
@@ -355,7 +378,8 @@ fn connect(
         match receive.recv_timeout(TICK) {
             Ok(url) => {
                 server.url = url.clone();
-                return Ok((Client::new(url, directory, false, None), Some(server)));
+                let client = Client::new(url, directory, v2, server.password.clone());
+                return Ok((client, Some(server)));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err("OpenCode server exited before reporting a URL".into());
@@ -748,4 +772,29 @@ pub(super) fn rewind(
     // A reverted history must never be resumed by the old warm generation.
     drop(server);
     Ok(session.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_access_threads_skip_the_shared_v2_service() {
+        let mut request = Request {
+            kind: Kind::OpenCode,
+            binary: PathBuf::from("opencode"),
+            cwd: PathBuf::from("/project"),
+            prompt: "hello".into(),
+            provider_id: None,
+            model: None,
+            settings: Settings::default(),
+        };
+        assert!(shared_service(&request, true));
+        assert!(!shared_service(&request, false));
+        request
+            .settings
+            .environment
+            .insert("MONOCODE_APP_ENDPOINT".into(), "127.0.0.1:1".into());
+        assert!(!shared_service(&request, true));
+    }
 }
