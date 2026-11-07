@@ -157,6 +157,76 @@ fn eased_shift(
 }
 
 impl Shell {
+    /// Dock tabs and terminal panes opened in `project` or below it, for the
+    /// app's `terminals.*` actions. IDs are the terminals' entity IDs.
+    fn project_terminals(&self, project: &str) -> Vec<Entity<Terminal>> {
+        let root = monocode_core::files::path_key(project);
+        let inside = |path: &str| {
+            let key = monocode_core::files::path_key(path);
+            key == root
+                || key
+                    .strip_prefix(root.trim_end_matches(['/', '\\']))
+                    .is_some_and(|rest| rest.starts_with(['/', '\\']))
+        };
+        let docks = self
+            .terminals
+            .iter()
+            .filter(|(key, _)| inside(key))
+            .flat_map(|(_, terminals)| terminals.iter().cloned());
+        let mut panes: Vec<_> = self.terminal_pane_views.iter().collect();
+        panes.sort_by_key(|(pane, _)| **pane);
+        let panes = panes.into_iter().filter_map(|(pane, view)| {
+            let state = self.workspace.terminal_panes.get(pane)?;
+            inside(&state.cwd).then(|| view.clone())
+        });
+        docks.chain(panes).collect()
+    }
+    /// `terminals.list` and `terminals.read`, scoped to `project`.
+    pub(crate) fn app_terminals(
+        &self,
+        project: &str,
+        action: &str,
+        input: &serde_json::Value,
+        cx: &App,
+    ) -> Result<serde_json::Value, String> {
+        let terminals = self.project_terminals(project);
+        let summary = |t: &Entity<Terminal>| {
+            let view = t.read(cx);
+            serde_json::json!({
+                "terminalId": t.entity_id().as_u64(),
+                "cwd": view.cwd,
+                "title": view.title,
+                "running": view.foreground,
+                "exited": view.exited,
+                "fullScreen": view.full_screen(),
+            })
+        };
+        if action == "terminals.list" {
+            return Ok(serde_json::json!({
+                "cwd": project,
+                "terminals": terminals.iter().map(summary).collect::<Vec<_>>(),
+            }));
+        }
+        let wanted = match &input["terminalId"] {
+            serde_json::Value::String(id) => id.trim().parse::<u64>().ok(),
+            id => id.as_u64(),
+        }
+        .ok_or("Provide terminalId from terminals.list")?;
+        let terminal = terminals
+            .iter()
+            .find(|t| t.entity_id().as_u64() == wanted)
+            .ok_or("Terminal was not found in this project; run terminals.list")?;
+        let mut value = summary(terminal);
+        let page = monocode_core::app_access::terminal_tail(
+            &terminal.read(cx).output_lines(),
+            input,
+        )?;
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(page.as_object().unwrap().clone());
+        Ok(value)
+    }
     fn live_terminals(&self) -> Vec<Entity<Terminal>> {
         self.terminals
             .get(&self.workspace.project)

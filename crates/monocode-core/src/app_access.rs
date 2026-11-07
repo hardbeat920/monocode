@@ -31,6 +31,8 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
             | "notes.write"
             | "worktrees.list"
             | "worktrees.create"
+            | "terminals.list"
+            | "terminals.read"
     ) {
         return Err("Unknown Operator action. Run app help for project actions; memory, habits and artifacts require a Mono.".into());
     }
@@ -39,6 +41,36 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
         return Err("Completion notifications are only available in a Mono's chat".into());
     }
     Ok(())
+}
+
+pub const TERMINAL_LINES: u64 = 200;
+pub const TERMINAL_MAX_LINES: u64 = 2000;
+pub const TERMINAL_MAX_CHARS: u64 = 60_000;
+
+/// The newest `lines` of a terminal's plain-text output, capped at `maxChars`.
+/// When the cap bites, older lines go first: errors land at the bottom.
+pub fn terminal_tail(all: &[String], input: &Value) -> Result<Value, String> {
+    let bounded = |key: &str, min: u64, max: u64, default: u64| match input.get(key) {
+        None => Ok(default),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (min..=max).contains(n))
+            .ok_or(format!("{key} must be an integer from {min} to {max}")),
+    };
+    let lines = bounded("lines", 1, TERMINAL_MAX_LINES, TERMINAL_LINES)? as usize;
+    let max_chars = bounded("maxChars", 200, TERMINAL_MAX_CHARS, TERMINAL_MAX_CHARS)? as usize;
+    let mut start = all.len().saturating_sub(lines);
+    let mut chars: usize = all[start..].iter().map(|l| l.chars().count() + 1).sum();
+    while chars > max_chars + 1 && start + 1 < all.len() {
+        chars -= all[start].chars().count() + 1;
+        start += 1;
+    }
+    let mut text = all[start..].join("\n");
+    let over = text.chars().count().saturating_sub(max_chars);
+    if over > 0 {
+        text = text.chars().skip(over).collect();
+    }
+    Ok(json!({"text": text, "lines": all.len() - start, "truncated": start > 0 || over > 0}))
 }
 
 pub fn text(input: &Value, key: &str, max: usize) -> Result<String, String> {
