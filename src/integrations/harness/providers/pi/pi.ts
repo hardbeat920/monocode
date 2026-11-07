@@ -3,6 +3,7 @@ import {
   cancelTurn,
   compactContext,
   forgetSession,
+  hasBackgroundWork,
   respondApproval,
   rewindLastTurn,
   sendTurn,
@@ -53,6 +54,10 @@ export function respondPiApproval(
 
 export function cancelPiTurn(sessionId: string): Promise<void> {
   return cancelTurn(PI_FLAVOR, sessionId);
+}
+
+export function piHasBackgroundWork(sessionId: string): boolean {
+  return hasBackgroundWork(PI_FLAVOR, sessionId);
 }
 
 export function stopPiSession(sessionId: string): Promise<void> {
