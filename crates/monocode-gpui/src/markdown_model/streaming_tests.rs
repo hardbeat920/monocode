@@ -23,6 +23,8 @@ fn appends_and_display_repairs_match_full_parses_at_every_character() {
         "é|```\n$$x$$`>---\n`\n\n$$x$$",
         "_3[x]$$x$$[x]. - >\n- a",
         "see https://a.com/a_b?x=1&y=2, www.a.com and me@a.com.\n\nnext",
+        "see https://github.com/x/y/blob/main/__init__.py and **bold https://a.com/x**y** end",
+        "*a https://x.com/*b* c* me@a.__b__.com https://a.com/_x and more_\n\n|h|\n|-|\n|https://a.com/x&amp;|y|",
     ];
     for source in samples {
         let mut parser = MarkdownParser::new();
