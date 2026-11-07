@@ -527,12 +527,7 @@ impl Monos {
 
     pub(super) fn card_action(&mut self, mono: &str, value: &Value, cx: &mut Context<Self>) {
         if value["type"] != "choice" {
-            if self.active.as_deref() != Some(mono) {
-                self.remember_panel_view();
-                self.restore_panel_view(mono, cx);
-                self.details.update(cx, |details, cx| details.reset(cx));
-            }
-            self.active = Some(mono.into());
+            self.make_active(mono, cx);
             if let Some(handle) = self.parent_window {
                 let app: &mut App = cx;
                 app.defer(move |cx| {

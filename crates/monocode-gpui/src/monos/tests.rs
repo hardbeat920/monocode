@@ -382,6 +382,61 @@ fn each_mono_remembers_its_details_tab_and_open_session(cx: &mut TestAppContext)
     assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
 }
 
+#[gpui::test]
+fn a_card_switching_monos_shows_the_target_monos_habits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut h = Habit::new(
+        "Daily review".into(),
+        "Review changes.".into(),
+        habits::Schedule::default(),
+        monocode_core::time::now_ms(),
+    )
+    .unwrap();
+    h.id = "target-habit".into();
+    habits::update(&s.root, &s.id, |all| {
+        all.push(h.clone());
+        Ok(())
+    })
+    .unwrap();
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.open(&s.id, w, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(s.manager.read_with(cx, |m, _| m.habits.is_empty()));
+    let ids = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.habits.iter().map(|h| h.id.clone()).collect::<Vec<_>>()
+        })
+    };
+    // Back on the first Mono, then a card from the second's chat switches over.
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(ids(cx), vec!["target-habit".to_string()]);
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert!(
+        ids(cx).is_empty(),
+        "the previous Mono's habits must not linger"
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        s.manager.read_with(cx, |m, _| m.active.clone()),
+        Some(other)
+    );
+    assert!(ids(cx).is_empty());
+}
+
 #[test]
 fn restored_panel_views_keep_only_pages_whose_subject_exists() {
     let view = |route| PanelView {
