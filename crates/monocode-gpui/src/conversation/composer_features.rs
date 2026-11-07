@@ -457,6 +457,27 @@ impl Conversation {
             monocode_core::response::limit(&format!("{}\n{}", self.status, text), 12_000),
         )
     }
+    pub(crate) fn worker_outcome(&self) -> Option<monocode_core::store::WorkerOutcome> {
+        use monocode_core::store::WorkerOutcome;
+        if self.busy || !self.summary.has_messages || !self.history_loaded() {
+            return None;
+        }
+        if self.notification_cancelled {
+            return Some(WorkerOutcome::Stopped);
+        }
+        // A saved app launch can be idle briefly before its queue starts the turn.
+        if self.external_submission_pending()
+            || self.follow_ups.requested.is_some()
+            || self.follow_ups.sending.is_some()
+        {
+            return None;
+        }
+        Some(if self.status == "Ready" {
+            WorkerOutcome::Completed
+        } else {
+            WorkerOutcome::Failed
+        })
+    }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         self.history_ready()
             && !self.editing_last_turn.pending()

@@ -5,6 +5,8 @@ mod managed_sessions;
 mod monocode_import;
 mod monos;
 mod notes;
+mod operator_completions;
+pub use operator_completions::{OperatorSubscription, WorkerOutcome};
 mod remote;
 mod remote_legacy;
 pub use remote::{RemoteProject, RemoteSession, RemoteUpload};

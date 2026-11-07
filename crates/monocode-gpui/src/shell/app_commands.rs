@@ -14,7 +14,7 @@ mod tests;
 type Placement = Option<(i64, Edge)>;
 enum Effect {
     None,
-    Start(Box<(Session, Settings, bool, bool, Placement)>),
+    Start(Box<(Session, Settings, bool, bool, Placement, u64)>),
     Groups(String, monocode_core::session_groups::Groups),
     Archive(i64),
 }
@@ -91,11 +91,24 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let result = result.map(|(value, effect)| {
+                let result = result.and_then(|(value, effect)| {
                     match effect {
                         Effect::None => (),
                         Effect::Start(start) => {
-                            let (summary, settings, draft, reveal, placement) = *start;
+                            let (summary, settings, draft, reveal, placement, turn) = *start;
+                            if call.input["notifyOnComplete"] == true
+                                && this
+                                    .session_summaries
+                                    .get(&call.session)
+                                    .is_some_and(|s| !s.archived)
+                            {
+                                this.arm_operator_completion(
+                                    call.session,
+                                    turn,
+                                    summary.id,
+                                    summary.title.clone(),
+                                )?;
+                            }
                             let id = summary.id;
                             this.draft_sessions.insert(id);
                             this.sidebar_hidden_sessions.remove(&id);
@@ -118,6 +131,7 @@ impl Shell {
                             if let Some(view) = this.sessions.get(&id) {
                                 view.update(cx, |v, _| v.summary.archived = true);
                             }
+                            this.check_operator_completions(cx);
                             this.refresh_session_mark(id, cx);
                             if this.workspace.tab_of(id).is_some() {
                                 this.close_pane(id, window, cx);
@@ -126,7 +140,7 @@ impl Shell {
                     }
                     this.invalidate_chrome(cx);
                     cx.notify();
-                    value
+                    Ok(value)
                 });
                 this.finish_app_call(call, result, cx);
             });
@@ -321,6 +335,7 @@ impl Shell {
         let project = caller.summary.cwd.clone();
         let provider = caller.summary.provider.clone();
         let inherited = caller.settings.clone();
+        let turn = caller.mono_turn;
         let input = call.input.clone();
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
@@ -396,7 +411,7 @@ impl Shell {
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
                     let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
-                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement)))}else{Effect::None}))
+                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement,turn)))}else{Effect::None}))
                 },cx);
                 return;
             }
@@ -433,6 +448,14 @@ impl Shell {
                     }) {
                     Err(e) => Err(e),
                     Ok((id, view)) => {
+                        if matches!(
+                            action.as_str(),
+                            "sessions.stop" | "sessions.archive" | "sessions.delete"
+                        ) && let Err(error) = self.dismiss_operator_completion(call.session, id)
+                        {
+                            self.finish_app_call(call, Err(error), cx);
+                            return;
+                        }
                         if action == "sessions.delete" {
                             self.delete_session(id, window, cx);
                             if !self.deleting.contains(&id) {
@@ -494,6 +517,17 @@ impl Shell {
                                 match app::prompt(&input) {
                                     Err(e) => Err(e),
                                     Ok(prompt) => {
+                                        if input["notifyOnComplete"] == true
+                                            && let Err(error) = self.arm_operator_completion(
+                                                call.session,
+                                                turn,
+                                                id,
+                                                view.read(cx).summary.title.clone(),
+                                            )
+                                        {
+                                            self.finish_app_call(call, Err(error), cx);
+                                            return;
+                                        }
                                         view.update(cx, |v, cx| {
                                             if action == "sessions.draft" {
                                                 v.save_app_draft(prompt, cx)

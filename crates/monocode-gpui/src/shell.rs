@@ -21,6 +21,7 @@ mod new_chat_choice;
 #[cfg(test)]
 mod new_chat_choice_tests;
 mod notifications;
+mod operator_completions;
 mod orchestration;
 mod picker_preferences;
 mod pinned_tabs;
@@ -616,6 +617,8 @@ pub(crate) struct Shell {
     orchestrations: HashMap<i64, orchestration::Run>,
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
+    operator_subscriptions: HashMap<i64, Vec<monocode_core::store::OperatorSubscription>>,
+    operator_completion_work: HashSet<(i64, u64)>,
     /// Sessions an /operator thread started, by the session that started them.
     started_by: HashMap<i64, i64>,
     /// The sidebar rails under orchestrators and /operator threads.
@@ -1019,6 +1022,8 @@ impl Shell {
             app_pending: HashSet::new(),
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
+            operator_subscriptions: sidebar_metadata.operator_subscriptions,
+            operator_completion_work: HashSet::new(),
             started_by: sidebar_metadata.started_by,
             rails: Default::default(),
             usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
@@ -1314,6 +1319,7 @@ impl Shell {
         this.apply_preferences(cx);
         this.poll_reminders(cx);
         this.initialize_automations(cx);
+        this.restore_operator_completions(cx);
         if this.workspace.active.is_none() {
             cx.spawn(async move |this, cx| {
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -1423,6 +1429,7 @@ impl Shell {
                 }
                 this.sync_search_session(id, cx);
                 this.orchestration_session_changed(id, cx);
+                this.check_operator_completions(cx);
                 this.automation_session_changed(id, cx);
                 this.sync_review_locks(cx);
                 this.refresh_session_mark(id, cx);
@@ -1455,6 +1462,7 @@ impl Shell {
                     this.sidebar_frame.update(cx, |_, cx| cx.notify());
                 }
             }));
+        self.observe_operator_completions(&view, id, cx);
         self.observe_orchestration(&view, id, cx);
         self.observe_session_folders(&view, id, cx);
         self.sessions.insert(id, view);
@@ -1546,6 +1554,7 @@ impl Shell {
                                 }
                             });
                         }
+                        this.check_operator_completions(cx);
                         this.refresh_session_mark(id, cx);
                         if archived && this.workspace.tab_of(id).is_some() {
                             this.close_pane(id, window, cx);

@@ -35,9 +35,6 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
         return Err("Unknown Operator action. Run app help for project actions; memory, habits and artifacts require a Mono.".into());
     }
     crate::mono::api::validate(action, input)?;
-    if input["notifyOnComplete"] == true {
-        return Err("Completion notifications are only available in a Mono's chat".into());
-    }
     Ok(())
 }
 

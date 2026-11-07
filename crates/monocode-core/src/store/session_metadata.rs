@@ -9,6 +9,7 @@ pub struct SessionSidebarMetadata {
     pub details: HashMap<i64, MobileSessionMetadata>,
     pub drafts: HashSet<i64>,
     pub sidebar_hidden: HashSet<i64>,
+    pub operator_subscriptions: HashMap<i64, Vec<super::OperatorSubscription>>,
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
     pub groups: HashMap<String, session_groups::Groups>,
@@ -99,6 +100,7 @@ impl Store {
             } else {
                 HashSet::new()
             },
+            operator_subscriptions: self.operator_subscriptions().unwrap_or_default(),
             started_by: self.started_links().unwrap_or_default(),
             orchestrations: self.orchestration_summaries().unwrap_or_default(),
             groups: projects

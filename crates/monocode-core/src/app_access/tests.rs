@@ -119,10 +119,6 @@ fn operator_rejects_unknown_fields_and_mono_only_capabilities() {
         ),
         ("sessions.start", json!({"prompt":"x","placement":"left"})),
         ("sessions.start", json!({"prompt":"x","besideSessionId":1})),
-        (
-            "sessions.send",
-            json!({"sessionId":1,"prompt":"x","notifyOnComplete":true}),
-        ),
         ("artifacts.write", json!({"body":"x"})),
     ] {
         assert!(
@@ -130,6 +126,21 @@ fn operator_rejects_unknown_fields_and_mono_only_capabilities() {
             "{action}: {input}"
         );
     }
+    assert!(validate_operator(
+        "sessions.send",
+        &json!({"sessionId":1,"prompt":"x","notifyOnComplete":true})
+    )
+    .is_ok());
+    assert!(validate_operator(
+        "sessions.start",
+        &json!({"prompt":"x","notifyOnComplete":true})
+    )
+    .is_ok());
+    assert!(validate_operator(
+        "sessions.start",
+        &json!({"prompt":"x","draft":true,"notifyOnComplete":true})
+    )
+    .is_err());
     assert!(prompt(&json!({"prompt":"/operator do something"})).is_err());
     assert!(validate_operator("sessions.archive", &json!({"sessionId":"desktop-uuid"})).is_ok());
     assert!(validate_operator(

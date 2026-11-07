@@ -38,7 +38,8 @@ chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {t
 Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
 sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
-Artifacts, memory, soul, habits, cards and notifyOnComplete:true require a Mono.
+Artifacts, memory, soul, habits and cards require a Mono.
+Operator sessions.start and sessions.send accept notifyOnComplete:true (default false). Say what started and end the turn; never poll. One internal completion report resumes the caller after all workers armed in that turn stop and the caller is idle. Completion is not verification; inspect and verify results before telling the user.
 The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID and identical input.
 Assigned projects alone may be addressed. Credentials are provided in the environment; never print them.
 "#;
