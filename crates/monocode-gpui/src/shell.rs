@@ -2937,6 +2937,8 @@ impl Shell {
         if !self.session_sidebar_available(cx) {
             return;
         }
+        // Callers fit right after changing the layout, before the next render.
+        self.refresh_right_panel_beside(cx);
         if self.workspace.sidebar_visible {
             if self.narrowest_chat(true, cx) < MIN_CHAT_WIDTH {
                 self.set_sidebar_visible(false, cx);
@@ -4873,6 +4875,18 @@ impl Shell {
             .right_panel_width
             .min(self.right_panel_max())
             .max(self.right_panel_min)
+    }
+    /// Measures what the window's other columns take: the card's inset and
+    /// border, as `narrowest_chat` counts them, the project rail, and the
+    /// sidebar at its settled width so its slide never resizes the panel
+    /// frame by frame.
+    fn refresh_right_panel_beside(&mut self, cx: &App) {
+        let sidebar = if self.workspace.sidebar_visible && self.session_sidebar_available(cx) {
+            self.workspace.sidebar_width
+        } else {
+            0.
+        };
+        self.right_panel_beside = 10. + self.project_rail_drawn_width() + sidebar;
     }
     /// The widest the panel may be in this window.
     fn right_panel_max(&self) -> f32 {
@@ -8614,15 +8628,7 @@ impl Render for Shell {
         }
         self.viewport_width = window.viewport_size().width.as_f32();
         self.viewport_height = window.viewport_size().height.as_f32();
-        // The card's inset and border, as `narrowest_chat` counts them, and
-        // the sidebar at its settled width so its slide never resizes the
-        // panel frame by frame.
-        let sidebar = if self.workspace.sidebar_visible && self.session_sidebar_available(cx) {
-            self.workspace.sidebar_width
-        } else {
-            0.
-        };
-        self.right_panel_beside = 10. + self.project_rail_drawn_width() + sidebar;
+        self.refresh_right_panel_beside(cx);
         self.refit_sidebar_to_room(window, cx);
         self.ensure_right_panel(window, cx);
         let full = self.right_panel_width();
@@ -10668,6 +10674,34 @@ mod tests {
                     shell.workspace.right_panel_width,
                     crate::right_panel::WIDTH_DEFAULT
                 )
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn fitting_the_sidebar_measures_the_layout_it_was_called_for(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        cx.simulate_window_resize(window.into(), gpui::size(px(1440.), px(900.)));
+        window
+            .update(cx, |shell, w, cx| {
+                shell.focus_active(w, cx);
+                shell.toggle_right_panel(w, cx);
+                shell.workspace.right_panel_width = 2000.;
+            })
+            .unwrap();
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.right_panel_shown(cx));
+                assert!(shell.workspace.sidebar_visible);
+                // A wider sidebar, fitted before any render: the panel narrows
+                // to make room rather than squeezing the sidebar out.
+                shell.workspace.sidebar_width = 400.;
+                shell.fit_sidebar(cx);
+                assert!(shell.workspace.sidebar_visible);
+                assert!(shell.narrowest_chat(true, cx) >= MIN_CHAT_WIDTH);
             })
             .unwrap();
     }
