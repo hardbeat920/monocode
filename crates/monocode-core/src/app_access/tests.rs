@@ -335,3 +335,25 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             .unwrap();
     }
 }
+
+#[test]
+fn a_remote_session_reads_through_its_negative_handle_before_its_first_turn() {
+    // Desktop stores read a session's blocks from the local sessions table,
+    // where a remote handle has no row ("Query returned no rows").
+    for store in [
+        Store::open_monocode(Path::new(":memory:")).unwrap(),
+        Store::open(Path::new(":memory:")).unwrap(),
+    ] {
+        let project = store
+            .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
+            .unwrap();
+        let session = store.create("claude", &project.key).unwrap();
+        assert!(session.id < 0);
+        let page = store
+            .app_conversation(session.id, &json!({}), false, false)
+            .unwrap();
+        assert_eq!(page["turns"], json!([]));
+        assert_eq!(page["sessionId"], session.id);
+        assert_eq!(page["title"], session.title);
+    }
+}

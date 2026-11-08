@@ -23,10 +23,11 @@ fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| format!("Provide {key} (up to {max} bytes)"))
 }
+/// Session handles are nonzero; remote sessions' handles are negative.
 fn id(v: &Value, key: &str) -> Result<i64, String> {
     v.get(key)
         .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
-        .filter(|n| *n > 0)
+        .filter(|n| *n != 0)
         .ok_or_else(|| format!("Provide {key}"))
 }
 fn flag(v: &Value, key: &str, default: bool) -> bool {
@@ -881,5 +882,22 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                 });
             }).detach();
         }
+    }
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+    #[test]
+    fn remote_session_handles_are_ids() {
+        for input in [
+            json!({"sessionId":-3720842865355117_i64}),
+            json!({"sessionId":"-3720842865355117"}),
+        ] {
+            assert_eq!(id(&input, "sessionId"), Ok(-3720842865355117));
+        }
+        assert_eq!(id(&json!({"sessionId":7}), "sessionId"), Ok(7));
+        assert!(id(&json!({"sessionId":0}), "sessionId").is_err());
+        assert!(id(&json!({}), "sessionId").is_err());
     }
 }

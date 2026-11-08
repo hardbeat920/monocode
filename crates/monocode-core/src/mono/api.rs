@@ -36,10 +36,14 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         if key == "before" && !value.is_string() && value.as_u64().is_none() {
             return Err("before must be a turn ID".into());
         }
-        if matches!(key.as_str(), "id" | "sessionId" | "besideSessionId")
+        // Remote sessions have negative desktop handles.
+        if matches!(key.as_str(), "sessionId" | "besideSessionId")
             && !value.is_string()
-            && value.as_u64().is_none()
+            && value.as_i64().is_none()
         {
+            return Err(format!("{key} must be an ID"));
+        }
+        if key == "id" && !value.is_string() && value.as_u64().is_none() {
             return Err(format!("{key} must be an ID"));
         }
         if ![
@@ -129,5 +133,23 @@ mod tests {
             &json!({"prompt":"x","project":"/code","draft":true})
         )
         .is_ok());
+    }
+    #[test]
+    fn session_ids_include_negative_remote_handles() {
+        for input in [
+            json!({"sessionId":-3720842865355117_i64}),
+            json!({"sessionId":"-3720842865355117"}),
+            json!({"sessionId":42}),
+        ] {
+            assert!(validate("sessions.read", &input).is_ok(), "{input}");
+        }
+        assert!(validate(
+            "sessions.start",
+            &json!({"prompt":"x","placement":"right","besideSessionId":-7})
+        )
+        .is_ok());
+        assert!(validate("sessions.read", &json!({"sessionId":1.5})).is_err());
+        assert!(validate("sessions.read", &json!({"sessionId":true})).is_err());
+        assert!(validate("notes.read", &json!({"id":-1})).is_err());
     }
 }

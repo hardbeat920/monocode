@@ -84,7 +84,14 @@ impl Store {
         busy: bool,
         has_draft: bool,
     ) -> Result<Value, String> {
-        let blocks = if self.shared.is_some() {
+        // A remote session's transcript lives on its host, under a negative
+        // handle that has no row in the local sessions table.
+        let blocks = if let Some(remote) = self.remote_session(id)? {
+            remote
+                .host_snapshot()?
+                .and_then(|snapshot| snapshot["session"]["blocks"].as_array().cloned())
+                .unwrap_or_default()
+        } else if self.shared.is_some() {
             self.shared_blocks(id)?
         } else {
             let mut blocks: Vec<Value> = Vec::new();

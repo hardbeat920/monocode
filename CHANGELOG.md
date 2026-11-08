@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Native: a session a Mono starts in a remote (SSH) project now runs and reports back when it finishes. Before, `sessions.start` answered `accepted` but never sent the prompt to the machine. When the machine is unreachable or lacks the harness, the launch now fails with that reason.
+- Native: the app CLI accepts the negative IDs of remote sessions. `sessions.read` returns a remote conversation from its machine, and `sessions.send`, `stop`, `archive` and `delete` find it, instead of failing with "sessionId must be an ID" or "Query returned no rows".
 
 ## [0.16.0] - 2026-10-19
 

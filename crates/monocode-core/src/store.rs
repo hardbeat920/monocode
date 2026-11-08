@@ -709,18 +709,12 @@ impl Store {
     }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
         if let Some(remote) = self.remote_session(session)? {
-            let Some(id) = remote.session_id.as_deref() else {
-                return Ok(Transcript::default());
+            return match remote.host_snapshot()? {
+                Some(snapshot) => {
+                    Self::project_remote_history(&snapshot).map(|(history, _)| history)
+                }
+                None => Ok(Transcript::default()),
             };
-            let client = crate::remote::default_connections()?;
-            let machine = remote.machine(&client)?;
-            let mut snapshot = client.load_session(&machine.id, id, None)?;
-            crate::remote::attachments::qualify_snapshot(
-                &mut snapshot,
-                &remote.project.environment_id,
-                id,
-            );
-            return Self::project_remote_history(&snapshot).map(|(history, _)| history);
         }
         if self.shared.is_some() {
             return self.shared_load(session);
