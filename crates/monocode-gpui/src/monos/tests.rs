@@ -586,6 +586,81 @@ fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &m
 }
 
 #[gpui::test]
+fn failed_completion_focus_scrolls_after_moving_between_windows(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let workspace: gpui::AnyWindowHandle = s.window.into();
+    workspace
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                for id in ["first", "second"] {
+                    m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                        id: id.into(),
+                        text: "completion".into(),
+                        internal: true,
+                        sent_at: None,
+                        error: Some("Long failure. ".repeat(500)),
+                        attachments: Vec::new(),
+                    });
+                }
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let mut main = gpui::VisualTestContext::from_window(workspace, cx);
+    main.run_until_parked();
+    main.refresh().unwrap();
+    s.manager
+        .update(&mut main, |m, cx| m.open_floating(s.id.clone(), cx));
+    main.run_until_parked();
+    let panel = s.manager.read_with(&main, |m, _| m.floating[0]);
+    let mut floating = gpui::VisualTestContext::from_window(panel, cx);
+    panel
+        .update(&mut floating, |_, w, _| w.activate_window())
+        .unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let chat = s
+        .manager
+        .read_with(&floating, |m, _| m.chats[&s.id].clone());
+    let second = chat.read_with(&floating, |c, _| c.queue_test_focus("second", 0));
+    panel
+        .update(&mut floating, |_, w, cx| w.focus(&second, cx))
+        .unwrap();
+    floating.refresh().unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let list = floating.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = floating.debug_bounds("mono-queue-retry-second").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "floating action {retry:?} outside {list:?}"
+    );
+
+    s.manager
+        .update(&mut floating, |m, cx| m.hide_floating(&s.id, cx));
+    floating.run_until_parked();
+    workspace
+        .update(&mut main, |_, w, _| w.activate_window())
+        .unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let first = chat.read_with(&main, |c, _| c.queue_test_focus("first", 0));
+    workspace
+        .update(&mut main, |_, w, cx| w.focus(&first, cx))
+        .unwrap();
+    main.refresh().unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let list = main.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = main.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "workspace action {retry:?} outside {list:?}"
+    );
+}
+
+#[gpui::test]
 fn floating_chat_leaves_the_workspace_selection_alone(cx: &mut TestAppContext) {
     let s = setup(cx);
     let other = cx.update(|cx| {
@@ -895,6 +970,10 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
         visual.debug_bounds("mono-internal-queue").is_none(),
         "a routine completion must not flash a Pending card in the composer"
     );
+    assert!(
+        visual.debug_bounds("mono-internal-queue-list").is_none(),
+        "no invisible queue tab stop"
+    );
     s.manager.update(visual, |m, cx| {
         m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Delivery failed".into());
         m.configure_chat(&s.id, cx);
@@ -904,6 +983,267 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
     assert!(
         visual.debug_bounds("mono-internal-queue").is_some(),
         "a failed notification keeps its retry and discard controls"
+    );
+}
+
+#[gpui::test]
+fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    id: "completion".into(),
+                    text: "completion".into(),
+                    internal: true,
+                    sent_at: None,
+                    error: Some("Long failure message. ".repeat(500)),
+                    attachments: Vec::new(),
+                });
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let composer = visual.debug_bounds("mono-composer").unwrap();
+    let viewport = s
+        .window
+        .update(visual, |_, w, _| w.viewport_size())
+        .unwrap();
+    assert!(
+        composer.bottom() <= viewport.height,
+        "composer {composer:?}, viewport {viewport:?}"
+    );
+}
+
+#[gpui::test]
+fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                for id in ["first", "second"] {
+                    m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                        id: id.into(),
+                        text: "completion".into(),
+                        internal: true,
+                        sent_at: None,
+                        error: Some("Long failure. ".repeat(500)),
+                        attachments: Vec::new(),
+                    });
+                }
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, _| w.activate_window())
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let chat = s.manager.read_with(visual, |m, _| m.chats[&s.id].clone());
+    let first_retry = chat.read_with(visual, |c, _| c.queue_test_focus("first", 0));
+    let first_discard = chat.read_with(visual, |c, _| c.queue_test_focus("first", 1));
+    let second_retry = chat.read_with(visual, |c, _| c.queue_test_focus("second", 0));
+    let second_discard = chat.read_with(visual, |c, _| c.queue_test_focus("second", 1));
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    let before = visual.debug_bounds("mono-queue-retry-first").unwrap().top();
+    visual.simulate_keystrokes("down");
+    visual.refresh().unwrap();
+    let after = visual.debug_bounds("mono-queue-retry-first").unwrap().top();
+    assert!(after < before, "down must scroll the focused failure list");
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(first_retry.is_focused(w)))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(first_discard.is_focused(w)))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(second_retry.is_focused(w)))
+        .unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-second").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "{retry:?} outside {list:?}"
+    );
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "third".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("new failure".into()),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list_focus = chat.read_with(visual, |c, _| c.queue_test_list_focus());
+    s.window
+        .update(visual, |_, w, _| {
+            assert!(list_focus.is_focused(w), "focus follows the reset list")
+        })
+        .unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let first = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "third", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus(&second_discard, cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(second_discard.is_focused(w)))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("enter");
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(visual, |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("enter").unwrap(),
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(!s.manager.read_with(visual, |m, _| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .any(|m| m.id == "second")
+    }));
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "remaining action {retry:?} outside {list:?}"
+    );
+    chat.update(visual, |c, _| c.busy = true);
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    handle
+        .update(visual, |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("space").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+                cx,
+            );
+            w.dispatch_event(
+                gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("space").unwrap(),
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(s.manager.read_with(visual, |m, _| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .any(|m| m.id == "first" && m.error.is_none())
+    }));
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Long failure. ".repeat(500));
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let first_retry = chat.read_with(visual, |c, _| c.queue_test_focus("first", 0));
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("pagedown");
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() < list.top(),
+        "test must scroll before clearing the queue"
+    );
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "first", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("mono-internal-queue-list").is_none());
+    let input_focus = chat.read_with(visual, |c, cx| c.input.focus_handle(cx));
+    s.window
+        .update(visual, |_, w, _| assert!(input_focus.is_focused(w)))
+        .unwrap();
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "new".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("Long failure. ".repeat(500)),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-new").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "new action {retry:?} outside {list:?}"
     );
 }
 
