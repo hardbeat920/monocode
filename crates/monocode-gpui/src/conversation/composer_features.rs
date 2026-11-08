@@ -517,6 +517,17 @@ impl Conversation {
             && self.follow_ups.state.draft.is_none()
             && !self.settings.worktree_removed
     }
+    pub(crate) fn ready_for_coordinator_report(&self, cx: &gpui::App) -> bool {
+        self.ready_for_external(cx)
+            && self.available_for_managed_run(cx)
+            && (self.settings.account.id == monocode_core::accounts::DEFAULT
+                || crate::accounts::get(cx).is_none_or(|center| {
+                    center.read(cx).book.exists(
+                        Kind::from_id(&self.summary.provider),
+                        &self.settings.account.id,
+                    )
+                }))
+    }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
         if !self.history_ready() || self.stopping {
             self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);

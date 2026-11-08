@@ -1180,7 +1180,9 @@ fn operator_completion_distinct_labels_report_each_worker_with_pending_context(
     finish_completion_worker(window, first, cx);
     let prompts = completion_prompts(window, caller, cx);
     assert_eq!(prompts.len(), 1);
-    let (report, pending) = prompts[0].split_once("\n\nStill running:\n").unwrap();
+    let (report, pending) = prompts[0]
+        .split_once("\n\nOther reports pending:\n")
+        .unwrap();
     assert!(report.contains(&format!("Session {first}: first\nOutcome: completed")));
     assert!(report.contains(&format!("Worker {first} final response")));
     assert!(!report.contains(&format!("Session {second}:")));
@@ -1327,4 +1329,47 @@ fn operator_completion_start_uses_a_trimmed_label(cx: &mut TestAppContext) {
     assert!(prompts[0].contains(&format!(
         "Session {child}: Labelled worker\nOutcome: failed"
     )));
+}
+
+#[gpui::test]
+fn operator_completion_waits_for_parent_account_recovery(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            crate::accounts::install(shell.store.clone(), cx);
+            shell.sessions[&caller].update(cx, |v, _| {
+                v.settings.account.id = "removed-account".into();
+            });
+        })
+        .unwrap();
+    let worker = completion_worker_in_group(window, caller, "first", Some("first"), cx);
+    end_completion_origin(window, caller, cx);
+    finish_completion_worker(window, worker, cx);
+    assert!(completion_prompts(window, caller, cx).is_empty());
+    window
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.operator_subscriptions[&caller][0].delivered);
+            shell.sessions[&caller].update(cx, |v, cx| {
+                v.settings.account = Default::default();
+                cx.emit(SessionChanged);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(completion_prompts(window, caller, cx).len(), 1);
+}
+
+#[gpui::test]
+fn operator_completion_terminal_sibling_is_pending_not_running(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    let first = completion_worker_in_group(window, caller, "first", Some("first"), cx);
+    let second = completion_worker_in_group(window, caller, "second", Some("second"), cx);
+    finish_completion_worker(window, first, cx);
+    finish_completion_worker(window, second, cx);
+    assert!(completion_prompts(window, caller, cx).is_empty());
+    end_completion_origin(window, caller, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 2);
+    assert!(!prompts[0].contains("Still running:"));
+    assert!(prompts[0].contains("Other reports pending:"));
 }

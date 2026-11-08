@@ -13,18 +13,17 @@ use serde_json::{Value, json};
 mod tests;
 
 type Placement = Option<(i64, Edge)>;
+struct SessionLaunch {
+    summary: Session,
+    settings: Settings,
+    draft: bool,
+    reveal: bool,
+    placement: Placement,
+    group: OperatorCompletionGroup,
+}
 enum Effect {
     None,
-    Start(
-        Box<(
-            Session,
-            Settings,
-            bool,
-            bool,
-            Placement,
-            OperatorCompletionGroup,
-        )>,
-    ),
+    Start(Box<SessionLaunch>),
     Groups(String, monocode_core::session_groups::Groups),
     Archive(i64),
 }
@@ -105,7 +104,14 @@ impl Shell {
                     match effect {
                         Effect::None => (),
                         Effect::Start(start) => {
-                            let (summary, settings, draft, reveal, placement, group) = *start;
+                            let SessionLaunch {
+                                summary,
+                                settings,
+                                draft,
+                                reveal,
+                                placement,
+                                group,
+                            } = *start;
                             if call.input["notifyOnComplete"] == true
                                 && this
                                     .session_summaries
@@ -424,7 +430,7 @@ impl Shell {
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
                     let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
-                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement,group)))}else{Effect::None}))
+                    Ok((value,if fresh {Effect::Start(Box::new(SessionLaunch { summary, settings, draft, reveal, placement, group }))}else{Effect::None}))
                 },cx);
                 return;
             }

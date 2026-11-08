@@ -25,6 +25,48 @@ can stay visible in history without switching the user's current conversation.
 Retry an uncertain mutation with the same request ID and identical input.
 Unknown fields and invalid options produce errors instead of being ignored.
 
+## Native Operator completion reports
+
+In the native app, an ordinary Operator chat can set `notifyOnComplete: true`
+on `sessions.start` or `sessions.send`, then end its turn. MonoCode resumes that
+chat with a completion report when its subscribed work finishes. Child sessions
+do not need Operator access.
+
+The optional `notifyGroup` field controls when reports arrive:
+
+| Input | Report timing |
+| --- | --- |
+| No label | One report after all subscribed workers from that caller turn finish. |
+| A different label per worker | One report for each worker as it finishes. |
+| The same label for several workers | One report after that group finishes, including workers added in later turns before delivery. |
+
+Labels belong to the calling session. They are trimmed and must contain 1 to 64
+characters. A label requires `notifyOnComplete: true`. Reusing a label after its
+report was delivered starts a fresh group. Monos reject `notifyGroup`; their
+existing completion behaviour is unchanged.
+
+For example, launch the implementation with `notifyGroup: "implementation"`
+and the review with `notifyGroup: "review"` to receive separate reports. Use
+`notifyGroup: "release-check"` on both to wait for both. Each call also needs
+`notifyOnComplete: true` and its usual launch or send fields.
+
+Reports include completed, failed, stopped or removed outcomes, and list other
+reports still pending. Completion does not establish that the work passed
+verification. The receiving assistant must inspect and verify the result.
+
+Delivery waits while the parent is busy, has a draft or attachments, has queued
+work, or cannot use its selected provider account. Archiving or deleting the
+parent drops its subscriptions. When the caller itself stops, archives or
+deletes a monitored worker through the CLI, that worker's subscription is
+dismissed, since the caller can confirm the action in its current reply.
+
+Subscriptions survive app restarts. Unfinished workers are reported as stopped;
+known terminal outcomes are retained. MonoCode saves delivery before dispatch to
+prevent duplicate automatic follow-ups after a restart. A crash between those
+steps can lose that report; delivery is at most once, rather than guaranteed.
+Project boundaries and the restriction against managing the caller remain in
+force.
+
 ## Orchestration workers
 
 Orchestration workers keep their existing scoped `control` workflow and do not receive this app access.

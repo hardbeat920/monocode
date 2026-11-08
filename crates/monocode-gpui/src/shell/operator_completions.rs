@@ -154,9 +154,7 @@ impl Shell {
                     continue;
                 };
                 origin.update(cx, |v, cx| v.load(cx));
-                if !origin.read(cx).ready_for_external(cx)
-                    || !origin.read(cx).available_for_managed_run(cx)
-                {
+                if !origin.read(cx).ready_for_coordinator_report(cx) {
                     continue;
                 }
                 let children: Vec<_> = self.operator_subscriptions[&caller]
@@ -219,7 +217,7 @@ impl Shell {
                             return;
                         }
                         let Some(origin) = this.sessions.get(&caller).cloned() else { return; };
-                        if !origin.read(cx).ready_for_external(cx) || !origin.read(cx).available_for_managed_run(cx) { return; }
+                        if !origin.read(cx).ready_for_coordinator_report(cx) { return; }
                         let mut subscriptions = this.operator_subscriptions[&caller].clone();
                         for subscription in subscriptions.iter_mut().filter(|s| s.group == group) {
                             subscription.delivered = true;
@@ -227,7 +225,7 @@ impl Shell {
                         let pending: Vec<_> = subscriptions.iter().filter(|s| !s.delivered)
                             .map(|s| format!("Session {}: {}", s.session, s.title)).collect();
                         if !pending.is_empty() {
-                            report.push_str(&format!("\n\nStill running:\n{}\nMore reports will follow.", pending.join("\n")));
+                            report.push_str(&format!("\n\nOther reports pending:\n{}\nMore reports will follow.", pending.join("\n")));
                         }
                         // Persist before dispatch for at-most-once delivery across a crash.
                         if let Err(error) = this.save_operator_completions(caller, subscriptions) {
