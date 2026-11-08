@@ -1,10 +1,17 @@
-import { act, forwardRef, useRef, type ReactNode } from "react";
+import {
+  act,
+  forwardRef,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Composer } from "@/features/sessions/Composer";
 
 const runtime = vi.hoisted(() => ({
   os: "android",
+  offline: false,
   values: [] as { get: () => unknown; set: (value: unknown) => void }[],
   photos: vi.fn(async () => []),
   files: vi.fn(async () => []),
@@ -167,8 +174,8 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 24 }),
 }));
 vi.mock("@/features/connection/ConnectionNotice", () => ({
-  useOffline: () => false,
-  PulsingDot: () => null,
+  useOffline: () => runtime.offline,
+  PulsingDot: () => <i data-testid="pulsing-dot" />,
 }));
 vi.mock("@/features/files/FileTypeIcon", () => ({ FileTypeIcon: () => null }));
 vi.mock("@/features/sessions/SessionScreen", () => ({
@@ -204,7 +211,10 @@ let root: ReturnType<typeof createRoot>;
 const model = vi.fn();
 const send = vi.fn();
 const stop = vi.fn(async () => {});
-const render = (active = true) =>
+const render = (
+  active = true,
+  props: Partial<ComponentProps<typeof Composer>> = {},
+) =>
   act(() =>
     root.render(
       <Composer
@@ -216,11 +226,20 @@ const render = (active = true) =>
         onSend={send}
         busy
         onStop={stop}
+        {...props}
       />,
     ),
   );
 const button = (label: string) =>
   container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+const type = (text: string) => {
+  const input = container.querySelector("textarea")!;
+  act(() => {
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return input;
+};
 const modelTouches = () =>
   button("Model: GPT").parentElement!.style.pointerEvents;
 beforeEach(() => {
@@ -228,6 +247,7 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
+  runtime.offline = false;
   runtime.values = [];
   vi.clearAllMocks();
   container = document.createElement("div");
@@ -333,4 +353,52 @@ it("focuses the existing draft on typing posture only for the active route", () 
   act(() => button("Enter typing posture").click());
   expect(document.activeElement).not.toBe(input);
   expect(input.value).toBe("Unsent draft");
+});
+
+it("keeps the field open while the desktop is away and holds the message until it is back", async () => {
+  runtime.offline = true;
+  render();
+  const input = container.querySelector("textarea")!;
+  expect(input.disabled).toBe(false);
+  expect(input.placeholder).toBe("Reconnecting to desktop…");
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).toBeNull();
+
+  type("Written on the train");
+  expect(input.value).toBe("Written on the train");
+  expect(button("Send").disabled).toBe(true);
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).not.toBeNull();
+  act(() => button("Send").click());
+  expect(send).not.toHaveBeenCalled();
+  expect(input.value).toBe("Written on the train");
+
+  runtime.offline = false;
+  render();
+  expect(button("Send").disabled).toBe(false);
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).toBeNull();
+  await act(async () => button("Send").click());
+  expect(send).toHaveBeenCalledWith("Written on the train", []);
+});
+
+it("can't stop a turn while the desktop is away, but dictation still works", () => {
+  runtime.offline = true;
+  render();
+  expect(button("Stop").disabled).toBe(true);
+  act(() => button("Stop").click());
+  expect(stop).not.toHaveBeenCalled();
+
+  render(true, { busy: false });
+  expect(button("Dictate").disabled).toBe(false);
+});
+
+it("leaves a session's error for when the desktop is back, so it can't lock the field", () => {
+  runtime.offline = true;
+  const notice = { text: "Turn failed", dismiss: vi.fn() };
+  render(true, { notice });
+  expect(container.querySelector("textarea")!.disabled).toBe(false);
+  expect(container.textContent).not.toContain("Turn failed");
+
+  runtime.offline = false;
+  render(true, { notice });
+  expect(container.querySelector("textarea")!.disabled).toBe(true);
+  expect(container.textContent).toContain("Turn failed");
 });

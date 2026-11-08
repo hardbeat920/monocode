@@ -3791,6 +3791,7 @@ dependencies = [
  "gpui-pre-platform",
  "image",
  "libc",
+ "log",
  "mermaid-rs-renderer",
  "mimalloc",
  "monocode-core",

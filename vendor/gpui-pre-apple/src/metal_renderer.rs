@@ -210,8 +210,50 @@ impl Drop for MetalRenderer {
     }
 }
 
+/// Monocode: whether drawn frames reach the screen. A window can keep
+/// drawing every frame while the compositor shows none of them (seen after a
+/// file drop, until a resize); Metal reports a presented time of 0 for each
+/// frame that was never shown.
+#[derive(Default)]
+pub struct PresentStats {
+    presented: AtomicU64,
+    skipped: AtomicU64,
+    /// Consecutive frames not shown, reset by the next one that is.
+    skipped_streak: AtomicU64,
+}
+
+impl PresentStats {
+    pub fn presented(&self) -> u64 {
+        self.presented.load(Ordering::Relaxed)
+    }
+    pub fn skipped(&self) -> u64 {
+        self.skipped.load(Ordering::Relaxed)
+    }
+    pub fn skipped_streak(&self) -> u64 {
+        self.skipped_streak.load(Ordering::Relaxed)
+    }
+    fn record(&self, shown: bool) {
+        if shown {
+            self.presented.fetch_add(1, Ordering::Relaxed);
+            self.skipped_streak.store(0, Ordering::Relaxed);
+        } else {
+            self.skipped.fetch_add(1, Ordering::Relaxed);
+            self.skipped_streak.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Monocode: logs a main-thread wait long enough to freeze the window.
+fn log_slow(what: &str, since: Instant) {
+    let elapsed = since.elapsed();
+    if elapsed >= Duration::from_millis(150) {
+        log::warn!("renderer blocked {}ms {what}", elapsed.as_millis());
+    }
+}
+
 pub struct MetalRenderer {
     device: metal::Device,
+    present_stats: Arc<PresentStats>,
     layer: Option<metal::MetalLayer>,
     is_apple_gpu: bool,
     is_unified_memory: bool,
@@ -302,9 +344,14 @@ impl MetalRenderer {
         // Support direct-to-display rendering if the window is not transparent
         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
         layer.set_opaque(!transparent);
-        // Each drawable is a full window of pixels; a third one costs as much
-        // as the path texture and only helps a frame that misses its deadline.
-        layer.set_maximum_drawable_count(2);
+        // Monocode: keep Core Animation's default of three drawables. With
+        // two, a frame drawn while the window server still holds both (one
+        // shown, one queued) blocks the main thread in `nextDrawable` until
+        // its 1s timeout. That happened on every screenshot thumbnail drop:
+        // the window turning key draws synchronously while the overlay holds
+        // the previous frames, freezing the window for a second. The third
+        // drawable costs one window of pixels.
+        layer.set_maximum_drawable_count(3);
         // Monocode: backdrop blur copies already drawn pixels out of the
         // drawable, so it must stay readable in every build, not only for
         // visual tests and UI automation screenshots.
@@ -542,6 +589,7 @@ impl MetalRenderer {
         RENDERERS.fetch_add(1, Ordering::Relaxed);
         Self {
             device,
+            present_stats: Arc::default(),
             layer,
             presents_with_transaction: false,
             is_apple_gpu,
@@ -602,6 +650,10 @@ impl MetalRenderer {
         if let Some(layer) = &self.layer {
             layer.set_presents_with_transaction(presents_with_transaction);
         }
+    }
+
+    pub fn present_stats(&self) -> &Arc<PresentStats> {
+        &self.present_stats
     }
 
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
@@ -689,7 +741,11 @@ impl MetalRenderer {
             (viewport_size.width.ceil() as i32).into(),
             (viewport_size.height.ceil() as i32).into(),
         );
-        let drawable = if let Some(drawable) = layer.next_drawable() {
+        // Monocode: log main-thread waits, which freeze the whole window.
+        let waited = Instant::now();
+        let next_drawable = layer.next_drawable();
+        log_slow("waiting for a drawable", waited);
+        let drawable = if let Some(drawable) = next_drawable {
             drawable
         } else {
             log::error!(
@@ -707,9 +763,26 @@ impl MetalRenderer {
             }
         };
 
+        {
+            let stats = self.present_stats.clone();
+            let block = RcBlock::new(move |drawable: ptr::NonNull<AnyObject>| {
+                // SAFETY: Metal passes the drawable this handler was added to.
+                let time: f64 = unsafe { msg_send![drawable.as_ref(), presentedTime] };
+                stats.record(time > 0.0);
+            });
+            // SAFETY: `addPresentedHandler:` copies the block; the drawable is
+            // a valid CAMetalDrawable that has not been presented yet.
+            unsafe {
+                let drawable: &AnyObject = &*drawable.as_ptr().cast();
+                let _: () = msg_send![drawable, addPresentedHandler: &*block];
+            }
+        }
+
         if self.presents_with_transaction {
             command_buffer.commit();
+            let waited = Instant::now();
             command_buffer.wait_until_scheduled();
+            log_slow("waiting for the GPU to schedule a frame", waited);
             drawable.present();
         } else {
             command_buffer.present_drawable(drawable);

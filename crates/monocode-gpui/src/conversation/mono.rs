@@ -5,6 +5,11 @@ use std::path::PathBuf;
 #[derive(Default)]
 pub(super) struct ChatState {
     pub(super) pending: Vec<Message>,
+    queue_scroll: gpui::ScrollHandle,
+    queue_ids: Vec<String>,
+    queue_list_focus: Option<gpui::FocusHandle>,
+    queue_window: Option<gpui::AnyWindowHandle>,
+    queue_focus: std::collections::HashMap<String, ([gpui::FocusHandle; 2], [Subscription; 2])>,
     pub(super) emoji: bool,
     pub(super) delivered: std::collections::HashSet<String>,
     pub(super) sending: Option<String>,
@@ -26,6 +31,16 @@ pub(crate) struct QueueChanged {
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
 impl Conversation {
+    #[cfg(test)]
+    pub(crate) fn queue_test_focus(&self, id: &str, index: usize) -> gpui::FocusHandle {
+        self.mono_ui.queue_focus[id].0[index].clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_test_list_focus(&self) -> gpui::FocusHandle {
+        self.mono_ui.queue_list_focus.as_ref().unwrap().clone()
+    }
+
     /// App launches are saved before installing a view. Reuse the normal durable
     /// draft/queue path instead of submitting an unrecorded seed prompt.
     pub(crate) fn install_app_launch(
@@ -542,6 +557,74 @@ impl Conversation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let failed_ids: Vec<_> = self
+            .mono_ui
+            .pending
+            .iter()
+            .filter(|m| m.internal && m.error.is_some())
+            .map(|m| m.id.clone())
+            .collect();
+        let list_focus = self
+            .mono_ui
+            .queue_list_focus
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        if self.mono_ui.queue_ids != failed_ids {
+            let queue_focused = list_focus.is_focused(window)
+                || self
+                    .mono_ui
+                    .queue_focus
+                    .values()
+                    .any(|(handles, _)| handles.iter().any(|handle| handle.is_focused(window)));
+            if queue_focused {
+                let focus = if failed_ids.is_empty() {
+                    self.input.focus_handle(cx)
+                } else {
+                    list_focus.clone()
+                };
+                window.focus(&focus, cx);
+            }
+            self.mono_ui.queue_scroll = gpui::ScrollHandle::new();
+            self.mono_ui.queue_ids.clone_from(&failed_ids);
+        }
+        if self.mono_ui.queue_window != Some(window.window_handle()) {
+            self.mono_ui.queue_focus.clear();
+            self.mono_ui.queue_window = Some(window.window_handle());
+        }
+        self.mono_ui
+            .queue_focus
+            .retain(|id, _| failed_ids.contains(id));
+        for id in &failed_ids {
+            if !self.mono_ui.queue_focus.contains_key(id) {
+                let handles = [
+                    cx.focus_handle().tab_stop(true),
+                    cx.focus_handle().tab_stop(true),
+                ];
+                let subscribe =
+                    |handle: &gpui::FocusHandle, cx: &mut Context<Self>, window: &mut Window| {
+                        let id = id.clone();
+                        cx.on_focus(handle, window, move |this, _, cx| {
+                            if let Some(index) = this
+                                .mono_ui
+                                .pending
+                                .iter()
+                                .filter(|m| m.internal && m.error.is_some())
+                                .position(|m| m.id == id)
+                            {
+                                this.mono_ui.queue_scroll.scroll_to_top_of_item(index);
+                                cx.notify();
+                            }
+                        })
+                    };
+                let subscriptions = [
+                    subscribe(&handles[0], cx, window),
+                    subscribe(&handles[1], cx, window),
+                ];
+                self.mono_ui
+                    .queue_focus
+                    .insert(id.clone(), (handles, subscriptions));
+            }
+        }
         let mono = self.settings.mono.as_ref().unwrap().mono.clone();
         let status = self.mono_status();
         let name = mono.label();
@@ -600,87 +683,127 @@ impl Conversation {
                     .pb_1p5()
                     .flex()
                     .flex_col()
-                    .children(
-                        self.mono_ui
-                            .pending
-                            .iter()
-                            .filter(|m| m.internal && m.error.is_some())
-                            .map(|message| {
-                                let retry = message.id.clone();
-                                let remove = retry.clone();
-                                div()
-                                    .id(SharedString::from(format!("mono-queued-{}", message.id)))
-                                    .debug_selector(|| "mono-internal-queue".into())
-                                    .mb_1()
-                                    .flex()
-                                    .justify_end()
-                                    .child(
+                    .when(!failed_ids.is_empty(), |d| d.child(
+                        div()
+                            .id("mono-internal-queue-list")
+                            .debug_selector(|| "mono-internal-queue-list".into())
+                            .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                            .track_focus(&list_focus)
+                            .tab_index(0)
+                            .track_scroll(&self.mono_ui.queue_scroll)
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                let scroll = &this.mono_ui.queue_scroll;
+                                let delta = match event.keystroke.key.as_str() {
+                                    "up" => px(40.),
+                                    "down" => px(-40.),
+                                    "pageup" => px(160.),
+                                    "pagedown" => px(-160.),
+                                    _ => return,
+                                };
+                                let y = (scroll.offset().y + delta).max(-scroll.max_offset().y).min(px(0.));
+                                scroll.set_offset(gpui::point(scroll.offset().x, y));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
+                            .max_h(px(180.))
+                            .overflow_y_scroll()
+                            .children(
+                                self.mono_ui
+                                    .pending
+                                    .iter()
+                                    .filter(|m| m.internal && m.error.is_some())
+                                    .map(|message| {
+                                        let retry = message.id.clone();
+                                        let remove = retry.clone();
+                                        let focus = &self.mono_ui.queue_focus[&message.id].0;
                                         div()
-                                            .max_w(px(440.))
-                                            .px_3()
-                                            .py_2()
-                                            .rounded_xl()
-                                            .border_1()
-                                            .border_color(content(0.15))
-                                            .bg(content(0.04))
-                                            .text_size(px(13.))
-                                            .text_color(content(0.6))
-                                            .child(if message.internal {
-                                                "Completion update".into()
-                                            } else {
-                                                message.text.clone()
-                                            })
+                                            .id(SharedString::from(format!(
+                                                "mono-queued-{}",
+                                                message.id
+                                            )))
+                                            .debug_selector(|| "mono-internal-queue".into())
+                                            .mb_1()
+                                            .flex()
+                                            .justify_end()
                                             .child(
                                                 div()
-                                                    .text_size(px(11.))
-                                                    .text_color(content(0.4))
+                                                    .max_w(px(440.))
+                                                    .px_3()
+                                                    .py_2()
+                                                    .rounded_xl()
+                                                    .border_1()
+                                                    .border_color(content(0.15))
+                                                    .bg(content(0.04))
+                                                    .text_size(px(13.))
+                                                    .text_color(content(0.6))
+                                                    .child(if message.internal {
+                                                        "Completion update".into()
+                                                    } else {
+                                                        message.text.clone()
+                                                    })
+                                                    .when(message.error.is_some(), |d| {
+                                                        d.child(
+                                                            div()
+                                                                .flex()
+                                                                .gap_2()
+                                                                .child(
+                                                                    icon_button(
+                                                                        "mono-queue-retry",
+                                                                        "Retry queued message",
+                                                                        "refresh-cw",
+                                                                    )
+                                                                    .track_focus(&focus[0]).tab_index(0)
+                                                                    .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                                                                    .debug_selector({ let id = message.id.clone(); move || format!("mono-queue-retry-{id}") })
+                                                                    .on_click(cx.listener(
+                                                                        move |_, _, _, cx| {
+                                                                            cx.emit(QueueChanged {
+                                                                                id: retry.clone(),
+                                                                                remove: false,
+                                                                            })
+                                                                        },
+                                                                    )),
+                                                                )
+                                                                .child(
+                                                                    icon_button(
+                                                                        "mono-queue-discard",
+                                                                        "Discard queued message",
+                                                                        "close",
+                                                                    )
+                                                                    .track_focus(&focus[1]).tab_index(0)
+                                                                    .focus_visible(|s| s.border_2().border_color(content(0.8)))
+                                                                    .debug_selector({ let id = message.id.clone(); move || format!("mono-queue-discard-{id}") })
+                                                                    .on_click(cx.listener(
+                                                                        move |_, _, _, cx| {
+                                                                            cx.emit(QueueChanged {
+                                                                                id: remove.clone(),
+                                                                                remove: true,
+                                                                            })
+                                                                        },
+                                                                    )),
+                                                                ),
+                                                        )
+                                                    })
                                                     .child(
-                                                        message
-                                                            .error
-                                                            .clone()
-                                                            .unwrap_or_else(|| "Pending".into()),
+                                                        div()
+                                                            .text_size(px(11.))
+                                                            .text_color(content(0.4))
+                                                            .child(
+                                                                message
+                                                                    .error
+                                                                    .clone()
+                                                                    .unwrap_or_else(|| {
+                                                                        "Pending".into()
+                                                                    }),
+                                                            ),
                                                     ),
                                             )
-                                            .when(message.error.is_some(), |d| {
-                                                d.child(
-                                                    div()
-                                                        .flex()
-                                                        .gap_2()
-                                                        .child(
-                                                            icon_button(
-                                                                "mono-queue-retry",
-                                                                "Retry queued message",
-                                                                "refresh-cw",
-                                                            )
-                                                            .on_click(cx.listener(
-                                                                move |_, _, _, cx| {
-                                                                    cx.emit(QueueChanged {
-                                                                        id: retry.clone(),
-                                                                        remove: false,
-                                                                    })
-                                                                },
-                                                            )),
-                                                        )
-                                                        .child(
-                                                            icon_button(
-                                                                "mono-queue-discard",
-                                                                "Discard queued message",
-                                                                "close",
-                                                            )
-                                                            .on_click(cx.listener(
-                                                                move |_, _, _, cx| {
-                                                                    cx.emit(QueueChanged {
-                                                                        id: remove.clone(),
-                                                                        remove: true,
-                                                                    })
-                                                                },
-                                                            )),
-                                                        ),
-                                                )
-                                            }),
-                                    )
-                            }),
-                    )
+                                    }),
+                            ),
+                    ))
+                    .when(!failed_ids.is_empty(), |d| {
+                        d.child(div().text_size(px(11.)).text_color(content(0.5)).child("Scroll for completion updates"))
+                    })
                     .children(self.usage_notice(true, cx))
                     .children(self.auth_notice(cx))
                     .child(self.approval_shelf(window, cx))
@@ -831,102 +954,157 @@ impl Conversation {
         }
         ("Model setting", items, 210., MenuStyle::Explorer)
     }
-    /// The form's box: the field and send, as `MonoComposer` lays them out
-    /// when it has controls.
+    /// The session composer's box: the field, then a toolbar with the model
+    /// picker, its settings, access and send.
     fn mono_composer_box(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let runner = self.composer_runner(cx);
-        let focused = self.input.focus_handle(cx).contains_focused(window, cx);
-        let ready = self.loaded
-            && !self.attaching
-            && (!self.input.read(cx).content.trim().is_empty() || !self.attachments.is_empty());
-        let border = if self.file_drag {
-            accent_color().opacity(0.6)
+        let radius = COMPOSER_RADIUS;
+        let has_value = self.input.read(cx).has_message_text() || !self.attachments.is_empty();
+        // As the session composer: setting pills only with controls beside
+        // the model, otherwise the effort rides inside the model pill.
+        let beside = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside");
+        let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let trigger_fast = self.trigger_fast(beside);
+        let controls = if beside {
+            self.model_controls(cx)
         } else {
-            content(if focused { 0.2 } else { 0.1 })
+            Vec::new()
         };
+        let models_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.mono_ui.models.is_some();
+        let kind = Kind::from_id(&self.summary.provider);
         div()
             .id("mono-composer")
             .debug_selector(|| "mono-composer".into())
             .relative()
-            .p(px(1.))
+            .rounded(px(radius))
+            .border_1()
+            .border_color(composer_border(
+                self.input.focus_handle(cx).is_focused(window),
+            ))
+            .shadow(composer_shadow())
+            .when(self.file_drag, |d| {
+                d.border_color(accent_color().opacity(0.6))
+            })
             .flex()
             .flex_col()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
-            )
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        // One line is 18px plus 8px field padding, 10px row
-                        // padding and 2px border. Decide after text wraps.
-                        let radius = if bounds.size.height <= px(38.) {
-                            bounds.size.height / 2.
-                        } else {
-                            px(COMPOSER_RADIUS)
-                        };
-                        window.paint_quad(
-                            gpui::fill(bounds, content(0.03))
-                                .corner_radii(radius)
-                                .border_widths(px(1.))
-                                .border_color(border),
-                        );
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
+                // Keep a focus-tracking ancestor from taking focus back.
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                    window.prevent_default();
+                }),
             )
             .child(self.composer_anchor.probe())
-            .children(runner)
+            .child(composer_surface(radius))
             .children(self.attachment_chips(cx))
             .child(
-                // Even padding centres send beside one line, and keeps it at
-                // the bottom as the text grows.
                 div()
+                    .px_3()
+                    .pt(px(10.))
+                    .pb(px(14.))
+                    .child(self.input.clone()),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "mono-composer-toolbar".into())
                     .flex()
-                    .items_end()
-                    .gap_1p5()
-                    .p(px(5.))
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .pb(px(10.))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .self_center()
-                            .px_1p5()
-                            .py_1()
-                            .child(self.input.clone()),
+                            .overflow_hidden()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                tool_pill("mono-model", "Model")
+                                    .debug_selector(|| "mono-model".into())
+                                    .min_w_0()
+                                    .max_w(px(220.))
+                                    .flex_shrink(1.)
+                                    .aria_label(format!(
+                                        "{}, {}{}",
+                                        kind.label(),
+                                        self.model_label(),
+                                        trigger_effort
+                                            .as_ref()
+                                            .map(|effort| format!(", effort {effort}"))
+                                            .unwrap_or_default()
+                                    ))
+                                    .aria_expanded(models_open)
+                                    .child(self.model_anchor.probe())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.mono_ui.models = None;
+                                        this.toggle_menu(ComposerMenu::Model, window, cx)
+                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.open_recent_models(window, cx)
+                                        }),
+                                    )
+                                    .child(provider_icon(&self.summary.provider, 16.))
+                                    .child(pill_label(self.model_label()))
+                                    .when_some(trigger_effort, |d, effort| {
+                                        d.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(11.))
+                                                .text_color(content(0.5))
+                                                .child(effort),
+                                        )
+                                    })
+                                    .when(trigger_fast, |d| d.child(fast_bolt()))
+                                    .child(icon("chevron-down", 12.)),
+                            )
+                            .children(controls)
+                            .child(
+                                tool_pill("mono-access", "Access")
+                                    .aria_label(format!("Access, {}", self.settings.access.label()))
+                                    .aria_expanded(self.menu_is(ComposerMenu::Access))
+                                    .child(self.access_anchor.probe())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_menu(ComposerMenu::Access, window, cx)
+                                    }))
+                                    .child(
+                                        icon(
+                                            match self.settings.access {
+                                                AccessMode::FullAccess => "shield-alert",
+                                                AccessMode::AutoAcceptEdits => "pencil-edit",
+                                                AccessMode::Auto => "sparkles",
+                                                _ => "square-lock",
+                                            },
+                                            14.,
+                                        )
+                                        .text_color(
+                                            if self.settings.access == AccessMode::FullAccess {
+                                                tint(AMBER_400, 0.9)
+                                            } else {
+                                                content(1.)
+                                            },
+                                        ),
+                                    )
+                                    .child(pill_label(self.settings.access.label()))
+                                    .child(icon("chevron-down", 12.)),
+                            ),
                     )
                     .child(
                         div()
-                            .id("mono-send")
                             .debug_selector(|| "mono-send".into())
-                            .role(Role::Button)
-                            .aria_label("Send")
                             .flex_shrink_0()
-                            .size(px(26.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(white(if ready { 1. } else { 0.3 }))
-                            .when(ready, |d| d.hover(|s| s.bg(white(0.9))))
-                            .child(icon("mono-arrow-up", 14.).text_color(black(if ready {
-                                1.
-                            } else {
-                                0.4
-                            })))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if ready {
-                                    this.send(cx)
-                                }
-                            })),
+                            .child(self.action(has_value, window, cx)),
                     ),
             )
-            .children(self.attachment_drop_overlay(8.))
+            .children(self.attachment_drop_overlay(12.))
             .into_any_element()
     }
     pub(super) fn model_controls(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1062,8 +1240,8 @@ impl Conversation {
         }
         pills
     }
-    /// Under the box: attach and emoji on the left, the model, its settings
-    /// and the context meter on the right, the last lined up under send.
+    /// Under the box: attach and emoji on the left, the context meter on the
+    /// right.
     fn mono_composer_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let tool = |id: &'static str, label: &'static str| {
             div()
@@ -1079,26 +1257,6 @@ impl Conversation {
                 .justify_center()
                 .hover(|s| s.bg(content(0.08)))
         };
-        let text_control = |id: SharedString, open: bool| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .flex_shrink_0()
-                .h(px(26.))
-                .min_w_0()
-                .px(px(10.))
-                .gap_1p5()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .text_color(content(if open { 1. } else { 0.55 }))
-                .when(open, |d| d.bg(content(0.08)))
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        let pills = self.model_controls(cx);
-        let models_open = self.mono_ui.models.is_some();
         let ratio = self.context.and_then(|usage| usage.ratio());
         let headline = ratio
             .map(|r| format!("{:.0}% context used", r * 100.))
@@ -1117,7 +1275,9 @@ impl Conversation {
             .gap(px(2.))
             .pt_1()
             .pl_1()
-            .pr_1p5()
+            // The box's 1px border plus its toolbar's 8px: the meter sits
+            // straight under send.
+            .pr(px(9.))
             .child(
                 tool("mono-attach", "Attach files")
                     .debug_selector(|| "mono-attach".into())
@@ -1178,30 +1338,11 @@ impl Conversation {
                     .items_center()
                     .gap_1()
                     .child(
-                        text_control("mono-model".into(), models_open)
-                            .min_w_0()
-                            .max_w(px(220.))
-                            .flex_shrink(1.)
-                            .debug_selector(|| "mono-model".into())
-                            .aria_label(format!(
-                                "{}, {}",
-                                Kind::from_id(&self.summary.provider).label(),
-                                self.model_label()
-                            ))
-                            .aria_expanded(models_open)
-                            .child(self.model_anchor.probe())
-                            .child(provider_icon(&self.summary.provider, 14.))
-                            .child(div().min_w_0().truncate().child(self.model_label()))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_mono_models(window, cx)
-                            })),
-                    )
-                    .children(pills)
-                    .child(
                         // A Mono is one long conversation; this is how full its
                         // current thread is. It rotates threads itself.
                         div()
                             .id("mono-context-meter")
+                            .debug_selector(|| "mono-context-meter".into())
                             .role(Role::Image)
                             .aria_label(format!(
                                 "{headline}{}",
