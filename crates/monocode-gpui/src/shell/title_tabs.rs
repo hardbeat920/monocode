@@ -289,6 +289,25 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let panes = tabs
+            .iter()
+            .filter(|tab| self.workspace.title_order.contains(tab))
+            .filter_map(TitleTab::session)
+            .flat_map(|id| self.workspace.layout(id).leaf_ids())
+            .collect::<Vec<_>>();
+        let tabs = tabs.to_vec();
+        self.confirm_close_terminal_panes(&panes, window, cx, move |this, window, cx| {
+            this.finish_close_title_tabs(&tabs, preferred, window, cx);
+        });
+    }
+
+    fn finish_close_title_tabs(
+        &mut self,
+        tabs: &[TitleTab],
+        preferred: Option<TitleTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let before = self.visible_tabs(cx);
         let closing: HashSet<_> = tabs
             .iter()
