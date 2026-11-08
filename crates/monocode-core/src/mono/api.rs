@@ -4,7 +4,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     let fields=match action{
         "models.list"|"soul.read"|"habits.list"=>"",
         "sessions.list"|"folders.list"|"worktrees.list"=>"project",
-        "sessions.read"=>"sessionId project before limit maxChars",
+        "sessions.read"=>"sessionId project before limit maxChars charOffset",
         "sessions.start"=>"prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete",
         "sessions.send"=>"sessionId prompt project notifyOnComplete",
         "sessions.draft"=>"sessionId prompt project",
@@ -28,7 +28,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         {
             return Err(format!("{key} must be true or false"));
         }
-        if ["limit", "offset", "maxChars", "number"].contains(&key.as_str())
+        if ["limit", "offset", "maxChars", "charOffset", "number"].contains(&key.as_str())
             && value.as_u64().is_none()
         {
             return Err(format!("{key} must be a non-negative integer"));
@@ -52,6 +52,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "limit",
             "offset",
             "maxChars",
+            "charOffset",
             "number",
             "id",
             "sessionId",
