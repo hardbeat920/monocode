@@ -1946,3 +1946,142 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
+
+/// Answers `environment.describe` as a machine offering Codex, and every other
+/// method with an empty result, until dropped.
+struct DescribingHost {
+    url: String,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    server: Option<std::thread::JoinHandle<()>>,
+}
+impl DescribingHost {
+    fn new(environment: &str) -> Self {
+        use std::io::{BufRead, Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let descriptor = json!({"protocolVersion": 1, "environmentId": environment, "name": "Test host", "providers": ["codex"], "capabilities": ["sessions.draft"]});
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("host accept: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((key, value)) = line.split_once(':')
+                        && key.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let request: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let result = if request["method"] == "environment.describe" {
+                    descriptor.clone()
+                } else {
+                    json!({})
+                };
+                let body = json!({"result": result}).to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+        Self {
+            url,
+            stop,
+            server: Some(server),
+        }
+    }
+}
+impl Drop for DescribingHost {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(server) = self.server.take() {
+            let _ = server.join();
+        }
+    }
+}
+
+#[gpui::test]
+fn a_remote_launch_that_failed_its_start_check_runs_again_on_retry(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let environment = format!("mono-launch-{}", mono::new_id());
+    let project = locked(&s.store)
+        .unwrap()
+        .remember_remote_project(
+            &environment,
+            &json!({"id": "project", "cwd": "/home/me/project", "name": "project"}),
+        )
+        .unwrap()
+        .key;
+    s.manager.update(cx, |m, _| {
+        m.roster.get_mut(&s.id).unwrap().projects = vec![project.clone()];
+    });
+    let input = json!({"project": project, "harness": "codex", "prompt": "Run hostname", "title": "Remote session smoke test", "draft": true});
+    let remote_sessions = |s: &Setup| {
+        locked(&s.store)
+            .unwrap()
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .filter(|session| session.cwd == project)
+            .count()
+    };
+    // The machine is not connected yet, so the start check fails before any
+    // session exists: nothing may be left behind, and the ID stays unused.
+    let error = call(&s, "smoke", "sessions.start", input.clone(), cx)
+        .try_recv()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("Machine is no longer connected"), "{error}");
+    assert_eq!(
+        remote_sessions(&s),
+        0,
+        "a failed start leaves no placeholder"
+    );
+    let host = DescribingHost::new(&environment);
+    let connections = s
+        .window
+        .read_with(cx, |shell, _| shell.remote_connections())
+        .unwrap();
+    connections
+        .connect(String::new(), host.url.clone(), "a".repeat(43))
+        .unwrap();
+    // The retry runs the launch instead of replaying the failure.
+    let started = call(&s, "smoke", "sessions.start", input.clone(), cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    let child = started["sessionId"].as_i64().unwrap();
+    assert!(child < 0, "remote handles are negative");
+    assert_eq!(started["accepted"], true);
+    // Once it succeeded, the same ID answers with the same session.
+    let again = call(&s, "smoke", "sessions.start", input, cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(again, started);
+    assert_eq!(remote_sessions(&s), 1);
+    drop(host);
+}

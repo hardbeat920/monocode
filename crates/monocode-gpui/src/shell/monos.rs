@@ -51,6 +51,10 @@ impl Shell {
             .as_ref()
             .is_some_and(|m| m.read(cx).active.is_some())
     }
+    /// This window's machine connections, for a Mono's remote launch check.
+    pub(crate) fn remote_connections(&self) -> Arc<monocode_core::remote::Connections> {
+        self.remote.clone()
+    }
     pub(crate) fn mono_session_views(&self, cx: &App) -> Vec<MonoSession> {
         // A Mono's launches are usually hidden from the sidebar, so they are
         // known by summary only, outside the sidebar's order.

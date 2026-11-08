@@ -16,6 +16,25 @@ enum Effect {
     ),
     Groups(String, Groups),
 }
+/// Why an action failed, and whether it changed anything before it did.
+struct Failure {
+    error: String,
+    committed: bool,
+}
+impl Failure {
+    fn committed(error: String) -> Self {
+        Self {
+            error,
+            committed: true,
+        }
+    }
+    fn uncommitted(error: String) -> Self {
+        Self {
+            error,
+            committed: false,
+        }
+    }
+}
 fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
     v.get(key)
         .and_then(Value::as_str)
@@ -89,11 +108,32 @@ impl Monos {
             let _ = call.reply.send(reply.and(result));
         }));
     }
+    /// Answers a failure that changed nothing without a receipt, so a retry
+    /// with the same request ID runs the action again instead of replaying it.
+    fn finish_uncommitted(&mut self, call: Call, error: String) {
+        self.app_pending
+            .remove(&(call.session, call.request_id.clone()));
+        let _ = call.reply.send(Err(error));
+    }
     fn call_work(
         &mut self,
         call: Call,
         mono_id: String,
         work: impl FnOnce(Database) -> Result<(Value, Effect), String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.call_work_retryable(
+            call,
+            mono_id,
+            move |store| work(store).map_err(Failure::committed),
+            cx,
+        );
+    }
+    fn call_work_retryable(
+        &mut self,
+        call: Call,
+        mono_id: String,
+        work: impl FnOnce(Database) -> Result<(Value, Effect), Failure> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
         let store = self.store.clone();
@@ -160,7 +200,13 @@ impl Monos {
                     this.changed(cx);
                     value
                 });
-                this.finish_call(call, result, cx);
+                match result {
+                    Err(Failure {
+                        error,
+                        committed: false,
+                    }) => this.finish_uncommitted(call, error),
+                    result => this.finish_call(call, result.map_err(|f| f.error), cx),
+                }
             });
         })
         .detach();
@@ -342,55 +388,88 @@ impl Monos {
                             owner.app_placement(&input, call.session, &project, cx)
                         })
                         .map_err(|e| e.to_string())??;
-                    Ok::<_, String>((prompt, provider, kind, source_provider, settings, placement))
+                    let remote = self
+                        .owner
+                        .read_with(cx, |owner, _| owner.remote_connections())
+                        .map_err(|e| e.to_string())?;
+                    Ok::<_, String>((
+                        prompt,
+                        provider,
+                        kind,
+                        source_provider,
+                        settings,
+                        placement,
+                        remote,
+                    ))
                 })();
-                let (prompt, provider, kind, source_provider, settings, placement) = match parsed {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finish_call(call, Err(error), cx);
-                        return;
-                    }
-                };
+                let (prompt, provider, kind, source_provider, settings, placement, remote) =
+                    match parsed {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.finish_call(call, Err(error), cx);
+                            return;
+                        }
+                    };
                 let draft = flag(&input, "draft", false);
                 let request = call.request_id.clone();
-                self.call_work(
+                self.call_work_retryable(
                     call,
                     target,
                     move |store| {
-                        let models = if input.get("model").is_some()
-                            || input.get("modelSettings").is_some()
-                            || input.get("effort").is_some()
-                        {
-                            monocode_core::catalog::models_for(kind, &settings.account)?
-                        } else {
-                            monocode_core::catalog::cached_models_for(kind, &settings.account)
-                                .unwrap_or_default()
-                        };
-                        let mut settings = app::launch_settings(
-                            &input,
-                            &source_provider,
-                            settings,
-                            kind,
-                            &models,
-                        )?;
-                        settings.revision = 0;
-                        if project.starts_with("remote://") {
-                            crate::runtime::remote::check_launch(
-                                &*monocode_core::remote::default_connections()?,
-                                &project,
-                                &provider,
+                        // Everything up to the session's creation only reads,
+                        // so a failure there leaves the request ID unused.
+                        let prepared = (|| {
+                            let models = if input.get("model").is_some()
+                                || input.get("modelSettings").is_some()
+                                || input.get("effort").is_some()
+                            {
+                                monocode_core::catalog::models_for(kind, &settings.account)?
+                            } else {
+                                monocode_core::catalog::cached_models_for(kind, &settings.account)
+                                    .unwrap_or_default()
+                            };
+                            let mut settings = app::launch_settings(
+                                &input,
+                                &source_provider,
+                                settings,
+                                kind,
+                                &models,
                             )?;
+                            settings.revision = 0;
+                            let title = app::optional_text(&input, "title", 160)?
+                                .unwrap_or_else(|| prompt.chars().take(160).collect());
+                            if project.starts_with("remote://") {
+                                crate::runtime::remote::check_launch(&remote, &project, &provider)?;
+                            }
+                            Ok::<_, String>((settings, title))
+                        })();
+                        let (mut settings, title) = prepared.map_err(Failure::uncommitted)?;
+                        let mut summary = locked(&store)
+                            .and_then(|db| db.create(&provider, &project))
+                            .map_err(Failure::uncommitted)?;
+                        summary.title = title;
+                        let configured = (|| {
+                            app::launch_checkout(&input, &project, summary.id, &mut settings)?;
+                            // Worktree creation can run git; do not hold the
+                            // application store lock while that command runs.
+                            let db = locked(&store)?;
+                            db.title(summary.id, &summary.title)?;
+                            db.configure_agent(summary.id, &provider, &settings)?;
+                            db.prepare_app_prompt(summary.id, &request, &prompt)
+                        })();
+                        if let Err(error) = configured {
+                            // Never leave a blank placeholder behind. A new
+                            // worktree stays recorded on its session instead.
+                            let removed = settings.worktree_cwd.is_none()
+                                && locked(&store)
+                                    .and_then(|mut db| db.delete(summary.id))
+                                    .is_ok();
+                            return Err(if removed {
+                                Failure::uncommitted(error)
+                            } else {
+                                Failure::committed(error)
+                            });
                         }
-                        let mut summary = locked(&store)?.create(&provider, &project)?;
-                        app::launch_checkout(&input, &project, summary.id, &mut settings)?;
-                        summary.title = app::optional_text(&input, "title", 160)?
-                            .unwrap_or_else(|| prompt.chars().take(160).collect());
-                        // Worktree creation can run git; do not hold the
-                        // application store lock while that command runs.
-                        let db = locked(&store)?;
-                        db.title(summary.id, &summary.title)?;
-                        db.configure_agent(summary.id, &provider, &settings)?;
-                        db.prepare_app_prompt(summary.id, &request, &prompt)?;
                         summary.has_messages = true;
                         Ok((
                             json!({"sessionId":summary.id,"accepted":true,"project":project}),
