@@ -35,6 +35,14 @@ impl PaneSlide {
         }
     }
 
+    /// A resting normalized value still needs a pixel scale so subsequent
+    /// retargets settle at subpixel precision rather than snapping early.
+    pub(crate) fn stationary(value: f32, pixels_per_unit: f32) -> Self {
+        let mut slide = Self::new(value, value, 0.);
+        slide.pixels_per_unit = pixels_per_unit.max(1.);
+        slide
+    }
+
     pub(crate) fn opening(&self) -> bool {
         self.to > self.from
     }

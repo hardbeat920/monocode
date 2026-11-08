@@ -22,6 +22,7 @@ mod diff_view;
 mod editor_analysis;
 mod editor_scrollbar;
 mod editor_syntax;
+mod effort_slider;
 mod explorer;
 mod file_editor;
 mod file_icons;

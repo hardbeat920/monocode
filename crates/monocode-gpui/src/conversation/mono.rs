@@ -715,6 +715,10 @@ impl Conversation {
         self.git_picker = None;
         self.git_events = None;
         let provider = Kind::from_id(&self.summary.provider);
+        let (effort_slider, effort_event) = self
+            .effort_slider(window, cx)
+            .map(|(slider, event)| (Some(slider), Some(event)))
+            .unwrap_or_default();
         let list = cx.new(|cx| {
             let hidden = cx
                 .try_global::<crate::settings::Preferences>()
@@ -727,10 +731,11 @@ impl Conversation {
                 self.settings.account.clone(),
                 cx,
             )
+            .with_effort_slider(effort_slider)
             .hide_providers(hidden)
             .allow_provider_switch(true)
         });
-        let events = vec![cx.subscribe_in(
+        let mut events = vec![cx.subscribe_in(
             &list,
             window,
             |this, _, picked: &ModelPicked, window, cx| {
@@ -739,6 +744,7 @@ impl Conversation {
                 }
             },
         )];
+        events.extend(effort_event.into_iter().flatten());
         window.focus(&list.read(cx).search_focus(cx), cx);
         self.mono_ui.models = Some((list, events));
         cx.notify();
@@ -749,8 +755,8 @@ impl Conversation {
         Some(
             popover("composer-models", Anchor::Slot(self.model_anchor.clone()))
                 .side(Side::Top)
-                .align(Align::End)
-                .width(310.)
+                .align(Align::Start)
+                .width(254.)
                 .height(442.)
                 .on_dismiss(move |window, cx| {
                     let _ = this.update(cx, |this, cx| this.close_mono_models(window, cx));

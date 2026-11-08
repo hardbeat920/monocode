@@ -456,6 +456,120 @@ fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn background_effect_menu_paints_above_mono_dialog_and_supports_mouse_and_keyboard(
+    cx: &mut TestAppContext,
+) {
+    use monocode_core::project_appearance::{Background, Effect};
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.roster.get_mut(&s.id).unwrap().background = Some(Background {
+                    path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/monocode.png").into(),
+                    ..Default::default()
+                });
+                m.open_options(&s.id, Some(gpui::point(px(100.), px(100.))), window, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    let background = visual.debug_bounds("menu-action-background").unwrap();
+    visual.simulate_click(background.center(), Default::default());
+    visual.run_until_parked();
+    let trigger = visual.debug_bounds("project-background-effect").unwrap();
+    visual.simulate_click(trigger.center(), Default::default());
+    visual.run_until_parked();
+    let selected = visual.debug_bounds("project-settings-None").unwrap();
+    // Bounds alone do not catch this bug: the options exist and take focus
+    // even when the deferred parent surface is painted over their pixels.
+    visual.update(|window, _| {
+        let scale = window.scale_factor();
+        let quads = window.painted_quads();
+        let logical = |quad: &gpui::Quad| quad.bounds.map(|v| px(v.0 / scale));
+        let row = quads
+            .iter()
+            .find(|q| logical(q) == selected && q.background == content(0.1).into())
+            .expect("the selected style is painted");
+        let modal_order = quads
+            .iter()
+            .filter(|q| {
+                logical(q).size.width == px(640.) && logical(q).contains(&selected.center())
+            })
+            .map(|q| q.order)
+            .max()
+            .expect("the Mono background surface");
+        assert!(
+            row.order > modal_order,
+            "style options must paint above the Mono background dialog"
+        );
+        let mask = row.content_mask.bounds.map(|v| px(v.0 / scale));
+        assert!(mask.contains(&selected.origin));
+        assert!(mask.contains(&selected.bottom_right()));
+    });
+    let haze = visual.debug_bounds("project-settings-Haze").unwrap();
+    visual.simulate_click(haze.center(), Default::default());
+    visual.run_until_parked();
+    visual.update(|_, cx| {
+        assert_eq!(
+            s.manager
+                .read(cx)
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .background
+                .as_ref()
+                .unwrap()
+                .effect,
+            Effect::GradientBlur
+        );
+    });
+    assert!(visual.debug_bounds("project-settings-Haze").is_none());
+    assert!(visual.debug_bounds("project-background-dialog").is_some());
+    // Choosing a style restores focus to its trigger; reopen and move up.
+    visual.simulate_keystrokes("enter up enter");
+    visual.run_until_parked();
+    visual.update(|_, cx| {
+        assert_eq!(
+            s.manager
+                .read(cx)
+                .roster
+                .get(&s.id)
+                .unwrap()
+                .background
+                .as_ref()
+                .unwrap()
+                .effect,
+            Effect::Scanlines
+        );
+    });
+    // Escape and an outside press close only the nested menu.
+    visual.simulate_keystrokes("enter escape");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("project-settings-Haze").is_none());
+    assert!(visual.debug_bounds("project-background-dialog").is_some());
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let title = visual.debug_bounds("background-dialog-title").unwrap();
+    visual.simulate_click(title.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("project-settings-Haze").is_none());
+    assert!(visual.debug_bounds("project-background-dialog").is_some());
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert_eq!(
+        saved
+            .get(&s.id)
+            .unwrap()
+            .background
+            .as_ref()
+            .unwrap()
+            .effect,
+        Effect::Scanlines
+    );
+}
+
+#[gpui::test]
 fn settings_color_popover_follows_its_mascot_when_the_window_resizes(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {

@@ -7,6 +7,8 @@ use crate::{
 use gpui::{AnyView, Div, FontWeight, Stateful};
 use monocode_core::mono::heartbeat;
 use monocode_core::project_appearance::{MASCOTS, ProjectAppearance};
+const BACKGROUND_MODAL_PRIORITY: usize = 100;
+
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum OverviewTab {
     Overview,
@@ -2482,6 +2484,7 @@ impl Monos {
                 },
                 cx,
             )
+            .popup_priority(BACKGROUND_MODAL_PRIORITY + 1)
         });
         let id = id.to_string();
         let events = cx.subscribe(
@@ -2510,7 +2513,7 @@ impl Monos {
             popover("mono-background", Anchor::Point(*at))
                 .modal_surface(false)
                 .without_animation()
-                .priority(100)
+                .priority(BACKGROUND_MODAL_PRIORITY)
                 .width(640.)
                 .child(view.clone())
                 .into_any_element(),

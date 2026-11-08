@@ -2103,6 +2103,105 @@ impl Conversation {
         self.save_settings(cx);
         cx.notify();
     }
+    fn fast_mode_state(&self) -> Option<bool> {
+        let model = self.model_info()?;
+        if model.fast {
+            Some(self.settings.fast)
+        } else {
+            model
+                .tiers
+                .iter()
+                .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
+                .map(|(id, _)| self.selected_tier() == Some(id.as_str()))
+        }
+    }
+    fn effort_slider(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(
+        Entity<crate::effort_slider::EffortSlider>,
+        Vec<Subscription>,
+    )> {
+        use crate::effort_slider::{EffortChanged, EffortSlider, ModelControlAction};
+        let model = self.model_info()?;
+        let name = model_display_name(
+            Kind::from_id(&self.summary.provider),
+            &model.id,
+            &model.name,
+        );
+        let slider = cx.new(|cx| {
+            EffortSlider::new(
+                model.efforts.clone(),
+                self.selected_effort(),
+                model.default_effort.as_deref(),
+                cx,
+            )
+            .header(name, self.fast_mode_state())
+        });
+        let effort = cx.subscribe(&slider, |this, _, effort: &EffortChanged, cx| {
+            if this
+                .model_info()
+                .is_some_and(|model| model.efforts.contains(&effort.0))
+            {
+                this.menu_choice(&format!("effort:{}", effort.0), cx);
+                cx.emit(SessionChanged);
+            }
+        });
+        let actions = cx.subscribe_in(
+            &slider,
+            window,
+            |this, slider, action: &ModelControlAction, window, cx| {
+                match action {
+                    ModelControlAction::ChooseModel => {
+                        this.menu = None;
+                        if this.mono_ui.models.is_none() {
+                            this.toggle_mono_models(window, cx);
+                        }
+                    }
+                    ModelControlAction::ToggleFast => {
+                        if let Some(model) = this.model_info() {
+                            if model.fast {
+                                this.menu_choice("fast", cx);
+                            } else if let Some((id, _)) = model
+                                .tiers
+                                .iter()
+                                .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
+                            {
+                                let id = id.clone();
+                                let value = if this.selected_tier() == Some(id.as_str()) {
+                                    String::new()
+                                } else {
+                                    id
+                                };
+                                this.menu_choice(&format!("tier:{value}"), cx);
+                            }
+                        }
+                        let fast = this.fast_mode_state();
+                        slider.update(cx, |slider, cx| slider.set_fast(fast, cx));
+                        cx.emit(SessionChanged);
+                    }
+                    ModelControlAction::ResetEffort => {
+                        let effort = this
+                            .model_info()
+                            .and_then(|model| {
+                                model
+                                    .default_effort
+                                    .as_ref()
+                                    .filter(|effort| model.efforts.contains(effort))
+                                    .or(model.efforts.first())
+                            })
+                            .cloned();
+                        if let Some(effort) = effort {
+                            slider.update(cx, |slider, cx| slider.set_effort(&effort, cx));
+                        }
+                    }
+                }
+                cx.notify();
+            },
+        );
+        Some((slider, vec![effort, actions]))
+    }
     fn set_effort_choice(&mut self, effort: &str, cx: &mut Context<Self>) {
         self.settings
             .model_settings
@@ -2166,8 +2265,7 @@ impl Conversation {
     /// unless beside mode already has its own Fast pill.
     fn trigger_fast(&self, beside: bool) -> bool {
         self.model_info().is_some_and(|model| {
-            model.fast
-                && self.settings.fast
+            self.fast_mode_state() == Some(true)
                 && !(beside && model.efforts.is_empty() && model.tiers.is_empty())
         })
     }
@@ -2585,6 +2683,16 @@ impl Conversation {
             ),
             // ModelPicker: a "Model" row whose flyout lists the models.
             ComposerMenu::Model => {
+                if let Some((slider, subscriptions)) = self.effort_slider(window, cx) {
+                    let focus = slider.focus_handle(cx);
+                    let mut items = vec![MenuItem::Custom(slider.into(), focus)];
+                    items.extend(self.mono_model_options().into_iter().filter(|item| {
+                        !matches!(item, MenuItem::Action(action) if action.id.as_ref() == "reasoning" || action.id.as_ref() == "fast"
+                            || (action.id.as_ref() == "service-tier" && self.model_info().is_some_and(|model| model.tiers.iter().all(|(id, _)| matches!(id.as_str(), "fast" | "priority")))))
+                    }));
+                    events.extend(subscriptions);
+                    return ("Model and settings", items, 254., MenuStyle::Settings);
+                }
                 let list = cx.new(|cx| {
                     let hidden = cx
                         .try_global::<crate::settings::Preferences>()
@@ -2618,6 +2726,12 @@ impl Conversation {
                 } else {
                     Vec::new()
                 };
+                if let Some((slider, event)) = self.effort_slider(window, cx) {
+                    items.retain(|item| !matches!(item, MenuItem::Action(action) if action.id.as_ref() == "reasoning"));
+                    let focus = slider.focus_handle(cx);
+                    items.insert(0, MenuItem::Custom(slider.into(), focus));
+                    events.extend(event);
+                }
                 items.push(
                     MenuAction::new("model", "Model")
                         .value_image(provider.id())
@@ -2636,7 +2750,7 @@ impl Conversation {
                         })
                         .into(),
                 );
-                ("Model and settings", items, 250., MenuStyle::Settings)
+                ("Model and settings", items, 280., MenuStyle::Settings)
             }
             ComposerMenu::Recent => (
                 "Recently used models",
@@ -2648,7 +2762,20 @@ impl Conversation {
                 let items = self.mono_access_options();
                 ("Access", items, 288., MenuStyle::Access)
             }
-            ComposerMenu::Setting(ix) => self.mono_setting_menu(ix),
+            ComposerMenu::Setting(ix) => {
+                let (label, mut items, mut width, style) = self.mono_setting_menu(ix);
+                if ix == 0
+                    && let Some((slider, event)) = self.effort_slider(window, cx)
+                {
+                    items.retain(|item| !matches!(item, MenuItem::Action(action) if action.id.starts_with("effort:"))
+                        && !matches!(item, MenuItem::Header(name) if name.as_ref() == self.effort_setting_label()));
+                    let focus = slider.focus_handle(cx);
+                    items.insert(0, MenuItem::Custom(slider.into(), focus));
+                    events.extend(event);
+                    width = 280.;
+                }
+                (label, items, width, style)
+            }
         }
     }
     /// The model trigger: the composer's model menu.
@@ -4087,6 +4214,206 @@ mod menu_tests {
     use monocode_core::store::Store;
     use std::sync::Mutex;
     #[gpui::test]
+    fn effort_slider_in_model_menu_saves_supported_choices_and_hides_without_catalog_support(
+        cx: &mut TestAppContext,
+    ) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.summary.provider = "codex".into();
+                view.model = Some("example-model".into());
+                view.settings.effort = Some("high".into());
+                view.catalog = vec![Model {
+                    id: "example-model".into(),
+                    name: "Example".into(),
+                    alias_target: None,
+                    efforts: vec!["low".into(), "high".into(), "xhigh".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                cx.set_global(crate::settings::Preferences::default());
+            })
+            .unwrap();
+        open(window, ComposerMenu::Model, cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("effort-slider").is_some(),
+            "the slider is visible directly in the model selector"
+        );
+        visual.simulate_keystrokes("home right");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, _| {
+                assert_eq!(
+                    view.settings.effort.as_deref(),
+                    Some("high"),
+                    "slider arrows take priority over menu navigation"
+                )
+            })
+            .unwrap();
+        visual.simulate_keystrokes("end");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, cx| {
+                assert!(
+                    view.menu.is_some(),
+                    "adjusting effort keeps the selector open"
+                );
+                assert_eq!(view.settings.effort.as_deref(), Some("xhigh"));
+                assert_eq!(
+                    cx.global::<crate::settings::Preferences>().provider_efforts["codex"],
+                    "xhigh"
+                );
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .agent_settings(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(saved.effort.as_deref(), Some("xhigh"));
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        // In beside mode the list contains the slider as a fixed footer.
+        window
+            .update(visual, |view, window, cx| {
+                cx.global_mut::<crate::settings::Preferences>()
+                    .model_controls = "beside".into();
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let track = visual.debug_bounds("effort-slider").unwrap();
+        let card = visual.debug_bounds("model-flyout").unwrap();
+        let header = visual.debug_bounds("model-controls-header").unwrap();
+        assert!(
+            (header.center().x - card.center().x).abs() < px(0.01),
+            "the full control group stays centered across model and provider views"
+        );
+        visual.simulate_click(
+            gpui::point(track.left() + px(10.), track.center().y),
+            Default::default(),
+        );
+        visual.simulate_keystrokes("up");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, window, cx| {
+                assert_eq!(
+                    view.settings.effort.as_deref(),
+                    Some("high"),
+                    "list navigation does not steal slider arrows"
+                );
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+                view.catalog[0].efforts.clear();
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("effort-slider").is_none());
+    }
+
+    #[gpui::test]
+    fn unified_model_controls_keep_fast_tiers_and_boolean_modes_durable(cx: &mut TestAppContext) {
+        for tier_based in [false, true] {
+            let window = conversation(cx);
+            window
+                .update(cx, |view, _, cx| {
+                    view.summary.provider = "codex".into();
+                    view.model = Some("example-model".into());
+                    view.catalog = vec![Model {
+                        id: "example-model".into(),
+                        name: "Example model".into(),
+                        alias_target: None,
+                        efforts: vec!["low".into(), "high".into()],
+                        default_effort: Some("high".into()),
+                        fast: !tier_based,
+                        tiers: if tier_based {
+                            vec![("fast".into(), "Fast".into())]
+                        } else {
+                            Vec::new()
+                        },
+                        thinking: false,
+                        default: true,
+                        controls: Vec::new(),
+                    }];
+                    cx.set_global(crate::settings::Preferences::default());
+                })
+                .unwrap();
+            open(window, ComposerMenu::Model, cx);
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            let fast = visual.debug_bounds("model-controls-fast").unwrap();
+            visual.simulate_click(fast.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.fast_mode_state(), Some(true));
+                    assert!(view.menu.is_some(), "Fast keeps the group open");
+                    let saved = locked(&view.store)
+                        .unwrap()
+                        .agent_settings(view.summary.id)
+                        .unwrap()
+                        .unwrap();
+                    if tier_based {
+                        assert_eq!(saved.service_tier.as_deref(), Some("fast"));
+                        assert!(!saved.fast);
+                    } else {
+                        assert!(saved.fast);
+                    }
+                })
+                .unwrap();
+            visual.simulate_keystrokes("space");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.fast_mode_state(), Some(false))
+                })
+                .unwrap();
+            let model = visual.debug_bounds("model-controls-choose-model").unwrap();
+            visual.simulate_click(model.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert!(
+                        view.mono_ui.models.is_some(),
+                        "centered model control opens the searchable model list"
+                    );
+                    assert!(view.menu.is_none());
+                })
+                .unwrap();
+            visual.simulate_keystrokes("escape");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, window, cx| {
+                    view.catalog[0].fast = false;
+                    view.catalog[0].tiers.clear();
+                    view.catalog[0].efforts.clear();
+                    view.toggle_menu(ComposerMenu::Model, window, cx);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            assert!(
+                visual.debug_bounds("model-controls-fast").is_none(),
+                "unsupported Fast is hidden"
+            );
+            assert!(visual.debug_bounds("effort-slider").is_none());
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert!(
+                        view.mono_ui.models.is_some(),
+                        "a model without effort still has a keyboard-accessible model chooser"
+                    )
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
     fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
         cx: &mut TestAppContext,
     ) {
@@ -4843,9 +5170,9 @@ mod menu_tests {
     }
 }
 
-/// The amber bolt the model trigger carries while fast mode is on.
+/// The blue bolt the model trigger carries while fast mode is on.
 pub(crate) fn fast_bolt() -> gpui::Div {
     div()
         .flex_shrink_0()
-        .child(icon("zap", 12.).text_color(gpui::rgb(0xfbbf24)))
+        .child(icon("zap", 12.).text_color(gpui::rgb(0x509bfa)))
 }

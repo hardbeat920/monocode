@@ -509,6 +509,7 @@ pub(crate) struct BackgroundDialog {
     effect_anchor: AnchorSlot,
     effect_region: AnchorSlot,
     effect_open: bool,
+    popup_priority: usize,
     effect_active: usize,
     effect_focus: FocusHandle,
     effect_trigger_focus: FocusHandle,
@@ -539,6 +540,7 @@ impl BackgroundDialog {
             effect_anchor: AnchorSlot::default(),
             effect_region: AnchorSlot::default(),
             effect_open: false,
+            popup_priority: 70,
             effect_active: 0,
             effect_focus: cx.focus_handle(),
             effect_trigger_focus: cx.focus_handle(),
@@ -548,6 +550,11 @@ impl BackgroundDialog {
             busy: false,
             error: None,
         }
+    }
+    /// Nested deferred popovers must paint above the surface hosting this dialog.
+    pub(crate) fn popup_priority(mut self, priority: usize) -> Self {
+        self.popup_priority = priority;
+        self
     }
     fn save(&mut self, cx: &mut Context<Self>) {
         self.background.normalize();
@@ -656,7 +663,7 @@ impl BackgroundDialog {
             .gap(4.)
             .align(Align::End)
             .padding(4.)
-            .priority(70)
+            .priority(self.popup_priority)
             .track(self.effect_region.clone())
             .on_dismiss(move |window, cx| {
                 let _ = weak.update(cx, |this, cx| this.close_effect(window, cx));
