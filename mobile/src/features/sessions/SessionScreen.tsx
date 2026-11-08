@@ -1,5 +1,6 @@
 import { useIsFocused, usePathname } from "expo-router";
 import { BlurTargetView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   createContext,
   useCallback,
@@ -55,7 +56,7 @@ import { GlassBlurTarget, GlassPresence, LiquidView } from "@/ui/LiquidView";
 import { DitherLoading } from "@/ui/DitherLoading";
 import { useDrawerActions, useSceneSwapping, useSceneSwitching } from "@/ui/ScenePager";
 import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
-import { themedStyles, useColors } from "@/ui/theme";
+import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 export const HEADER_HEIGHT = 44;
 /** The frame's own header (a mono's) below the status bar: flush with it, so
@@ -698,10 +699,13 @@ export function SessionFrame({
             >
               {/* Its own view, since its lift and a screen's dockStyle each set a transform. */}
               <Animated.View style={keyboardLift}>
-                <GradualBlur
-                  edge="bottom"
-                  height={composerHeight + composerBottom + FADE}
-                  color={colors.background}
+                {/* Solid behind the composer: its glass shows what's under it, so
+                    with the transcript there the add button and mic turn different greys. */}
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={[withAlpha(colors.background, 0), colors.background]}
+                  locations={[0, FADE / (composerHeight + composerBottom + FADE)]}
+                  style={[styles.composerFade, { height: composerHeight + composerBottom + FADE }]}
                 />
                 <View style={{ paddingBottom: composerBottom }}>
                   <View onLayout={onComposerLayout}>
@@ -1083,5 +1087,11 @@ const useStyles = themedStyles((colors) => ({
     right: 0,
     bottom: 0,
     justifyContent: "flex-end",
+  },
+  composerFade: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
 }));

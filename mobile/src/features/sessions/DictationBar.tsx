@@ -16,18 +16,22 @@ import {
   AppState,
   Linking,
   Pressable,
+  StyleSheet,
   Text,
   View,
   type LayoutChangeEvent,
 } from "react-native";
 import Animated, {
   Easing,
+  FadeIn,
+  FadeOut,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
 
+import { ActionDisc } from "@/ui/GlassBacking";
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors } from "@/ui/theme";
 
@@ -45,6 +49,7 @@ const WAVE_HEIGHT = 24;
 /** Long enough for a thought; the recording is transcribed when it ends. */
 const LIMIT_SECONDS = 5 * 60;
 const BAR_TIMING = { duration: 100, easing: Easing.out(Easing.quad) };
+const DONE_SWAP = { duration: 160, easing: Easing.bezier(0.23, 1, 0.32, 1) };
 
 const OPTIONS: RecordingOptions = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -54,11 +59,12 @@ const OPTIONS: RecordingOptions = {
 type Phase = "preparing" | "recording" | "transcribing" | "done";
 
 /**
- * The composer's bottom row while dictating: cancel, the live waveform and its
- * time, and done. Mounted only while dictating, so the recorder is made then
- * rather than with every composer. `onClose` gets the words heard, or null
- * when cancelled or nothing came of it; unmounting stops and discards the
- * recording.
+ * What lies over the composer's bottom row while dictating: the live waveform
+ * and its time, and done, in the capsule the mic draws out into. Cancel is a
+ * touch area alone, as the add button below it has turned into the cross.
+ * Mounted only while dictating, so the recorder is made then rather than with
+ * every composer. `onClose` gets the words heard, or null when cancelled or
+ * nothing came of it; unmounting stops and discards the recording.
  */
 export function DictationBar({ onClose }: { onClose: (words: string | null) => void }) {
   const colors = useColors();
@@ -68,6 +74,10 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
   const recorder = useRef<AudioRecorder | null>(null);
   const [seconds, setSeconds] = useState(0);
   const levels = useSharedValue<number[]>(Array(HISTORY).fill(0));
+  const doneFill = useSharedValue(0);
+  useEffect(() => {
+    doneFill.set(withTiming(phase === "recording" ? 1 : 0, DONE_SWAP));
+  }, [phase, doneFill]);
   // Read through a function: TypeScript keeps a ref's narrowing across awaits.
   const stopped = () => stage.current === "done";
   const close = useRef(onClose);
@@ -210,10 +220,8 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
         accessibilityLabel="Cancel dictation"
         hitSlop={4}
         onPress={cancel}
-        style={({ pressed }) => [styles.cancel, pressed && styles.pressed]}
-      >
-        <Icon name="close" size={20} color={colors.content} />
-      </Pressable>
+        style={styles.cancel}
+      />
 
       <View style={styles.middle}>
         {phase === "recording" ? (
@@ -234,16 +242,31 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
         hitSlop={4}
         disabled={phase !== "recording"}
         onPress={() => void finish()}
-        style={({ pressed }) => [
-          styles.done,
-          phase !== "recording" && styles.doneWaiting,
-          pressed && styles.pressed,
-        ]}
+        style={styles.done}
       >
-        {phase === "recording" ? (
-          <Icon name="check" size={18} color={colors.inverse} />
-        ) : (
-          <ActivityIndicator size="small" color={colors.muted} />
+        {({ pressed }) => (
+          <>
+            <ActionDisc fill={doneFill} size={BUTTON} />
+            {phase === "recording" ? (
+              <Animated.View
+                key="check"
+                entering={FadeIn.duration(DONE_SWAP.duration)}
+                exiting={FadeOut.duration(DONE_SWAP.duration)}
+                style={[styles.doneGlyph, pressed && styles.pressed]}
+              >
+                <Icon name="check" size={18} color={colors.inverse} />
+              </Animated.View>
+            ) : (
+              <Animated.View
+                key="waiting"
+                entering={FadeIn.duration(DONE_SWAP.duration)}
+                exiting={FadeOut.duration(DONE_SWAP.duration)}
+                style={styles.doneGlyph}
+              >
+                <ActivityIndicator size="small" color={colors.muted} />
+              </Animated.View>
+            )}
+          </>
         )}
       </Pressable>
     </View>
@@ -295,15 +318,15 @@ const useStyles = themedStyles((colors) => ({
   cancel: {
     width: BUTTON,
     height: BUTTON,
-    alignItems: "center",
-    justifyContent: "center",
   },
+  // Clear of the capsule's rounded end.
   middle: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     height: BUTTON,
+    paddingLeft: 14,
   },
   wave: {
     flex: 1,
@@ -332,13 +355,11 @@ const useStyles = themedStyles((colors) => ({
   done: {
     width: BUTTON,
     height: BUTTON,
-    borderRadius: BUTTON / 2,
+  },
+  doneGlyph: {
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.inverseSurface,
-  },
-  doneWaiting: {
-    backgroundColor: colors.fill,
   },
   pressed: {
     opacity: 0.6,

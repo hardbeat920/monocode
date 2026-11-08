@@ -6,6 +6,8 @@ import type { View } from "react-native";
 
 const runtime = vi.hoisted(() => ({
   os: "android",
+  nativeGlass: false,
+  glass: {} as { isInteractive?: boolean; style?: unknown[] },
   blur: {} as {
     blurTarget?: unknown;
     blurMethod?: string;
@@ -20,8 +22,11 @@ vi.mock("expo-blur", () => ({
   },
 }));
 vi.mock("expo-glass-effect", () => ({
-  isLiquidGlassAvailable: () => false,
-  GlassView: () => null,
+  isLiquidGlassAvailable: () => runtime.nativeGlass,
+  GlassView: (props: typeof runtime.glass) => {
+    runtime.glass = props;
+    return null;
+  },
 }));
 vi.mock("expo-haptics", () => ({ impactAsync: vi.fn() }));
 vi.mock("expo-linear-gradient", () => ({
@@ -58,6 +63,7 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
+  runtime.nativeGlass = false;
   root = createRoot(document.createElement("div"));
 });
 afterEach(() => act(() => root.unmount()));
@@ -103,4 +109,23 @@ it("preserves the untargeted fallback and iOS blur settings", () => {
   );
   expect(runtime.blur.blurMethod).toBeUndefined();
   expect(runtime.blur.blurTarget).toBeUndefined();
+});
+
+const clipped = (style: unknown[] = []) =>
+  style.flat().some((part) => (part as { overflow?: string } | null)?.overflow === "hidden");
+
+it("leaves interactive native glass unclipped so it can stretch past its frame", () => {
+  runtime.os = "ios";
+  runtime.nativeGlass = true;
+  act(() => root.render(<LiquidView interactive><span>Search</span></LiquidView>));
+  expect(runtime.glass.isInteractive).toBe(true);
+  expect(clipped(runtime.glass.style)).toBe(false);
+});
+
+it("keeps still native glass clipped to its frame", () => {
+  runtime.os = "ios";
+  runtime.nativeGlass = true;
+  act(() => root.render(<LiquidView><span>Title</span></LiquidView>));
+  expect(runtime.glass.isInteractive).toBe(false);
+  expect(clipped(runtime.glass.style)).toBe(true);
 });
