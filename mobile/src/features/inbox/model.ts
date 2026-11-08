@@ -32,6 +32,13 @@ export function isSnoozed(item: InboxItem, now: number) {
   return item.snoozedUntil !== undefined && item.snoozedUntil > now;
 }
 
+/** The lists the switch at the top of the page moves between. */
+export const INBOX_SCOPES: { id: InboxScope; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "needsMe", label: "Needs me" },
+  { id: "done", label: "Done" },
+];
+
 /** The chips under the switch; each narrows the list on its own. */
 export type InboxChip = "unread" | "reviews" | "ci";
 export const INBOX_CHIPS: { id: InboxChip; label: string }[] = [

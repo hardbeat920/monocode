@@ -5,6 +5,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -39,10 +40,9 @@ import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { HEADER_HEIGHT, useSessionLayout } from "@/features/sessions/SessionScreen";
 import { projectColor } from "@/features/workspace/projectColors";
 import { relativeTime } from "@/features/workspace/relativeTime";
-import { GlassSegments } from "@/ui/GlassSegments";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
-import { CONTROL_TEXT_MAX, useTextScale } from "@/ui/textScale";
+import { useTextScale } from "@/ui/textScale";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { Chip, FilterChips, FilterSheet, placeName, type FilterKind } from "./InboxFilters";
@@ -51,6 +51,7 @@ import { GroupMenu } from "./GroupMenu";
 import { InboxRow, type RowHandlers } from "./InboxRow";
 import { SOURCE_NAMES } from "./ProviderMark";
 import { InboxToast } from "./InboxToast";
+import { ScopeSwitch } from "./ScopeSwitch";
 import {
   bannerFor,
   groupItems,
@@ -65,12 +66,6 @@ import {
 import type { InboxItem, InboxScope, InboxSource } from "./protocol";
 import type { Feed } from "./store";
 import { useNow } from "./useNow";
-
-const SCOPES: { id: InboxScope; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "needsMe", label: "Needs me" },
-  { id: "done", label: "Done" },
-];
 
 type Entry =
   | { type: "header"; id: string; title: string; count: number; projectId?: string }
@@ -125,6 +120,11 @@ export const InboxPage = memo(function InboxPage({
   const feed = useHeldFeed(live, scope);
   const now = useNow();
   const [pulling, setPulling] = useState(false);
+
+  // The drawer's badge already watches this list, so the watch alone reads
+  // nothing, and only a forced read reaches the providers.
+  const refreshOnOpen = useEffectEvent(() => void refresh());
+  useEffect(() => refreshOnOpen(), []);
 
   // A tick in a sheet and a letter in the search answer first; the list follows.
   const listFacets = useDeferredValue(facets);
@@ -386,37 +386,6 @@ function GroupHeader({ entry }: { entry: Extract<Entry, { type: "header" }> }) {
   );
 }
 
-/** All / Needs me / Done, in the same glass as the page switch above. */
-function ScopeSwitch({
-  value,
-  onChange,
-  needsMe,
-}: {
-  value: InboxScope;
-  onChange: (value: InboxScope) => void;
-  needsMe: number;
-}) {
-  const styles = useStyles();
-  return (
-    <GlassSegments
-      value={value}
-      onChange={onChange}
-      segments={SCOPES.map((scope) => ({
-        value: scope.id,
-        label: scope.label,
-        trailing:
-          scope.id === "needsMe" && needsMe > 0 ? (
-            <View style={styles.count}>
-              <Text maxFontSizeMultiplier={CONTROL_TEXT_MAX} style={styles.countLabel}>
-                {needsMe}
-              </Text>
-            </View>
-          ) : undefined,
-      }))}
-    />
-  );
-}
-
 function Banner({
   banner,
   now,
@@ -568,20 +537,6 @@ const useStyles = themedStyles((colors) => ({
     position: "absolute",
     left: 14,
     right: 14,
-  },
-  count: {
-    minWidth: 18,
-    minHeight: 18,
-    paddingHorizontal: 5,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.accent,
-  },
-  countLabel: {
-    color: colors.inverse,
-    fontSize: 11,
-    fontWeight: "700",
   },
   // Bleeds past the list's side padding so the chips scroll to the screen's
   // edges rather than clipping a few points short of them.

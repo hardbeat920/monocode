@@ -222,7 +222,7 @@ export function useInboxFeed(query: FeedQuery, watching = true) {
   }, [store, stable, watching]);
   return {
     feed,
-    /** Pull to refresh: the desktop fetches from its providers before it answers. */
+    /** The desktop fetches from its providers before it answers. */
     refresh: useCallback(
       () => store?.refresh(stable, { force: true }) ?? Promise.resolve(),
       [store, stable],

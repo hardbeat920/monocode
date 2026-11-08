@@ -3,7 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxListScreen from "@/app/inbox-list";
-import { InboxProvider } from "@/features/inbox/InboxProvider";
+import { InboxPage } from "@/features/inbox/InboxPage";
+import { InboxProvider, useInboxBadge } from "@/features/inbox/InboxProvider";
 import { createFixtureClient } from "@/features/inbox/fixtures";
 import type { InboxList, InboxListParams } from "@/features/inbox/protocol";
 
@@ -127,6 +128,7 @@ vi.mock("react-native-safe-area-context", () => ({
 vi.mock("@/ui/useNativeHeaderHeight", () => ({ useNativeHeaderHeight: () => 44 }));
 vi.mock("@/features/workspace/projectColors", () => ({ projectColor: () => "#000" }));
 vi.mock("@/ui/GlassSegments", () => ({ GlassSegments: () => null }));
+vi.mock("@/features/inbox/ScopeSwitch", () => ({ ScopeSwitch: () => null }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/ChoiceMenu", () => ({ ChoiceMenu: () => null }));
@@ -221,5 +223,56 @@ describe("what redraws the Inbox's rows", () => {
     });
     expect(seen.pages).toBe(0);
     expect(seen.rows).toBe(0);
+  });
+});
+
+describe("opening the Inbox", () => {
+  function Badge() {
+    useInboxBadge();
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW });
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fetches from the providers, though the drawer's badge already watches the list", async () => {
+    const reads: (boolean | undefined)[] = [];
+    const client = linkedClient();
+    const spied = {
+      ...client,
+      list: (params: InboxListParams) => {
+        reads.push(params.refresh);
+        return client.list(params);
+      },
+    };
+    const names = new Map([["p1", "monocode"]]);
+    const root = createRoot(document.createElement("div"));
+    const render = (open: boolean) =>
+      act(async () => {
+        root.render(
+          <InboxProvider client={spied}>
+            <Badge />
+            {open ? <InboxPage names={names} canReadAll /> : null}
+          </InboxProvider>,
+        );
+        await vi.advanceTimersByTimeAsync(10);
+      });
+
+    await render(false);
+    expect(reads).toEqual([undefined]);
+
+    await render(true);
+    expect(reads).toEqual([undefined, true]);
+
+    // Once for the opening, not for each draw after it.
+    await render(true);
+    expect(reads).toEqual([undefined, true]);
+
+    act(() => root.unmount());
   });
 });

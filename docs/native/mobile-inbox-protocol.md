@@ -45,7 +45,7 @@ Catalog sessions a Mono launched carry `monoId`.
   fetch, the desktop's own snapshot is used and nothing extra runs; otherwise
   the host keeps a second snapshot for the phone and refreshes it the same way.
   Items only that snapshot lists start out read.
-- `refresh: true` (pull to refresh, retry) makes the host fetch from the
+- `refresh: true` (opening the Inbox, pull to refresh, retry) makes the host fetch from the
   providers now, unless a fetch is already running, and answer when it ends
   (after 20 s at most, with whatever the Inbox then holds). A phone that
   doesn't send it gets the cache, as before.
