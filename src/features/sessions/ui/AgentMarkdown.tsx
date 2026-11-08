@@ -45,6 +45,9 @@ import {
 import type { EditorNavigation, OpenFileFn } from "../../search/model/search";
 import { remarkWorkspaceFileLinks } from "../../files/model/markdownFileLinks";
 import { isAtxHeadingLine } from "../../files/model/markdownSource";
+import { GithubMark } from "../../../shared/ui/icons";
+import { parseGithubRef, truncateWords } from "../model/githubLinks";
+import { useGithubRefTitle } from "../hooks/useGithubRefTitle";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
@@ -293,8 +296,49 @@ function MarkdownLink({
   const file = href ? resolveWorkspaceFileReference(href, cwd) : undefined;
   const label = textContent(children);
   const localMedia = useContext(LocalMediaContext);
+  const githubRef = href ? parseGithubRef(href) : null;
+  const githubTitle = useGithubRefTitle(githubRef, cwd);
   if (allowRemoteMedia && href && isInboxMediaUrl(href)) {
     return <InboxMedia src={href} alt={label} />;
+  }
+
+  if (githubRef && href) {
+    const shortTitle = githubTitle ? truncateWords(githubTitle, 6) : null;
+    const tooltip =
+      githubRef.kind === "commit"
+        ? `${githubRef.repo}@${githubRef.label}`
+        : `${githubRef.repo}${githubRef.label}${
+            githubTitle ? ` · ${githubTitle}` : ""
+          }`;
+    return (
+      <a
+        href={href}
+        title={tooltip}
+        dir={dir ?? "auto"}
+        {...props}
+        className={`group mx-px inline-flex max-w-full items-center rounded-md border border-content/15 bg-content/8 px-1.5 align-[-0.15em] font-medium text-[0.85em] leading-5 text-content no-underline transition-colors hover:border-accent/40 hover:bg-content/12 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${className ?? ""}`}
+        onClick={(event) => {
+          onClick?.(event);
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          void openUrl(href).catch((error) => {
+            console.error("Failed to open GitHub link:", error);
+          });
+        }}
+      >
+        <GithubMark className="size-3.5 shrink-0" />
+        <span className="ml-1 shrink-0 font-semibold">{githubRef.label}</span>
+        {shortTitle ? (
+          // Collapsed by default; the 0fr→1fr grid column animates the title
+          // open on hover/focus so the badge stays compact in dense prose.
+          <span className="grid grid-cols-[0fr] opacity-0 transition-[grid-template-columns,opacity] duration-200 ease-out group-hover:grid-cols-[1fr] group-hover:opacity-100 group-focus-visible:grid-cols-[1fr] group-focus-visible:opacity-100 motion-reduce:transition-none">
+            <span className="ml-1 min-w-0 overflow-hidden whitespace-nowrap font-normal text-content/70">
+              {shortTitle}
+            </span>
+          </span>
+        ) : null}
+      </a>
+    );
   }
 
   const link = (
