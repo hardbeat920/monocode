@@ -193,6 +193,8 @@ fn icon_body(path: &str) -> Option<&'static str> {
             "<circle cx='9' cy='5' r='1'/><circle cx='9' cy='12' r='1'/><circle cx='9' cy='19' r='1'/><circle cx='15' cy='5' r='1'/><circle cx='15' cy='12' r='1'/><circle cx='15' cy='19' r='1'/>"
         }
         "sidebar" => "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='M9 4v16'/>",
+        "split-right" => "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='M12 4v16'/>",
+        "split-down" => "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='M3 12h18'/>",
         "search" => "<circle cx='10.5' cy='10.5' r='6.5'/><path d='m16 16 4.5 4.5'/>",
         "folder" => {
             "<path d='M3 8V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'/>"
