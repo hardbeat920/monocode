@@ -528,7 +528,10 @@ impl Shell {
                             Ok(json!({"sessionId":id,"stopped":true}))
                         } else {
                             view.update(cx, |v, cx| v.load(cx));
-                            if !view.read(cx).ready_for_external(cx)
+                            if action == "sessions.send" && view.read(cx).settings.worktree_removed
+                            {
+                                Err("Session's worktree was removed. Select a branch or worktree before sending.".into())
+                            } else if !view.read(cx).ready_for_external(cx)
                                 || view.read(cx).has_saved_draft()
                             {
                                 Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into())

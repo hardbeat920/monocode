@@ -106,6 +106,56 @@ fn operator_completion_restart_reports_empty_interrupted_worker(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn operator_completion_send_rejects_removed_worktree_without_a_subscription(
+    cx: &mut TestAppContext,
+) {
+    let (window, _, caller) = completion_setup(cx);
+    let other = completion_worker(window, caller, "other", cx);
+    let empty = empty_session(window, caller, cx);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&empty].update(cx, |v, cx| {
+                v.worktree_deleted(
+                    v.summary.clone(),
+                    Settings {
+                        worktree_removed: true,
+                        ..v.settings.clone()
+                    },
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    let error = call(
+        window,
+        caller,
+        "removed-worktree",
+        "sessions.send",
+        json!({
+            "sessionId":empty,"prompt":"Do not accept this prompt","notifyOnComplete":true
+        }),
+        cx,
+    )
+    .unwrap_err();
+    assert!(error.to_lowercase().contains("worktree"));
+    window
+        .read_with(cx, |shell, cx| {
+            assert_eq!(shell.operator_subscriptions[&caller].len(), 1);
+            assert_eq!(shell.operator_subscriptions[&caller][0].session, other);
+            assert!(
+                shell.sessions[&empty]
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .content
+                    .is_empty()
+            );
+            assert!(!shell.sessions[&empty].read(cx).summary.has_messages);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn operator_completion_load_error_preserves_saved_state_until_recovery(cx: &mut TestAppContext) {
     let (window, other, caller) = completion_setup(cx);
     let worker = completion_worker(window, caller, "saved-worker", cx);

@@ -60,6 +60,15 @@ parent drops its subscriptions. When the caller itself stops, archives or
 deletes a monitored worker through the CLI, that worker's subscription is
 dismissed, since the caller can confirm the action in its current reply.
 
+An empty chat can still report a terminal failure or cancellation. A fresh empty
+chat is not treated as completed. Sends to a session whose worktree is marked
+removed fail before accepting the prompt or adding a completion subscription.
+
+If saved subscriptions cannot be read, the app shows the load error and disables
+subscription changes. It preserves the stored records rather than treating the
+failure as an empty snapshot. Repair the saved state and restart the app before
+using completion subscriptions again.
+
 Subscriptions survive app restarts. Unfinished workers are reported as stopped;
 known terminal outcomes are retained. MonoCode saves delivery before dispatch to
 prevent duplicate automatic follow-ups after a restart. A crash between those
