@@ -201,43 +201,81 @@ impl Shell {
                 cx.spawn(async move |this, cx| {
                     let report = work.await;
                     let _ = this.update(cx, |this, cx| {
-                        this.operator_completion_work.remove(&(caller, group.clone()));
-                        let (children, mut report) = match report {
-                            Ok(report) => report,
-                            Err(error) => { this.error = Some(error); return; }
-                        };
-                        if this.session_summaries.get(&caller).is_none_or(|s| s.archived)
-                            || this.deleting.contains(&caller) || this.archiving.contains(&caller)
-                            || !this.operator_group_ready(caller, &group, cx)
-                        { return; }
-                        let current: Vec<_> = this.operator_subscriptions[&caller].iter()
-                            .filter(|s| s.group == group).map(|s| (s.session, s.outcome)).collect();
-                        if current != children.iter().map(|s| (s.session, s.outcome)).collect::<Vec<_>>() {
-                            this.check_operator_completions(cx);
-                            return;
-                        }
-                        let Some(origin) = this.sessions.get(&caller).cloned() else { return; };
-                        if !origin.read(cx).ready_for_coordinator_report(cx) { return; }
-                        let mut subscriptions = this.operator_subscriptions[&caller].clone();
-                        for subscription in subscriptions.iter_mut().filter(|s| s.group == group) {
-                            subscription.delivered = true;
-                        }
-                        let pending: Vec<_> = subscriptions.iter().filter(|s| !s.delivered)
-                            .map(|s| format!("Session {}: {}", s.session, s.title)).collect();
-                        if !pending.is_empty() {
-                            report.push_str(&format!("\n\nOther reports pending:\n{}\nMore reports will follow.", pending.join("\n")));
-                        }
-                        // Persist before dispatch for at-most-once delivery across a crash.
-                        if let Err(error) = this.save_operator_completions(caller, subscriptions) {
-                            this.error = Some(error);
-                            return;
-                        }
-                        origin.update(cx, |v, cx| v.send_coordinator_report(format!(
-                            "[Delegated work completed]\nWorker completion is not verification: inspect the results, verify as needed, then tell the user.\n\n{report}"
-                        ), cx));
+                        this.deliver_operator_completion(caller, group, report, cx);
                     });
-                }).detach();
+                })
+                .detach();
             }
         }
+    }
+    fn deliver_operator_completion(
+        &mut self,
+        caller: i64,
+        group: OperatorCompletionGroup,
+        report: Result<(Vec<OperatorSubscription>, String), String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.operator_completion_work
+            .remove(&(caller, group.clone()));
+        let (children, mut report) = match report {
+            Ok(report) => report,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        if self
+            .session_summaries
+            .get(&caller)
+            .is_none_or(|s| s.archived)
+            || self.deleting.contains(&caller)
+            || self.archiving.contains(&caller)
+            || !self.operator_group_ready(caller, &group, cx)
+        {
+            return;
+        }
+        let current: Vec<_> = self.operator_subscriptions[&caller]
+            .iter()
+            .filter(|s| s.group == group)
+            .map(|s| (s.session, s.outcome))
+            .collect();
+        if current
+            != children
+                .iter()
+                .map(|s| (s.session, s.outcome))
+                .collect::<Vec<_>>()
+        {
+            self.check_operator_completions(cx);
+            return;
+        }
+        let Some(origin) = self.sessions.get(&caller).cloned() else {
+            return;
+        };
+        if !origin.read(cx).ready_for_coordinator_report(cx) {
+            return;
+        }
+        let mut subscriptions = self.operator_subscriptions[&caller].clone();
+        for subscription in subscriptions.iter_mut().filter(|s| s.group == group) {
+            subscription.delivered = true;
+        }
+        let pending: Vec<_> = subscriptions
+            .iter()
+            .filter(|s| !s.delivered)
+            .map(|s| format!("Session {}: {}", s.session, s.title))
+            .collect();
+        if !pending.is_empty() {
+            report.push_str(&format!(
+                "\n\nOther reports pending:\n{}\nMore reports will follow.",
+                pending.join("\n")
+            ));
+        }
+        // Persist before dispatch for at-most-once delivery across a crash.
+        if let Err(error) = self.save_operator_completions(caller, subscriptions) {
+            self.error = Some(error);
+            return;
+        }
+        origin.update(cx, |v, cx| v.send_coordinator_report(format!(
+                            "[Delegated work completed]\nWorker completion is not verification: inspect the results, verify as needed, then tell the user.\n\n{report}"
+                        ), cx));
     }
 }
