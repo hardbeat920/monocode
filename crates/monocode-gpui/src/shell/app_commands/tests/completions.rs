@@ -752,3 +752,5 @@ fn operator_completion_delayed_turn_rearm_does_not_keep_delivered_members(cx: &m
     end_completion_origin(window, caller, cx);
     assert_eq!(completion_prompts(window, caller, cx).len(), 3);
 }
+
+mod lifecycle;

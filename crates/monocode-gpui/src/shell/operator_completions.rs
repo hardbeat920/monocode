@@ -86,7 +86,7 @@ impl Shell {
                     && s.outcome.is_some()
                     && self.session_summaries.get(&s.session).is_none_or(|_| {
                         let metadata = self.session_metadata(s.session, cx);
-                        !metadata.busy && metadata.summary.has_messages
+                        !metadata.busy
                     })
             })
     }

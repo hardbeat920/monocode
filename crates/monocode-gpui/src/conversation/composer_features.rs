@@ -463,7 +463,7 @@ impl Conversation {
     }
     pub(crate) fn worker_outcome(&self) -> Option<monocode_core::store::WorkerOutcome> {
         use monocode_core::store::WorkerOutcome;
-        if self.busy || !self.summary.has_messages || !self.history_loaded() {
+        if self.busy || !self.history_loaded() {
             return None;
         }
         if self.notification_cancelled {
@@ -476,11 +476,13 @@ impl Conversation {
         {
             return None;
         }
-        Some(if self.status == "Ready" {
-            WorkerOutcome::Completed
+        if self.status != "Ready" {
+            Some(WorkerOutcome::Failed)
+        } else if self.summary.has_messages {
+            Some(WorkerOutcome::Completed)
         } else {
-            WorkerOutcome::Failed
-        })
+            None
+        }
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         self.history_ready()
