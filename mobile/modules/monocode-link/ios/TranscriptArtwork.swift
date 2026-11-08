@@ -58,6 +58,16 @@ final class TranscriptArtwork {
     }
     return "file:file"
   }
+  /// The language aliases used by desktop AgentMarkdown and mobile codeFence.ts.
+  static func codeFileName(_ language: String) -> String {
+    let key = language.lowercased()
+    let aliases = [
+      "bash": "sh", "c++": "cpp", "csharp": "cs", "javascript": "js",
+      "markdown": "md", "python": "py", "ruby": "rb", "rust": "rs",
+      "shell": "sh", "typescript": "ts", "yml": "yaml", "zsh": "sh",
+    ]
+    return "code." + (aliases[key] ?? key)
+  }
   static func inlineFileName(_ value: String) -> String? {
     let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, text.count <= 240,
