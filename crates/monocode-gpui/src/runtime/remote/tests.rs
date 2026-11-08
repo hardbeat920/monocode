@@ -870,3 +870,16 @@ fn observer_reports_a_host_title_change_once_and_never_writes_it_back() {
         "Named by the host"
     );
 }
+
+#[test]
+fn an_app_launch_is_refused_until_its_machine_offers_the_harness() {
+    let host = Host::new(|_| None);
+    let project = monocode_core::remote::remote_path("env", "/host/repo");
+    check_launch(&host.client, &project, "codex").unwrap();
+    let missing = check_launch(&host.client, &project, "claude").unwrap_err();
+    assert!(missing.contains("claude is not installed"), "{missing}");
+    let elsewhere = monocode_core::remote::remote_path("other-machine", "/host/repo");
+    let offline = check_launch(&host.client, &elsewhere, "codex").unwrap_err();
+    assert!(offline.contains("Reconnect"), "{offline}");
+    assert!(check_launch(&host.client, "/local/repo", "codex").is_err());
+}

@@ -201,6 +201,9 @@ impl Conversation {
                             this.launch_prompt(String::new(), cx);
                         } else {
                             this.run_history_actions(cx);
+                            // A Mono's send to an unloaded remote conversation
+                            // waits for this load, as a local one does.
+                            this.mono_flush_external(cx);
                         }
                     }
                     Err(error) => this.remote_connection_error(&error, cx),
@@ -313,6 +316,45 @@ impl Conversation {
             json!({"type":"removeDraft","draftBlockId":draft.id})
         });
         self.launch_prompt(prompt, cx);
+    }
+    /// An app launch saves its prompt as a local follow-up draft. A remote
+    /// conversation's drafts live on its host, so that local draft is never
+    /// loaded here, and its ID means nothing to the host. Send its text as the
+    /// first turn, and drop the local draft once the turn has started.
+    pub(super) fn install_remote_app_launch(
+        &mut self,
+        settings: Settings,
+        send: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = locked(&self.store).and_then(|store| store.follow_ups(self.summary.id));
+        self.install_transfer(settings, None, cx);
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(error) => {
+                self.status = error;
+                cx.emit(SessionChanged);
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(draft) = saved.draft.as_ref() {
+            self.input
+                .update(cx, |input, cx| input.set_text(draft.text.clone(), cx));
+            if send {
+                self.send(cx);
+            } else {
+                self.remote_save_draft(cx);
+            }
+            // A guard that kept the text in the composer has set the status;
+            // the local draft stays recoverable until a turn takes it.
+            if self.busy {
+                self.follow_ups.state.revision = self.follow_ups.state.revision.max(saved.revision);
+                self.follow_ups.state.draft = None;
+                self.save_follow_ups(cx);
+            }
+        }
+        cx.emit(SessionChanged);
     }
     pub(super) fn remote_save_draft(&mut self, cx: &mut Context<Self>) {
         if self.remote_send_guard(cx) {

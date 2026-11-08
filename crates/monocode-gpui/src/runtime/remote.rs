@@ -40,6 +40,37 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
         finished,
     }
 }
+fn offers_provider(
+    client: &monocode_core::remote::Connections,
+    machine: &str,
+    provider: &str,
+) -> Result<(), String> {
+    let descriptor = client.request(machine, "environment.describe", json!({}))?;
+    if descriptor["providers"]
+        .as_array()
+        .is_some_and(|providers| providers.iter().any(|p| p.as_str() == Some(provider)))
+    {
+        Ok(())
+    } else {
+        Err(format!("{provider} is not installed on this machine"))
+    }
+}
+/// An app launch into a remote project answers only once the project's machine
+/// responds and offers the harness, so the caller gets the reason instead of a
+/// session that never starts.
+pub(crate) fn check_launch(
+    client: &monocode_core::remote::Connections,
+    project: &str,
+    provider: &str,
+) -> Result<(), String> {
+    let path = monocode_core::remote::parse_remote_path(project)
+        .ok_or("Open this folder on its machine again to restore its project identity")?;
+    let machine = client
+        .machine_for_environment(&path.environment_id)
+        .map_err(|_| "Machine is no longer connected. Reconnect in Settings → Connections.")?;
+    offers_provider(client, &machine.id, provider)
+        .map_err(|error| format!("Cannot start a session on {}: {error}", machine.name))
+}
 fn command(kind: &str, session_id: Option<&str>) -> Value {
     let mut value = json!({"type":kind,"commandId":monocode_core::mono::new_id()});
     if let Some(id) = session_id {
@@ -623,17 +654,7 @@ pub(crate) fn run_with_client(
             binding.summary.has_messages = true;
             binding.summary.updated_at = monocode_core::time::now_ms();
             journal(&store, &binding)?;
-            let descriptor = client.request(&machine.id, "environment.describe", json!({}))?;
-            if !descriptor["providers"].as_array().is_some_and(|providers| {
-                providers
-                    .iter()
-                    .any(|provider| provider.as_str() == Some(&summary.provider))
-            }) {
-                return Err(format!(
-                    "{} is not installed on this machine",
-                    summary.provider
-                ));
-            }
+            offers_provider(&client, &machine.id, &summary.provider)?;
         }
         if !attaching {
             upload_pending(&client, &machine.id, &store, &mut binding)?;

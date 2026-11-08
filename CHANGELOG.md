@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Native: a session a Mono starts in a remote (SSH) project now runs and reports back when it finishes. Before, `sessions.start` answered `accepted` but never sent the prompt to the machine. When the machine is unreachable or lacks the harness, the launch now fails with that reason.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added

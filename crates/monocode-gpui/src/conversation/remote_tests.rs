@@ -220,6 +220,13 @@ impl HostFixture {
                     }
                     "commands.dispatch" => {
                         let command = &request["params"];
+                        // As a host does, a sent message becomes a transcript block.
+                        if command["type"] == "send"
+                            && command["draftBlockId"].is_null()
+                            && let Some(blocks) = snapshot["session"]["blocks"].as_array_mut()
+                        {
+                            blocks.push(json!({"id": command["commandId"], "role": "user", "text": command["text"]}));
+                        }
                         json!({"commandId": command["commandId"], "sessionId": "host-session", "revision": 2})
                     }
                     _ => json!({}),
@@ -499,4 +506,99 @@ fn ambiguous_legacy_requests_block_send_retry_and_restore_without_consuming_draf
             assert!(view.transcript.read(cx).source_rows().is_empty());
         })
     });
+}
+
+fn dispatched(host: &HostFixture) -> Vec<serde_json::Value> {
+    host.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request["method"] == "commands.dispatch")
+        .map(|request| request["params"].clone())
+        .collect()
+}
+
+#[gpui::test]
+fn an_app_launch_sends_its_prompt_as_the_new_remote_conversations_first_turn(
+    cx: &mut TestAppContext,
+) {
+    let host = HostFixture::new(false, false);
+    // As sessions.start leaves it: a blank host handle whose prompt is a local
+    // follow-up draft, recoverable if the app exits before the host has it.
+    let (summary, settings) = {
+        let store = locked(&host.store).unwrap();
+        let mut summary = store.create("codex", &host.summary.cwd).unwrap();
+        let settings = Settings {
+            model: Some("gpt-test".into()),
+            ..Default::default()
+        };
+        store
+            .configure_agent(summary.id, "codex", &settings)
+            .unwrap();
+        store
+            .prepare_app_prompt(summary.id, "request", "Report the current branch")
+            .unwrap();
+        summary.has_messages = true;
+        (summary, settings)
+    };
+    assert!(summary.id < 0, "remote handles are negative");
+    let view = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut view = Conversation::new(summary.clone(), host.store.clone(), cx);
+            view.remote_state.client = Some(host.client.clone());
+            view.install_app_launch(settings, true, cx);
+            view
+        })
+    });
+    host.wait(&view, cx, true);
+    let commands = dispatched(&host);
+    let kinds: Vec<_> = commands
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create", "send"], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Report the current branch");
+    // The local draft's ID is not a host block; naming it would be refused.
+    assert!(commands[1].get("draftBlockId").is_none(), "{commands:?}");
+    cx.update(|cx| {
+        let view = view.read(cx);
+        // A Mono's completion check waits for a settled child with messages.
+        assert!(!view.busy);
+        assert!(view.summary.has_messages);
+        assert!(view.input.read(cx).content.is_empty());
+    });
+    let store = locked(&host.store).unwrap();
+    assert!(store.follow_ups(summary.id).unwrap().draft.is_none());
+    assert_eq!(
+        store
+            .remote_session(summary.id)
+            .unwrap()
+            .unwrap()
+            .session_id
+            .as_deref(),
+        Some("host-session")
+    );
+}
+
+#[gpui::test]
+fn a_mono_send_waits_for_the_remote_conversation_to_load(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let view = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut view = Conversation::new(host.summary.clone(), host.store.clone(), cx);
+            view.remote_state.client = Some(host.client.clone());
+            view.mono_external_send("Check the logs".into(), false, cx)
+                .unwrap();
+            view
+        })
+    });
+    host.wait(&view, cx, true);
+    let commands = dispatched(&host);
+    assert!(
+        commands
+            .iter()
+            .any(|c| c["type"] == "send" && c["text"] == "Check the logs"),
+        "{commands:?}"
+    );
+    cx.update(|cx| assert!(!view.read(cx).mono_external_pending()));
 }

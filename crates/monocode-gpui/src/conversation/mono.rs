@@ -41,6 +41,10 @@ impl Conversation {
             );
             return;
         }
+        if self.is_remote() {
+            self.install_remote_app_launch(settings, send, cx);
+            return;
+        }
         self.install_transfer(settings, None, cx);
         if send {
             self.draft_action(true, cx);

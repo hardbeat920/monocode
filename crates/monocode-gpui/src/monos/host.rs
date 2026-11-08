@@ -373,6 +373,13 @@ impl Monos {
                             &models,
                         )?;
                         settings.revision = 0;
+                        if project.starts_with("remote://") {
+                            crate::runtime::remote::check_launch(
+                                &*monocode_core::remote::default_connections()?,
+                                &project,
+                                &provider,
+                            )?;
+                        }
                         let mut summary = locked(&store)?.create(&provider, &project)?;
                         app::launch_checkout(&input, &project, summary.id, &mut settings)?;
                         summary.title = app::optional_text(&input, "title", 160)?
