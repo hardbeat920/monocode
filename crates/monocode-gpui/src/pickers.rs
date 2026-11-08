@@ -614,6 +614,8 @@ pub(crate) struct ModelList {
 }
 impl EventEmitter<ModelPicked> for ModelList {}
 impl ModelList {
+    /// Creates a searchable picker for a provider/profile, restores the saved tab and
+    /// starts catalog discovery; the current choice is revealed after layout.
     pub(crate) fn new_for(
         provider: Kind,
         current: Option<String>,
@@ -678,6 +680,7 @@ impl ModelList {
         );
         list
     }
+    /// Attaches the shared model controls as a fixed footer outside the scrollable list.
     pub(crate) fn with_effort_slider(
         mut self,
         slider: Option<Entity<crate::effort_slider::EffortSlider>>,
@@ -708,6 +711,7 @@ impl ModelList {
         self
     }
     /// Follow a pick made through this list, keeping it open.
+    /// Updates the active model and reveals its row in the current filtered list.
     pub(crate) fn set_current(
         &mut self,
         kind: Kind,
@@ -736,6 +740,8 @@ impl ModelList {
                     .any(|c| c.provider == kind.id() && c.model.as_deref() == id)
             })
     }
+    /// Toggles the saved favorite and resets selection on the Favorites tab so removal
+    /// cannot leave the keyboard highlight beyond the remaining rows.
     fn toggle_favorite(&mut self, kind: Kind, id: Option<String>, cx: &mut Context<Self>) {
         if !cx.has_global::<crate::settings::Preferences>() {
             return;
@@ -795,6 +801,8 @@ impl ModelList {
         })
         .detach();
     }
+    /// Loads a local provider catalog or the remote project catalog asynchronously,
+    /// then refreshes availability and reveals the current selection.
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
@@ -876,9 +884,12 @@ impl ModelList {
     pub(crate) fn search_focus(&self, cx: &gpui::App) -> FocusHandle {
         self.search.focus_handle(cx)
     }
+    /// Normalizes outer whitespace and case before matching individual search terms.
     fn query(&self, cx: &gpui::App) -> String {
         self.search.read(cx).content.trim().to_lowercase()
     }
+    /// Builds the current provider or Favorites rows, filtering every search term
+    /// against provider, display name and model ID while retaining availability.
     fn entries(&self, cx: &gpui::App) -> Vec<ModelEntry> {
         let ModelTab::Harness(kind) = self.tab else {
             let query = self.query(cx);
@@ -997,11 +1008,15 @@ impl ModelList {
             .position(|entry| entry.kind == self.provider && entry.id == self.current)
             .unwrap_or(0)
     }
+    /// Selects the active filtered row (or the first row) and schedules a second
+    /// reveal after layout, when the scroll viewport has its new bounds.
     fn reset_highlight(&mut self, cx: &gpui::App) {
         self.highlighted = self.current_index(cx);
         self.scroll.scroll_to_item(self.highlighted);
         self.reveal_pending = true;
     }
+    /// Persists the tab, discovers its catalog if needed and clears the old search
+    /// before returning focus to a visible selection.
     fn select_tab(&mut self, tab: ModelTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
@@ -1031,6 +1046,8 @@ impl ModelList {
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
     }
+    /// Moves the highlight within filtered rows and scrolls it into view; empty lists
+    /// leave the selection unchanged.
     fn step(&mut self, direction: isize, cx: &mut Context<Self>) {
         let count = self.entries(cx).len();
         if count > 0 {
@@ -1096,6 +1113,8 @@ impl ModelList {
     }
 }
 impl Render for ModelList {
+    /// Renders the provider/search list and fixed controls footer, repeating pending
+    /// row reveals after layout rather than using stale viewport bounds.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.reveal_pending) {
             // ScrollHandle uses the previous frame's viewport. Reveal again
@@ -1380,6 +1399,8 @@ impl Render for ModelList {
     }
 }
 impl ModelList {
+    /// Renders the compact tabbed picker with the same search results and tracked
+    /// scroll handle as the full model flyout.
     fn render_quick(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let entries = self.entries(cx);
         let kind = match self.tab {

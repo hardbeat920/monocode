@@ -2468,6 +2468,8 @@ impl Monos {
         })
         .detach();
     }
+    /// Opens the Mono background editor with its nested style popup above the modal
+    /// and persists appearance changes back to the roster.
     fn open_background(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) {
         let Some(mono) = self.roster.get(id).cloned() else {
             return;
@@ -2507,6 +2509,8 @@ impl Monos {
         self.background = Some((view, events, at));
         cx.notify();
     }
+    /// Paints the background editor at the base priority reserved for this modal;
+    /// its nested style menu uses the next higher priority.
     pub(super) fn background_modal(&self) -> Option<AnyElement> {
         let (view, _, at) = self.background.as_ref()?;
         Some(

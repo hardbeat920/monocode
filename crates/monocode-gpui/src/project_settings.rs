@@ -649,6 +649,8 @@ impl BackgroundDialog {
         self.close_effect(window, cx);
         self.save(cx);
     }
+    /// Builds the anchored style menu at the host-selected priority so nested dialogs
+    /// cannot paint over its otherwise focusable options.
     fn effect_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.effect_open {
             return None;

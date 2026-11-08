@@ -10,6 +10,8 @@ use std::time::Instant;
 gpui::actions!(model_effort, [Increase, Decrease, First, Last, Activate]);
 struct SliderKeys;
 impl gpui::Global for SliderKeys {}
+/// Registers scoped slider and header-button actions once per app, so parent
+/// menu navigation cannot consume their arrow or activation keys.
 fn install_keys(cx: &mut App) {
     if cx.has_global::<SliderKeys>() {
         return;
@@ -52,6 +54,8 @@ struct SliderFrame {
     moving: bool,
 }
 impl SliderMotion {
+    /// Starts with one visible label at a resting catalog index; a zero- or one-stop
+    /// catalog uses a zero position without dividing by zero.
     fn new(index: usize, count: usize) -> Self {
         let position = index as f32 / count.saturating_sub(1).max(1) as f32;
         Self {
@@ -64,6 +68,8 @@ impl SliderMotion {
             rising: false,
         }
     }
+    /// Retargets from the sampled position and label weights, preserving continuity
+    /// when a new selection interrupts an in-flight transition.
     fn retarget(&mut self, index: usize, now: Instant) {
         let frame = self.frame(now, false);
         let target = index as f32 / self.labels.len().saturating_sub(1).max(1) as f32;
@@ -74,6 +80,8 @@ impl SliderMotion {
         self.target = index;
         self.started = Some(now);
     }
+    /// Samples position, label blending and upward emphasis at `now`. Reduced motion
+    /// settles immediately and clears the transition to prevent later replay.
     fn frame(&mut self, now: Instant, reduced: bool) -> SliderFrame {
         if reduced {
             self.position = PaneSlide::stationary(self.position.to, 240.);
@@ -125,6 +133,7 @@ pub(crate) struct EffortSlider {
 impl EventEmitter<EffortChanged> for EffortSlider {}
 impl EventEmitter<ModelControlAction> for EffortSlider {}
 impl Focusable for EffortSlider {
+    /// Uses the model button as the keyboard entry point when no effort track exists.
     fn focus_handle(&self, _: &App) -> FocusHandle {
         if self.levels.is_empty() {
             self.actions[0].clone()
@@ -161,20 +170,26 @@ impl EffortSlider {
             actions: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
         }
     }
+    /// Adds the selected model label and an optional Fast action; `None` hides Fast.
     pub(crate) fn header(mut self, model: SharedString, fast: Option<bool>) -> Self {
         self.model_label = Some(model);
         self.fast = fast;
         self
     }
+    /// Refreshes the displayed Fast state after the owner persists its setting.
     pub(crate) fn set_fast(&mut self, fast: Option<bool>, cx: &mut Context<Self>) {
         self.fast = fast;
         cx.notify();
     }
+    /// Selects a supported effort through the same event path as user input; ignores
+    /// values absent from this catalog.
     pub(crate) fn set_effort(&mut self, effort: &str, cx: &mut Context<Self>) {
         if let Some(index) = self.levels.iter().position(|value| value == effort) {
             self.select(index, cx);
         }
     }
+    /// Clamps input to a catalog stop, animates a changed selection and emits its ID.
+    /// The first explicit selection also commits an otherwise implicit default.
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.levels.is_empty() {
             return;
@@ -198,6 +213,8 @@ impl EffortSlider {
             cx.notify();
         }
     }
+    /// Maps pointer x to the nearest catalog stop on the inset thumb travel rail,
+    /// clamping captured drags beyond either endpoint.
     fn point(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
         if let Some(bounds) = self.track.get() {
             let width = (bounds.size.width - px(INSET * 2.)).max(px(1.));
@@ -210,6 +227,8 @@ impl EffortSlider {
     }
 }
 impl Render for EffortSlider {
+    /// Draws the header and accessible track on a shared center line, sampling retained
+    /// motion state and requesting frames only while a transition is active.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Window listeners belong to paint, and keep a drag captured even
         // when the pointer leaves the track or the selector's bounds.

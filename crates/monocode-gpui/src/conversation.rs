@@ -2103,6 +2103,8 @@ impl Conversation {
         self.save_settings(cx);
         cx.notify();
     }
+    /// Returns the saved Fast state only when the current catalog exposes a Fast
+    /// boolean or a fast/priority service tier; unsupported models return `None`.
     fn fast_mode_state(&self) -> Option<bool> {
         let model = self.model_info()?;
         if model.fast {
@@ -2115,6 +2117,8 @@ impl Conversation {
                 .map(|(id, _)| self.selected_tier() == Some(id.as_str()))
         }
     }
+    /// Builds catalog-backed model controls and subscriptions to the existing save path.
+    /// Without a catalog entry, the caller must use the fallback model menu.
     fn effort_slider(
         &self,
         window: &mut Window,
@@ -2547,6 +2551,8 @@ impl Conversation {
         });
         cx.notify();
     }
+    /// Builds menu contents and retains subscriptions in `events`. Known models use
+    /// the unified controls; undiscovered models retain the Model row and flyout.
     fn menu_items(
         &self,
         kind: ComposerMenu,
@@ -2726,12 +2732,6 @@ impl Conversation {
                 } else {
                     Vec::new()
                 };
-                if let Some((slider, event)) = self.effort_slider(window, cx) {
-                    items.retain(|item| !matches!(item, MenuItem::Action(action) if action.id.as_ref() == "reasoning"));
-                    let focus = slider.focus_handle(cx);
-                    items.insert(0, MenuItem::Custom(slider.into(), focus));
-                    events.extend(event);
-                }
                 items.push(
                     MenuAction::new("model", "Model")
                         .value_image(provider.id())
@@ -2750,7 +2750,7 @@ impl Conversation {
                         })
                         .into(),
                 );
-                ("Model and settings", items, 280., MenuStyle::Settings)
+                ("Model and settings", items, 250., MenuStyle::Settings)
             }
             ComposerMenu::Recent => (
                 "Recently used models",
@@ -4213,6 +4213,31 @@ mod menu_tests {
     use gpui::{TestAppContext, WindowHandle, point};
     use monocode_core::store::Store;
     use std::sync::Mutex;
+
+    /// An undiscovered model retains the compact Model flyout without slider controls.
+    #[gpui::test]
+    fn fallback_model_menu_keeps_its_flyout_without_catalog_controls(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.catalog.clear();
+                assert!(view.model_info().is_none());
+                let (_, items, width, _) =
+                    view.menu_items(ComposerMenu::Model, &mut Vec::new(), window, cx);
+                assert_eq!(width, 250.);
+                assert!(
+                    !items
+                        .iter()
+                        .any(|item| matches!(item, MenuItem::Custom(..)))
+                );
+                assert!(items.iter().any(|item| {
+                    matches!(item, MenuItem::Action(action)
+                        if action.id.as_ref() == "model" && action.flyout.is_some())
+                }));
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn effort_slider_in_model_menu_saves_supported_choices_and_hides_without_catalog_support(
         cx: &mut TestAppContext,
