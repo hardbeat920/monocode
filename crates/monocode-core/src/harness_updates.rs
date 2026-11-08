@@ -124,7 +124,12 @@ pub fn run_update(update: &Update) -> Result<String, String> {
     if compare_versions(&version, &update.latest).is_lt() {
         return Err(format!("Still on {version} after updating."));
     }
-    catalog::invalidate(update.harness, &crate::accounts::Profile::default());
-    catalog::models(update.harness)?;
+    catalog::invalidate_all(update.harness);
+    // Claude reloads its catalog lazily for the account in use. Probing the
+    // default account here would start a cold CLI on an account that may not
+    // be in use, and that start may refresh (and rotate) its OAuth token.
+    if update.harness != Kind::Claude {
+        catalog::models(update.harness)?;
+    }
     Ok(version)
 }

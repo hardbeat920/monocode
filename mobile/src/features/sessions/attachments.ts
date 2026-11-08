@@ -1,6 +1,13 @@
-import { File } from "expo-file-system";
+import {
+  addClipboardListener,
+  ContentType,
+  getImageAsync,
+  hasImageAsync,
+} from "expo-clipboard";
+import { File, Paths } from "expo-file-system";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { launchImageLibraryAsync, type ImagePickerAsset } from "expo-image-picker";
+import { AppState } from "react-native";
 
 /** A file or photo held in the composer until it's sent. */
 export type Attachment = {
@@ -81,6 +88,69 @@ export async function pickFiles(room: number): Promise<Attachment[]> {
   );
 }
 
+/**
+ * The clipboard's image (a screenshot, a photo copied from Photos), as if it
+ * had been picked: the same scaling, re-encoding and limits.
+ * iOS asks the user to allow the paste the first time; a refusal reads as no image.
+ */
+export async function pasteImage(room: number): Promise<Attachment[]> {
+  if (room <= 0) return [];
+  const image = await getImageAsync({ format: "png" });
+  if (!image) throw new Error("There's no image on the clipboard to paste.");
+  const file = new File(Paths.cache, `pasted-${makeId()}.png`);
+  // Arrives as a data URI; the file takes the bytes after its prefix.
+  file.write(image.data.slice(image.data.indexOf(",") + 1), { encoding: "base64" });
+  const discard = () => {
+    try {
+      if (file.exists) file.delete();
+    } catch {
+      // Only a cache file; the OS clears the cache in time anyway.
+    }
+  };
+  try {
+    const attachment = await fromPhoto({
+      uri: file.uri,
+      width: image.size.width,
+      height: image.size.height,
+      mimeType: "image/png",
+      fileName: "Pasted image.png",
+      fileSize: file.size,
+    });
+    // Re-encoded to its own file: the pasted PNG is no longer the thumbnail.
+    if (attachment.uri !== file.uri) discard();
+    return [attachment];
+  } catch (reason) {
+    discard();
+    throw reason;
+  }
+}
+
+/**
+ * Tells whether the clipboard holds an image: now, whenever it changes, and
+ * on coming back to the app (copied elsewhere). Only asks, never reads, so iOS
+ * doesn't prompt to allow a paste until one is chosen.
+ */
+export function watchClipboardImage(onChange: (hasImage: boolean) => void): () => void {
+  let live = true;
+  const check = () =>
+    void hasImageAsync().then(
+      (has) => live && onChange(has),
+      () => live && onChange(false),
+    );
+  check();
+  const clipboard = addClipboardListener(({ contentTypes }) => {
+    if (live) onChange(contentTypes.includes(ContentType.IMAGE));
+  });
+  const app = AppState.addEventListener("change", (state) => {
+    if (state === "active") check();
+  });
+  return () => {
+    live = false;
+    clipboard.remove();
+    app.remove();
+  };
+}
+
 /** Adds picks to what's held, refusing any that would take the message over the link's limit. */
 export function merge(existing: Attachment[], added: Attachment[]): Attachment[] {
   const next = [...existing, ...added].slice(0, MAX_ATTACHMENTS);
@@ -90,7 +160,10 @@ export function merge(existing: Attachment[], added: Attachment[]): Attachment[]
   return next;
 }
 
-async function fromPhoto(asset: ImagePickerAsset): Promise<Attachment> {
+type PhotoSource = Pick<ImagePickerAsset, "uri" | "width" | "height"> &
+  Partial<Pick<ImagePickerAsset, "mimeType" | "fileName" | "fileSize">>;
+
+async function fromPhoto(asset: PhotoSource): Promise<Attachment> {
   const mimeType = asset.mimeType ?? mimeFor(asset.fileName ?? "", null);
   const small =
     SENT_AS_IS.has(mimeType) &&

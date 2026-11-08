@@ -156,7 +156,13 @@ mod tests {
                 })
                 .unwrap();
             visual.run_until_parked();
-            let search = visual.debug_bounds("sidebar-search-field").unwrap();
+            let search = visual
+                .debug_bounds(if classic {
+                    "sidebar-search-field"
+                } else {
+                    "sidebar-search-button"
+                })
+                .unwrap();
             visual.simulate_click(search.center(), Default::default());
             visual.run_until_parked();
             window

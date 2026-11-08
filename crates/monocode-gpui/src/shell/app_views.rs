@@ -129,6 +129,26 @@ impl Shell {
                 this.open_title_tab(&TitleTab::App(view), window, cx);
             }))
     }
+    /// Reads how many notes the store holds for the sidebar's Notes row.
+    pub(super) fn load_note_count(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.list_notes().map(|notes| notes.len()) });
+        cx.spawn(async move |this, cx| {
+            let Ok(count) = work.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.note_count != Some(count) {
+                    this.note_count = Some(count);
+                    this.notify_sidebar(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn leave_app_views(&mut self, cx: &mut Context<Self>) {
         if self.active_app_view == Some(AppView::Notes)
             && let Some(notes) = &self.notes
@@ -231,6 +251,15 @@ impl Shell {
                     notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), window, cx),
                 },
             ));
+            self.app_view_events
+                .push(cx.observe(&view, |this, notes, cx| {
+                    if let Some(count) = notes.read(cx).count()
+                        && this.note_count != Some(count)
+                    {
+                        this.note_count = Some(count);
+                        this.notify_sidebar(cx);
+                    }
+                }));
             self.notes = Some(view);
         }
         if let Some(notes) = &self.notes {

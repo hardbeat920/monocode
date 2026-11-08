@@ -665,6 +665,31 @@ const MAX_FRAME_RETRY: Duration = Duration::from_secs(2);
 /// redraws while they keep coming; resume vsync frames once the pointer rests.
 const LIVE_RESIZE_YIELD: Duration = Duration::from_millis(50);
 
+/// Monocode: a file drop sometimes leaves the window handling input but
+/// never repainting until it is resized. For a few seconds after each drop,
+/// count each stage of the frame loop (display link ticks, GPUI frame
+/// callbacks, renderer draws) so the log shows which one stopped.
+const DROP_PROBE: Duration = Duration::from_secs(3);
+/// Monocode: consecutive drawn frames the compositor never showed before the
+/// window nudges its frame to recover, as a resize does.
+const UNSHOWN_FRAMES_RESET: u64 = 5;
+const UNSHOWN_NUDGE_RETRY: Duration = Duration::from_millis(300);
+/// After this many quick nudges, keep trying slowly rather than giving up:
+/// frames also go unshown while the screen is locked, and the window must
+/// still recover once it unlocks.
+const QUICK_UNSHOWN_NUDGES: u32 = 10;
+const SLOW_UNSHOWN_NUDGE_RETRY: Duration = Duration::from_secs(2);
+
+struct DropProbe {
+    id: u64,
+    presented: u64,
+    skipped: u64,
+    ticks: u32,
+    callbacks: u32,
+    missing_callbacks: u32,
+    draws: u32,
+}
+
 /// When the window's display link last delivered a frame request.
 #[derive(Clone)]
 struct FrameTicks(Arc<AtomicU64>);
@@ -690,6 +715,35 @@ impl FrameTicks {
     }
 }
 
+/// Monocode: frames GPUI has asked for, and how many a delivered frame has
+/// answered. GPUI wakes the platform only when a window turns dirty, so a
+/// demand nothing answers gets no second wakeup.
+#[derive(Clone, Default)]
+struct FrameDemand {
+    raised: Arc<AtomicU64>,
+    answered: Arc<AtomicU64>,
+}
+
+impl FrameDemand {
+    fn raise(&self) {
+        self.raised.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn raised(&self) -> u64 {
+        self.raised.load(Ordering::Acquire)
+    }
+
+    /// Takes `raised` from before a frame ran: a demand raised during the
+    /// frame, such as an animation asking for the next one, stays open.
+    fn answer(&self, raised: u64) {
+        self.answered.store(raised, Ordering::Release);
+    }
+
+    fn is_answered(&self, raised: u64) -> bool {
+        self.answered.load(Ordering::Acquire) == raised
+    }
+}
+
 struct MacWindowState {
     handle: AnyWindowHandle,
     foreground_executor: ForegroundExecutor,
@@ -704,11 +758,16 @@ struct MacWindowState {
     frame_ticks: FrameTicks,
     /// Set while a task is watching for, or restarting, stalled frames.
     frame_recovery: Arc<AtomicBool>,
-    /// Counts frame demands from GPUI, so a watcher can tell whether new
-    /// demand arrived while it was waiting.
-    frame_demands: Arc<AtomicU64>,
+    frame_demand: FrameDemand,
     /// When AppKit last drew the layer through `displayLayer:`.
     last_native_draw: Option<Instant>,
+    /// Monocode: what the frame loop did after the latest file drop.
+    drop_probe: Option<DropProbe>,
+    /// When frames stopped reaching the screen, and the presented frame
+    /// count then, to tell when they come back.
+    unshown_since: Option<(Instant, u64)>,
+    unshown_nudges: u32,
+    last_unshown_nudge: Option<Instant>,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
@@ -889,34 +948,165 @@ impl MacWindowState {
         self.subscribe_frames();
     }
 
-    /// Subscribes the window to its screen's display link. Returns whether it
-    /// is subscribed afterwards.
-    fn subscribe_frames(&mut self) -> bool {
+    /// Subscribes the window to its screen's display link.
+    fn subscribe_frames(&mut self) {
         let Some(display_id) = display_id_for_screen(unsafe { self.native_window.screen() }) else {
             // AppKit can temporarily report no screen while displays are being reconfigured.
             log::warn!("window has no screen; keeping its current frame source");
-            return self
-                .frame_source
-                .as_ref()
-                .is_some_and(|source| source.display_id().is_some());
+            return;
         };
         let data = self.native_view.as_ptr() as *mut c_void;
         let frame_source = self
             .frame_source
             .get_or_insert_with(|| WindowFrameSource::new(data, step));
         if frame_source.display_id() == Some(display_id) {
-            return true;
+            return;
         }
         match frame_source.start(display_id) {
-            Ok(()) => {
-                // Give the new subscription a full stall period to deliver.
-                self.frame_ticks.tick();
-                true
-            }
+            // Give the new subscription a full stall period to deliver.
+            Ok(()) => self.frame_ticks.tick(),
             Err(error) => {
                 log::error!("could not start frames for display {display_id}: {error:#}");
-                false
             }
+        }
+    }
+
+    /// Monocode: while the screenshot thumbnail's full-screen window
+    /// (screencaptureui) lingers above ours after a drop, the compositor stops
+    /// showing our frames although every one is drawn, so the window looks
+    /// frozen while still taking input. A resize makes the window server pick
+    /// our frames up again, so nudge the frame once a run of frames goes
+    /// unshown, and retry while they stay unshown.
+    fn recover_unshown_frames(&mut self) {
+        let stats = self.renderer.present_stats().clone();
+        if let Some((started, presented)) = self.unshown_since
+            && stats.presented() > presented
+        {
+            log::warn!(
+                "frames reach the screen again {}ms after the freeze was detected, after {} nudge(s)",
+                started.elapsed().as_millis(),
+                self.unshown_nudges,
+            );
+            self.unshown_since = None;
+            self.unshown_nudges = 0;
+            self.last_unshown_nudge = None;
+        }
+        let streak = stats.skipped_streak();
+        let retry = if self.unshown_nudges < QUICK_UNSHOWN_NUDGES {
+            UNSHOWN_NUDGE_RETRY
+        } else {
+            SLOW_UNSHOWN_NUDGE_RETRY
+        };
+        if streak < UNSHOWN_FRAMES_RESET
+            || self
+                .last_unshown_nudge
+                .is_some_and(|at| at.elapsed() < retry)
+        {
+            return;
+        }
+        let in_live_resize: BOOL = unsafe { msg_send![self.native_view.as_ptr(), inLiveResize] };
+        if in_live_resize == YES {
+            return;
+        }
+        // A background window also goes unshown while a screenshot selection
+        // holds the screen, and screencaptureui is the active app then; only
+        // nudge while ours is. Right after a drop ours is active before its
+        // window turns key, so don't wait for that.
+        let active = unsafe {
+            let app = NSApplication::sharedApplication(nil);
+            let active: BOOL = msg_send![app, isActive];
+            active == YES
+        };
+        if !active {
+            return;
+        }
+        if self.unshown_since.is_none() {
+            self.unshown_since = Some((Instant::now(), stats.presented()));
+            log::warn!(
+                "{streak} drawn frames were not shown; nudging the window frame ({} shown / {} skipped in total; {}; {}; {})",
+                stats.presented(),
+                stats.skipped(),
+                frame_status(self),
+                self.layer_status(),
+                windows_above(self),
+            );
+        } else if self.unshown_nudges < QUICK_UNSHOWN_NUDGES {
+            log::warn!("{streak} drawn frames still not shown; nudging again");
+        } else if self.unshown_nudges == QUICK_UNSHOWN_NUDGES {
+            log::warn!(
+                "frames still not shown after {QUICK_UNSHOWN_NUDGES} nudges ({}); retrying every {}s",
+                windows_above(self),
+                SLOW_UNSHOWN_NUDGE_RETRY.as_secs(),
+            );
+        }
+        self.unshown_nudges += 1;
+        self.last_unshown_nudge = Some(Instant::now());
+        self.nudge_window_frame();
+    }
+
+    /// Monocode: resizing the window is the only thing known to bring back a
+    /// window whose frames stopped reaching the screen, because the window
+    /// server then rebuilds the window's surface. Shrink by a point and
+    /// restore it. AppKit calls back into the window state while resizing,
+    /// so this runs as a fresh main-thread task.
+    fn nudge_window_frame(&self) {
+        let native_window = self.native_window;
+        let closed = self.closed.clone();
+        self.foreground_executor
+            .spawn(async move {
+                if closed.load(Ordering::Acquire) {
+                    return;
+                }
+                unsafe {
+                    let frame = NSWindow::frame(native_window);
+                    if frame.size.width < 2.0 {
+                        return;
+                    }
+                    let mut smaller = frame;
+                    smaller.size.width -= 1.0;
+                    native_window.setFrame_display_(smaller, NO);
+                    native_window.setFrame_display_(frame, YES);
+                }
+            })
+            .detach();
+    }
+
+    /// The layer and window state behind a frame the compositor did not show.
+    fn layer_status(&self) -> String {
+        unsafe {
+            let window = self.native_window;
+            let on_active_space: BOOL = msg_send![window, isOnActiveSpace];
+            let visible: BOOL = msg_send![window, isVisible];
+            let alpha: f64 = msg_send![window, alphaValue];
+            let view = self.native_view.as_ptr();
+            let view_layer: id = msg_send![view, layer];
+            let Some(layer) = self.renderer.layer() else {
+                return "no layer".into();
+            };
+            let layer_ptr = foreign_types::ForeignTypeRef::as_ptr(layer) as id;
+            let hidden: BOOL = msg_send![layer_ptr, isHidden];
+            let opacity: f32 = msg_send![layer_ptr, opacity];
+            let layer_opaque: BOOL = msg_send![layer_ptr, isOpaque];
+            let bounds: NSRect = msg_send![layer_ptr, bounds];
+            let scale: f64 = msg_send![layer_ptr, contentsScale];
+            let with_transaction: BOOL = msg_send![layer_ptr, presentsWithTransaction];
+            let drawable = layer.drawable_size();
+            let frame = NSWindow::frame(window);
+            format!(
+                "window {}x{} visible {} active space {} alpha {alpha}; layer is view layer {}, opaque {}, hidden {}, opacity {opacity}, bounds {}x{}, scale {scale}, drawable {}x{}, presents with transaction {}",
+                frame.size.width,
+                frame.size.height,
+                visible == YES,
+                on_active_space == YES,
+                std::ptr::eq(view_layer, layer_ptr),
+                layer_opaque == YES,
+                hidden == YES,
+                bounds.size.width,
+                bounds.size.height,
+                drawable.width,
+                drawable.height,
+                with_transaction == YES,
+            )
         }
     }
 
@@ -934,21 +1124,25 @@ impl MacWindowState {
         }
     }
 
-    /// Resubscribes a window whose frames stopped arriving. Returns false
-    /// when the window should not be drawing at all.
-    fn restart_stalled_frames(&mut self) -> bool {
-        // The key window of the active app is on screen whatever the occlusion
-        // state says, and is exactly the window the user is waiting on.
+    /// Resubscribes a window whose frames stopped arriving, unless it should
+    /// not be drawing at all.
+    fn restart_stalled_frames(&mut self) {
+        // The active app's main window is on screen whatever the occlusion
+        // state says, and is exactly the window the user is waiting on. Key
+        // alone misses it: the screenshot thumbnail holds key status while it
+        // is dragged onto the window, and the capture overlay reports the
+        // window occluded.
         let frontmost = unsafe {
             let app = NSApplication::sharedApplication(nil);
             let active: BOOL = msg_send![app, isActive];
-            active == YES && self.native_window.isKeyWindow() == YES
+            let main: BOOL = msg_send![self.native_window, isMainWindow];
+            active == YES && (main == YES || self.native_window.isKeyWindow() == YES)
         };
         if !frontmost && !self.is_occlusion_visible() {
-            return false;
+            return;
         }
         self.stop_display_link();
-        self.subscribe_frames()
+        self.subscribe_frames();
     }
 
     fn is_maximized(&self) -> bool {
@@ -1192,8 +1386,12 @@ impl MacWindow {
                 frame_source: None,
                 frame_ticks: FrameTicks::new(),
                 frame_recovery: Arc::new(AtomicBool::new(false)),
-                frame_demands: Arc::new(AtomicU64::new(0)),
+                frame_demand: FrameDemand::default(),
                 last_native_draw: None,
+                drop_probe: None,
+                unshown_since: None,
+                unshown_nudges: 0,
+                last_unshown_nudge: None,
                 renderer: renderer::new_renderer(
                     renderer_context,
                     native_window as *mut _,
@@ -1509,14 +1707,45 @@ impl Drop for MacWindow {
     }
 }
 
-/// Restarts a window's display link until frames arrive again, backing off
-/// while the display stays unavailable. Stops once the window is hidden,
-/// closed, or drawing again.
-async fn recover_stalled_frames(window: Weak<Mutex<MacWindowState>>) {
+/// Watches a window GPUI wants a frame for until a delivered frame has answered
+/// every demand, restarting its display link when no vsync tick arrives within
+/// a stall period.
+///
+/// Nothing else can revive a window left dirty without a frame source, because
+/// GPUI wakes the platform only when a window turns dirty: input keeps working
+/// while the window never repaints. So a window that cannot be restarted yet,
+/// whether occluded or screenless, is retried rather than given up on.
+async fn watch_frames(
+    window: Weak<Mutex<MacWindowState>>,
+    ticks: FrameTicks,
+    demand: FrameDemand,
+    watching: Arc<AtomicBool>,
+    executor: BackgroundExecutor,
+) {
     // Waiting at least one stall period lets a restarted link prove itself.
     let mut retry = FRAME_STALL;
-    for attempt in 0.. {
-        let executor = {
+    let mut restarts = 0;
+    loop {
+        let raised = demand.raised();
+        if demand.is_answered(raised) {
+            watching.store(false, Ordering::Release);
+            // A demand that landed after the check above saw `watching` still
+            // set and left; take the watch back for it unless another task has.
+            if demand.raised() == raised || watching.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            continue;
+        }
+        if !ticks.stalled() {
+            if restarts > 0 {
+                log::warn!("window frames resumed after {restarts} restart(s)");
+                restarts = 0;
+            }
+            retry = FRAME_STALL;
+            executor.timer(FRAME_STALL).await;
+            continue;
+        }
+        {
             let Some(state) = window.upgrade() else {
                 return;
             };
@@ -1524,52 +1753,14 @@ async fn recover_stalled_frames(window: Weak<Mutex<MacWindowState>>) {
             if lock.closed.load(Ordering::Acquire) {
                 return;
             }
-            if attempt > 0 && !lock.frame_ticks.stalled() {
-                log::warn!("window frames resumed after {attempt} restart(s)");
-                return;
-            }
-            if attempt == 0 {
+            if restarts == 0 {
                 log::warn!("window frames stalled; restarting its display link");
             }
-            if !lock.restart_stalled_frames() {
-                return;
-            }
-            lock.background_executor.clone()
-        };
+            restarts += 1;
+            lock.restart_stalled_frames();
+        }
         executor.timer(retry).await;
         retry = (retry * 2).min(MAX_FRAME_RETRY);
-    }
-}
-
-/// Watches a window that GPUI wants a frame for, restarting its display link
-/// if no vsync tick arrives within a stall period. Keeps watching while new
-/// frame demands arrive, because GPUI only wakes the platform when a window
-/// turns dirty: a link that dies while the window is already dirty, or just
-/// before it turns dirty, gets no further wakeup.
-async fn watch_frames(
-    window: Weak<Mutex<MacWindowState>>,
-    ticks: FrameTicks,
-    demands: Arc<AtomicU64>,
-    watching: Arc<AtomicBool>,
-    executor: BackgroundExecutor,
-) {
-    loop {
-        let seen = demands.load(Ordering::Acquire);
-        if !ticks.stalled() {
-            executor.timer(FRAME_STALL).await;
-        }
-        if ticks.stalled() {
-            recover_stalled_frames(window.clone()).await;
-        }
-        if demands.load(Ordering::Acquire) != seen {
-            continue;
-        }
-        watching.store(false, Ordering::Release);
-        // A demand that landed after the check above saw `watching` still
-        // set and left; take the watch back for it unless another task has.
-        if demands.load(Ordering::Acquire) == seen || watching.swap(true, Ordering::AcqRel) {
-            return;
-        }
     }
 }
 
@@ -2191,13 +2382,13 @@ impl PlatformWindow for MacWindow {
         let state = self.0.lock();
         let ticks = state.frame_ticks.clone();
         let watching = state.frame_recovery.clone();
-        let demands = state.frame_demands.clone();
+        let demand = state.frame_demand.clone();
         let executor = state.foreground_executor.clone();
         let background = state.background_executor.clone();
         let window = Arc::downgrade(&self.0);
         drop(state);
         Some(Rc::new(move || {
-            demands.fetch_add(1, Ordering::AcqRel);
+            demand.raise();
             if watching.swap(true, Ordering::AcqRel) {
                 return;
             }
@@ -2207,7 +2398,7 @@ impl PlatformWindow for MacWindow {
                 .spawn(watch_frames(
                     window.clone(),
                     ticks.clone(),
-                    demands.clone(),
+                    demand.clone(),
                     watching.clone(),
                     background.clone(),
                 ))
@@ -2316,7 +2507,11 @@ impl PlatformWindow for MacWindow {
 
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
+        if let Some(probe) = this.drop_probe.as_mut() {
+            probe.draws += 1;
+        }
         this.renderer.draw(scene);
+        this.recover_unshown_frames();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -3186,6 +3381,7 @@ fn report_visibility(window_state: &Arc<Mutex<MacWindowState>>) {
 extern "C" fn window_did_change_occlusion_state(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
+    log::info!("occlusion changed: {}", frame_status(&lock));
     unsafe {
         if lock
             .native_window
@@ -3394,15 +3590,19 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
                 // the display link cannot interleave with it; keep it running
                 // rather than risk losing it on the restart below.
                 lock.renderer.set_presents_with_transaction(true);
+                let raised = lock.frame_demand.raised();
                 drop(lock);
+                let started = Instant::now();
                 callback(RequestFrameOptions {
                     signal_at,
                     signal_source: FrameRequestSource::NativeCallback,
                     ..Default::default()
                 });
+                log_slow_main("drawing the frame for becoming key", started);
 
                 let mut lock = window_state.lock();
                 lock.request_frame_callback = Some(callback);
+                lock.frame_demand.answer(raised);
                 lock.renderer.set_presents_with_transaction(false);
                 lock.start_display_link();
             }
@@ -3502,6 +3702,9 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
 
     let scale_factor = lock.scale_factor();
     let drawable_size = new_size.to_device_pixels(scale_factor);
+    if lock.drop_probe.is_none() {
+        log::info!("window resized: {}", frame_status(&lock));
+    }
     lock.renderer.update_drawable_size(drawable_size);
 
     if let Some(mut callback) = lock.resize_callback.take() {
@@ -3520,15 +3723,19 @@ extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
     if let Some(mut callback) = lock.request_frame_callback.take() {
         // Monocode: keep the display link running; see `windowDidBecomeKey:`.
         lock.renderer.set_presents_with_transaction(true);
+        let raised = lock.frame_demand.raised();
         drop(lock);
+        let started = Instant::now();
         callback(RequestFrameOptions {
             signal_at,
             signal_source: FrameRequestSource::NativeCallback,
             ..Default::default()
         });
+        log_slow_main("drawing the frame AppKit asked for", started);
 
         let mut lock = window_state.lock();
         lock.request_frame_callback = Some(callback);
+        lock.frame_demand.answer(raised);
         lock.renderer.set_presents_with_transaction(false);
         lock.last_native_draw = Some(Instant::now());
         lock.start_display_link();
@@ -3540,6 +3747,15 @@ extern "C" fn step(view: *mut c_void) {
     let window_state = unsafe { get_window_state(&*view) };
     let mut lock = window_state.lock();
     lock.frame_ticks.tick();
+    let has_callback = lock.request_frame_callback.is_some();
+    if let Some(probe) = lock.drop_probe.as_mut() {
+        probe.ticks += 1;
+        if has_callback {
+            probe.callbacks += 1;
+        } else {
+            probe.missing_callbacks += 1;
+        }
+    }
 
     let in_live_resize: BOOL = unsafe { msg_send![view, inLiveResize] };
     if in_live_resize == YES
@@ -3559,13 +3775,18 @@ extern "C" fn step(view: *mut c_void) {
                 (None, FrameRequestSource::NativeCallback),
                 |(at, source)| (Some(at), source),
             );
+        let raised = lock.frame_demand.raised();
         drop(lock);
+        let started = Instant::now();
         callback(RequestFrameOptions {
             signal_at,
             signal_source,
             ..Default::default()
         });
-        window_state.lock().request_frame_callback = Some(callback);
+        log_slow_main("drawing a frame", started);
+        let mut lock = window_state.lock();
+        lock.request_frame_callback = Some(callback);
+        lock.frame_demand.answer(raised);
     }
 }
 
@@ -3807,10 +4028,15 @@ extern "C" fn dragging_entered(this: &Object, _: Sel, dragging_info: id) -> NSDr
     let is_source_window = is_drag_from_this_window(this, dragging_info);
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
+    let started = Instant::now();
     let paths = external_paths_from_event(dragging_info);
-    if let Some(event) = paths.map(|paths| FileDropEvent::Entered { position, paths })
-        && send_file_drop_event(window_state, event)
-    {
+    log_slow_main("reading the dragged file paths", started);
+    let started = Instant::now();
+    let sent = paths
+        .map(|paths| FileDropEvent::Entered { position, paths })
+        .is_some_and(|event| send_file_drop_event(window_state, event));
+    log_slow_main("handling the drag entering the window", started);
+    if sent {
         if is_source_window {
             return NSDragOperationMove;
         }
@@ -3842,7 +4068,19 @@ extern "C" fn dragging_exited(this: &Object, _: Sel, _: id) {
 extern "C" fn perform_drag_operation(this: &Object, _: Sel, dragging_info: id) -> BOOL {
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
-    send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
+    start_drop_probe(&window_state);
+    let started = Instant::now();
+    let handled = send_file_drop_event(window_state, FileDropEvent::Submit { position });
+    log_slow_main("handling the drop", started);
+    handled.to_objc()
+}
+
+/// Monocode: logs main-thread work long enough to freeze the window.
+fn log_slow_main(what: &str, since: Instant) {
+    let elapsed = since.elapsed();
+    if elapsed >= Duration::from_millis(150) {
+        log::warn!("main thread blocked {}ms {what}", elapsed.as_millis());
+    }
 }
 
 fn external_paths_from_event(dragging_info: *mut Object) -> Option<ExternalPaths> {
@@ -3949,6 +4187,174 @@ async fn synthetic_drag(
 
 /// Sends the specified FileDropEvent using `PlatformInput::FileDrop` to the window
 /// state and updates the window state according to the event passed.
+fn start_drop_probe(window_state: &Arc<Mutex<MacWindowState>>) {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut lock = window_state.lock();
+    log::info!("file drop {id}: {}", frame_status(&lock));
+    let stats = lock.renderer.present_stats().clone();
+    lock.drop_probe = Some(DropProbe {
+        id,
+        presented: stats.presented(),
+        skipped: stats.skipped(),
+        ticks: 0,
+        callbacks: 0,
+        missing_callbacks: 0,
+        draws: 0,
+    });
+    let foreground = lock.foreground_executor.clone();
+    let background = lock.background_executor.clone();
+    let window = Arc::downgrade(window_state);
+    drop(lock);
+    foreground
+        .spawn(async move {
+            background.timer(DROP_PROBE).await;
+            let Some(state) = window.upgrade() else {
+                return;
+            };
+            let mut lock = state.lock();
+            if lock.drop_probe.as_ref().is_none_or(|probe| probe.id != id) {
+                return;
+            }
+            let Some(probe) = lock.drop_probe.take() else {
+                return;
+            };
+            let stats = lock.renderer.present_stats().clone();
+            let summary = format!(
+                "file drop {id}, {}s later: {} ticks, {} frame callbacks ({} missing), {} draws, {} shown, {} skipped; {}",
+                DROP_PROBE.as_secs(),
+                probe.ticks,
+                probe.callbacks,
+                probe.missing_callbacks,
+                probe.draws,
+                stats.presented() - probe.presented,
+                stats.skipped() - probe.skipped,
+                frame_status(&lock),
+            );
+            // A window that ticks but never draws is fine while nothing changes;
+            // flag only a stopped link or lost callback as a failure.
+            if probe.ticks == 0 || probe.missing_callbacks > 0 {
+                log::warn!("{summary}");
+            } else {
+                log::info!("{summary}");
+            }
+        })
+        .detach();
+}
+
+unsafe extern "C" {
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> id;
+}
+
+/// Monocode: the on-screen windows stacked above `state`'s window that
+/// overlap it, for the log. A window above ours that the compositor treats
+/// as covering it would explain frames that are drawn but never shown.
+fn windows_above(state: &MacWindowState) -> String {
+    const ON_SCREEN_ABOVE_WINDOW: u32 = 1 << 1;
+    const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+    unsafe {
+        let number: NSInteger = msg_send![state.native_window, windowNumber];
+        let frame = NSWindow::frame(state.native_window);
+        let screen_height = {
+            let screens = NSScreen::screens(nil);
+            if NSArray::count(screens) == 0 {
+                0.0
+            } else {
+                NSScreen::frame(NSArray::objectAtIndex(screens, 0))
+                    .size
+                    .height
+            }
+        };
+        // CoreGraphics window bounds have a top-left origin on the main screen.
+        let top = screen_height - frame.origin.y - frame.size.height;
+        let (left, right, bottom) = (
+            frame.origin.x,
+            frame.origin.x + frame.size.width,
+            top + frame.size.height,
+        );
+        let list = CGWindowListCopyWindowInfo(
+            ON_SCREEN_ABOVE_WINDOW | EXCLUDE_DESKTOP_ELEMENTS,
+            number as u32,
+        );
+        if list == nil {
+            return "windows above: unknown".into();
+        }
+        let number_value = |dict: id, key: &str| -> f64 {
+            let value: id = msg_send![dict, objectForKey: ns_string(key)];
+            if value == nil {
+                0.0
+            } else {
+                msg_send![value, doubleValue]
+            }
+        };
+        let string_value = |dict: id, key: &str| -> String {
+            let value: id = msg_send![dict, objectForKey: ns_string(key)];
+            if value == nil {
+                String::new()
+            } else {
+                CStr::from_ptr(NSString::UTF8String(value))
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
+        let mut above = Vec::new();
+        for index in 0..NSArray::count(list) {
+            let info = NSArray::objectAtIndex(list, index);
+            let bounds: id = msg_send![info, objectForKey: ns_string("kCGWindowBounds")];
+            if bounds == nil {
+                continue;
+            }
+            let (x, y, w, h) = (
+                number_value(bounds, "X"),
+                number_value(bounds, "Y"),
+                number_value(bounds, "Width"),
+                number_value(bounds, "Height"),
+            );
+            if x >= right || x + w <= left || y >= bottom || y + h <= top {
+                continue;
+            }
+            above.push(format!(
+                "{} \"{}\" layer {} alpha {} at {x},{y} {w}x{h}",
+                string_value(info, "kCGWindowOwnerName"),
+                string_value(info, "kCGWindowName"),
+                number_value(info, "kCGWindowLayer"),
+                number_value(info, "kCGWindowAlpha"),
+            ));
+            if above.len() == 8 {
+                break;
+            }
+        }
+        CFRelease(list as CFTypeRef);
+        if above.is_empty() {
+            "windows above: none".into()
+        } else {
+            format!("windows above: [{}]", above.join("; "))
+        }
+    }
+}
+
+/// The state that decides whether a window gets frames, for the log.
+fn frame_status(state: &MacWindowState) -> String {
+    let (active, key, visible) = unsafe {
+        let app = NSApplication::sharedApplication(nil);
+        let active: BOOL = msg_send![app, isActive];
+        (
+            active == YES,
+            state.native_window.isKeyWindow() == YES,
+            state.is_occlusion_visible(),
+        )
+    };
+    format!(
+        "app active {active}, key {key}, occlusion visible {visible}, display {:?}, frames stalled {}, recovering {}",
+        state
+            .frame_source
+            .as_ref()
+            .and_then(WindowFrameSource::display_id),
+        state.frame_ticks.stalled(),
+        state.frame_recovery.load(Ordering::Acquire),
+    )
+}
+
 fn send_file_drop_event(
     window_state: Arc<Mutex<MacWindowState>>,
     file_drop_event: FileDropEvent,
@@ -4169,5 +4575,22 @@ mod tests {
     #[test]
     fn display_id_for_screen_returns_none_for_null_screen() {
         assert_eq!(display_id_for_screen(nil), None);
+    }
+
+    #[test]
+    fn frame_demand_stays_open_until_a_frame_answers_it() {
+        let demand = FrameDemand::default();
+        assert!(demand.is_answered(demand.raised()));
+
+        demand.raise();
+        assert!(!demand.is_answered(demand.raised()));
+
+        let before_frame = demand.raised();
+        demand.raise();
+        demand.answer(before_frame);
+        assert!(!demand.is_answered(demand.raised()));
+
+        demand.answer(demand.raised());
+        assert!(demand.is_answered(demand.raised()));
     }
 }

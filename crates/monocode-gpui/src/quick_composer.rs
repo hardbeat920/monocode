@@ -1190,6 +1190,14 @@ impl QuickComposer {
         );
         let can_submit = self.can_submit(cx);
         let draft = self.leading(cx) == Some(Command::Draft);
+        // As the effort footer: only for a model that offers fast mode.
+        let fast = self.fast
+            && self.models.as_ref().is_some_and(|models| {
+                models
+                    .read(cx)
+                    .catalog_model(self.kind, self.model.as_deref())
+                    .is_some_and(|model| model.fast)
+            });
         div()
             .flex_shrink_0()
             .flex()
@@ -1233,6 +1241,7 @@ impl QuickComposer {
                 .py_1()
                 .child(provider_icon(self.kind.id(), 14.))
                 .child(div().truncate().child(name))
+                .when(fast, |d| d.child(crate::conversation::fast_bolt()))
                 .child(icon("chevron-down", 12.).text_color(content(0.4)))
                 .on_click(cx.listener(|this, _, window, cx| this.open(Picker::Model, window, cx))),
             )

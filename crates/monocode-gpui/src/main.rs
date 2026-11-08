@@ -5,6 +5,7 @@
 
 mod accounts;
 mod activity;
+mod app_log;
 mod app_menu;
 mod arcade;
 mod assets;
@@ -26,6 +27,7 @@ mod file_editor;
 mod file_icons;
 mod fixtures;
 mod fonts;
+mod frame_log;
 mod fs_watch;
 mod git_cache;
 mod git_graph;
@@ -411,6 +413,7 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
+    app_log::init();
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
@@ -422,6 +425,7 @@ fn main() {
             image_memory::init(cx);
             #[cfg(target_os = "macos")]
             memory_log::start(cx);
+            frame_log::start(cx);
             gpu_trim::start(cx);
             #[cfg(target_os = "macos")]
             hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
