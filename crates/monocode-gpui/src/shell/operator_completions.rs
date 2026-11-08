@@ -32,11 +32,7 @@ impl Shell {
             .get(&caller)
             .cloned()
             .unwrap_or_default();
-        subscriptions.retain(|s| {
-            s.session != session
-                && (!s.delivered
-                    || matches!(group, OperatorCompletionGroup::Turn(_)) && s.group == group)
-        });
+        subscriptions.retain(|s| s.session != session && !s.delivered);
         subscriptions.push(OperatorSubscription {
             session,
             title,

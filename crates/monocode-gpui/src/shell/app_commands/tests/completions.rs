@@ -707,3 +707,48 @@ fn operator_completion_terminal_sibling_is_pending_not_running(cx: &mut TestAppC
     assert!(!prompts[0].contains("Still running:"));
     assert!(prompts[0].contains("Other reports pending:"));
 }
+
+#[gpui::test]
+fn operator_completion_delayed_turn_rearm_does_not_keep_delivered_members(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    let first = completion_worker(window, caller, "first", cx);
+    let delayed = completion_worker(window, caller, "delayed", cx);
+    let other = completion_worker_in_group(window, caller, "other", Some("other"), cx);
+    let captured_group = window
+        .update(cx, |shell, _, _| {
+            let group = shell.operator_subscriptions[&caller]
+                .iter()
+                .find(|s| s.session == delayed)
+                .unwrap()
+                .group
+                .clone();
+            // The delayed launch captured its group but has not registered yet.
+            shell.dismiss_operator_completion(caller, delayed).unwrap();
+            group
+        })
+        .unwrap();
+    end_completion_origin(window, caller, cx);
+    finish_completion_worker(window, first, cx);
+    assert_eq!(completion_prompts(window, caller, cx).len(), 1);
+    window
+        .update(cx, |shell, _, _| {
+            shell
+                .arm_operator_completion(caller, captured_group, delayed, "delayed".into())
+                .unwrap();
+        })
+        .unwrap();
+    finish_completion_worker(window, delayed, cx);
+    let reports = completion_prompts(window, caller, cx);
+    assert_eq!(
+        reports.len(),
+        2,
+        "the delayed worker must get its own report"
+    );
+    assert!(reports[1].contains(&format!("Session {delayed}: delayed")));
+    assert!(!reports[1].contains(&format!("Session {first}: first")));
+    assert!(reports[1].contains(&format!("Session {other}: other")));
+    finish_completion_worker(window, other, cx);
+    assert_eq!(completion_prompts(window, caller, cx).len(), 3);
+    end_completion_origin(window, caller, cx);
+    assert_eq!(completion_prompts(window, caller, cx).len(), 3);
+}
