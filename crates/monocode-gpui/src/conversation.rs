@@ -811,6 +811,9 @@ impl Conversation {
                     this.attach_account(cx);
                     this.settings.mono = mono;
                     this.settings.environment = environment;
+                    if this.normalize_effort(cx) {
+                        this.save_settings(cx);
+                    }
                 }
                 match result {
                     Ok((history, edits)) => {
@@ -1936,17 +1939,7 @@ impl Conversation {
                 let _ = this.update(cx, |this, cx| {
                     if Kind::from_id(&this.summary.provider) == kind && this.catalog_epoch == epoch
                     {
-                        this.catalog = models;
-                        if this.is_remote() && this.model.is_none() {
-                            this.model = this
-                                .catalog
-                                .iter()
-                                .find(|m| m.default)
-                                .or_else(|| this.catalog.first())
-                                .map(|m| m.id.clone());
-                            this.settings.model = this.model.clone();
-                            this.save_settings(cx);
-                        }
+                        this.install_catalog(models, cx);
                         cx.emit(SessionChanged);
                         cx.notify();
                     }
@@ -1954,6 +1947,24 @@ impl Conversation {
             }
         })
         .detach();
+    }
+    /// Reconciles saved effort after discovery, including a remote default model.
+    /// Unsupported choices are persisted before consumers use the new catalog.
+    fn install_catalog(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
+        self.catalog = models;
+        let remote_default = self.is_remote() && self.model.is_none();
+        if remote_default {
+            self.model = self
+                .catalog
+                .iter()
+                .find(|m| m.default)
+                .or_else(|| self.catalog.first())
+                .map(|m| m.id.clone());
+            self.settings.model = self.model.clone();
+        }
+        if self.normalize_effort(cx) || remote_default {
+            self.save_settings(cx);
+        }
     }
     fn model_info(&self) -> Option<&Model> {
         match self.model.as_deref().or(self.resolved_model.as_deref()) {
@@ -1978,6 +1989,7 @@ impl Conversation {
         cx.notify();
     }
     fn save_settings(&mut self, cx: &mut Context<Self>) {
+        self.normalize_effort(cx);
         self.settings.revision = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -2114,7 +2126,12 @@ impl Conversation {
                 .tiers
                 .iter()
                 .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
-                .map(|(id, _)| self.selected_tier() == Some(id.as_str()))
+                .map(|_| {
+                    self.selected_tier().is_some_and(|tier| {
+                        matches!(tier, "fast" | "priority")
+                            && model.tiers.iter().any(|(id, _)| id == tier)
+                    })
+                })
         }
     }
     /// Builds catalog-backed model controls and subscriptions to the existing save path.
@@ -2173,7 +2190,7 @@ impl Conversation {
                                 .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
                             {
                                 let id = id.clone();
-                                let value = if this.selected_tier() == Some(id.as_str()) {
+                                let value = if this.fast_mode_state() == Some(true) {
                                     String::new()
                                 } else {
                                     id
@@ -2220,6 +2237,32 @@ impl Conversation {
                     prefs.provider_efforts.insert(provider, effort.to_owned());
                 }
             });
+        }
+    }
+    /// Replaces an unsupported effort only when the catalog advertises valid stops.
+    /// Keeps supported choices and unresolved catalogs intact; uses a supported
+    /// default or the first stop, clearing legacy effort overrides via the save path.
+    fn normalize_effort(&mut self, cx: &mut Context<Self>) -> bool {
+        let replacement = self.model_info().and_then(|model| {
+            if model.efforts.is_empty()
+                || self
+                    .selected_effort()
+                    .is_some_and(|effort| model.efforts.iter().any(|supported| supported == effort))
+            {
+                return None;
+            }
+            model
+                .default_effort
+                .as_ref()
+                .filter(|effort| model.efforts.contains(effort))
+                .or(model.efforts.first())
+                .cloned()
+        });
+        if let Some(effort) = replacement {
+            self.set_effort_choice(&effort, cx);
+            true
+        } else {
+            false
         }
     }
     fn selected_effort(&self) -> Option<&str> {
@@ -2694,7 +2737,7 @@ impl Conversation {
                     let mut items = vec![MenuItem::Custom(slider.into(), focus)];
                     items.extend(self.mono_model_options().into_iter().filter(|item| {
                         !matches!(item, MenuItem::Action(action) if action.id.as_ref() == "reasoning" || action.id.as_ref() == "fast"
-                            || (action.id.as_ref() == "service-tier" && self.model_info().is_some_and(|model| model.tiers.iter().all(|(id, _)| matches!(id.as_str(), "fast" | "priority")))))
+                            || (action.id.as_ref() == "service-tier" && self.model_info().is_some_and(|model| model.tiers.len() <= 1 && model.tiers.iter().all(|(id, _)| matches!(id.as_str(), "fast" | "priority")))))
                     }));
                     events.extend(subscriptions);
                     return ("Model and settings", items, 254., MenuStyle::Settings);
@@ -4213,6 +4256,145 @@ mod menu_tests {
     use gpui::{TestAppContext, WindowHandle, point};
     use monocode_core::store::Store;
     use std::sync::Mutex;
+
+    /// Model switches reconcile supported defaults both before and after discovery.
+    #[gpui::test]
+    fn model_effort_is_reconciled_and_saved_when_catalog_becomes_available(
+        cx: &mut TestAppContext,
+    ) {
+        for delayed in [false, true] {
+            for (saved, default, expected) in [
+                ("xhigh", "high", "high"),
+                ("low", "high", "low"),
+                ("xhigh", "unsupported-default", "low"),
+            ] {
+                let window = conversation(cx);
+                window
+                    .update(cx, |view, _, cx| {
+                        let mut prefs = crate::settings::Preferences::default();
+                        prefs.provider_efforts.insert("claude".into(), saved.into());
+                        cx.set_global(prefs);
+                        let model = Model {
+                            id: "limited-model".into(),
+                            name: "Limited model".into(),
+                            alias_target: None,
+                            efforts: vec!["low".into(), "high".into()],
+                            default_effort: Some(default.into()),
+                            fast: false,
+                            thinking: false,
+                            default: true,
+                            tiers: Vec::new(),
+                            controls: Vec::new(),
+                        };
+                        view.catalog = if delayed {
+                            Vec::new()
+                        } else {
+                            vec![model.clone()]
+                        };
+                        assert!(view.apply_model_pick(
+                            &ModelPicked(Kind::Claude, Some(model.id.clone())),
+                            cx,
+                        ));
+                        if delayed {
+                            assert_eq!(view.settings.effort.as_deref(), Some(saved));
+                            view.install_catalog(vec![model], cx);
+                        }
+                        assert_eq!(view.settings.effort.as_deref(), Some(expected));
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(
+                            cx.global::<crate::settings::Preferences>().provider_efforts["claude"],
+                            expected
+                        );
+                        // A legacy model setting must follow the same normalization path.
+                        view.settings.effort = None;
+                        view.settings
+                            .model_settings
+                            .insert("reasoningEffort".into(), saved.into());
+                        view.save_settings(cx);
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        if saved != expected {
+                            assert!(!view.settings.model_settings.contains_key("reasoningEffort"));
+                        }
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, _| {
+                        let saved = locked(&view.store)
+                            .unwrap()
+                            .agent_settings(view.summary.id)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(
+                            saved.effort.as_deref().or_else(|| saved
+                                .model_settings
+                                .get("reasoningEffort")
+                                .map(String::as_str)),
+                            Some(expected)
+                        );
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    /// Both Fast tier IDs remain selectable, and either selected ID can be toggled off.
+    #[gpui::test]
+    fn unified_model_controls_preserve_multiple_fast_service_tiers(cx: &mut TestAppContext) {
+        for ids in [
+            vec!["fast"],
+            vec!["priority"],
+            vec!["fast", "priority"],
+            vec!["priority", "fast"],
+        ] {
+            let window = conversation(cx);
+            window.update(cx, |view, window, cx| {
+                view.catalog = vec![Model {
+                    id: "tier-model".into(), name: "Tier model".into(), alias_target: None,
+                    efforts: Vec::new(), default_effort: None, fast: false, thinking: false,
+                    default: true, tiers: ids.iter().map(|id| (id.to_string(), id.to_string())).collect(), controls: Vec::new(),
+                }];
+                view.model = Some("tier-model".into());
+                let (_, items, _, _) = view.menu_items(ComposerMenu::Model, &mut Vec::new(), window, cx);
+                assert_eq!(items.iter().any(|item| matches!(item, MenuItem::Action(a) if a.id.as_ref() == "service-tier")), ids.len() > 1);
+                if ids.len() > 1 {
+                    let tiers = items.iter().find_map(|item| match item {
+                        MenuItem::Action(action) if action.id.as_ref() == "service-tier" => Some(&action.submenu),
+                        _ => None,
+                    }).unwrap();
+                    for id in &ids {
+                        assert!(tiers.iter().any(|action| action.id.as_ref() == format!("tier:{id}")));
+                    }
+                }
+                view.menu_choice(&format!("tier:{}", ids[ids.len() - 1]), cx);
+                assert_eq!(view.fast_mode_state(), Some(true));
+            }).unwrap();
+            open(window, ComposerMenu::Model, cx);
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            let fast = visual.debug_bounds("model-controls-fast").unwrap();
+            visual.simulate_click(fast.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.selected_tier(), None);
+                    assert_eq!(view.fast_mode_state(), Some(false));
+                })
+                .unwrap();
+            visual.simulate_keystrokes("space");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.selected_tier(), Some(ids[0]));
+                    let saved = locked(&view.store)
+                        .unwrap()
+                        .agent_settings(view.summary.id)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(saved.service_tier.as_deref(), Some(ids[0]));
+                })
+                .unwrap();
+        }
+    }
 
     /// An undiscovered model retains the compact Model flyout without slider controls.
     #[gpui::test]
