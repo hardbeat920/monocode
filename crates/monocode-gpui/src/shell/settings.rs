@@ -666,7 +666,7 @@ mod tests {
         let back = visual.debug_bounds("settings-nav-back").unwrap();
         let search = visual.debug_bounds("settings-search").unwrap();
         let first = visual.debug_bounds("settings-nav-general").unwrap();
-        assert!(back.bottom() < search.top() && search.bottom() < first.top());
+        assert!(search.bottom() < first.top() && first.bottom() < back.top());
         visual.simulate_click(search.center(), Default::default());
         visual.simulate_input("theme");
         visual.run_until_parked();
@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn settings_nav_collapses_and_carries_back_and_search_at_its_top(cx: &mut TestAppContext) {
+    fn settings_nav_collapses_with_search_on_top_and_back_at_the_bottom(cx: &mut TestAppContext) {
         cx.update(super::super::bind_keys);
         cx.update(|cx| cx.set_reduce_motion(true));
         let (window, _, _) = window(cx);
@@ -768,11 +768,11 @@ mod tests {
         let search = visual.debug_bounds("settings-search").unwrap();
         let general = visual.debug_bounds("settings-nav-general").unwrap();
         let header = visual.debug_bounds("settings-header").unwrap();
-        assert!(back.bottom() <= search.top(), "Back heads the nav");
         assert!(
             search.bottom() <= general.top(),
-            "search sits above the pages"
+            "search heads the nav, above the pages"
         );
+        assert!(general.bottom() <= back.top(), "Back sits below the pages");
         assert!(search.right() <= header.left(), "search lives in the nav");
 
         let toggle = visual.debug_bounds("toggle-sidebar").unwrap();

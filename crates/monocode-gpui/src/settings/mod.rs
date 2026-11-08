@@ -892,8 +892,8 @@ impl SettingsView {
     }
 }
 
-/// SettingsNav: the rail body while Settings is open. Back and the search
-/// head it; the pages scroll beneath.
+/// SettingsNav: the rail body while Settings is open. The search heads it,
+/// the pages scroll beneath, and Back to app sits at the bottom.
 pub(crate) fn nav(
     section: Section,
     search: AnyElement,
@@ -955,10 +955,59 @@ pub(crate) fn nav(
                 .flex_shrink_0()
                 .flex()
                 .flex_col()
-                .items_start()
-                .gap_1()
                 .px_2()
                 .pt_2()
+                .pb_2()
+                .child(search),
+        )
+        .child(
+            div()
+                .id("settings-nav-scroll")
+                .min_h_0()
+                .flex_1()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_5()
+                .px_2()
+                .pt_2()
+                .pb_3()
+                .children(model::GROUPS.iter().map(|(group, sections)| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_px()
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(content(0.35))
+                                .child(*group),
+                        )
+                        .children(sections.iter().map(|&item| {
+                            let select = select.clone();
+                            row(
+                                format!("settings-nav-{}", item.id()).into(),
+                                item.label(),
+                                item.icon(),
+                                item == section,
+                            )
+                            .on_click(move |_, window, cx| select(item, window, cx))
+                        }))
+                }))
+                .into_any_element(),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .items_start()
+                .px_2()
+                .pt_1()
                 .pb_2()
                 .child(
                     div()
@@ -1002,48 +1051,7 @@ pub(crate) fn nav(
                                 .child("Back to app"),
                         )
                         .on_click(move |_, window, cx| back(window, cx)),
-                )
-                .child(search),
-        )
-        .child(
-            div()
-                .id("settings-nav-scroll")
-                .min_h_0()
-                .flex_1()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap_5()
-                .px_2()
-                .pt_2()
-                .pb_3()
-                .children(model::GROUPS.iter().map(|(group, sections)| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_px()
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(content(0.35))
-                                .child(*group),
-                        )
-                        .children(sections.iter().map(|&item| {
-                            let select = select.clone();
-                            row(
-                                format!("settings-nav-{}", item.id()).into(),
-                                item.label(),
-                                item.icon(),
-                                item == section,
-                            )
-                            .on_click(move |_, window, cx| select(item, window, cx))
-                        }))
-                }))
-                .into_any_element(),
+                ),
         )
         .into_any_element()
 }

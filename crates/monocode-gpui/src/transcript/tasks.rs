@@ -329,7 +329,10 @@ fn panel_width(view: &TranscriptView, start: usize) -> Pixels {
         .map_or(0., |row| {
             (if row.work { 20. } else { 0. }) + if row.in_phase() { 20. } else { 0. }
         });
-    px((f32::from(view.viewport.size.width).min(COLUMN) - 32. - inset).max(1.))
+    px(
+        (f32::from(view.viewport.size.width).min(COLUMN) - 2. * crate::theme::COLUMN_PAD - inset)
+            .max(1.),
+    )
 }
 
 fn disclosure(
