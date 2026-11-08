@@ -27,3 +27,11 @@ The native app demonstrated two separately labelled workers, two app-owned repor
 Delivery is at most once. A crash between saving delivered state and dispatch can lose that report; this is documented. Labels are supported for ordinary Operator callers only, and Monos reject them explicitly. A worker finishing does not establish verification success. The review did not broaden any child capabilities or self-session management restrictions.
 
 The related open PRs cover lead/subagent orchestration, Mono handoff or report content. Reusing those mechanisms here would change the caller model and expand scope. This branch keeps grouping and subscription ownership in a dedicated native Operator module.
+
+## CodeRabbit follow-up
+
+CodeRabbit identified two further edge cases after the initial review. A delayed launch could re-arm an already-delivered turn group and retain its delivered members, permanently blocking the new report. Re-arming now drops all delivered records and preserves other undelivered subscriptions. A regression reproduces the delayed registration and confirms that both the delayed worker and another pending group receive their reports without duplicates.
+
+Removing the final composer attachment did not emit SessionChanged, so a report held behind that attachment could remain pending. The actual removal control now emits the event when attachments become empty. A rendered UI test clicks two removal controls, confirms that the first removal remains blocked, and checks that the last removal emits one readiness change. Conversation internals remain private.
+
+Before these fixes, the callback test group had 18 passes and the two new regressions failed at their expected assertions. After the fixes, all 20 callback tests and all 5 composer submission tests passed. Touched-file formatting and git diff whitespace checks passed. Both packages and all targets passed Clippy with the same two baseline lint-category allowances documented above. The full GPUI suite and live screenshots were not repeated for this follow-up; the earlier results above remain unchanged.

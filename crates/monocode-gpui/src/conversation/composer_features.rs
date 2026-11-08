@@ -328,6 +328,7 @@ impl Conversation {
                     let image = monocode_core::composer::image_mime(path).is_some();
                     let remove = div()
                         .id(("remove-attachment", ix))
+                        .debug_selector(move || format!("remove-attachment-{ix}"))
                         .role(Role::Button)
                         .aria_label(format!("Remove {label}"))
                         .cursor_pointer()
@@ -359,6 +360,9 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                if this.attachments.is_empty() {
+                                    cx.emit(SessionChanged);
+                                }
                                 cx.notify();
                             }
                         }));

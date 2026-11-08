@@ -301,3 +301,53 @@ fn stopping_before_the_worker_runs_keeps_the_optimistic_message(cx: &mut TestApp
             .unwrap();
     }
 }
+
+#[gpui::test]
+fn operator_completion_removing_last_attachment_emits_readiness_change(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.attachments = vec!["/tmp/first.txt".into(), "/tmp/second.txt".into()];
+            assert!(!view.ready_for_coordinator_report(cx));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let view = window.root(cx).unwrap();
+    let changes = Arc::new(Mutex::new(Vec::new()));
+    let observed = changes.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&view, move |view, _: &SessionChanged, cx| {
+            let view = view.read(cx);
+            observed.lock().unwrap().push((
+                view.attachments.len(),
+                view.ready_for_coordinator_report(cx),
+            ));
+        })
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    for remaining in [1, 0] {
+        let remove = visual
+            .debug_bounds("remove-attachment-0")
+            .expect("attachment removal control");
+        visual.simulate_click(remove.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        window
+            .read_with(visual, |view, _| {
+                assert_eq!(view.attachments.len(), remaining)
+            })
+            .unwrap();
+        let expected = if remaining == 0 {
+            vec![(0, true)]
+        } else {
+            vec![]
+        };
+        assert_eq!(*changes.lock().unwrap(), expected);
+    }
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    assert_eq!(*changes.lock().unwrap(), vec![(0, true)]);
+}
