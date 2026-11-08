@@ -437,6 +437,119 @@ fn a_card_switching_monos_shows_the_target_monos_habits(cx: &mut TestAppContext)
     assert!(ids(cx).is_empty());
 }
 
+#[gpui::test]
+fn a_document_deleted_by_the_desktop_while_its_mono_is_inactive_returns_to_documents(
+    cx: &mut TestAppContext,
+) {
+    let s = setup_shared(cx);
+    let doc = "saved-document";
+    // The desktop app writes the same SQLite file through its own connection.
+    let desktop =
+        rusqlite::Connection::open(std::path::Path::new(&s.project).join("native.sqlite")).unwrap();
+    let original = locked(&s.store)
+        .unwrap()
+        .persisted_session_id(s.session)
+        .unwrap();
+    desktop
+        .execute(
+            "INSERT INTO notes(id,slug,title,body,tags_json,created_at,updated_at,content_kind,artifact_kind)
+             VALUES(?1,?1,'Saved document','# Saved\n\nBody.','[]',10,20,'artifact','document')",
+            [doc],
+        )
+        .unwrap();
+    let blocks = json!([{"id":"reply","role":"assistant","text":"Saved it.",
+        "artifactCards":[{"id":doc,"kind":"document","title":"Saved document","summary":""}]}]);
+    desktop
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            rusqlite::params![original, blocks.to_string()],
+        )
+        .unwrap();
+    s.manager.update(cx, |m, cx| m.refresh_work(&s.id, cx));
+    cx.run_until_parked();
+    let listed = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.roster
+                .get(&s.id)
+                .unwrap()
+                .documents
+                .iter()
+                .any(|d| d.id == doc)
+        })
+    };
+    assert!(listed(cx), "the chat's card lists the saved document");
+
+    // Open it on this Mono, then switch to another.
+    let action = json!({"type":"document", "documentId":doc});
+    s.manager
+        .update(cx, |m, cx| m.card_action(&s.id, &action, cx));
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.route, Some(Route::Document(doc.into())));
+        assert!(m.work.documents.contains_key(doc));
+    });
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+
+    // The desktop deletes the artifact (src-tauri/src/artifacts.rs). Its card
+    // stays in the transcript, so the Mono keeps a placeholder entry.
+    desktop
+        .execute(
+            "DELETE FROM notes WHERE id = ?1 AND content_kind = 'artifact'",
+            [doc],
+        )
+        .unwrap();
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(listed(cx), "the placeholder entry survives the deletion");
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.active.as_deref(), Some(s.id.as_str()));
+        assert_eq!(m.overview_tab, OverviewTab::Documents);
+        assert_eq!(m.route, None, "the deleted document's page is not restored");
+        assert!(!m.work.documents.contains_key(doc));
+        assert!(!m.documents.contains_key(doc));
+        assert!(
+            m.panel_views
+                .values()
+                .all(|v| v.route != Some(Route::Document(doc.into())))
+        );
+    });
+}
+
+#[gpui::test]
+fn an_unavailable_document_page_keeps_its_back_control(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        m.overview_tab = OverviewTab::Documents;
+        m.route = Some(Route::Document("never-loaded".into()));
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let back = visual
+        .debug_bounds("mono-page-back")
+        .expect("an unavailable document still offers Back");
+    visual.simulate_click(back.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(s.manager.read_with(visual, |m, _| m.route.clone()), None);
+}
+
 #[test]
 fn restored_panel_views_keep_only_pages_whose_subject_exists() {
     let view = |route| PanelView {
@@ -455,10 +568,17 @@ fn restored_panel_views_keep_only_pages_whose_subject_exists() {
 }
 
 fn setup(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open(path).unwrap())
+}
+/// `setup` over the desktop's shared database, at `<project>/native.sqlite`.
+fn setup_shared(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open_monocode(path).unwrap())
+}
+fn setup_with(cx: &mut TestAppContext, open: impl FnOnce(&std::path::Path) -> Store) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-monos-{}", mono::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
-    let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
+    let store = Arc::new(Mutex::new(open(&dir.join("native.sqlite"))));
     let db = store.clone();
     let cwd = project.clone();
     let window = cx.update(|cx| {

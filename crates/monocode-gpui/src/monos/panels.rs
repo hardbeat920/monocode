@@ -81,6 +81,8 @@ impl Monos {
     }
     /// Restores `id`'s remembered view. Callers may be inside the Shell's own
     /// update, so whether a session still exists unarchived is checked after.
+    /// A document listed by the chat may have been deleted from the shared
+    /// store while `id` was inactive, so its record is checked there too.
     pub(super) fn restore_panel_view(&mut self, id: &str, cx: &mut Context<Self>) {
         let saved = self.panel_views.get(id).cloned().unwrap_or_default();
         let mono = self.roster.get(id);
@@ -92,6 +94,20 @@ impl Monos {
             _ => false,
         });
         self.panel_check = None;
+        if let Some(Route::Document(document)) = view.route.clone()
+            && !mono.is_some_and(|m| super::work::inline_document(m, &document))
+        {
+            let store = self.store.clone();
+            let target = document.clone();
+            let exists = cx
+                .background_executor()
+                .spawn(async move { locked(&store)?.mono_document(&target).map(|d| d.is_some()) });
+            self.panel_check = Some(cx.spawn(async move |this, cx| {
+                if exists.await == Ok(false) {
+                    let _ = this.update(cx, |this, cx| this.forget_document(&document, cx));
+                }
+            }));
+        }
         if let Some(Route::Session(session)) = view.route {
             self.panel_check = Some(cx.spawn(async move |this, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -1504,11 +1520,22 @@ impl Monos {
                     })
                     .cloned()
                 else {
-                    return empty(if self.work.loading_documents.contains(&id) {
-                        "Loading document…"
-                    } else {
-                        "Document unavailable"
-                    });
+                    let title = mono
+                        .documents
+                        .iter()
+                        .find(|d| d.id == id)
+                        .map_or("Document", |d| d.title.as_str());
+                    return div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(self.page_header(title, cx))
+                        .child(empty(if self.work.loading_documents.contains(&id) {
+                            "Loading document…"
+                        } else {
+                            "Document unavailable"
+                        }))
+                        .into_any_element();
                 };
                 let view: AnyElement = if document.kind == "html"
                     && (self.settings.is_some()
