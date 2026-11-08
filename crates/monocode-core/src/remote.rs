@@ -226,6 +226,29 @@ fn write(path: &Path, machines: &[StoredMachine]) -> Result<(), String> {
     result
 }
 
+const INCOMPLETE: &str = "The host request did not complete. Retry to confirm its result.";
+
+/// A request through an SSH tunnel that was reset before any response, while
+/// OpenSSH reported the forward refused, never reached a host: nothing listens
+/// on the host's port. Say so instead of suggesting a retry.
+fn explain_incomplete(
+    error: String,
+    machine: &StoredMachine,
+    forward_failed: impl FnOnce() -> bool,
+) -> String {
+    let Some(target) = machine.ssh.as_ref() else {
+        return error;
+    };
+    if error != INCOMPLETE || !forward_failed() {
+        return error;
+    }
+    format!(
+        "MonoCode Host is not running on {}. SSH connects, but nothing answers on the host's port {}. \
+         Start it on the machine with `monocode-host service install --port {}`, then retry.",
+        machine.name, target.remote_port, target.remote_port
+    )
+}
+
 /// Hosts split large session syncs into pieces below this cap
 /// (`host/sync-transfer.ts`), so it bounds memory without limiting transcripts.
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
@@ -256,9 +279,7 @@ fn rpc(
                 "Machine is unreachable. Check the host and SSH tunnel, then reconnect.".into(),
             )
         }
-        Err(_) => {
-            return Err("The host request did not complete. Retry to confirm its result.".into())
-        }
+        Err(_) => return Err(INCOMPLETE.into()),
     };
     let status = response.status();
     let mut bytes = Vec::new();
@@ -419,13 +440,24 @@ impl Connections {
             .as_ref()
             .map(|lease| lease.endpoint.as_str())
             .unwrap_or(&machine.endpoint);
+        let before = tunnel_lease
+            .as_ref()
+            .map(ssh::TunnelLease::forward_failures);
         let response = rpc(
             endpoint,
             &machine.token,
             Some(&machine.environment_id),
             method,
             params,
-        );
+        )
+        .map_err(|error| {
+            explain_incomplete(error, &machine, || {
+                tunnel_lease
+                    .as_ref()
+                    .zip(before)
+                    .is_some_and(|(lease, before)| lease.forward_failed_since(before))
+            })
+        });
         if response
             .as_ref()
             .err()
@@ -913,6 +945,58 @@ mod tests {
         assert!(parse_remote_path("/local/repo").is_none());
         assert!(parse_remote_path("remote://env").is_none());
         assert!(parse_remote_path("remote:///repo").is_none());
+    }
+
+    #[test]
+    fn a_refused_ssh_forward_says_the_host_is_not_running() {
+        use std::{net::TcpListener, thread};
+        // OpenSSH accepts the local connection, then resets it when the host
+        // port refuses. The client sees an incomplete request, not a refusal.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            // Closing with unread request bytes makes the OS send a reset.
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.read(&mut [0; 1]);
+            drop(stream);
+        });
+        let error = rpc(&url, "t", Some("env"), "environment.describe", json!({})).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error, INCOMPLETE);
+        let machine = |ssh| StoredMachine {
+            id: "m".into(),
+            name: "VPS".into(),
+            endpoint: "ssh://vps".into(),
+            environment_id: "env".into(),
+            token: String::new(),
+            ssh,
+        };
+        let tunneled = machine(Some(SshTarget {
+            target: "vps".into(),
+            port: None,
+            remote_port: 3774,
+        }));
+        let explained = explain_incomplete(error.clone(), &tunneled, || true);
+        assert!(
+            explained.starts_with("MonoCode Host is not running on VPS.")
+                && explained.contains("port 3774")
+                && explained.contains("service install --port 3774")
+                && !explained.contains("Retry to confirm"),
+            "{explained}"
+        );
+        // Without OpenSSH's proof the result stays unknown, so keep the retry advice.
+        assert_eq!(
+            explain_incomplete(error.clone(), &tunneled, || false),
+            INCOMPLETE
+        );
+        assert_eq!(
+            explain_incomplete(error, &machine(None), || true),
+            INCOMPLETE
+        );
+        assert_eq!(
+            explain_incomplete("Host returned HTTP 500".into(), &tunneled, || true),
+            "Host returned HTTP 500"
+        );
     }
 
     #[test]

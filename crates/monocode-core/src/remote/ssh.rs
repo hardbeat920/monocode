@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex, PoisonError,
 };
 use std::time::{Duration, Instant};
@@ -435,6 +435,31 @@ pub struct Tunnel {
     child: Child,
     pub port: u16,
     stderr: Arc<Mutex<String>>,
+    forward_failures: Arc<AtomicU64>,
+}
+
+/// Copies OpenSSH's stderr into `buffer` (bounded) and counts forwarded
+/// connections the remote side refused. OpenSSH accepts every local
+/// connection on a `-L` forward, so when nothing listens on the host's port
+/// the client only sees a reset; this line is the one proof of that cause.
+fn watch_stderr(reader: impl Read, buffer: &Mutex<String>, forward_failures: &AtomicU64) {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(reader);
+    let mut line = Vec::new();
+    while let Ok(count) = reader.read_until(b'\n', &mut line) {
+        if count == 0 {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line);
+        if text.contains(": open failed: ") {
+            forward_failures.fetch_add(1, Ordering::SeqCst);
+        }
+        let mut buffer = buffer.lock().unwrap_or_else(PoisonError::into_inner);
+        if buffer.len() < 8192 {
+            buffer.push_str(&text);
+        }
+        line.clear();
+    }
 }
 impl Drop for Tunnel {
     fn drop(&mut self) {
@@ -477,25 +502,16 @@ impl Tunnel {
         let mut child = command
             .spawn()
             .map_err(|e| format!("Could not start OpenSSH: {e}"))?;
-        let mut reader = child.stderr.take().unwrap();
+        let reader = child.stderr.take().unwrap();
         let stderr = Arc::new(Mutex::new(String::new()));
-        let errors = stderr.clone();
-        std::thread::spawn(move || {
-            let mut buffer = [0; 2048];
-            while let Ok(count) = reader.read(&mut buffer) {
-                if count == 0 {
-                    break;
-                }
-                let mut errors = errors.lock().unwrap();
-                if errors.len() < 8192 {
-                    errors.push_str(&String::from_utf8_lossy(&buffer[..count]));
-                }
-            }
-        });
+        let forward_failures = Arc::new(AtomicU64::new(0));
+        let (errors, failures) = (stderr.clone(), forward_failures.clone());
+        std::thread::spawn(move || watch_stderr(reader, &errors, &failures));
         let mut tunnel = Self {
             child,
             port,
             stderr,
+            forward_failures,
         };
         let deadline = Instant::now() + Duration::from_secs(if job.is_some() { 150 } else { 20 });
         loop {
@@ -505,7 +521,11 @@ impl Tunnel {
             if !tunnel.alive() {
                 return Err(format!(
                     "SSH connection failed: {}. Open Settings → Connections and reconnect to check access.",
-                    tunnel.stderr.lock().unwrap().trim()
+                    tunnel
+                        .stderr
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .trim()
                 ));
             }
             if TcpStream::connect_timeout(
@@ -538,6 +558,27 @@ pub struct TunnelLease {
     pub endpoint: String,
     slot: Arc<Mutex<Slot>>,
     generation: u64,
+    forward_failures: Arc<AtomicU64>,
+}
+
+impl TunnelLease {
+    pub fn forward_failures(&self) -> u64 {
+        self.forward_failures.load(Ordering::SeqCst)
+    }
+    /// Whether OpenSSH reported a refused forward after `before`. It may log
+    /// the line just after closing the local socket, so wait briefly for it.
+    pub fn forward_failed_since(&self, before: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            if self.forward_failures() > before {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 /// Each machine has its own lock: restarting one machine's tunnel (up to
@@ -568,12 +609,14 @@ impl Tunnels {
     pub fn endpoint(&self, id: &str, target: &SshTarget) -> Result<TunnelLease, String> {
         let slot = self.slots().entry(id.into()).or_default().clone();
         let mut current = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let generation = current.generation;
         if let Some(tunnel) = current.tunnel.as_mut() {
             if tunnel.alive() {
                 return Ok(TunnelLease {
                     endpoint: format!("http://127.0.0.1:{}", tunnel.port),
                     slot: slot.clone(),
-                    generation: current.generation,
+                    generation,
+                    forward_failures: tunnel.forward_failures.clone(),
                 });
             }
         }
@@ -586,6 +629,7 @@ impl Tunnels {
         match Tunnel::start(target, None, None) {
             Ok(tunnel) => {
                 let endpoint = format!("http://127.0.0.1:{}", tunnel.port);
+                let forward_failures = tunnel.forward_failures.clone();
                 current.failure = None;
                 current.generation = current.generation.wrapping_add(1);
                 current.tunnel = Some(tunnel);
@@ -593,6 +637,7 @@ impl Tunnels {
                     endpoint,
                     slot: slot.clone(),
                     generation: current.generation,
+                    forward_failures,
                 })
             }
             Err(error) => {
@@ -675,6 +720,7 @@ mod tests {
             endpoint: String::new(),
             slot: old,
             generation: 1,
+            forward_failures: Default::default(),
         };
         let newer = slot(2);
         tunnels.slots().insert("host".into(), newer.clone());
@@ -684,6 +730,7 @@ mod tests {
             endpoint: String::new(),
             slot: newer.clone(),
             generation: 1,
+            forward_failures: Default::default(),
         };
         tunnels.invalidate("host", &stale_lease);
         assert!(newer.lock().unwrap().failure.is_some());
@@ -695,6 +742,35 @@ mod tests {
             },
         );
         assert!(newer.lock().unwrap().failure.is_none());
+    }
+    #[test]
+    fn refused_forwards_are_counted_from_openssh_stderr() {
+        // OpenSSH's own wording when nothing listens on the forwarded port,
+        // delivered in pieces as a pipe would.
+        struct Chunks(Vec<&'static [u8]>);
+        impl Read for Chunks {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.is_empty() {
+                    return Ok(0);
+                }
+                let chunk = self.0.remove(0);
+                buffer[..chunk.len()].copy_from_slice(chunk);
+                Ok(chunk.len())
+            }
+        }
+        let buffer = Mutex::new(String::new());
+        let failures = AtomicU64::new(0);
+        watch_stderr(
+            Chunks(vec![
+                b"Warning: Permanently added '[127.0.0.1]:62183' (ED25519) to the list of known hosts.\nchannel 1: open fai",
+                b"led: connect failed: Connection refused\n",
+                b"channel 2: open failed: connect failed: Connection refused\n",
+            ]),
+            &buffer,
+            &failures,
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 2);
+        assert!(buffer.lock().unwrap().contains("channel 2: open failed"));
     }
     // scripts/test-remote-ssh.py creates an isolated sshd, host and keypair.
     // This test uses the production tunnel lifecycle and shell transport.
