@@ -190,6 +190,11 @@ impl Conversation {
                         }
                         this.remote_state.snapshot = snapshot;
                         if initial {
+                            // A catalog may arrive before the stored settings. Reconcile
+                            // it only after those settings and turn metadata are installed.
+                            if !this.catalog.is_empty() {
+                                this.install_catalog(this.catalog.clone(), cx);
+                            }
                             this.refresh_catalog(cx);
                             this.refresh_git(cx);
                         }

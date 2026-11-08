@@ -1950,12 +1950,12 @@ impl Conversation {
         .detach();
     }
     /// Reconciles saved effort after discovery, including a remote default model.
-    /// Local normalization waits until stored settings have been read.
+    /// Normalization waits until stored settings have been read.
     fn install_catalog(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
         self.catalog = models;
         // Discovery can finish before load() has read the persisted settings.
         // Do not give the initial snapshot a revision that supersedes them.
-        if !self.is_remote() && !self.loaded && self.settings.revision == 0 {
+        if !self.loaded && self.settings.revision == 0 {
             return;
         }
         let remote_default = self.is_remote() && self.model.is_none();
