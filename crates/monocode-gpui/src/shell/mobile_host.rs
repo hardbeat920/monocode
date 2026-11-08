@@ -755,10 +755,7 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
-            "inbox.start"
-            | "inbox.action"
-            | "inbox.comment"
-            | "inbox.reviewAdd"
+            "inbox.start" | "inbox.action" | "inbox.comment" | "inbox.reviewAdd"
             | "inbox.reviewSubmit" => self.mobile_command(request, window, cx),
             method if method.starts_with("inbox.") => self.mobile_inbox(request, window, cx),
             method if method.starts_with("project.") => self.mobile_project(request, cx),

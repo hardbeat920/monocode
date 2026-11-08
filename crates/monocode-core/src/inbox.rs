@@ -3,8 +3,8 @@
 mod avatar;
 mod media;
 pub mod review;
-pub use media::{image_bytes as media_image_bytes, is_image_url, phone_image};
 pub use media::png as media_png;
+pub use media::{image_bytes as media_image_bytes, is_image_url, phone_image};
 pub mod azure_devops;
 pub use avatar::png as avatar_png;
 mod github;

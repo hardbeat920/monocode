@@ -6,9 +6,9 @@
 //! a token could ride in. Provider errors are cut down by [`safe_error`] before
 //! they cross the link.
 use crate::inbox::{
-    Check, Checks, Details, Diff, Item, ME, PROVIDERS, Seen, Status, Thread, Triage, patch,
+    patch,
     review::{PendingComment, Side},
-    timestamp_ms,
+    timestamp_ms, Check, Checks, Details, Diff, Item, Seen, Status, Thread, Triage, ME, PROVIDERS,
 };
 use base64::Engine;
 use serde::Serialize;
@@ -698,7 +698,11 @@ fn status(item: &Item) -> &'static str {
 }
 
 fn kind_of(item: &Item) -> &'static str {
-    if item.kind == "pr" { "pr" } else { "issue" }
+    if item.kind == "pr" {
+        "pr"
+    } else {
+        "issue"
+    }
 }
 
 /// `~none` is a Linear issue in no project, as in the desktop's filter.
@@ -716,9 +720,9 @@ fn linear_project(item: &Item) -> Option<String> {
 /// item with none the repo, team or tracker project it lists under, and for a
 /// Linear issue its Linear project too.
 fn places(item: &Item, view: &View) -> Vec<String> {
-    let mut places = vec![
-        project_for(item, view.projects).unwrap_or_else(|| format!("repo:{}", repo_label(item))),
-    ];
+    let mut places =
+        vec![project_for(item, view.projects)
+            .unwrap_or_else(|| format!("repo:{}", repo_label(item)))];
     places.extend(linear_project(item).map(|id| format!("linear:{id}")));
     places
 }
@@ -1726,11 +1730,9 @@ mod tests {
         let mut state = crate::inbox::ViewState::load(&store);
         state.triage.mark_done(&one.key(), NOW);
         state.save(&store).unwrap();
-        assert!(
-            crate::inbox::ViewState::load(&store)
-                .triage
-                .is_done(&one.key())
-        );
+        assert!(crate::inbox::ViewState::load(&store)
+            .triage
+            .is_done(&one.key()));
     }
 
     #[test]
@@ -1911,11 +1913,9 @@ mod tests {
         };
         let mut tracker = NotificationTracker::default();
         // The backlog is a baseline: nothing in it is announced, even if it needs me.
-        assert!(
-            tracker
-                .observe(&snapshot(vec![item(1, 5, "review_requested")]), "s".into())
-                .is_empty()
-        );
+        assert!(tracker
+            .observe(&snapshot(vec![item(1, 5, "review_requested")]), "s".into())
+            .is_empty());
         let mut merged = item(5, 1, "mentioned");
         merged.state = "merged".into();
         let appeared = tracker.observe(
@@ -2167,9 +2167,7 @@ mod tests {
         };
         assert_eq!(
             actions(&pr("OPEN", false)),
-            [
-                "comment", "review", "merge", "squash", "rebase", "draft", "close"
-            ]
+            ["comment", "review", "merge", "squash", "rebase", "draft", "close"]
         );
         assert_eq!(
             actions(&pr("open", true)),
@@ -2512,11 +2510,9 @@ mod tests {
         }
         let serialized = serde_json::to_string(&responses).unwrap();
         assert!(!serialized.contains("me@acme.test") && !serialized.contains("atlassian"));
-        assert!(
-            !list
-                .providers
-                .iter()
-                .any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_")))
-        );
+        assert!(!list
+            .providers
+            .iter()
+            .any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_"))));
     }
 }
