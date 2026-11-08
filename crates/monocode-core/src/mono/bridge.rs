@@ -26,6 +26,7 @@ sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
 worktrees.list {project?}
+terminals.list {project?}; terminals.read {terminalId,lines?,maxChars?,project?}
 worktrees.create {branch,base?,existing?,project?}
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
@@ -37,6 +38,7 @@ habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOf
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
 Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
 sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
+terminals.read returns the plain text of a terminal's newest output, up to its 2000-line scrollback (lines 1-2000, default 200). It never types into the terminal.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits, cards and notifyOnComplete:true require a Mono.
 The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID and identical input.

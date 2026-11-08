@@ -335,3 +335,23 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             .unwrap();
     }
 }
+
+#[test]
+fn terminal_tail_keeps_the_newest_output_within_its_caps() {
+    let all: Vec<String> = ["one", "two", "three"].map(String::from).to_vec();
+    let page = terminal_tail(&all, &json!({"lines":2})).unwrap();
+    assert_eq!(page["text"], "two\nthree");
+    assert_eq!(page["lines"], 2);
+    assert_eq!(page["truncated"], true);
+    assert_eq!(terminal_tail(&all, &json!({})).unwrap()["truncated"], false);
+    let long = vec!["a".repeat(300), "tail".into()];
+    assert_eq!(terminal_tail(&long, &json!({"maxChars":200})).unwrap()["text"], "tail");
+    let single = vec!["b".repeat(300)];
+    assert_eq!(terminal_tail(&single, &json!({"maxChars":200})).unwrap()["text"].as_str().unwrap().len(), 200);
+    assert_eq!(terminal_tail(&[], &json!({})).unwrap()["text"], "");
+    assert!(terminal_tail(&all, &json!({"lines":0})).is_err());
+    assert!(terminal_tail(&all, &json!({"lines":2001})).is_err());
+    assert!(validate_operator("terminals.read", &json!({"terminalId":7,"lines":50})).is_ok());
+    assert!(validate_operator("terminals.read", &json!({"terminalId":7,"text":"ls"})).is_err());
+    assert!(validate_operator("terminals.list", &json!({})).is_ok());
+}
