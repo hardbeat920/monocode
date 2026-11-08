@@ -3,8 +3,8 @@
 // owns a search field; arrows and Enter in it move and pick in the list.
 use crate::{input, theme::*, workspace::project_name};
 use gpui::{
-    AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, SharedString,
-    Subscription, Window, div, prelude::*, px,
+    AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, Role, ScrollHandle,
+    SharedString, Subscription, Window, div, prelude::*, px,
 };
 use monocode_core::catalog::{self, Model};
 use monocode_core::provider::{self, Kind};
@@ -268,6 +268,121 @@ mod model_label_tests {
             .unwrap();
         (window, picks, events)
     }
+    #[gpui::test]
+    fn search_matches_catalog_ids_names_and_provider_terms(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let (window, picks, _events) =
+            rendered_picker(cx, Kind::Codex, "/work", &["vendor:example-model"]);
+        window
+            .update(cx, |list, _, cx| {
+                list.catalogs[0].1[0].name = "Friendly name".into();
+                list.toggle_favorite(Kind::Codex, Some("vendor:example-model".into()), cx);
+                // The same matching rules apply to provider and favorite tabs.
+                for tab in [ModelTab::Harness(Kind::Codex), ModelTab::Favorites] {
+                    list.tab = tab;
+                    for query in [
+                        "  CODEX  friendly  ",
+                        "example-model codex",
+                        "vendor:example-model",
+                        "name friendly",
+                    ] {
+                        list.search
+                            .update(cx, |search, cx| search.set_text(query.into(), cx));
+                        let entries = list.entries(cx);
+                        assert_eq!(entries.len(), 1, "{query}");
+                        assert_eq!(entries[0].id.as_deref(), Some("vendor:example-model"));
+                    }
+                    list.search
+                        .update(cx, |search, cx| search.set_text("missing".into(), cx));
+                    assert!(list.entries(cx).is_empty());
+                    list.pick(0, cx);
+                }
+                list.search
+                    .update(cx, |search, cx| search.set_text("   ".into(), cx));
+                assert_eq!(list.entries(cx).len(), 1);
+                list.pick(0, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            *picks.borrow(),
+            vec![("codex", Some("vendor:example-model".into()))]
+        );
+    }
+
+    /// Both the flyout and quick composer must reveal keyboard navigation and
+    /// an active model beyond the first screen, without opening a provider CLI.
+    #[gpui::test]
+    fn keyboard_navigation_reveals_rows_in_both_model_lists(cx: &mut gpui::TestAppContext) {
+        cx.update(input::bind);
+        for quick in [false, true] {
+            let models: Vec<_> = (0..40).map(|ix| format!("example-{ix}")).collect();
+            let ids: Vec<_> = models.iter().map(String::as_str).collect();
+            let (window, picks, _events) = rendered_picker(cx, Kind::Codex, "/work", &ids);
+            window
+                .update(cx, |list, _, cx| {
+                    list.quick = quick;
+                    list.set_current(Kind::Codex, Some("example-39".into()), cx);
+                })
+                .unwrap();
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            visual.refresh().unwrap();
+            visual.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+            visual.refresh().unwrap();
+            window
+                .update(visual, |list, _, cx| {
+                    assert_eq!(list.highlighted, 40);
+                    assert!(list.scroll.offset().y < px(0.));
+                    let row = list.scroll.bounds_for_item(40).unwrap();
+                    let viewport = list.scroll.bounds();
+                    let offset = list.scroll.offset().y;
+                    assert!(row.top() + offset >= viewport.top());
+                    assert!(
+                        row.bottom() + offset <= viewport.bottom(),
+                        "quick={quick}: row={row:?}, viewport={viewport:?}, offset={offset:?}"
+                    );
+                    for _ in 0..40 {
+                        list.step(-1, cx);
+                    }
+                })
+                .unwrap();
+            visual.refresh().unwrap();
+            window
+                .update(visual, |list, window, cx| {
+                    assert_eq!(list.highlighted, 0);
+                    assert_eq!(list.scroll.top_item(), 0);
+                    // Filtering after scrolling resets navigation to a visible match.
+                    list.search
+                        .update(cx, |search, cx| search.set_text("example-1".into(), cx));
+                    window.focus(&list.search_focus(cx), cx);
+                })
+                .unwrap();
+            visual.refresh().unwrap();
+            visual.simulate_keystrokes("down enter");
+            visual.refresh().unwrap();
+            assert_eq!(*picks.borrow(), vec![("codex", Some("example-10".into()))]);
+        }
+    }
+
+    #[gpui::test]
+    fn removing_a_favorite_keeps_keyboard_selection_in_range(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let (window, _, _events) = rendered_picker(cx, Kind::Codex, "/work", &[]);
+        window
+            .update(cx, |list, _, cx| {
+                list.toggle_favorite(Kind::Codex, Some("first".into()), cx);
+                list.toggle_favorite(Kind::Codex, Some("last".into()), cx);
+                list.tab = ModelTab::Favorites;
+                list.highlighted = 1;
+                list.toggle_favorite(Kind::Codex, Some("last".into()), cx);
+                assert_eq!(list.highlighted, 0);
+                assert_eq!(list.entries(cx).len(), 1);
+            })
+            .unwrap();
+    }
+
     /// Debug selectors are `'static`; leaking a few test strings is fine.
     fn star(ix: usize) -> &'static str {
         Box::leak(format!("model-star-{ix}").into_boxed_str())
@@ -449,6 +564,26 @@ struct ModelEntry {
     enabled: bool,
 }
 
+impl ModelEntry {
+    /// Match each search term against the provider, display name or model id.
+    /// Catalogs can give a friendly name that differs from the CLI identifier.
+    fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let searchable = format!(
+            "{} {} {}",
+            self.kind.label(),
+            self.name,
+            self.id.as_deref().unwrap_or("default")
+        )
+        .to_lowercase();
+        query
+            .split_whitespace()
+            .all(|term| searchable.contains(term))
+    }
+}
+
 /// The model the next turn uses; `None` is the provider's default.
 pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 
@@ -469,13 +604,18 @@ pub(crate) struct ModelList {
     hidden: Vec<String>,
     /// QuickModelSelector.tsx: providers as tabs above the search and list.
     quick: bool,
+    effort_slider: Option<Entity<crate::effort_slider::EffortSlider>>,
     tab: ModelTab,
     highlighted: usize,
+    scroll: ScrollHandle,
+    reveal_pending: bool,
     search: Entity<input::Input>,
     _changed: Subscription,
 }
 impl EventEmitter<ModelPicked> for ModelList {}
 impl ModelList {
+    /// Creates a searchable picker for a provider/profile, restores the saved tab and
+    /// starts catalog discovery; the current choice is revealed after layout.
     pub(crate) fn new_for(
         provider: Kind,
         current: Option<String>,
@@ -494,7 +634,7 @@ impl ModelList {
         profiles.insert(provider, profile);
         let search = search_field("Search models", "Search models", 0.4, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
-            this.highlighted = this.current_index(cx);
+            this.reset_highlight(cx);
             cx.notify();
         });
         let mut list = Self {
@@ -511,6 +651,7 @@ impl ModelList {
             switch_allowed: true,
             hidden: Vec::new(),
             quick: false,
+            effort_slider: None,
             tab: cx
                 .try_global::<crate::settings::Preferences>()
                 .and_then(|prefs| prefs.model_picker_tab.as_deref())
@@ -523,10 +664,12 @@ impl ModelList {
                 })
                 .unwrap_or(ModelTab::Harness(provider)),
             highlighted: 0,
+            scroll: ScrollHandle::new(),
+            reveal_pending: false,
             search,
             _changed: changed,
         };
-        list.highlighted = list.current_index(cx);
+        list.reset_highlight(cx);
         list.probe_installed(cx);
         list.discover(
             match list.tab {
@@ -536,6 +679,14 @@ impl ModelList {
             cx,
         );
         list
+    }
+    /// Attaches the shared model controls as a fixed footer outside the scrollable list.
+    pub(crate) fn with_effort_slider(
+        mut self,
+        slider: Option<Entity<crate::effort_slider::EffortSlider>>,
+    ) -> Self {
+        self.effort_slider = slider;
+        self
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
         if self.remote_project.is_some() {
@@ -560,6 +711,7 @@ impl ModelList {
         self
     }
     /// Follow a pick made through this list, keeping it open.
+    /// Updates the active model and reveals its row in the current filtered list.
     pub(crate) fn set_current(
         &mut self,
         kind: Kind,
@@ -568,6 +720,7 @@ impl ModelList {
     ) {
         self.provider = kind;
         self.current = model;
+        self.reset_highlight(cx);
         cx.notify();
     }
     /// The live catalog entry behind a choice, once discovery has run.
@@ -587,6 +740,8 @@ impl ModelList {
                     .any(|c| c.provider == kind.id() && c.model.as_deref() == id)
             })
     }
+    /// Toggles the saved favorite and resets selection on the Favorites tab so removal
+    /// cannot leave the keyboard highlight beyond the remaining rows.
     fn toggle_favorite(&mut self, kind: Kind, id: Option<String>, cx: &mut Context<Self>) {
         if !cx.has_global::<crate::settings::Preferences>() {
             return;
@@ -603,6 +758,9 @@ impl ModelList {
                 });
             }
         });
+        if self.tab == ModelTab::Favorites {
+            self.reset_highlight(cx);
+        }
         cx.notify();
     }
     pub(crate) fn allow_provider_switch(mut self, allowed: bool) -> Self {
@@ -636,13 +794,15 @@ impl ModelList {
                     this.tab = ModelTab::Harness(this.provider);
                 }
                 if this.query(cx).is_empty() {
-                    this.highlighted = this.current_index(cx);
+                    this.reset_highlight(cx);
                 }
                 cx.notify();
             });
         })
         .detach();
     }
+    /// Loads a local provider catalog or the remote project catalog asynchronously,
+    /// then refreshes availability and reveals the current selection.
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
@@ -679,7 +839,7 @@ impl ModelList {
                                 .collect();
                         }
                     }
-                    this.highlighted = this.current_index(cx);
+                    this.reset_highlight(cx);
                     cx.notify();
                 });
             })
@@ -714,7 +874,7 @@ impl ModelList {
                     this.missing.push(kind);
                 }
                 if this.query(cx).is_empty() {
-                    this.highlighted = this.current_index(cx);
+                    this.reset_highlight(cx);
                 }
                 cx.notify();
             });
@@ -724,9 +884,12 @@ impl ModelList {
     pub(crate) fn search_focus(&self, cx: &gpui::App) -> FocusHandle {
         self.search.focus_handle(cx)
     }
+    /// Normalizes outer whitespace and case before matching individual search terms.
     fn query(&self, cx: &gpui::App) -> String {
-        self.search.read(cx).content.to_lowercase()
+        self.search.read(cx).content.trim().to_lowercase()
     }
+    /// Builds the current provider or Favorites rows, filtering every search term
+    /// against provider, display name and model ID while retaining availability.
     fn entries(&self, cx: &gpui::App) -> Vec<ModelEntry> {
         let ModelTab::Harness(kind) = self.tab else {
             let query = self.query(cx);
@@ -741,9 +904,6 @@ impl ModelList {
                     }
                     let name = self.saved_model_name(kind, choice.model.as_deref());
                     let name: SharedString = format!("{} · {}", kind.label(), name).into();
-                    if !query.is_empty() && !name.to_lowercase().contains(&query) {
-                        return None;
-                    }
                     Some(ModelEntry {
                         kind,
                         id: choice.model.clone(),
@@ -751,6 +911,7 @@ impl ModelList {
                         enabled: self.enabled(kind),
                     })
                 })
+                .filter(|entry| entry.matches(&query))
                 .collect();
         };
         let enabled = self.enabled(kind);
@@ -821,12 +982,7 @@ impl ModelList {
         let query = self.query(cx);
         entries
             .into_iter()
-            .filter(|e| {
-                query.is_empty()
-                    || format!("{} {}", e.name, kind.label())
-                        .to_lowercase()
-                        .contains(&query)
-            })
+            .filter(|entry| entry.matches(&query))
             .collect()
     }
     fn enabled(&self, kind: Kind) -> bool {
@@ -852,6 +1008,15 @@ impl ModelList {
             .position(|entry| entry.kind == self.provider && entry.id == self.current)
             .unwrap_or(0)
     }
+    /// Selects the active filtered row (or the first row) and schedules a second
+    /// reveal after layout, when the scroll viewport has its new bounds.
+    fn reset_highlight(&mut self, cx: &gpui::App) {
+        self.highlighted = self.current_index(cx);
+        self.scroll.scroll_to_item(self.highlighted);
+        self.reveal_pending = true;
+    }
+    /// Persists the tab, discovers its catalog if needed and clears the old search
+    /// before returning focus to a visible selection.
     fn select_tab(&mut self, tab: ModelTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
@@ -877,15 +1042,18 @@ impl ModelList {
         self.search.update(cx, |search, cx| {
             search.take(cx);
         });
-        self.highlighted = self.current_index(cx);
+        self.reset_highlight(cx);
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
     }
+    /// Moves the highlight within filtered rows and scrolls it into view; empty lists
+    /// leave the selection unchanged.
     fn step(&mut self, direction: isize, cx: &mut Context<Self>) {
         let count = self.entries(cx).len();
         if count > 0 {
             self.highlighted =
                 (self.highlighted as isize + direction).clamp(0, count as isize - 1) as usize;
+            self.scroll.scroll_to_item(self.highlighted);
             cx.notify();
         }
     }
@@ -945,7 +1113,20 @@ impl ModelList {
     }
 }
 impl Render for ModelList {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Renders the provider/search list and fixed controls footer, repeating pending
+    /// row reveals after layout rather than using stale viewport bounds.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.reveal_pending) {
+            // ScrollHandle uses the previous frame's viewport. Reveal again
+            // after layout when opening or changing the list and its bounds.
+            let view = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.scroll.scroll_to_item(this.highlighted);
+                    cx.notify();
+                });
+            });
+        }
         if self.quick {
             return self.render_quick(cx);
         }
@@ -1066,11 +1247,13 @@ impl Render for ModelList {
             .collect();
         div()
             .id("model-flyout")
+            .debug_selector(|| "model-flyout".into())
             .role(Role::Dialog)
             .aria_label("Models")
             .size_full()
             .min_h_0()
             .flex()
+            .flex_col()
             .capture_action(cx.listener(|this, _: &input::Up, _, cx| {
                 this.step(-1, cx);
                 cx.stop_propagation();
@@ -1085,122 +1268,139 @@ impl Render for ModelList {
             }))
             .child(
                 div()
-                    .id("model-providers")
-                    .role(Role::TabList)
-                    .aria_label("Providers")
-                    .w(px(44.))
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_col()
-                    .overflow_y_scroll()
-                    .items_center()
-                    .gap_1()
-                    .p(px(6.))
-                    .border_r_1()
-                    .border_color(content(0.07))
-                    .child(self.tab(ModelTab::Favorites, cx))
-                    .children(
-                        Kind::ALL
-                            .into_iter()
-                            .filter(|kind| {
-                                if self.remote_project.is_some() {
-                                    *kind == self.provider
-                                        || self
-                                            .remote_providers
-                                            .as_ref()
-                                            .is_some_and(|providers| providers.contains(kind))
-                                } else {
-                                    *kind == self.provider
-                                        || (!self.hidden.iter().any(|id| id == kind.id())
-                                            && !self.missing.contains(kind))
-                                }
-                            })
-                            .map(|kind| self.tab(ModelTab::Harness(kind), cx)),
-                    ),
-            )
-            .child(
-                div()
                     .flex_1()
-                    .min_w_0()
                     .min_h_0()
                     .flex()
-                    .flex_col()
                     .child(
                         div()
+                            .id("model-providers")
+                            .role(Role::TabList)
+                            .aria_label("Providers")
+                            .w(px(44.))
                             .flex_shrink_0()
                             .flex()
+                            .flex_col()
+                            .overflow_y_scroll()
                             .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py(px(10.))
-                            .border_b_1()
+                            .gap_1()
+                            .p(px(6.))
+                            .border_r_1()
                             .border_color(content(0.07))
-                            .text_color(content(1.))
-                            .child(icon("search", 14.).text_color(content(0.5)))
-                            .child(div().flex_1().min_w_0().child(self.search.clone())),
+                            .child(self.tab(ModelTab::Favorites, cx))
+                            .children(
+                                Kind::ALL
+                                    .into_iter()
+                                    .filter(|kind| {
+                                        if self.remote_project.is_some() {
+                                            *kind == self.provider
+                                                || self.remote_providers.as_ref().is_some_and(
+                                                    |providers| providers.contains(kind),
+                                                )
+                                        } else {
+                                            *kind == self.provider
+                                                || (!self.hidden.iter().any(|id| id == kind.id())
+                                                    && !self.missing.contains(kind))
+                                        }
+                                    })
+                                    .map(|kind| self.tab(ModelTab::Harness(kind), cx)),
+                            ),
                     )
                     .child(
                         div()
-                            .id("model-list")
-                            .role(Role::ListBox)
-                            .aria_label("Models")
                             .flex_1()
+                            .min_w_0()
                             .min_h_0()
-                            .overflow_y_scroll()
-                            .p_1()
                             .flex()
                             .flex_col()
-                            .when_some(empty, |d, text| {
-                                d.child(
-                                    div()
-                                        .px_2()
-                                        .py_3()
-                                        .text_size(px(12.))
-                                        .text_color(content(0.5))
-                                        .child(text),
-                                )
-                            })
-                            .children(rows)
-                            .when(loading, |d| {
-                                d.child(
-                                    div()
-                                        .px_2()
-                                        .py_2()
-                                        .text_size(px(12.))
-                                        .text_color(content(0.5))
-                                        .child("Loading models…"),
-                                )
-                            })
-                            .when_some(error, |d, error| {
-                                d.child(
-                                    div()
-                                        .px_2()
-                                        .py_2()
-                                        .text_size(px(12.))
-                                        .text_color(content(0.5))
-                                        .child(error)
-                                        .child(
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py(px(10.))
+                                    .border_b_1()
+                                    .border_color(content(0.07))
+                                    .text_color(content(1.))
+                                    .child(icon("search", 14.).text_color(content(0.5)))
+                                    .child(div().flex_1().min_w_0().child(self.search.clone())),
+                            )
+                            .child(
+                                div()
+                                    .id("model-list")
+                                    .track_scroll(&self.scroll)
+                                    .role(Role::ListBox)
+                                    .aria_label("Models")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .p_1()
+                                    .flex()
+                                    .flex_col()
+                                    .when_some(empty, |d, text| {
+                                        d.child(
                                             div()
-                                                .id("retry-models")
-                                                .role(Role::Button)
-                                                .aria_label("Retry model discovery")
+                                                .px_2()
+                                                .py_3()
+                                                .text_size(px(12.))
+                                                .text_color(content(0.5))
+                                                .child(text),
+                                        )
+                                    })
+                                    .children(rows)
+                                    .when(loading, |d| {
+                                        d.child(
+                                            div()
+                                                .px_2()
                                                 .py_2()
-                                                .child("Retry")
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if let Some(kind) = kind {
-                                                        this.discover(kind, cx);
-                                                        cx.notify();
-                                                    }
-                                                })),
-                                        ),
-                                )
-                            }),
+                                                .text_size(px(12.))
+                                                .text_color(content(0.5))
+                                                .child("Loading models…"),
+                                        )
+                                    })
+                                    .when_some(error, |d, error| {
+                                        d.child(
+                                            div()
+                                                .px_2()
+                                                .py_2()
+                                                .text_size(px(12.))
+                                                .text_color(content(0.5))
+                                                .child(error)
+                                                .child(
+                                                    div()
+                                                        .id("retry-models")
+                                                        .role(Role::Button)
+                                                        .aria_label("Retry model discovery")
+                                                        .py_2()
+                                                        .child("Retry")
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                if let Some(kind) = kind {
+                                                                    this.discover(kind, cx);
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                    }),
+                            ),
                     ),
             )
+            .children(self.effort_slider.clone().map(|slider| {
+                div()
+                    .flex_shrink_0()
+                    .border_t_1()
+                    .border_color(content(0.08))
+                    .child(slider)
+            }))
             .into_any_element()
     }
 }
 impl ModelList {
+    /// Renders the compact tabbed picker with the same search results and tracked
+    /// scroll handle as the full model flyout.
     fn render_quick(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let entries = self.entries(cx);
         let kind = match self.tab {
@@ -1398,6 +1598,7 @@ impl ModelList {
             .child(
                 div()
                     .id("quick-model-list")
+                    .track_scroll(&self.scroll)
                     .role(Role::ListBox)
                     .aria_label("Models")
                     .h(px(240.))

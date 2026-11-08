@@ -295,6 +295,85 @@ impl Drop for HostFixture {
     }
 }
 
+/// An early remote catalog must not supersede stored settings or choose its default model.
+#[gpui::test]
+fn remote_catalog_waits_for_stored_settings(cx: &mut TestAppContext) {
+    for catalog_first in [true, false] {
+        for saved_effort in ["low", "xhigh"] {
+            let host = HostFixture::new(false, false);
+            let model = Model {
+                id: "codex:gpt-test".into(),
+                name: "Stored model".into(),
+                alias_target: None,
+                efforts: vec!["low".into(), "high".into()],
+                default_effort: Some("high".into()),
+                fast: false,
+                thinking: false,
+                default: false,
+                tiers: Vec::new(),
+                controls: Vec::new(),
+            };
+            let mut default_model = model.clone();
+            default_model.id = "catalog-default".into();
+            default_model.default = true;
+            let models = vec![default_model, model];
+            let view = cx.update(|cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(host.summary.clone(), host.store.clone(), cx);
+                    view.remote_state.client = Some(host.client.clone());
+                    let mut stored = view.settings.clone();
+                    stored.revision = 1;
+                    stored.model = Some("codex:gpt-test".into());
+                    stored.effort = Some(saved_effort.into());
+                    stored
+                        .model_settings
+                        .insert("unrelated".into(), "preserved".into());
+                    locked(&view.store)
+                        .unwrap()
+                        .configure_agent(view.summary.id, &view.summary.provider, &stored)
+                        .unwrap();
+                    view.settings.revision = 0;
+                    view.settings.effort = Some("unsupported-initial".into());
+                    view.model = None;
+                    if catalog_first {
+                        view.install_catalog(models.clone(), cx);
+                        assert_eq!(view.settings.revision, 0);
+                        assert!(view.model.is_none());
+                    }
+                    view.load_remote(cx);
+                    view
+                })
+            });
+            host.wait(&view, cx, true);
+            cx.update(|cx| {
+                view.update(cx, |view, cx| {
+                    if !catalog_first {
+                        view.install_catalog(models, cx);
+                    }
+                    assert_eq!(view.model.as_deref(), Some("codex:gpt-test"));
+                    assert_eq!(
+                        view.selected_effort(),
+                        Some(if saved_effort == "low" { "low" } else { "high" })
+                    );
+                    assert_eq!(view.settings.model_settings["unrelated"], "preserved");
+                })
+            });
+            cx.run_until_parked();
+            let stored = locked(&host.store)
+                .unwrap()
+                .agent_settings(host.summary.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.model.as_deref(), Some("codex:gpt-test"));
+            assert_eq!(
+                stored.effort.as_deref(),
+                Some(if saved_effort == "low" { "low" } else { "high" })
+            );
+            assert_eq!(stored.model_settings["unrelated"], "preserved");
+        }
+    }
+}
+
 #[gpui::test]
 fn snapshot_load_restores_host_draft_without_replacing_unsent_composer(cx: &mut TestAppContext) {
     let host = HostFixture::new(false, true);

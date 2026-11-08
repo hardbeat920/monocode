@@ -788,6 +788,7 @@ impl Conversation {
                         .update(cx, |view, _| view.set_turns(settings.turns.clone()));
                     this.settings.turns = settings.turns.clone();
                 }
+                let settings_loaded = settings.is_ok();
                 if let Ok(Some(mut settings)) = settings
                     && settings.revision >= this.settings.revision
                 {
@@ -811,6 +812,9 @@ impl Conversation {
                     this.attach_account(cx);
                     this.settings.mono = mono;
                     this.settings.environment = environment;
+                }
+                if settings_loaded && this.normalize_effort() {
+                    this.save_settings(cx);
                 }
                 match result {
                     Ok((history, edits)) => {
@@ -1936,17 +1940,7 @@ impl Conversation {
                 let _ = this.update(cx, |this, cx| {
                     if Kind::from_id(&this.summary.provider) == kind && this.catalog_epoch == epoch
                     {
-                        this.catalog = models;
-                        if this.is_remote() && this.model.is_none() {
-                            this.model = this
-                                .catalog
-                                .iter()
-                                .find(|m| m.default)
-                                .or_else(|| this.catalog.first())
-                                .map(|m| m.id.clone());
-                            this.settings.model = this.model.clone();
-                            this.save_settings(cx);
-                        }
+                        this.install_catalog(models, cx);
                         cx.emit(SessionChanged);
                         cx.notify();
                     }
@@ -1954,6 +1948,29 @@ impl Conversation {
             }
         })
         .detach();
+    }
+    /// Reconciles saved effort after discovery, including a remote default model.
+    /// Normalization waits until stored settings have been read.
+    fn install_catalog(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
+        self.catalog = models;
+        // Discovery can finish before load() has read the persisted settings.
+        // Do not give the initial snapshot a revision that supersedes them.
+        if !self.loaded && self.settings.revision == 0 {
+            return;
+        }
+        let remote_default = self.is_remote() && self.model.is_none();
+        if remote_default {
+            self.model = self
+                .catalog
+                .iter()
+                .find(|m| m.default)
+                .or_else(|| self.catalog.first())
+                .map(|m| m.id.clone());
+            self.settings.model = self.model.clone();
+        }
+        if self.normalize_effort() || remote_default {
+            self.save_settings(cx);
+        }
     }
     fn model_info(&self) -> Option<&Model> {
         match self.model.as_deref().or(self.resolved_model.as_deref()) {
@@ -1978,6 +1995,7 @@ impl Conversation {
         cx.notify();
     }
     fn save_settings(&mut self, cx: &mut Context<Self>) {
+        self.normalize_effort();
         self.settings.revision = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -2103,6 +2121,114 @@ impl Conversation {
         self.save_settings(cx);
         cx.notify();
     }
+    /// Returns the saved Fast state only when the current catalog exposes a Fast
+    /// boolean or a fast/priority service tier; unsupported models return `None`.
+    fn fast_mode_state(&self) -> Option<bool> {
+        let model = self.model_info()?;
+        if model.fast {
+            Some(self.settings.fast)
+        } else {
+            model
+                .tiers
+                .iter()
+                .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
+                .map(|_| {
+                    self.selected_tier().is_some_and(|tier| {
+                        matches!(tier, "fast" | "priority")
+                            && model.tiers.iter().any(|(id, _)| id == tier)
+                    })
+                })
+        }
+    }
+    /// Builds catalog-backed model controls and subscriptions to the existing save path.
+    /// Without a catalog entry, the caller must use the fallback model menu.
+    fn effort_slider(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(
+        Entity<crate::effort_slider::EffortSlider>,
+        Vec<Subscription>,
+    )> {
+        use crate::effort_slider::{EffortChanged, EffortSlider, ModelControlAction};
+        let model = self.model_info()?;
+        let name = model_display_name(
+            Kind::from_id(&self.summary.provider),
+            &model.id,
+            &model.name,
+        );
+        let slider = cx.new(|cx| {
+            EffortSlider::new(
+                model.efforts.clone(),
+                self.selected_effort(),
+                model.default_effort.as_deref(),
+                cx,
+            )
+            .header(name, self.fast_mode_state())
+        });
+        let effort = cx.subscribe(&slider, |this, _, effort: &EffortChanged, cx| {
+            if this
+                .model_info()
+                .is_some_and(|model| model.efforts.contains(&effort.0))
+            {
+                this.menu_choice(&format!("effort:{}", effort.0), cx);
+                cx.emit(SessionChanged);
+            }
+        });
+        let actions = cx.subscribe_in(
+            &slider,
+            window,
+            |this, slider, action: &ModelControlAction, window, cx| {
+                match action {
+                    ModelControlAction::ChooseModel => {
+                        this.menu = None;
+                        if this.mono_ui.models.is_none() {
+                            this.toggle_mono_models(window, cx);
+                        }
+                    }
+                    ModelControlAction::ToggleFast => {
+                        if let Some(model) = this.model_info() {
+                            if model.fast {
+                                this.menu_choice("fast", cx);
+                            } else if let Some((id, _)) = model
+                                .tiers
+                                .iter()
+                                .find(|(id, _)| matches!(id.as_str(), "fast" | "priority"))
+                            {
+                                let id = id.clone();
+                                let value = if this.fast_mode_state() == Some(true) {
+                                    String::new()
+                                } else {
+                                    id
+                                };
+                                this.menu_choice(&format!("tier:{value}"), cx);
+                            }
+                        }
+                        let fast = this.fast_mode_state();
+                        slider.update(cx, |slider, cx| slider.set_fast(fast, cx));
+                        cx.emit(SessionChanged);
+                    }
+                    ModelControlAction::ResetEffort => {
+                        let effort = this
+                            .model_info()
+                            .and_then(|model| {
+                                model
+                                    .default_effort
+                                    .as_ref()
+                                    .filter(|effort| model.efforts.contains(effort))
+                                    .or(model.efforts.first())
+                            })
+                            .cloned();
+                        if let Some(effort) = effort {
+                            slider.update(cx, |slider, cx| slider.set_effort(&effort, cx));
+                        }
+                    }
+                }
+                cx.notify();
+            },
+        );
+        Some((slider, vec![effort, actions]))
+    }
     fn set_effort_choice(&mut self, effort: &str, cx: &mut Context<Self>) {
         self.settings
             .model_settings
@@ -2117,6 +2243,36 @@ impl Conversation {
                     prefs.provider_efforts.insert(provider, effort.to_owned());
                 }
             });
+        }
+    }
+    /// Replaces an unsupported effort only when the catalog advertises valid stops.
+    /// Keeps supported choices and unresolved catalogs intact; uses a supported
+    /// default or the first stop. Only conversation settings change; the explicit
+    /// provider preference is preserved for other models and conversations.
+    fn normalize_effort(&mut self) -> bool {
+        let replacement = self.model_info().and_then(|model| {
+            if model.efforts.is_empty()
+                || self
+                    .selected_effort()
+                    .is_some_and(|effort| model.efforts.iter().any(|supported| supported == effort))
+            {
+                return None;
+            }
+            model
+                .default_effort
+                .as_ref()
+                .filter(|effort| model.efforts.contains(effort))
+                .or(model.efforts.first())
+                .cloned()
+        });
+        if let Some(effort) = replacement {
+            self.settings
+                .model_settings
+                .retain(|key, _| !is_effort_key(key));
+            self.settings.effort = Some(effort);
+            true
+        } else {
+            false
         }
     }
     fn selected_effort(&self) -> Option<&str> {
@@ -2166,8 +2322,7 @@ impl Conversation {
     /// unless beside mode already has its own Fast pill.
     fn trigger_fast(&self, beside: bool) -> bool {
         self.model_info().is_some_and(|model| {
-            model.fast
-                && self.settings.fast
+            self.fast_mode_state() == Some(true)
                 && !(beside && model.efforts.is_empty() && model.tiers.is_empty())
         })
     }
@@ -2449,6 +2604,8 @@ impl Conversation {
         });
         cx.notify();
     }
+    /// Builds menu contents and retains subscriptions in `events`. Known models use
+    /// the unified controls; undiscovered models retain the Model row and flyout.
     fn menu_items(
         &self,
         kind: ComposerMenu,
@@ -2585,6 +2742,16 @@ impl Conversation {
             ),
             // ModelPicker: a "Model" row whose flyout lists the models.
             ComposerMenu::Model => {
+                if let Some((slider, subscriptions)) = self.effort_slider(window, cx) {
+                    let focus = slider.focus_handle(cx);
+                    let mut items = vec![MenuItem::Custom(slider.into(), focus)];
+                    items.extend(self.mono_model_options().into_iter().filter(|item| {
+                        !matches!(item, MenuItem::Action(action) if action.id.as_ref() == "reasoning" || action.id.as_ref() == "fast"
+                            || (action.id.as_ref() == "service-tier" && self.model_info().is_some_and(|model| model.tiers.len() <= 1 && model.tiers.iter().all(|(id, _)| matches!(id.as_str(), "fast" | "priority")))))
+                    }));
+                    events.extend(subscriptions);
+                    return ("Model and settings", items, 254., MenuStyle::Settings);
+                }
                 let list = cx.new(|cx| {
                     let hidden = cx
                         .try_global::<crate::settings::Preferences>()
@@ -2648,7 +2815,20 @@ impl Conversation {
                 let items = self.mono_access_options();
                 ("Access", items, 288., MenuStyle::Access)
             }
-            ComposerMenu::Setting(ix) => self.mono_setting_menu(ix),
+            ComposerMenu::Setting(ix) => {
+                let (label, mut items, mut width, style) = self.mono_setting_menu(ix);
+                if ix == 0
+                    && let Some((slider, event)) = self.effort_slider(window, cx)
+                {
+                    items.retain(|item| !matches!(item, MenuItem::Action(action) if action.id.starts_with("effort:"))
+                        && !matches!(item, MenuItem::Header(name) if name.as_ref() == self.effort_setting_label()));
+                    let focus = slider.focus_handle(cx);
+                    items.insert(0, MenuItem::Custom(slider.into(), focus));
+                    events.extend(event);
+                    width = 280.;
+                }
+                (label, items, width, style)
+            }
         }
     }
     /// The model trigger: the composer's model menu.
@@ -4086,6 +4266,460 @@ mod menu_tests {
     use gpui::{TestAppContext, WindowHandle, point};
     use monocode_core::store::Store;
     use std::sync::Mutex;
+
+    /// Model switches reconcile supported defaults both before and after discovery.
+    #[gpui::test]
+    fn model_effort_is_reconciled_and_saved_when_catalog_becomes_available(
+        cx: &mut TestAppContext,
+    ) {
+        for delayed in [false, true] {
+            for (saved, default, expected) in [
+                ("xhigh", "high", "high"),
+                ("low", "high", "low"),
+                ("xhigh", "unsupported-default", "low"),
+            ] {
+                let window = conversation(cx);
+                window
+                    .update(cx, |view, _, cx| {
+                        let mut prefs = crate::settings::Preferences::default();
+                        prefs.provider_efforts.insert("claude".into(), saved.into());
+                        cx.set_global(prefs);
+                        let model = Model {
+                            id: "limited-model".into(),
+                            name: "Limited model".into(),
+                            alias_target: None,
+                            efforts: vec!["low".into(), "high".into()],
+                            default_effort: Some(default.into()),
+                            fast: false,
+                            thinking: false,
+                            default: true,
+                            tiers: Vec::new(),
+                            controls: Vec::new(),
+                        };
+                        view.catalog = if delayed {
+                            Vec::new()
+                        } else {
+                            vec![model.clone()]
+                        };
+                        assert!(view.apply_model_pick(
+                            &ModelPicked(Kind::Claude, Some(model.id.clone())),
+                            cx,
+                        ));
+                        if delayed {
+                            assert_eq!(view.settings.effort.as_deref(), Some(saved));
+                            view.install_catalog(vec![model], cx);
+                        }
+                        assert_eq!(view.settings.effort.as_deref(), Some(expected));
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(
+                            cx.global::<crate::settings::Preferences>().provider_efforts["claude"],
+                            saved
+                        );
+                        // A legacy model setting must follow the same normalization path.
+                        view.settings.effort = None;
+                        view.settings
+                            .model_settings
+                            .insert("reasoningEffort".into(), saved.into());
+                        view.save_settings(cx);
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(preferred_effort("claude", cx).as_deref(), Some(saved));
+                        if saved != expected {
+                            assert!(!view.settings.model_settings.contains_key("reasoningEffort"));
+                        }
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, _| {
+                        let saved = locked(&view.store)
+                            .unwrap()
+                            .agent_settings(view.summary.id)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(
+                            saved.effort.as_deref().or_else(|| saved
+                                .model_settings
+                                .get("reasoningEffort")
+                                .map(String::as_str)),
+                            Some(expected)
+                        );
+                    })
+                    .unwrap();
+                // Automatic fallback must not change the next conversation's default.
+                let next = conversation(cx);
+                next.update(cx, |view, _, cx| {
+                    assert_eq!(view.settings.effort.as_deref(), Some(saved));
+                    // Explicit user choices still update the provider-wide preference.
+                    view.menu_choice("effort:high", cx);
+                    assert_eq!(preferred_effort("claude", cx).as_deref(), Some("high"));
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    /// Catalog discovery must preserve stored settings in either startup order.
+    #[gpui::test]
+    fn catalog_discovery_waits_for_stored_settings(cx: &mut TestAppContext) {
+        for catalog_first in [true, false] {
+            for saved_effort in ["low", "xhigh"] {
+                let window = conversation(cx);
+                let model = Model {
+                    id: "stored-model".into(),
+                    name: "Stored model".into(),
+                    alias_target: None,
+                    efforts: vec!["low".into(), "high".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                };
+                window
+                    .update(cx, |view, _, cx| {
+                        let mut stored = view.settings.clone();
+                        stored.revision = 1;
+                        stored.model = Some(model.id.clone());
+                        stored.effort = Some(saved_effort.into());
+                        stored
+                            .model_settings
+                            .insert("unrelated".into(), "preserved".into());
+                        locked(&view.store)
+                            .unwrap()
+                            .configure_agent(view.summary.id, &view.summary.provider, &stored)
+                            .unwrap();
+                        view.loaded = false;
+                        view.settings.revision = 0;
+                        view.settings.effort = Some("unsupported-initial".into());
+                        view.model = None;
+                        view.catalog.clear();
+                        if catalog_first {
+                            view.install_catalog(vec![model.clone()], cx);
+                            assert_eq!(view.settings.revision, 0);
+                            assert_eq!(
+                                view.settings.effort.as_deref(),
+                                Some("unsupported-initial")
+                            );
+                        }
+                        view.load(cx);
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, cx| {
+                        assert!(view.loaded);
+                        assert_eq!(view.model.as_deref(), Some("stored-model"));
+                        if !catalog_first {
+                            view.install_catalog(vec![model], cx);
+                        }
+                        let expected = if saved_effort == "low" { "low" } else { "high" };
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(view.settings.model_settings["unrelated"], "preserved");
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, _| {
+                        let stored = locked(&view.store)
+                            .unwrap()
+                            .agent_settings(view.summary.id)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(stored.model.as_deref(), Some("stored-model"));
+                        assert_eq!(stored.model_settings["unrelated"], "preserved");
+                        assert_eq!(
+                            stored.effort.as_deref(),
+                            Some(if saved_effort == "low" { "low" } else { "high" })
+                        );
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    /// Both Fast tier IDs remain selectable, and either selected ID can be toggled off.
+    #[gpui::test]
+    fn unified_model_controls_preserve_multiple_fast_service_tiers(cx: &mut TestAppContext) {
+        for ids in [
+            vec!["fast"],
+            vec!["priority"],
+            vec!["fast", "priority"],
+            vec!["priority", "fast"],
+        ] {
+            let window = conversation(cx);
+            window.update(cx, |view, window, cx| {
+                view.catalog = vec![Model {
+                    id: "tier-model".into(), name: "Tier model".into(), alias_target: None,
+                    efforts: Vec::new(), default_effort: None, fast: false, thinking: false,
+                    default: true, tiers: ids.iter().map(|id| (id.to_string(), id.to_string())).collect(), controls: Vec::new(),
+                }];
+                view.model = Some("tier-model".into());
+                let (_, items, _, _) = view.menu_items(ComposerMenu::Model, &mut Vec::new(), window, cx);
+                assert_eq!(items.iter().any(|item| matches!(item, MenuItem::Action(a) if a.id.as_ref() == "service-tier")), ids.len() > 1);
+                if ids.len() > 1 {
+                    let tiers = items.iter().find_map(|item| match item {
+                        MenuItem::Action(action) if action.id.as_ref() == "service-tier" => Some(&action.submenu),
+                        _ => None,
+                    }).unwrap();
+                    for id in &ids {
+                        assert!(tiers.iter().any(|action| action.id.as_ref() == format!("tier:{id}")));
+                    }
+                }
+                view.menu_choice(&format!("tier:{}", ids[ids.len() - 1]), cx);
+                assert_eq!(view.fast_mode_state(), Some(true));
+            }).unwrap();
+            open(window, ComposerMenu::Model, cx);
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            let fast = visual.debug_bounds("model-controls-fast").unwrap();
+            visual.simulate_click(fast.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.selected_tier(), None);
+                    assert_eq!(view.fast_mode_state(), Some(false));
+                })
+                .unwrap();
+            visual.simulate_keystrokes("space");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.selected_tier(), Some(ids[0]));
+                    let saved = locked(&view.store)
+                        .unwrap()
+                        .agent_settings(view.summary.id)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(saved.service_tier.as_deref(), Some(ids[0]));
+                })
+                .unwrap();
+        }
+    }
+
+    /// An undiscovered model retains the compact Model flyout without slider controls.
+    #[gpui::test]
+    fn fallback_model_menu_keeps_its_flyout_without_catalog_controls(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.catalog.clear();
+                assert!(view.model_info().is_none());
+                let (_, items, width, _) =
+                    view.menu_items(ComposerMenu::Model, &mut Vec::new(), window, cx);
+                assert_eq!(width, 250.);
+                assert!(
+                    !items
+                        .iter()
+                        .any(|item| matches!(item, MenuItem::Custom(..)))
+                );
+                assert!(items.iter().any(|item| {
+                    matches!(item, MenuItem::Action(action)
+                        if action.id.as_ref() == "model" && action.flyout.is_some())
+                }));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn effort_slider_in_model_menu_saves_supported_choices_and_hides_without_catalog_support(
+        cx: &mut TestAppContext,
+    ) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.summary.provider = "codex".into();
+                view.model = Some("example-model".into());
+                view.settings.effort = Some("high".into());
+                view.catalog = vec![Model {
+                    id: "example-model".into(),
+                    name: "Example".into(),
+                    alias_target: None,
+                    efforts: vec!["low".into(), "high".into(), "xhigh".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                cx.set_global(crate::settings::Preferences::default());
+            })
+            .unwrap();
+        open(window, ComposerMenu::Model, cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(
+            visual.debug_bounds("effort-slider").is_some(),
+            "the slider is visible directly in the model selector"
+        );
+        visual.simulate_keystrokes("home right");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, _| {
+                assert_eq!(
+                    view.settings.effort.as_deref(),
+                    Some("high"),
+                    "slider arrows take priority over menu navigation"
+                )
+            })
+            .unwrap();
+        visual.simulate_keystrokes("end");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, cx| {
+                assert!(
+                    view.menu.is_some(),
+                    "adjusting effort keeps the selector open"
+                );
+                assert_eq!(view.settings.effort.as_deref(), Some("xhigh"));
+                assert_eq!(
+                    cx.global::<crate::settings::Preferences>().provider_efforts["codex"],
+                    "xhigh"
+                );
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .agent_settings(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(saved.effort.as_deref(), Some("xhigh"));
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        // In beside mode the list contains the slider as a fixed footer.
+        window
+            .update(visual, |view, window, cx| {
+                cx.global_mut::<crate::settings::Preferences>()
+                    .model_controls = "beside".into();
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let track = visual.debug_bounds("effort-slider").unwrap();
+        let card = visual.debug_bounds("model-flyout").unwrap();
+        let header = visual.debug_bounds("model-controls-header").unwrap();
+        assert!(
+            (header.center().x - card.center().x).abs() < px(0.01),
+            "the full control group stays centered across model and provider views"
+        );
+        visual.simulate_click(
+            gpui::point(track.left() + px(10.), track.center().y),
+            Default::default(),
+        );
+        visual.simulate_keystrokes("up");
+        visual.run_until_parked();
+        window
+            .update(visual, |view, window, cx| {
+                assert_eq!(
+                    view.settings.effort.as_deref(),
+                    Some("high"),
+                    "list navigation does not steal slider arrows"
+                );
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+                view.catalog[0].efforts.clear();
+                view.toggle_menu(ComposerMenu::Model, window, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("effort-slider").is_none());
+    }
+
+    #[gpui::test]
+    fn unified_model_controls_keep_fast_tiers_and_boolean_modes_durable(cx: &mut TestAppContext) {
+        for tier_based in [false, true] {
+            let window = conversation(cx);
+            window
+                .update(cx, |view, _, cx| {
+                    view.summary.provider = "codex".into();
+                    view.model = Some("example-model".into());
+                    view.catalog = vec![Model {
+                        id: "example-model".into(),
+                        name: "Example model".into(),
+                        alias_target: None,
+                        efforts: vec!["low".into(), "high".into()],
+                        default_effort: Some("high".into()),
+                        fast: !tier_based,
+                        tiers: if tier_based {
+                            vec![("fast".into(), "Fast".into())]
+                        } else {
+                            Vec::new()
+                        },
+                        thinking: false,
+                        default: true,
+                        controls: Vec::new(),
+                    }];
+                    cx.set_global(crate::settings::Preferences::default());
+                })
+                .unwrap();
+            open(window, ComposerMenu::Model, cx);
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            let fast = visual.debug_bounds("model-controls-fast").unwrap();
+            visual.simulate_click(fast.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.fast_mode_state(), Some(true));
+                    assert!(view.menu.is_some(), "Fast keeps the group open");
+                    let saved = locked(&view.store)
+                        .unwrap()
+                        .agent_settings(view.summary.id)
+                        .unwrap()
+                        .unwrap();
+                    if tier_based {
+                        assert_eq!(saved.service_tier.as_deref(), Some("fast"));
+                        assert!(!saved.fast);
+                    } else {
+                        assert!(saved.fast);
+                    }
+                })
+                .unwrap();
+            visual.simulate_keystrokes("space");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.fast_mode_state(), Some(false))
+                })
+                .unwrap();
+            let model = visual.debug_bounds("model-controls-choose-model").unwrap();
+            visual.simulate_click(model.center(), Default::default());
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert!(
+                        view.mono_ui.models.is_some(),
+                        "centered model control opens the searchable model list"
+                    );
+                    assert!(view.menu.is_none());
+                })
+                .unwrap();
+            visual.simulate_keystrokes("escape");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, window, cx| {
+                    view.catalog[0].fast = false;
+                    view.catalog[0].tiers.clear();
+                    view.catalog[0].efforts.clear();
+                    view.toggle_menu(ComposerMenu::Model, window, cx);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            assert!(
+                visual.debug_bounds("model-controls-fast").is_none(),
+                "unsupported Fast is hidden"
+            );
+            assert!(visual.debug_bounds("effort-slider").is_none());
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, _| {
+                    assert!(
+                        view.mono_ui.models.is_some(),
+                        "a model without effort still has a keyboard-accessible model chooser"
+                    )
+                })
+                .unwrap();
+        }
+    }
+
     #[gpui::test]
     fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
         cx: &mut TestAppContext,
@@ -4843,9 +5477,9 @@ mod menu_tests {
     }
 }
 
-/// The amber bolt the model trigger carries while fast mode is on.
+/// The blue bolt the model trigger carries while fast mode is on.
 pub(crate) fn fast_bolt() -> gpui::Div {
     div()
         .flex_shrink_0()
-        .child(icon("zap", 12.).text_color(gpui::rgb(0xfbbf24)))
+        .child(icon("zap", 12.).text_color(gpui::rgb(0x509bfa)))
 }
