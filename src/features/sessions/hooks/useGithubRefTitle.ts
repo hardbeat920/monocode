@@ -55,7 +55,7 @@ export function useGithubRefTitle(
       return;
     }
     const number = Number(label.replace(/^#/, ""));
-    if (!Number.isFinite(number)) return;
+    if (!Number.isSafeInteger(number) || number <= 0) return;
 
     const key = cacheKey(repo, kind, number);
     const cached = titleCache.get(key);
