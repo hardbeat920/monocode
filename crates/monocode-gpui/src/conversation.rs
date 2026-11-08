@@ -811,7 +811,7 @@ impl Conversation {
                     this.attach_account(cx);
                     this.settings.mono = mono;
                     this.settings.environment = environment;
-                    if this.normalize_effort(cx) {
+                    if this.normalize_effort() {
                         this.save_settings(cx);
                     }
                 }
@@ -1962,7 +1962,7 @@ impl Conversation {
                 .map(|m| m.id.clone());
             self.settings.model = self.model.clone();
         }
-        if self.normalize_effort(cx) || remote_default {
+        if self.normalize_effort() || remote_default {
             self.save_settings(cx);
         }
     }
@@ -1989,7 +1989,7 @@ impl Conversation {
         cx.notify();
     }
     fn save_settings(&mut self, cx: &mut Context<Self>) {
-        self.normalize_effort(cx);
+        self.normalize_effort();
         self.settings.revision = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -2241,8 +2241,9 @@ impl Conversation {
     }
     /// Replaces an unsupported effort only when the catalog advertises valid stops.
     /// Keeps supported choices and unresolved catalogs intact; uses a supported
-    /// default or the first stop, clearing legacy effort overrides via the save path.
-    fn normalize_effort(&mut self, cx: &mut Context<Self>) -> bool {
+    /// default or the first stop. Only conversation settings change; the explicit
+    /// provider preference is preserved for other models and conversations.
+    fn normalize_effort(&mut self) -> bool {
         let replacement = self.model_info().and_then(|model| {
             if model.efforts.is_empty()
                 || self
@@ -2259,7 +2260,10 @@ impl Conversation {
                 .cloned()
         });
         if let Some(effort) = replacement {
-            self.set_effort_choice(&effort, cx);
+            self.settings
+                .model_settings
+                .retain(|key, _| !is_effort_key(key));
+            self.settings.effort = Some(effort);
             true
         } else {
             false
@@ -4303,7 +4307,7 @@ mod menu_tests {
                         assert_eq!(view.selected_effort(), Some(expected));
                         assert_eq!(
                             cx.global::<crate::settings::Preferences>().provider_efforts["claude"],
-                            expected
+                            saved
                         );
                         // A legacy model setting must follow the same normalization path.
                         view.settings.effort = None;
@@ -4312,6 +4316,7 @@ mod menu_tests {
                             .insert("reasoningEffort".into(), saved.into());
                         view.save_settings(cx);
                         assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(preferred_effort("claude", cx).as_deref(), Some(saved));
                         if saved != expected {
                             assert!(!view.settings.model_settings.contains_key("reasoningEffort"));
                         }
@@ -4334,6 +4339,15 @@ mod menu_tests {
                         );
                     })
                     .unwrap();
+                // Automatic fallback must not change the next conversation's default.
+                let next = conversation(cx);
+                next.update(cx, |view, _, cx| {
+                    assert_eq!(view.settings.effort.as_deref(), Some(saved));
+                    // Explicit user choices still update the provider-wide preference.
+                    view.menu_choice("effort:high", cx);
+                    assert_eq!(preferred_effort("claude", cx).as_deref(), Some("high"));
+                })
+                .unwrap();
             }
         }
     }
