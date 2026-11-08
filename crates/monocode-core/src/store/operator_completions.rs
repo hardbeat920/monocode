@@ -102,6 +102,7 @@ mod tests {
                 let mut subscriptions = store
                     .session_sidebar_metadata(&[])
                     .operator_subscriptions
+                    .unwrap()
                     .remove(&caller)
                     .unwrap();
                 assert_eq!(subscriptions.len(), 1);
@@ -122,5 +123,47 @@ mod tests {
                 assert!(open().operator_subscriptions().unwrap()[&caller].is_empty());
             }
         }
+    }
+    #[test]
+    fn operator_subscription_decode_failure_reaches_sidebar_without_overwriting_state() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store.save_setting("operator-completions:1", "[]").unwrap();
+        store
+            .save_setting("operator-completions:2", "broken JSON")
+            .unwrap();
+        assert!(store
+            .session_sidebar_metadata(&[])
+            .operator_subscriptions
+            .is_err());
+        assert_eq!(
+            store.setting("operator-completions:1").unwrap().as_deref(),
+            Some("[]")
+        );
+        assert_eq!(
+            store.setting("operator-completions:2").unwrap().as_deref(),
+            Some("broken JSON")
+        );
+        store.save_setting("operator-completions:2", "[]").unwrap();
+        assert_eq!(
+            store
+                .session_sidebar_metadata(&[])
+                .operator_subscriptions
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn operator_subscription_database_failure_is_not_an_empty_snapshot() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store
+            .conn
+            .execute_batch("DROP TABLE native_settings")
+            .unwrap();
+        assert!(store
+            .session_sidebar_metadata(&[])
+            .operator_subscriptions
+            .is_err());
     }
 }

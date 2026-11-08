@@ -618,6 +618,7 @@ pub(crate) struct Shell {
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
     operator_subscriptions: HashMap<i64, Vec<monocode_core::store::OperatorSubscription>>,
+    operator_subscription_error: Option<String>,
     operator_completion_work: HashSet<(i64, monocode_core::store::OperatorCompletionGroup)>,
     /// Sessions an /operator thread started, by the session that started them.
     started_by: HashMap<i64, i64>,
@@ -863,9 +864,13 @@ impl Shell {
         if !projects.contains(&workspace.project) {
             projects.push(workspace.project);
         }
-        let metadata = locked(&store)
-            .map(|db| db.session_sidebar_metadata(&projects))
-            .unwrap_or_default();
+        let metadata = match locked(&store) {
+            Ok(db) => db.session_sidebar_metadata(&projects),
+            Err(error) => monocode_core::store::SessionSidebarMetadata {
+                operator_subscriptions: Err(error),
+                ..Default::default()
+            },
+        };
         Self::new_with_metadata(store, summaries, cwd, saved, metadata, cx)
     }
     pub(crate) fn new_with_metadata(
@@ -1002,6 +1007,17 @@ impl Shell {
             }
         });
         let worktree_focus = workspace.worktree_focus.clone();
+        let (operator_subscriptions, operator_subscription_error) = match sidebar_metadata
+            .operator_subscriptions
+        {
+            Ok(subscriptions) => (subscriptions, None),
+            Err(error) => (
+                HashMap::new(),
+                Some(format!(
+                    "Could not load Operator completion subscriptions: {error}. Completion changes are disabled until the saved state is repaired and the app restarts."
+                )),
+            ),
+        };
         let session_worktrees = sidebar_metadata.worktrees;
         let notification_state = notifications::State::new(&workspace, store.clone(), cx);
         let classic_session_search = classic_sidebar::session_search(cx);
@@ -1022,7 +1038,8 @@ impl Shell {
             app_pending: HashSet::new(),
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
-            operator_subscriptions: sidebar_metadata.operator_subscriptions,
+            operator_subscriptions,
+            operator_subscription_error: operator_subscription_error.clone(),
             operator_completion_work: HashSet::new(),
             started_by: sidebar_metadata.started_by,
             rails: Default::default(),
@@ -1160,7 +1177,7 @@ impl Shell {
             spaces_nudge: None,
             hovered_space: None,
             space_anchor: AnchorSlot::default(),
-            error: None,
+            error: operator_subscription_error,
             tab_scroll: ScrollHandle::new(),
             tab_scroll_task: None,
             resize: None,

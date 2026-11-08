@@ -18,6 +18,29 @@ fn empty_session(window: WindowHandle<Shell>, caller: i64, cx: &mut TestAppConte
     id
 }
 
+fn reload_shell(window: WindowHandle<Shell>, cx: &mut TestAppContext) {
+    window
+        .update(cx, |shell, _, cx| {
+            let store = shell.store.clone();
+            let summaries = shell
+                .session_summaries
+                .values()
+                .map(|s| {
+                    shell
+                        .sessions
+                        .get(&s.id)
+                        .map(|v| v.read(cx).summary.clone())
+                        .unwrap_or_else(|| s.clone())
+                })
+                .collect();
+            let cwd = shell.workspace.project.clone();
+            let saved = Some(serde_json::to_string(&shell.workspace).unwrap());
+            *shell = Shell::new(store, summaries, cwd, saved, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
 #[gpui::test]
 fn operator_completion_empty_failure_does_not_block_other_workers(cx: &mut TestAppContext) {
     let (window, _, caller) = completion_setup(cx);
@@ -80,4 +103,68 @@ fn operator_completion_restart_reports_empty_interrupted_worker(cx: &mut TestApp
     let reports = completion_prompts(window, caller, cx);
     assert_eq!(reports.len(), 1);
     assert!(reports[0].contains(&format!("Session {empty}: empty\nOutcome: stopped")));
+}
+
+#[gpui::test]
+fn operator_completion_load_error_preserves_saved_state_until_recovery(cx: &mut TestAppContext) {
+    let (window, other, caller) = completion_setup(cx);
+    let worker = completion_worker(window, caller, "saved-worker", cx);
+    let key = format!("operator-completions:{caller}");
+    let broken = format!("operator-completions:{other}");
+    let saved = window
+        .update(cx, |shell, _, _| {
+            let store = locked(&shell.store).unwrap();
+            let saved = store.setting(&key).unwrap().unwrap();
+            store
+                .save_setting(&broken, "invalid subscription JSON")
+                .unwrap();
+            saved
+        })
+        .unwrap();
+    reload_shell(window, cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let error = shell
+                .arm_operator_completion(
+                    caller,
+                    OperatorCompletionGroup::Label("new".into()),
+                    worker,
+                    "new-worker".into(),
+                )
+                .unwrap_err();
+            assert!(error.to_lowercase().contains("completion"));
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .to_lowercase()
+                    .contains("completion")
+            );
+            shell.check_operator_completions(cx);
+            let store = locked(&shell.store).unwrap();
+            assert_eq!(
+                store.setting(&key).unwrap().as_deref(),
+                Some(saved.as_str())
+            );
+            assert_eq!(
+                store.setting(&broken).unwrap().as_deref(),
+                Some("invalid subscription JSON")
+            );
+            store.save_setting(&broken, "[]").unwrap();
+        })
+        .unwrap();
+    reload_shell(window, cx);
+    window
+        .update(cx, |shell, _, _| {
+            shell
+                .arm_operator_completion(
+                    caller,
+                    OperatorCompletionGroup::Label("recovered".into()),
+                    worker,
+                    "recovered-worker".into(),
+                )
+                .unwrap();
+        })
+        .unwrap();
 }

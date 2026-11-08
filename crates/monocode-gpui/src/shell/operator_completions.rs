@@ -47,17 +47,25 @@ impl Shell {
         caller: i64,
         session: i64,
     ) -> Result<(), String> {
+        self.operator_completion_storage_ready()?;
         let Some(mut subscriptions) = self.operator_subscriptions.get(&caller).cloned() else {
             return Ok(());
         };
         subscriptions.retain(|s| s.session != session);
         self.save_operator_completions(caller, subscriptions)
     }
+    fn operator_completion_storage_ready(&self) -> Result<(), String> {
+        match &self.operator_subscription_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
     fn save_operator_completions(
         &mut self,
         caller: i64,
         subscriptions: Vec<OperatorSubscription>,
     ) -> Result<(), String> {
+        self.operator_completion_storage_ready()?;
         locked(&self.store)?.save_operator_subscriptions(caller, &subscriptions)?;
         if subscriptions.is_empty() {
             self.operator_subscriptions.remove(&caller);

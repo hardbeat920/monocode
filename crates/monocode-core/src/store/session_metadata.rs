@@ -3,17 +3,32 @@ use super::Store;
 use crate::{agent::AccessMode, orchestration, session_groups};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Default)]
 pub struct SessionSidebarMetadata {
     pub worktrees: HashMap<i64, Option<String>>,
     pub details: HashMap<i64, MobileSessionMetadata>,
     pub drafts: HashSet<i64>,
     pub sidebar_hidden: HashSet<i64>,
-    pub operator_subscriptions: HashMap<i64, Vec<super::OperatorSubscription>>,
+    pub operator_subscriptions: Result<HashMap<i64, Vec<super::OperatorSubscription>>, String>,
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
     pub groups: HashMap<String, session_groups::Groups>,
     pub reminders: Vec<super::Reminder>,
+}
+
+impl Default for SessionSidebarMetadata {
+    fn default() -> Self {
+        Self {
+            worktrees: Default::default(),
+            details: Default::default(),
+            drafts: Default::default(),
+            sidebar_hidden: Default::default(),
+            operator_subscriptions: Ok(Default::default()),
+            started_by: Default::default(),
+            orchestrations: Default::default(),
+            groups: Default::default(),
+            reminders: Default::default(),
+        }
+    }
 }
 
 /// Scalar fields sent to paired phones, including sessions with no live view.
@@ -100,7 +115,7 @@ impl Store {
             } else {
                 HashSet::new()
             },
-            operator_subscriptions: self.operator_subscriptions().unwrap_or_default(),
+            operator_subscriptions: self.operator_subscriptions(),
             started_by: self.started_links().unwrap_or_default(),
             orchestrations: self.orchestration_summaries().unwrap_or_default(),
             groups: projects

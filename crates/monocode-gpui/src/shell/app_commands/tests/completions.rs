@@ -198,7 +198,8 @@ fn operator_completion_waits_for_busy_origin_and_survives_duplicate_events_and_r
             shell.operator_subscriptions = locked(&shell.store)
                 .unwrap()
                 .session_sidebar_metadata(&[])
-                .operator_subscriptions;
+                .operator_subscriptions
+                .unwrap();
             shell.restore_operator_completions(cx);
         })
         .unwrap();
