@@ -788,6 +788,7 @@ impl Conversation {
                         .update(cx, |view, _| view.set_turns(settings.turns.clone()));
                     this.settings.turns = settings.turns.clone();
                 }
+                let settings_loaded = settings.is_ok();
                 if let Ok(Some(mut settings)) = settings
                     && settings.revision >= this.settings.revision
                 {
@@ -811,9 +812,9 @@ impl Conversation {
                     this.attach_account(cx);
                     this.settings.mono = mono;
                     this.settings.environment = environment;
-                    if this.normalize_effort() {
-                        this.save_settings(cx);
-                    }
+                }
+                if settings_loaded && this.normalize_effort() {
+                    this.save_settings(cx);
                 }
                 match result {
                     Ok((history, edits)) => {
@@ -1949,9 +1950,14 @@ impl Conversation {
         .detach();
     }
     /// Reconciles saved effort after discovery, including a remote default model.
-    /// Unsupported choices are persisted before consumers use the new catalog.
+    /// Local normalization waits until stored settings have been read.
     fn install_catalog(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
         self.catalog = models;
+        // Discovery can finish before load() has read the persisted settings.
+        // Do not give the initial snapshot a revision that supersedes them.
+        if !self.is_remote() && !self.loaded && self.settings.revision == 0 {
+            return;
+        }
         let remote_default = self.is_remote() && self.model.is_none();
         if remote_default {
             self.model = self
@@ -4348,6 +4354,86 @@ mod menu_tests {
                     assert_eq!(preferred_effort("claude", cx).as_deref(), Some("high"));
                 })
                 .unwrap();
+            }
+        }
+    }
+
+    /// Catalog discovery must preserve stored settings in either startup order.
+    #[gpui::test]
+    fn catalog_discovery_waits_for_stored_settings(cx: &mut TestAppContext) {
+        for catalog_first in [true, false] {
+            for saved_effort in ["low", "xhigh"] {
+                let window = conversation(cx);
+                let model = Model {
+                    id: "stored-model".into(),
+                    name: "Stored model".into(),
+                    alias_target: None,
+                    efforts: vec!["low".into(), "high".into()],
+                    default_effort: Some("high".into()),
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                };
+                window
+                    .update(cx, |view, _, cx| {
+                        let mut stored = view.settings.clone();
+                        stored.revision = 1;
+                        stored.model = Some(model.id.clone());
+                        stored.effort = Some(saved_effort.into());
+                        stored
+                            .model_settings
+                            .insert("unrelated".into(), "preserved".into());
+                        locked(&view.store)
+                            .unwrap()
+                            .configure_agent(view.summary.id, &view.summary.provider, &stored)
+                            .unwrap();
+                        view.loaded = false;
+                        view.settings.revision = 0;
+                        view.settings.effort = Some("unsupported-initial".into());
+                        view.model = None;
+                        view.catalog.clear();
+                        if catalog_first {
+                            view.install_catalog(vec![model.clone()], cx);
+                            assert_eq!(view.settings.revision, 0);
+                            assert_eq!(
+                                view.settings.effort.as_deref(),
+                                Some("unsupported-initial")
+                            );
+                        }
+                        view.load(cx);
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, cx| {
+                        assert!(view.loaded);
+                        assert_eq!(view.model.as_deref(), Some("stored-model"));
+                        if !catalog_first {
+                            view.install_catalog(vec![model], cx);
+                        }
+                        let expected = if saved_effort == "low" { "low" } else { "high" };
+                        assert_eq!(view.selected_effort(), Some(expected));
+                        assert_eq!(view.settings.model_settings["unrelated"], "preserved");
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                window
+                    .update(cx, |view, _, _| {
+                        let stored = locked(&view.store)
+                            .unwrap()
+                            .agent_settings(view.summary.id)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(stored.model.as_deref(), Some("stored-model"));
+                        assert_eq!(stored.model_settings["unrelated"], "preserved");
+                        assert_eq!(
+                            stored.effort.as_deref(),
+                            Some(if saved_effort == "low" { "low" } else { "high" })
+                        );
+                    })
+                    .unwrap();
             }
         }
     }
