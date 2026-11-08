@@ -5,8 +5,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "models.list"|"soul.read"|"habits.list"=>"",
         "sessions.list"|"folders.list"|"worktrees.list"=>"project",
         "sessions.read"=>"sessionId project before limit maxChars",
-        "sessions.start"=>"prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete",
-        "sessions.send"=>"sessionId prompt project notifyOnComplete",
+        "sessions.start"=>"prompt project harness model modelSettings effort runtimeMode title draft reveal workspaceMode worktreeBase worktreeCwd placement besideSessionId notifyOnComplete notifyGroup",
+        "sessions.send"=>"sessionId prompt project notifyOnComplete notifyGroup",
         "sessions.draft"=>"sessionId prompt project",
         "sessions.stop"|"sessions.archive"|"sessions.delete"=>"sessionId project",
         "worktrees.create"=>"branch base existing project",
@@ -74,6 +74,15 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }) {
         return Err("modelSettings must be an object of strings".into());
     }
+    if let Some(label) = input.get("notifyGroup") {
+        if input["notifyOnComplete"] != true {
+            return Err("notifyGroup requires notifyOnComplete:true".into());
+        }
+        let label = label.as_str().ok_or("notifyGroup must be text")?.trim();
+        if !(1..=64).contains(&label.chars().count()) {
+            return Err("notifyGroup must be from 1 to 64 characters after trimming".into());
+        }
+    }
     if input["draft"] == true && input["notifyOnComplete"] == true {
         return Err("An unsent draft cannot send a completion notification".into());
     }
@@ -115,6 +124,13 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }
     Ok(())
 }
+pub fn validate_mono(action: &str, input: &Value) -> Result<(), String> {
+    if input.get("notifyGroup").is_some() {
+        return Err("notifyGroup is only supported for Operator calls, not Monos".into());
+    }
+    validate(action, input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +145,66 @@ mod tests {
             &json!({"prompt":"x","project":"/code","draft":true})
         )
         .is_ok());
+    }
+    #[test]
+    fn operator_completion_notify_group_validates_labels_and_opt_in() {
+        for action in ["sessions.start", "sessions.send"] {
+            for label in ["a".into(), " x ".into(), "x".repeat(64), "🦀".repeat(64)] {
+                assert!(validate(
+                    action,
+                    &json!({"notifyOnComplete":true,"notifyGroup":label})
+                )
+                .is_ok());
+            }
+            for label in [
+                json!(""),
+                json!(" \t\n"),
+                json!("x".repeat(65)),
+                json!("🦀".repeat(65)),
+                json!(false),
+                json!(1),
+                json!(null),
+                json!([]),
+            ] {
+                assert!(validate(
+                    action,
+                    &json!({"notifyOnComplete":true,"notifyGroup":label})
+                )
+                .unwrap_err()
+                .contains("notifyGroup"));
+            }
+            for input in [
+                json!({"notifyGroup":"a"}),
+                json!({"notifyOnComplete":false,"notifyGroup":"a"}),
+            ] {
+                assert_eq!(
+                    validate(action, &input).unwrap_err(),
+                    "notifyGroup requires notifyOnComplete:true"
+                );
+            }
+            assert!(validate(
+                action,
+                &json!({"draft":true,"notifyOnComplete":true,"notifyGroup":"a"})
+            )
+            .is_err());
+        }
+        assert!(validate(
+            "sessions.draft",
+            &json!({"notifyOnComplete":true,"notifyGroup":"a"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn operator_completion_mono_validation_rejects_groups_and_keeps_existing_notifications() {
+        for action in ["sessions.start", "sessions.send"] {
+            assert_eq!(
+                validate_mono(action, &json!({"notifyOnComplete":true,"notifyGroup":"a"}))
+                    .unwrap_err(),
+                "notifyGroup is only supported for Operator calls, not Monos"
+            );
+            assert!(validate_mono(action, &json!({"notifyOnComplete":true})).is_ok());
+            assert!(validate_mono(action, &json!({"notifyOnComplete":false})).is_ok());
+        }
     }
 }

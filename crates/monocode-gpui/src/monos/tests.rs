@@ -1946,3 +1946,33 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
+
+#[gpui::test]
+fn operator_completion_mono_calls_reject_notify_group(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    for action in ["sessions.start", "sessions.send"] {
+        let error = call(
+            &s,
+            "operator-only-group",
+            action,
+            json!({
+                "prompt":"Do not start", "sessionId":s.session,
+                "notifyOnComplete":true, "notifyGroup":"review"
+            }),
+            cx,
+        )
+        .try_recv()
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "notifyGroup is only supported for Operator calls, not Monos"
+        );
+    }
+    s.manager.read_with(cx, |m, _| {
+        assert!(m.app_pending.is_empty());
+        assert!(m.app_results.is_empty());
+        assert!(m.running.is_empty());
+        assert!(m.roster.get(&s.id).unwrap().launches.is_empty());
+    });
+}

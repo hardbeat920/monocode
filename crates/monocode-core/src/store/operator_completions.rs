@@ -21,11 +21,17 @@ impl WorkerOutcome {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OperatorCompletionGroup {
+    Turn(u64),
+    Label(String),
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OperatorSubscription {
     pub session: i64,
     pub title: String,
-    pub turn: u64,
+    pub group: OperatorCompletionGroup,
     pub outcome: Option<WorkerOutcome>,
     pub delivered: bool,
 }
@@ -62,51 +68,59 @@ mod tests {
     #[test]
     fn operator_subscriptions_survive_reopening_native_and_desktop_stores() {
         for desktop in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("callbacks.db");
-            let open = || {
-                if desktop {
-                    Store::open_monocode(&path)
-                } else {
-                    Store::open(&path)
-                }
-                .unwrap()
-            };
-            let store = open();
-            let caller = store.create("codex", "/work/callbacks").unwrap().id;
-            let child = store.create("codex", "/work/callbacks").unwrap().id;
-            store
-                .save_operator_subscriptions(
-                    caller,
-                    &[OperatorSubscription {
-                        session: child,
-                        title: "Worker".into(),
-                        turn: 41,
-                        outcome: Some(WorkerOutcome::Failed),
-                        delivered: false,
-                    }],
-                )
-                .unwrap();
-            drop(store);
-            let store = open();
-            let mut subscriptions = store
-                .session_sidebar_metadata(&[])
-                .operator_subscriptions
-                .remove(&caller)
-                .unwrap();
-            assert_eq!(subscriptions.len(), 1);
-            assert_eq!(subscriptions[0].session, child);
-            assert_eq!(subscriptions[0].outcome, Some(WorkerOutcome::Failed));
-            subscriptions[0].delivered = true;
-            store
-                .save_operator_subscriptions(caller, &subscriptions)
-                .unwrap();
-            drop(store);
-            let store = open();
-            assert!(store.operator_subscriptions().unwrap()[&caller][0].delivered);
-            store.save_operator_subscriptions(caller, &[]).unwrap();
-            drop(store);
-            assert!(open().operator_subscriptions().unwrap()[&caller].is_empty());
+            for group in [
+                OperatorCompletionGroup::Turn(41),
+                OperatorCompletionGroup::Label("review".into()),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("callbacks.db");
+                let open = || {
+                    if desktop {
+                        Store::open_monocode(&path)
+                    } else {
+                        Store::open(&path)
+                    }
+                    .unwrap()
+                };
+                let store = open();
+                let caller = store.create("codex", "/work/callbacks").unwrap().id;
+                let child = store.create("codex", "/work/callbacks").unwrap().id;
+                store
+                    .save_operator_subscriptions(
+                        caller,
+                        &[OperatorSubscription {
+                            session: child,
+                            title: "Worker".into(),
+                            group: group.clone(),
+                            outcome: Some(WorkerOutcome::Failed),
+                            delivered: false,
+                        }],
+                    )
+                    .unwrap();
+                drop(store);
+                let store = open();
+                let mut subscriptions = store
+                    .session_sidebar_metadata(&[])
+                    .operator_subscriptions
+                    .remove(&caller)
+                    .unwrap();
+                assert_eq!(subscriptions.len(), 1);
+                assert_eq!(subscriptions[0].session, child);
+                assert_eq!(subscriptions[0].group, group);
+                assert_eq!(subscriptions[0].outcome, Some(WorkerOutcome::Failed));
+                subscriptions[0].delivered = true;
+                store
+                    .save_operator_subscriptions(caller, &subscriptions)
+                    .unwrap();
+                drop(store);
+                let store = open();
+                let restored = store.operator_subscriptions().unwrap();
+                assert!(restored[&caller][0].delivered);
+                assert_eq!(restored[&caller][0].group, group);
+                store.save_operator_subscriptions(caller, &[]).unwrap();
+                drop(store);
+                assert!(open().operator_subscriptions().unwrap()[&caller].is_empty());
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Durable completion groups for ordinary project sessions.
 use super::*;
-use monocode_core::store::{OperatorSubscription, WorkerOutcome};
+use monocode_core::store::{OperatorCompletionGroup, OperatorSubscription, WorkerOutcome};
 
 impl Shell {
     pub(super) fn observe_operator_completions(
@@ -23,7 +23,7 @@ impl Shell {
     pub(super) fn arm_operator_completion(
         &mut self,
         caller: i64,
-        turn: u64,
+        group: OperatorCompletionGroup,
         session: i64,
         title: String,
     ) -> Result<(), String> {
@@ -32,11 +32,15 @@ impl Shell {
             .get(&caller)
             .cloned()
             .unwrap_or_default();
-        subscriptions.retain(|s| s.session != session && (!s.delivered || s.turn == turn));
+        subscriptions.retain(|s| {
+            s.session != session
+                && (!s.delivered
+                    || matches!(group, OperatorCompletionGroup::Turn(_)) && s.group == group)
+        });
         subscriptions.push(OperatorSubscription {
             session,
             title,
-            turn,
+            group,
             outcome: None,
             delivered: false,
         });
@@ -75,11 +79,11 @@ impl Shell {
         }
         self.check_operator_completions(cx);
     }
-    fn operator_group_ready(&self, caller: i64, turn: u64, cx: &App) -> bool {
+    fn operator_group_ready(&self, caller: i64, group: &OperatorCompletionGroup, cx: &App) -> bool {
         let Some(subscriptions) = self.operator_subscriptions.get(&caller) else {
             return false;
         };
-        let group: Vec<_> = subscriptions.iter().filter(|s| s.turn == turn).collect();
+        let group: Vec<_> = subscriptions.iter().filter(|s| &s.group == group).collect();
         !group.is_empty()
             && group.iter().all(|s| {
                 !s.delivered
@@ -135,12 +139,14 @@ impl Shell {
             let groups: HashSet<_> = self.operator_subscriptions[&caller]
                 .iter()
                 .filter(|s| !s.delivered)
-                .map(|s| s.turn)
+                .map(|s| s.group.clone())
                 .collect();
-            for turn in groups {
-                if self.operator_completion_work.contains(&(caller, turn))
+            for group in groups {
+                if self
+                    .operator_completion_work
+                    .contains(&(caller, group.clone()))
                     || self.archiving.contains(&caller)
-                    || !self.operator_group_ready(caller, turn, cx)
+                    || !self.operator_group_ready(caller, &group, cx)
                 {
                     continue;
                 }
@@ -155,7 +161,7 @@ impl Shell {
                 }
                 let children: Vec<_> = self.operator_subscriptions[&caller]
                     .iter()
-                    .filter(|s| s.turn == turn)
+                    .filter(|s| s.group == group)
                     .cloned()
                     .collect();
                 let responses: Vec<_> = children
@@ -167,7 +173,8 @@ impl Shell {
                             .map(|v| v.read(cx).external_outcome(cx).1)
                     })
                     .collect();
-                self.operator_completion_work.insert((caller, turn));
+                self.operator_completion_work
+                    .insert((caller, group.clone()));
                 let store = self.store.clone();
                 let work = cx.background_executor().spawn(async move {
                     children
@@ -196,17 +203,17 @@ impl Shell {
                 cx.spawn(async move |this, cx| {
                     let report = work.await;
                     let _ = this.update(cx, |this, cx| {
-                        this.operator_completion_work.remove(&(caller, turn));
-                        let (children, report) = match report {
+                        this.operator_completion_work.remove(&(caller, group.clone()));
+                        let (children, mut report) = match report {
                             Ok(report) => report,
                             Err(error) => { this.error = Some(error); return; }
                         };
                         if this.session_summaries.get(&caller).is_none_or(|s| s.archived)
                             || this.deleting.contains(&caller) || this.archiving.contains(&caller)
-                            || !this.operator_group_ready(caller, turn, cx)
+                            || !this.operator_group_ready(caller, &group, cx)
                         { return; }
                         let current: Vec<_> = this.operator_subscriptions[&caller].iter()
-                            .filter(|s| s.turn == turn).map(|s| (s.session, s.outcome)).collect();
+                            .filter(|s| s.group == group).map(|s| (s.session, s.outcome)).collect();
                         if current != children.iter().map(|s| (s.session, s.outcome)).collect::<Vec<_>>() {
                             this.check_operator_completions(cx);
                             return;
@@ -214,8 +221,13 @@ impl Shell {
                         let Some(origin) = this.sessions.get(&caller).cloned() else { return; };
                         if !origin.read(cx).ready_for_external(cx) || !origin.read(cx).available_for_managed_run(cx) { return; }
                         let mut subscriptions = this.operator_subscriptions[&caller].clone();
-                        for subscription in subscriptions.iter_mut().filter(|s| s.turn == turn) {
+                        for subscription in subscriptions.iter_mut().filter(|s| s.group == group) {
                             subscription.delivered = true;
+                        }
+                        let pending: Vec<_> = subscriptions.iter().filter(|s| !s.delivered)
+                            .map(|s| format!("Session {}: {}", s.session, s.title)).collect();
+                        if !pending.is_empty() {
+                            report.push_str(&format!("\n\nStill running:\n{}\nMore reports will follow.", pending.join("\n")));
                         }
                         // Persist before dispatch for at-most-once delivery across a crash.
                         if let Err(error) = this.save_operator_completions(caller, subscriptions) {

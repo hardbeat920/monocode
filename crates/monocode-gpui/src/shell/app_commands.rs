@@ -5,6 +5,7 @@ use monocode_core::{
     agent::Settings,
     app_access as app,
     mono::bridge::{Call, Server},
+    store::OperatorCompletionGroup,
 };
 use serde_json::{Value, json};
 
@@ -14,7 +15,16 @@ mod tests;
 type Placement = Option<(i64, Edge)>;
 enum Effect {
     None,
-    Start(Box<(Session, Settings, bool, bool, Placement, u64)>),
+    Start(
+        Box<(
+            Session,
+            Settings,
+            bool,
+            bool,
+            Placement,
+            OperatorCompletionGroup,
+        )>,
+    ),
     Groups(String, monocode_core::session_groups::Groups),
     Archive(i64),
 }
@@ -95,7 +105,7 @@ impl Shell {
                     match effect {
                         Effect::None => (),
                         Effect::Start(start) => {
-                            let (summary, settings, draft, reveal, placement, turn) = *start;
+                            let (summary, settings, draft, reveal, placement, group) = *start;
                             if call.input["notifyOnComplete"] == true
                                 && this
                                     .session_summaries
@@ -104,7 +114,7 @@ impl Shell {
                             {
                                 this.arm_operator_completion(
                                     call.session,
-                                    turn,
+                                    group,
                                     summary.id,
                                     summary.title.clone(),
                                 )?;
@@ -335,7 +345,10 @@ impl Shell {
         let project = caller.summary.cwd.clone();
         let provider = caller.summary.provider.clone();
         let inherited = caller.settings.clone();
-        let turn = caller.mono_turn;
+        let group = call.input["notifyGroup"]
+            .as_str()
+            .map(|label| OperatorCompletionGroup::Label(label.trim().to_owned()))
+            .unwrap_or(OperatorCompletionGroup::Turn(caller.mono_turn));
         let input = call.input.clone();
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
@@ -411,7 +424,7 @@ impl Shell {
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
                     let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
-                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement,turn)))}else{Effect::None}))
+                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement,group)))}else{Effect::None}))
                 },cx);
                 return;
             }
@@ -520,7 +533,7 @@ impl Shell {
                                         if input["notifyOnComplete"] == true
                                             && let Err(error) = self.arm_operator_completion(
                                                 call.session,
-                                                turn,
+                                                group,
                                                 id,
                                                 view.read(cx).summary.title.clone(),
                                             )

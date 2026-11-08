@@ -687,6 +687,16 @@ fn completion_worker(
     name: &str,
     cx: &mut TestAppContext,
 ) -> i64 {
+    completion_worker_in_group(window, caller, name, None, cx)
+}
+
+fn completion_worker_in_group(
+    window: WindowHandle<Shell>,
+    caller: i64,
+    name: &str,
+    label: Option<&str>,
+    cx: &mut TestAppContext,
+) -> i64 {
     let id = window
         .update(cx, |shell, _, cx| {
             let mut store = locked(&shell.store).unwrap();
@@ -717,21 +727,30 @@ fn completion_worker(
         })
         .unwrap();
     cx.run_until_parked();
-    call(
-        window,
-        caller,
-        name,
-        "sessions.send",
-        json!({"sessionId":id,"prompt":"Fixture work","notifyOnComplete":true}),
-        cx,
-    )
-    .unwrap();
+    let mut input = json!({"sessionId":id,"prompt":"Fixture work","notifyOnComplete":true});
+    if let Some(label) = label {
+        input["notifyGroup"] = json!(label);
+    }
+    call(window, caller, name, "sessions.send", input, cx).unwrap();
     // Hold the worker at the provider boundary after exercising the authorised send.
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&id].update(cx, |v, _| v.busy = true);
+            let group = label
+                .map(|label| OperatorCompletionGroup::Label(label.trim().into()))
+                .unwrap_or(OperatorCompletionGroup::Turn(
+                    shell.sessions[&caller].read(cx).mono_turn,
+                ));
+            assert_eq!(
+                shell.operator_subscriptions[&caller]
+                    .iter()
+                    .find(|s| s.session == id)
+                    .unwrap()
+                    .group,
+                group
+            );
             shell
-                .arm_operator_completion(caller, 41, id, name.into())
+                .arm_operator_completion(caller, group, id, name.into())
                 .unwrap();
         })
         .unwrap();
@@ -1096,7 +1115,7 @@ fn operator_completion_start_arms_the_dispatch_turn_and_defaults_to_off(cx: &mut
             let subscriptions = &shell.operator_subscriptions[&caller];
             assert_eq!(subscriptions.len(), 1);
             assert_eq!(subscriptions[0].session, first);
-            assert_eq!(subscriptions[0].turn, 41);
+            assert_eq!(subscriptions[0].group, OperatorCompletionGroup::Turn(41));
             assert!(!shell.sessions[&first].read(cx).settings.operator_enabled);
             assert!(!shell.sessions[&second].read(cx).settings.operator_enabled);
         })
@@ -1148,4 +1167,164 @@ fn operator_completion_app_archive_and_delete_dismiss_workers(cx: &mut TestAppCo
             })
             .unwrap();
     }
+}
+
+#[gpui::test]
+fn operator_completion_distinct_labels_report_each_worker_with_pending_context(
+    cx: &mut TestAppContext,
+) {
+    let (window, _, caller) = completion_setup(cx);
+    let first = completion_worker_in_group(window, caller, "first", Some("first"), cx);
+    let second = completion_worker_in_group(window, caller, "second", Some("second"), cx);
+    end_completion_origin(window, caller, cx);
+    finish_completion_worker(window, first, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 1);
+    let (report, pending) = prompts[0].split_once("\n\nStill running:\n").unwrap();
+    assert!(report.contains(&format!("Session {first}: first\nOutcome: completed")));
+    assert!(report.contains(&format!("Worker {first} final response")));
+    assert!(!report.contains(&format!("Session {second}:")));
+    assert_eq!(
+        pending,
+        format!("Session {second}: second\nMore reports will follow.")
+    );
+    finish_completion_worker(window, second, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[1].contains(&format!("Session {second}: second\nOutcome: completed")));
+    assert!(!prompts[1].contains(&format!("Session {first}:")));
+    assert!(!prompts[1].contains("Still running:"));
+    assert!(!prompts[1].contains("More reports will follow."));
+}
+
+#[gpui::test]
+fn operator_completion_shared_label_groups_workers_across_turns(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    let first = completion_worker_in_group(window, caller, "first", Some(" shared "), cx);
+    end_completion_origin(window, caller, cx);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, _| {
+                v.mono_turn = 42;
+                v.busy = true;
+            });
+        })
+        .unwrap();
+    let second = completion_worker_in_group(window, caller, "second", Some("shared"), cx);
+    finish_completion_worker(window, first, cx);
+    end_completion_origin(window, caller, cx);
+    assert!(completion_prompts(window, caller, cx).is_empty());
+    finish_completion_worker(window, second, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains(&format!("Session {first}: first\nOutcome: completed")));
+    assert!(prompts[0].contains(&format!("Session {second}: second\nOutcome: completed")));
+    assert!(!prompts[0].contains("Still running:"));
+}
+
+#[gpui::test]
+fn operator_completion_reusing_a_delivered_label_starts_a_fresh_group(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    let first = completion_worker_in_group(window, caller, "first", Some("review"), cx);
+    end_completion_origin(window, caller, cx);
+    finish_completion_worker(window, first, cx);
+    assert_eq!(completion_prompts(window, caller, cx).len(), 1);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, _| v.busy = true);
+        })
+        .unwrap();
+    let second = completion_worker_in_group(window, caller, "second", Some("review"), cx);
+    end_completion_origin(window, caller, cx);
+    assert_eq!(completion_prompts(window, caller, cx).len(), 1);
+    finish_completion_worker(window, second, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[1].contains(&format!("Session {second}: second\nOutcome: completed")));
+    assert!(!prompts[1].contains(&format!("Session {first}:")));
+    assert!(!prompts[1].contains("Still running:"));
+    window
+        .update(cx, |shell, _, cx| {
+            shell.operator_subscriptions = locked(&shell.store)
+                .unwrap()
+                .operator_subscriptions()
+                .unwrap();
+            shell.restore_operator_completions(cx);
+            shell.check_operator_completions(cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(completion_prompts(window, caller, cx).len(), 2);
+}
+
+#[gpui::test]
+fn operator_completion_notify_group_requires_completion_opt_in(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    for action in ["sessions.start", "sessions.send"] {
+        for opt_in in [None, Some(false)] {
+            let mut input =
+                json!({"prompt":"Do not start", "sessionId":caller, "notifyGroup":"review"});
+            if action == "sessions.start" {
+                input.as_object_mut().unwrap().remove("sessionId");
+            }
+            if let Some(opt_in) = opt_in {
+                input["notifyOnComplete"] = json!(opt_in);
+            }
+            let error = call(window, caller, "invalid-label", action, input, cx).unwrap_err();
+            assert_eq!(error, "notifyGroup requires notifyOnComplete:true");
+        }
+    }
+    window
+        .update(cx, |shell, _, _| {
+            assert!(shell.operator_subscriptions.is_empty());
+            assert!(shell.started_by.is_empty());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn operator_completion_start_uses_a_trimmed_label(cx: &mut TestAppContext) {
+    let (window, _, caller) = completion_setup(cx);
+    let missing = std::env::temp_dir()
+        .join(monocode_core::mono::new_id())
+        .join("missing-project");
+    assert!(!missing.exists());
+    window
+        .update(cx, |shell, _, cx| {
+            let project = missing.to_string_lossy().into_owned();
+            shell.session_summaries.get_mut(&caller).unwrap().cwd = project.clone();
+            shell.sessions[&caller].update(cx, |v, _| v.summary.cwd = project);
+        })
+        .unwrap();
+    let child = call(
+        window,
+        caller,
+        "labelled-start",
+        "sessions.start",
+        json!({
+            "prompt":"No provider can start in the missing fixture directory", "harness":"codex",
+            "title":"Labelled worker", "notifyOnComplete":true, "notifyGroup":" launch "
+        }),
+        cx,
+    )
+    .unwrap()["sessionId"]
+        .as_i64()
+        .unwrap();
+    window
+        .update(cx, |shell, _, _| {
+            let subscriptions = &shell.operator_subscriptions[&caller];
+            assert_eq!(subscriptions.len(), 1);
+            assert_eq!(subscriptions[0].session, child);
+            assert_eq!(
+                subscriptions[0].group,
+                OperatorCompletionGroup::Label("launch".into())
+            );
+        })
+        .unwrap();
+    end_completion_origin(window, caller, cx);
+    let prompts = completion_prompts(window, caller, cx);
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains(&format!(
+        "Session {child}: Labelled worker\nOutcome: failed"
+    )));
 }

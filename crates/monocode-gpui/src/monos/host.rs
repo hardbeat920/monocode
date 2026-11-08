@@ -169,7 +169,7 @@ impl Monos {
             let _ = call.reply.send(Err(error));
             return;
         }
-        if let Err(error) = mono::api::validate(&call.action, &call.input) {
+        if let Err(error) = mono::api::validate_mono(&call.action, &call.input) {
             let _ = call.reply.send(Err(error));
             return;
         }

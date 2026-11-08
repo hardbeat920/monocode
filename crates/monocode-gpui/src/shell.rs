@@ -618,7 +618,7 @@ pub(crate) struct Shell {
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
     operator_subscriptions: HashMap<i64, Vec<monocode_core::store::OperatorSubscription>>,
-    operator_completion_work: HashSet<(i64, u64)>,
+    operator_completion_work: HashSet<(i64, monocode_core::store::OperatorCompletionGroup)>,
     /// Sessions an /operator thread started, by the session that started them.
     started_by: HashMap<i64, i64>,
     /// The sidebar rails under orchestrators and /operator threads.

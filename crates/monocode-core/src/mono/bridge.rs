@@ -21,8 +21,8 @@ Actions:
 models.list {}
 sessions.list {project?}
 sessions.read {sessionId,project?,before?,limit?,maxChars?}
-sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,placement?,besideSessionId?,notifyOnComplete?}
-sessions.send {sessionId,prompt,project?,notifyOnComplete?}
+sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,placement?,besideSessionId?,notifyOnComplete?,notifyGroup?}
+sessions.send {sessionId,prompt,project?,notifyOnComplete?,notifyGroup?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
 worktrees.list {project?}
@@ -39,7 +39,7 @@ Ordinary Operator sessions are visible in project history. Mono launches follow 
 sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits and cards require a Mono.
-Operator sessions.start and sessions.send accept notifyOnComplete:true (default false). Say what started and end the turn; never poll. One internal completion report resumes the caller after all workers armed in that turn stop and the caller is idle. Completion is not verification; inspect and verify results before telling the user.
+Operator sessions.start and sessions.send accept notifyOnComplete:true (default false). Say what started and end the turn; never poll. By default workers are grouped by caller turn. Give each worker its own notifyGroup for a report per worker, or share a label to group across turns. Labels are trimmed, 1 to 64 characters, and require notifyOnComplete:true; Monos do not support notifyGroup. Reusing a label after delivery starts a fresh group. A report resumes the idle caller after all workers in its group stop. Completion is not verification; inspect and verify results before telling the user.
 The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID and identical input.
 Assigned projects alone may be addressed. Credentials are provided in the environment; never print them.
 "#;
