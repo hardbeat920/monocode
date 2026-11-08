@@ -135,6 +135,8 @@ export type SessionSummary = {
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
   waiting?: "approval" | "question";
+  /** A subagent's lead; subagents stay out of lists. */
+  leadId?: string;
 };
 
 // The desktop's UserQuestionPrompt (src/features/sessions/model/userQuestion.ts):

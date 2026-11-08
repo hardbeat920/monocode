@@ -442,7 +442,9 @@ impl State {
                         .unwrap_or("tool");
                     let planning = self.protocol.request.settings.plan
                         || self.protocol.request.settings.access == AccessMode::ReadOnly;
-                    if planning
+                    let thread_read = crate::visual_bridge::read_only_tool(action);
+                    if thread_read
+                        || planning
                         || self.protocol.request.settings.access == AccessMode::FullAccess
                         || !interactive
                     {
@@ -453,7 +455,9 @@ impl State {
                         let reading = ["read", "grep", "glob", "search", "find"]
                             .iter()
                             .any(|kind| action.contains(kind));
-                        let allow = if planning {
+                        let allow = if thread_read {
+                            true
+                        } else if planning {
                             !writing && reading
                         } else {
                             interactive

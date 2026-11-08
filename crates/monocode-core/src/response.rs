@@ -53,6 +53,21 @@ pub fn limit(text: &str, count: usize) -> String {
         )
     }
 }
+/// Keeps the start and the end. An agent's closing summary is usually the part
+/// worth reading, so trimming only the tail would lose it.
+pub fn limit_middle(text: &str, count: usize) -> String {
+    let total = text.chars().count();
+    if total <= count {
+        return text.into();
+    }
+    const GAP: &str = "\n\n[…]\n\n";
+    let keep = count.saturating_sub(GAP.len());
+    let head = keep / 3;
+    let tail = keep - head;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(total - tail).collect();
+    format!("{start}{GAP}{end}")
+}
 pub fn prose(rows: &[Row]) -> String {
     let mut messages: Vec<String> = Vec::new();
     let mut previous = false;

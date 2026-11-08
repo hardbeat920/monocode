@@ -70,6 +70,8 @@ struct MonoPreview {
 
 struct CatalogEntry {
     id: i64,
+    /// The lead of a subagent, which the phone lists under it.
+    lead: Option<i64>,
     project: String,
     summary: Session,
     live: Option<mobile_catalog::LiveSession>,
@@ -400,7 +402,6 @@ impl Shell {
                 let summary = metadata.summary;
                 if summary.archived
                     || !summary.has_messages
-                    || self.orchestration_worker(id)
                     || self
                         .monos
                         .as_ref()
@@ -433,6 +434,7 @@ impl Shell {
                 });
                 Some(CatalogEntry {
                     id,
+                    lead: self.subagent_lead(id),
                     project: project_id(project),
                     summary: summary.clone(),
                     live,
@@ -557,11 +559,23 @@ impl Shell {
                 let Some(id) = ids.get(&entry.id) else {
                     continue;
                 };
+                // A worker whose lead the phone can't open is left out, as before.
+                let lead = match entry.lead {
+                    Some(lead) => match ids.get(&lead) {
+                        Some(lead) => Some(lead),
+                        None => continue,
+                    },
+                    None => None,
+                };
                 let metadata = mobile_catalog::metadata(saved.get(&entry.id).unwrap_or(&Default::default()), entry.live.as_ref());
                 let branch = if !metadata.worktree_removed && metadata.branch.as_ref().is_none_or(|branch| branch.is_empty()) {
                     mobile_catalog::checkout_branch(metadata.worktree_cwd.as_deref().unwrap_or(&entry.summary.cwd), &mut branches)
                 } else { String::new() };
-                sessions.push(mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch));
+                let mut session = mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch);
+                if let Some(lead) = lead {
+                    session["leadId"] = json!(lead);
+                }
+                sessions.push(session);
             }
             sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_u64()));
             let monos: Vec<Value> = monos
@@ -1372,6 +1386,9 @@ impl Shell {
                         .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(mono, cx))),
                 }
                 .ok_or("This conversation is still opening on desktop; try again")?;
+                if view.read(cx).driven_by.is_some() {
+                    return Err("A subagent is driven by its lead".into());
+                }
                 let model = match (
                     string(params, "harness").as_deref().and_then(Kind::parse),
                     string(params, "model"),
@@ -1479,6 +1496,9 @@ impl Shell {
                         let view = this
                             .ensure_session(*id, cx)
                             .ok_or("Session is no longer available")?;
+                        if view.read(cx).driven_by.is_some() {
+                            return Err("A subagent is driven by its lead".into());
+                        }
                         view.update(cx, |v, cx| v.mobile_submit(text, attachments, cx));
                         this.mobile.started.insert(*id);
                         Ok(())
@@ -2528,6 +2548,32 @@ mod tests {
             .unwrap();
     }
 
+    #[gpui::test]
+    fn a_lead_lists_its_subagents_under_it_on_the_phone(cx: &mut gpui::TestAppContext) {
+        use monocode_core::subagents::{Summary, SummaryTask};
+        let (window, lead, worker) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&worker].update(cx, |chat, _| chat.summary.has_messages = true);
+                shell.agent_summaries.insert(
+                    lead,
+                    Summary {
+                        tasks: vec![SummaryTask {
+                            session: Some(worker),
+                            status: "running".into(),
+                            ..Default::default()
+                        }],
+                        live: true,
+                    },
+                );
+                let paths = shell.mobile_projects(cx);
+                let entries = shell.mobile_catalog_sessions(&paths, cx);
+                let entry = |id: i64| entries.iter().find(|e| e.id == id).unwrap();
+                assert_eq!(entry(worker).lead, Some(lead));
+                assert_eq!(entry(lead).lead, None);
+            })
+            .unwrap();
+    }
     #[gpui::test]
     fn saved_and_live_usage_tokens_match_and_shell_routes_continuation_controls(
         cx: &mut gpui::TestAppContext,

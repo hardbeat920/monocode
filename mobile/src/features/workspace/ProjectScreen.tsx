@@ -1,3 +1,4 @@
+import { LeadLink } from "@/features/sessions/LeadLink";
 import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
 import { router, Stack, useIsFocused } from "expo-router";
 import {
@@ -101,7 +102,7 @@ export function ProjectScreen({
   /** Its title until the session is in the catalog, which may leave it out. */
   title?: string;
 }) {
-  const { startSession, sendMessage, stop } = useWorkspace();
+  const { startSession, sendMessage, stop, sessions } = useWorkspace();
   const [openAfterStarting] = useOpenSessionAfterStarting();
   const colors = useColors();
   const drawer = useDrawerActions();
@@ -309,6 +310,10 @@ export function ProjectScreen({
       onClose={sheet ? () => router.back() : undefined}
     />
   ) : null;
+  // A subagent's way back to its lead.
+  const lead = session?.leadId
+    ? sessions.find((entry) => entry.id === session.leadId)
+    : undefined;
   const sessionToolbar = sessionId ? (
     <SessionToolbar
       projectId={project.id}
@@ -326,7 +331,9 @@ export function ProjectScreen({
       // Where a new session will work, under the tabs and in view across its
       // pages; a session's composer shows where it does.
       below={
-        sessionId ? undefined : offline ? (
+        sessionId ? (
+          lead ? <LeadLink lead={lead} /> : undefined
+        ) : offline ? (
           // Nothing to pick from while the desktop can't be reached.
           <ReconnectingStatus />
         ) : (

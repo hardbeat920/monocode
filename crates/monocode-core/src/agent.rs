@@ -2,7 +2,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Declared from least to most trust, so a mode compares as its trust.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AccessMode {
     ReadOnly,
@@ -105,6 +106,10 @@ pub struct Settings {
     pub turn_model: Option<TurnInfo>,
     #[serde(skip)]
     pub disable_claude_hooks: bool,
+    /// Turns off the harness's own subagent tool in a lead chat, so every
+    /// subagent starts as a MonoCode thread.
+    #[serde(skip)]
+    pub monocode_subagents_only: bool,
     #[serde(skip)]
     pub environment: std::collections::HashMap<String, String>,
     #[serde(skip)]
@@ -127,10 +132,6 @@ pub struct Settings {
     /// Provider-advertised controls beyond the common effort/speed switches.
     pub model_settings: std::collections::HashMap<String, String>,
     pub plan: bool,
-    pub operator: bool,
-    /// A submitted /operator grants this thread access independently of its next draft.
-    pub operator_enabled: bool,
-    pub orchestrator: bool,
     pub new_worktree: bool,
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,
@@ -178,6 +179,9 @@ pub struct TurnInfo {
     pub started_at: Option<u64>,
     pub completed_at: Option<u64>,
     pub metrics: Option<TurnMetrics>,
+    /// The thread that sent this turn's prompt, when another thread did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender: Option<i64>,
 }
 impl TurnInfo {
     pub fn has_duration(&self) -> bool {

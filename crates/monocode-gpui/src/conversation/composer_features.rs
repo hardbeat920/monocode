@@ -1,7 +1,5 @@
 use super::*;
 use std::path::PathBuf;
-pub(crate) struct StartOrchestration(pub monocode_core::orchestration::Plan);
-pub(crate) struct StopOrchestration;
 
 impl Conversation {
     pub(crate) fn request_folder(&mut self, cx: &mut Context<Self>) {
@@ -30,8 +28,6 @@ impl Conversation {
         let enabled = match id {
             "draft" => self.follow_ups.draft_selected,
             "plan" => self.settings.plan,
-            "operator" => self.settings.operator,
-            "orchestrator" => self.settings.orchestrator,
             _ => true,
         };
         if !enabled {
@@ -42,8 +38,6 @@ impl Conversation {
         let enabled = match id {
             "draft" => &mut self.follow_ups.draft_selected,
             "plan" => &mut self.settings.plan,
-            "operator" => &mut self.settings.operator,
-            "orchestrator" => &mut self.settings.orchestrator,
             _ => return,
         };
         if *enabled {
@@ -58,19 +52,12 @@ impl Conversation {
         // The accepted turn or queue item already owns its mode. The empty
         // composer starts a fresh draft, matching Composer.tsx's submit reset.
         self.settings.plan = false;
-        self.settings.operator = false;
-        self.settings.orchestrator = false;
         self.input
             .update(cx, |input, cx| input.selected_command(None, cx));
         self.save_settings(cx);
         cx.notify();
     }
     pub(crate) fn toggle_mode(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.is_remote() && matches!(id, "operator" | "orchestrator") {
-            self.status = "This mode is not available on remote projects.".into();
-            cx.notify();
-            return;
-        }
         if id != "draft" {
             self.follow_ups.draft_selected = false;
         }
@@ -78,34 +65,14 @@ impl Conversation {
             "draft" => {
                 self.follow_ups.draft_selected = !self.follow_ups.draft_selected;
                 self.settings.plan = false;
-                self.settings.operator = false;
-                self.settings.orchestrator = false;
             }
-            "plan" => {
-                self.settings.plan = !self.settings.plan;
-                self.settings.orchestrator = false;
-                self.settings.operator = false;
-            }
-            "operator" => {
-                self.settings.operator = !self.settings.operator;
-                self.settings.plan = false;
-                self.settings.orchestrator = false;
-            }
-            "orchestrator" => {
-                self.settings.orchestrator = !self.settings.orchestrator;
-                self.settings.plan = false;
-                self.settings.operator = false;
-            }
+            "plan" => self.settings.plan = !self.settings.plan,
             _ => return,
         }
         let selected = if self.follow_ups.draft_selected {
             Some("draft")
-        } else if self.settings.orchestrator {
-            Some("orchestrator")
         } else if self.settings.plan {
             Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
         } else {
             None
         };
@@ -128,34 +95,11 @@ impl Conversation {
         mut text: String,
         cx: &mut Context<Self>,
     ) -> String {
-        for mode in ["plan", "operator", "orchestrator"] {
-            if let Some(rest) = monocode_core::composer::consume_command(&text, mode) {
-                let rest = rest.to_owned();
-                match mode {
-                    "plan" => {
-                        self.settings.plan = true;
-                        self.settings.orchestrator = false;
-                        self.settings.operator = false;
-                    }
-                    "operator" => {
-                        self.settings.operator = true;
-                        self.settings.plan = false;
-                        self.settings.orchestrator = false;
-                    }
-                    _ => {
-                        self.settings.orchestrator = true;
-                        self.settings.plan = false;
-                        self.settings.operator = false;
-                    }
-                }
-                self.save_settings(cx);
-                text = if rest.is_empty() && mode == "operator" {
-                    "Explain what you can do in MonoCode with the app CLI.".into()
-                } else {
-                    rest
-                };
-                break;
-            }
+        if let Some(rest) = monocode_core::composer::consume_command(&text, "plan") {
+            let rest = rest.to_owned();
+            self.settings.plan = true;
+            self.save_settings(cx);
+            text = rest;
         }
         text
     }
@@ -420,34 +364,6 @@ impl Conversation {
                 .into_any_element(),
         )
     }
-    pub(super) fn finish_orchestration_plan(&mut self, cx: &mut Context<Self>) {
-        if !self.planning_orchestration {
-            return;
-        }
-        self.planning_orchestration = false;
-        let rows = self.transcript.read(cx).source_rows();
-        let start = rows.iter().rposition(|row| row.role == "user").unwrap_or(0);
-        let text: String = rows[start..]
-            .iter()
-            .filter(|row| row.role == "assistant")
-            .map(|row| row.text.as_str())
-            .collect();
-        match monocode_core::orchestration::parse(&text) {
-            Ok(plan) => self.orchestration_plan = Some(plan),
-            Err(error) => self.orchestration_error = Some(error),
-        }
-    }
-    pub(crate) fn set_orchestration_progress(
-        &mut self,
-        progress: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.orchestration_progress = progress;
-        if self.needs_history_restore() {
-            self.load(cx);
-        }
-        cx.notify();
-    }
     pub(crate) fn external_outcome(&self, cx: &gpui::App) -> (bool, String) {
         let rows = self.transcript.read(cx).source_rows();
         let start = rows.iter().rposition(|row| row.role == "user").unwrap_or(0);
@@ -495,125 +411,5 @@ impl Conversation {
             && self.follow_ups.state.messages.is_empty()
             && self.follow_ups.state.draft.is_none()
             && !self.settings.worktree_removed
-    }
-    pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.history_ready() || self.stopping {
-            self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);
-            return;
-        }
-        let internal = self.settings.internal_message;
-        self.settings.internal_message = true;
-        self.launch_prompt(prompt, cx);
-        self.settings.internal_message = internal;
-    }
-    pub(super) fn orchestration_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.orchestration_plan.is_none()
-            && self.orchestration_error.is_none()
-            && self.orchestration_progress.is_none()
-        {
-            return None;
-        }
-        let mut card = div()
-            .id("orchestration-card")
-            .mb_2()
-            .p_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(tint(FUCHSIA_300, 0.2))
-            .bg(tint(FUCHSIA_300, 0.04))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .text_size(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(icon("share", 16.).text_color(tint(FUCHSIA_300, 0.8)))
-                    .child(
-                        self.orchestration_plan
-                            .as_ref()
-                            .map(|p| p.title.clone())
-                            .unwrap_or_else(|| "Orchestrator".into()),
-                    ),
-            );
-        if let Some(plan) = &self.orchestration_plan {
-            card = card
-                .child(
-                    div()
-                        .text_color(content(0.6))
-                        .child(monocode_core::response::limit(&plan.summary, 600)),
-                )
-                .child(
-                    div()
-                        .id("orchestration-tasks")
-                        .max_h(px(200.))
-                        .overflow_y_scroll()
-                        .children(plan.tasks.iter().map(|task| {
-                            div()
-                                .py_1()
-                                .child(format!("{} · {}", task.id, task.title))
-                                .child(div().text_size(px(10.)).text_color(content(0.4)).child(
-                                    format!(
-                                        "{}{}",
-                                        task.files.join(", "),
-                                        if task.depends_on.is_empty() {
-                                            String::new()
-                                        } else {
-                                            format!(" · after {}", task.depends_on.join(", "))
-                                        }
-                                    ),
-                                ))
-                        })),
-                );
-            if self.orchestration_progress.is_none() {
-                card = card.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            tool_pill("start-orchestration", "Start agents")
-                                .bg(content(0.1))
-                                .child("Start agents")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(plan) = this.orchestration_plan.clone() {
-                                        cx.emit(StartOrchestration(plan));
-                                    }
-                                })),
-                        )
-                        .child(
-                            tool_pill("dismiss-orchestration", "Dismiss plan")
-                                .child("Dismiss")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.orchestration_plan = None;
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-        }
-        if let Some(error) = &self.orchestration_error {
-            card = card
-                .child(div().text_color(tint(AMBER_400, 0.9)).child(error.clone()))
-                .child(
-                    tool_pill("dismiss-plan-error", "Dismiss")
-                        .child("Dismiss")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.orchestration_error = None;
-                            cx.notify();
-                        })),
-                );
-        }
-        if let Some(progress) = &self.orchestration_progress {
-            card = card
-                .child(div().text_color(content(0.6)).child(progress.clone()))
-                .child(
-                    tool_pill("stop-orchestration", "Stop agents")
-                        .child("Stop agents")
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(StopOrchestration))),
-                );
-        }
-        Some(card.into_any_element())
     }
 }

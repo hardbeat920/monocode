@@ -1501,7 +1501,7 @@ impl Menu {
             .flex_1()
             .min_w_0()
             .child(match &action.badge {
-                // The Orchestrator row's "v1" pill beside its title.
+                // A short pill beside the row's title.
                 Some(badge) => div()
                     .flex()
                     .items_center()

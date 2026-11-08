@@ -52,6 +52,7 @@ pub fn forget_session(kind: Kind, provider_id: &str, account_id: &str, cwd: &Pat
 mod questions;
 mod rewind;
 mod tasks;
+mod thread_tools;
 pub use rewind::{rewind_last_turn, supports_rewind, RewindError};
 #[cfg(all(test, unix))]
 mod text_tests;
@@ -595,9 +596,12 @@ impl Protocol {
                         }
                         if self.request.settings.plan {
                             params["sandboxPolicy"] = json!({"type":"readOnly"});
-                            if self.request.settings.operator
-                                || self.request.settings.operator_enabled
-                                || self.request.settings.orchestrator
+                            if self
+                                .request
+                                .settings
+                                .environment
+                                .get("MONOCODE_THREADS")
+                                .is_some_and(|v| v == "1")
                             {
                                 params["sandboxPolicy"]["networkAccess"] = true.into();
                             }
@@ -1055,8 +1059,22 @@ impl Protocol {
                 .and_then(|p| serde_json::to_string_pretty(p).ok())
                 .unwrap_or_else(|| "The agent is requesting permission to continue.".into());
         }
+        let native_read = kind == "claude"
+            && request["tool_name"].as_str().is_some_and(|name| {
+                name.starts_with("mcp__monocode__") && crate::visual_bridge::read_only_tool(name)
+            });
         self.approvals
             .insert(id.clone(), (wire, kind.into(), request));
+        // MonoCode read-only tools do not need a permission prompt.
+        if native_read {
+            return self.respond(
+                Control {
+                    id,
+                    decision: Decision::Allow,
+                },
+                stdin,
+            );
+        }
         if self.request.settings.plan || self.request.settings.access == AccessMode::ReadOnly {
             return self.respond(
                 Control {
@@ -1387,7 +1405,7 @@ fn run_operation(
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
-    if request.kind == Kind::OpenCode {
+    if request.kind == Kind::OpenCode && !thread_tools::enabled(&request) {
         return opencode::run(request, cancel, controls, probe, compact, emit);
     }
     let claude_new_session = (request.kind == Kind::Claude
@@ -1413,6 +1431,11 @@ fn run_operation(
         Kind::Codex => {
             command.arg("app-server");
             crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            if request.settings.monocode_subagents_only
+                && crate::visual_bridge::lead_chat(&request.settings.environment)
+            {
+                command.args(["-c", "features.multi_agent=false"]);
+            }
             crate::mono::bridge::configure_codex(
                 &mut command,
                 request.settings.mono.as_ref(),
@@ -1483,12 +1506,17 @@ fn run_operation(
                 system.push(crate::mono::instructions(&mono.mono, &mono.executable));
             }
             if let Some(server) = visual_server {
-                servers.insert("monocode_visual".into(), server);
+                servers.insert(crate::visual_bridge::SERVER_NAME.into(), server);
                 allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
                 if let Some(instructions) =
                     crate::visual_bridge::instructions(&settings.environment, true)
                 {
                     system.push(instructions);
+                }
+                if settings.monocode_subagents_only
+                    && crate::visual_bridge::lead_chat(&settings.environment)
+                {
+                    command.args(["--disallowedTools", "Agent"]);
                 }
             }
             if !system.is_empty() {
@@ -1565,6 +1593,10 @@ fn run_operation(
         }
         kind if kind.is_pi() => pi::configure(&mut command, &request, probe || command_probe),
         _ => acp::configure(&mut command, &request)?,
+    }
+    let _thread_extension = thread_tools::pi_extension(&request)?;
+    if let Some(extension) = &_thread_extension {
+        command.arg("--extension").arg(extension.path());
     }
     command
         .current_dir(if request.kind == Kind::Antigravity {
@@ -1931,29 +1963,6 @@ mod tests {
         assert!(instructions.contains("- /repo"));
     }
     #[test]
-    fn operator_thread_access_keeps_the_codex_app_bridge_reachable_on_later_turns() {
-        for plan in [false, true] {
-            let mut p = protocol(Kind::Codex);
-            p.request.settings.operator_enabled = true;
-            p.request.settings.plan = plan;
-            assert!(!p.request.settings.operator);
-            assert_eq!(p.codex_access().2["networkAccess"], true);
-            let mut out = Vec::new();
-            p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
-            p.frame(json!({"id":2,"result":{"thread":{"id":"saved"}}}), &mut out)
-                .unwrap();
-            let started: Value = String::from_utf8_lossy(&out)
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                .find(|message| message["method"] == "turn/start")
-                .unwrap();
-            assert_eq!(started["params"]["sandboxPolicy"]["networkAccess"], true);
-            if plan {
-                assert_eq!(started["params"]["sandboxPolicy"]["type"], "readOnly");
-            }
-        }
-    }
-    #[test]
     fn context_reports_use_the_latest_request_and_include_cached_tokens() {
         let mut codex = protocol(Kind::Codex);
         let events = codex.frame(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"totalTokens":4200},"total":{"totalTokens":99000},"modelContextWindow":272000}}}),&mut Vec::new()).unwrap();
@@ -2120,6 +2129,29 @@ mod tests {
         assert_eq!(response["response"]["request_id"], "permission-2");
         assert_eq!(response["response"]["response"]["behavior"], "allow");
         assert_eq!(response["response"]["response"]["updatedInput"], input);
+    }
+
+    #[test]
+    fn thread_reads_are_auto_allowed_only_on_the_monocode_server() {
+        for (name, allow) in [
+            ("mcp__monocode__thread_wait", true),
+            ("mcp__monocode__thread_read", true),
+            ("mcp__monocode__thread_list", true),
+            ("mcp__other__thread_read", false),
+            ("mcp__monocode__thread_send", false),
+        ] {
+            let mut p = protocol(Kind::Claude);
+            p.request.settings.access = AccessMode::ReadOnly;
+            let mut out = Vec::new();
+            let events=p.frame(json!({"type":"control_request","request_id":"read-1","request":{"subtype":"can_use_tool","tool_name":name,"input":{"threadId":7}}}),&mut out).unwrap();
+            assert!(events.is_empty());
+            let result: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(
+                result["response"]["response"]["behavior"],
+                if allow { "allow" } else { "deny" },
+                "{name}"
+            );
+        }
     }
     #[test]
     fn selected_model_effort_and_access_reach_the_codex_turn() {

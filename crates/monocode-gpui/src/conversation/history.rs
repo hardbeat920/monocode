@@ -36,15 +36,7 @@ impl Conversation {
         // taking any files the user attached while history was restoring.
         let attachments = std::mem::take(&mut self.attachments);
         self.attachments = std::mem::take(&mut self.settings.attachments);
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
+        let mode = self.settings.plan.then_some("plan");
         self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
         self.attachments = attachments;
     }
@@ -71,9 +63,6 @@ impl Conversation {
             || self.settings.mono.is_some()
             || self.account_switching
             || self.preparing_worktree
-            || self.planning_orchestration
-            || self.orchestration_plan.is_some()
-            || self.orchestration_progress.is_some()
             || self.settings.usage_limit.is_some()
             || !self.history_actions.is_empty()
             || self.mono_ui.external.is_some()

@@ -11,14 +11,16 @@ mod edit_last_turn;
 mod follow_up;
 pub(crate) mod git_actions;
 mod history;
-mod mobile;
+pub(crate) mod mobile;
 mod mono;
 mod notifications;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
+pub(crate) mod subagents;
 #[cfg(test)]
 mod submission_tests;
+mod threads;
 mod title;
 mod worktree_naming;
 use crate::{
@@ -94,8 +96,6 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 ];
 // Tailwind v4 accents the composer menus tint their icons with.
 const YELLOW_300: u32 = 0xffdf20;
-const SKY_300: u32 = 0x74d4ff;
-const FUCHSIA_300: u32 = 0xf4a8ff;
 const AMBER_400: u32 = 0xffb900;
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
     let mut c: gpui::Hsla = gpui::rgb(color).into();
@@ -125,6 +125,10 @@ struct OpenMenu {
 use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
+pub(crate) struct OpenThread(pub i64);
+/// The user removed these finished children from the lead's spawn tree; the
+/// shell closes (archives) them.
+pub(crate) struct CloseThreads(pub Vec<i64>);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
 pub(crate) struct Conversation {
@@ -165,10 +169,6 @@ pub(crate) struct Conversation {
     app_environment: std::collections::HashMap<String, String>,
     /// The running turn's policy, independent of the next composer's mode.
     pub(crate) app_read_only: bool,
-    planning_orchestration: bool,
-    pub(crate) orchestration_plan: Option<monocode_core::orchestration::Plan>,
-    orchestration_error: Option<String>,
-    pub(crate) orchestration_progress: Option<String>,
     status: String,
     loaded: bool,
     history_unloaded: bool,
@@ -181,6 +181,18 @@ pub(crate) struct Conversation {
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
+    /// Automation runs and subagents: they are run by
+    /// something else, so they cannot start threads of their own.
+    pub(crate) managed: bool,
+    /// The lead that drives this subagent. The user can watch it, answer
+    /// its approvals and stop it, but not send it messages.
+    pub(crate) driven_by: Option<i64>,
+    /// The lead's title, for the read-only bar.
+    pub(crate) thread_lead_title: String,
+    /// The thread whose message the next turn delivers, kept on its receipt.
+    pub(crate) thread_sender: Option<i64>,
+    /// This lead's subagents, for the strip above its composer.
+    subagents: Vec<subagents::Subagent>,
     /// The provider model for the next turn; `None` uses its configured default.
     model: Option<String>,
     resolved_model: Option<String>,
@@ -622,10 +634,6 @@ impl Conversation {
             attachment_error: None,
             app_environment: Default::default(),
             app_read_only: false,
-            planning_orchestration: false,
-            orchestration_plan: None,
-            orchestration_error: None,
-            orchestration_progress: None,
             status: "Loading conversation…".into(),
             loaded: false,
             history_unloaded: false,
@@ -636,6 +644,11 @@ impl Conversation {
             stopping: false,
             notification_cancelled: false,
             draft_hint: false,
+            managed: false,
+            driven_by: None,
+            thread_lead_title: String::new(),
+            thread_sender: None,
+            subagents: Vec::new(),
             model: std::env::var(format!(
                 "MONOCODE_{}_MODEL",
                 summary.provider.to_uppercase()
@@ -856,6 +869,9 @@ impl Conversation {
         settings: Settings,
         cx: &mut Context<Self>,
     ) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.editing_last_turn.pending() {
             self.defer_edit_transfer(settings, Some(prompt), cx);
             return;
@@ -887,6 +903,9 @@ impl Conversation {
     /// `invert` sends a mid-turn message the opposite way from the follow-up
     /// preference: queued when it steers, steering when it queues.
     fn send_follow_up(&mut self, invert: bool, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.is_remote() && self.remote_send_guard(cx) {
             return;
         }
@@ -959,15 +978,7 @@ impl Conversation {
         }
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
+        let mode = self.settings.plan.then_some("plan");
         if self.settings.pending_provider_switch.is_some() && self.busy {
             // Picking a provider only arms the change. Sending is what stops
             // the outgoing provider and commits the handoff.
@@ -996,9 +1007,6 @@ impl Conversation {
             }
             return;
         }
-        self.planning_orchestration = self.settings.orchestrator;
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
         self.launch_prompt(prompt, cx);
         if self.busy && mode.is_some() {
             self.clear_submitted_mode(cx);
@@ -1026,9 +1034,8 @@ impl Conversation {
         {
             return None;
         }
-        let mode = self.settings.orchestrator || self.settings.plan || self.settings.operator;
         Some(
-            if self.busy && !mode && self.steers_follow_up(alternate, cx) {
+            if self.busy && !self.settings.plan && self.steers_follow_up(alternate, cx) {
                 ("Steer", "queue-steer")
             } else {
                 ("Queue", "queue-list")
@@ -1037,15 +1044,7 @@ impl Conversation {
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         if self.stopping {
-            let mode = if self.settings.orchestrator {
-                Some("orchestrator")
-            } else if self.settings.plan {
-                Some("plan")
-            } else if self.settings.operator {
-                Some("operator")
-            } else {
-                None
-            };
+            let mode = self.settings.plan.then_some("plan");
             self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
             if let Some(id) = self
                 .follow_ups
@@ -1114,12 +1113,9 @@ impl Conversation {
         let summary = self.summary.clone();
         let store = self.store.clone();
         let cancel = self.cancel.clone();
-        // Composer modes reset after Send; the thread grant and running turn's
-        // access policy must outlive that reset and edits to the next draft.
-        self.settings.operator_enabled |= self.settings.operator;
-        self.app_read_only = self.settings.plan
-            || self.settings.orchestrator
-            || self.settings.access == AccessMode::ReadOnly;
+        // Composer modes reset after Send; the running turn's access policy
+        // must outlive that reset and edits to the next draft.
+        self.app_read_only = self.settings.plan || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
         if let Some(model) = self.model_info() {
             for control in &model.controls {
@@ -1129,6 +1125,8 @@ impl Conversation {
                     .or_insert_with(|| control.current.clone());
             }
         }
+        let sender = self.thread_sender.take();
+        self.transcript.update(cx, |t, _| t.live_sender = sender);
         settings.turn_model = Some(monocode_core::agent::TurnInfo {
             provider: self.summary.provider.clone(),
             model: model_label.to_string(),
@@ -1137,6 +1135,7 @@ impl Conversation {
                 .map(|model| model.id.clone())
                 .or(self.model.clone()),
             started_at: Some(monocode_core::time::now_ms()),
+            sender,
             ..Default::default()
         });
         if !self.is_remote() && settings.prepared_prompt.is_none() {
@@ -1148,8 +1147,11 @@ impl Conversation {
         settings.disable_claude_hooks = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
+        settings.monocode_subagents_only = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.monocode_subagents_only);
         settings.model = self.model.clone();
-        settings.environment.extend(self.app_environment.clone());
+        settings.environment = self.provider_environment(&settings);
         if settings.remote_action.as_ref().is_none_or(|action| {
             (action["type"] == "send"
                 && action["draftBlockId"].is_null()
@@ -1180,11 +1182,6 @@ impl Conversation {
         {
             self.transcript
                 .update(cx, |view, cx| view.submit_prompt(&prompt, &settings, cx));
-        }
-        if settings.orchestrator {
-            settings.plan = true;
-            settings.operator = false;
-            self.settings.orchestrator = false;
         }
         if self.settings.handoff.take().is_some() {
             self.save_settings(cx);
@@ -1510,12 +1507,6 @@ impl Conversation {
                                     info.model_id = model_id;
                                 }
                             });
-                            if stopping {
-                                this.planning_orchestration = false;
-                                this.orchestration_progress = None;
-                            } else {
-                                this.finish_orchestration_plan(cx);
-                            }
                             this.settings.turns = this.transcript.read(cx).window_turns();
                             this.save_settings(cx);
                             this.refresh_git(cx);
@@ -1565,12 +1556,24 @@ impl Conversation {
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
+impl EventEmitter<OpenThread> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
-impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
-impl EventEmitter<composer_features::StopOrchestration> for Conversation {}
 
 impl Conversation {
     pub(crate) fn install_transfer(
+        &mut self,
+        settings: Settings,
+        prompt: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.driven_by.is_some() && prompt.is_some() {
+            return;
+        }
+        self.install_lead_transfer(settings, prompt, cx);
+    }
+    /// install_transfer for a lead starting work on its own subagent, which
+    /// the user can't send messages to.
+    pub(crate) fn install_lead_transfer(
         &mut self,
         settings: Settings,
         prompt: Option<String>,
@@ -1597,7 +1600,7 @@ impl Conversation {
                             this.install_transfer(settings, None, cx);
                             this.enqueue_restored_prompt(prompt, cx);
                         }
-                        prompt => this.install_transfer(settings, prompt, cx),
+                        prompt => this.install_lead_transfer(settings, prompt, cx),
                     }
                 },
                 cx,
@@ -2093,7 +2096,7 @@ impl Conversation {
                 "thinking" => {
                     self.settings.thinking = Some(!self.settings.thinking.unwrap_or(false))
                 }
-                "plan" | "operator" | "orchestrator" | "draft" => {
+                "plan" | "draft" => {
                     self.toggle_mode(id, cx);
                     return;
                 }
@@ -2103,11 +2106,14 @@ impl Conversation {
         self.save_settings(cx);
         cx.notify();
     }
-    fn set_effort_choice(&mut self, effort: &str, cx: &mut Context<Self>) {
+    fn apply_effort(&mut self, effort: &str) {
         self.settings
             .model_settings
             .retain(|key, _| !is_effort_key(key));
         self.settings.effort = (!effort.is_empty()).then(|| effort.to_owned());
+    }
+    fn set_effort_choice(&mut self, effort: &str, cx: &mut Context<Self>) {
+        self.apply_effort(effort);
         let provider = self.summary.provider.clone();
         if cx.has_global::<crate::settings::Preferences>() {
             cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
@@ -2244,7 +2250,10 @@ impl Conversation {
         picked: &ModelPicked,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.editing_last_turn.pending() || self.status == "Preparing handoff…" {
+        if self.driven_by.is_some()
+            || self.editing_last_turn.pending()
+            || self.status == "Preparing handoff…"
+        {
             return false;
         }
         let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
@@ -2547,17 +2556,6 @@ impl Conversation {
                             .icon("ai-idea")
                             .icon_color(tint(YELLOW_300, 0.8))
                             .description("Review a plan before building"),
-                        MenuAction::new("operator", "Operator")
-                            .disabled(self.is_remote())
-                            .icon("cursor-magic")
-                            .icon_color(tint(SKY_300, 0.8))
-                            .description("Give this thread access to MonoCode"),
-                        MenuAction::new("orchestrator", "Orchestrator")
-                            .disabled(self.is_remote())
-                            .icon("share")
-                            .icon_color(tint(FUCHSIA_300, 0.65))
-                            .badge("v1")
-                            .description("Plan and coordinate agent work"),
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save this message without starting the agent")
@@ -2568,8 +2566,6 @@ impl Conversation {
                         let checked = match action.id.as_ref() {
                             "plan" => self.settings.plan,
                             "draft" => self.draft_active(cx),
-                            "operator" => self.settings.operator,
-                            "orchestrator" => self.settings.orchestrator,
                             _ => false,
                         };
                         action.checked(checked).into()
@@ -2726,6 +2722,10 @@ impl Conversation {
         }
         if self.busy {
             self.stop(cx);
+        } else if self.driven_by.is_none() || self.thread_pending() {
+            self.notification_cancelled = true;
+            cx.emit(SessionChanged);
+            cx.notify();
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -2782,15 +2782,14 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.driven_by.is_some() {
+            return self.thread_composer(cx);
+        }
         let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
-        } else if self.settings.orchestrator {
-            Some(input::Command::Orchestrator)
         } else if self.settings.plan {
             Some(input::Command::Plan)
-        } else if self.settings.operator {
-            Some(input::Command::Operator)
         } else {
             None
         };
@@ -2840,8 +2839,8 @@ impl Conversation {
             .child(self.composer_anchor.probe())
             .children(menu)
             .children(self.model_list_popover(cx))
-            .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .children(self.subagent_strip(cx))
             .child(self.changes_shelf(window, cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
@@ -4087,6 +4086,32 @@ mod menu_tests {
     use monocode_core::store::Store;
     use std::sync::Mutex;
     #[gpui::test]
+    fn an_agent_can_set_the_full_id_behind_a_model_alias(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.catalog = vec![Model {
+                    alias_target: Some("claude-sonnet-5-5".into()),
+                    id: "sonnet".into(),
+                    name: "Sonnet 5.5".into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                    fast: false,
+                    thinking: false,
+                    default: true,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                }];
+                view.check_agent_change(Some("claude-sonnet-5-5"), None)
+                    .unwrap();
+                assert!(view.check_agent_change(Some("nope"), None).is_err());
+                view.apply_agent_change(Some("claude-sonnet-5-5"), None, None, cx)
+                    .unwrap();
+                assert_eq!(view.model.as_deref(), Some("sonnet"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
         cx: &mut TestAppContext,
     ) {
@@ -4615,13 +4640,8 @@ mod menu_tests {
                     .update(cx, |i, cx| i.set_text("Review this".into(), cx));
                 c.toggle_mode("plan", cx);
                 assert_eq!(c.input.read(cx).content, "/plan Review this");
-                c.toggle_mode("operator", cx);
-                assert_eq!(c.input.read(cx).content, "/operator Review this");
-                c.toggle_mode("orchestrator", cx);
-                assert_eq!(c.input.read(cx).content, "/orchestrator Review this");
-                c.toggle_mode("orchestrator", cx);
-                assert_eq!(c.input.read(cx).content, "Review this");
                 c.toggle_mode("plan", cx);
+                assert_eq!(c.input.read(cx).content, "Review this");
             })
             .unwrap();
         cx.run_until_parked();
@@ -4629,16 +4649,15 @@ mod menu_tests {
             .update(cx, |c, w, cx| {
                 c.input.update(cx, |i, cx| {
                     i.select_range(0..i.content.len(), cx);
-                    i.replace_text_in_range(None, "/operator New draft", w, cx);
+                    i.replace_text_in_range(None, "/plan New draft", w, cx);
                 });
             })
             .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |c, _, cx| {
-                assert!(!c.settings.plan);
-                assert_eq!(c.input.read(cx).content, "/operator New draft");
-                c.enable_mode("operator", cx);
+                assert_eq!(c.input.read(cx).content, "/plan New draft");
+                c.enable_mode("plan", cx);
                 c.input.update(cx, |i, cx| i.select_range(1..1, cx));
             })
             .unwrap();
@@ -4646,8 +4665,8 @@ mod menu_tests {
         cx.run_until_parked();
         window
             .update(cx, |c, _, cx| {
-                assert!(!c.settings.operator);
-                assert_eq!(c.input.read(cx).content, "operator New draft");
+                assert!(!c.settings.plan);
+                assert_eq!(c.input.read(cx).content, "plan New draft");
             })
             .unwrap();
     }
@@ -4656,39 +4675,34 @@ mod menu_tests {
     fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
         cx: &mut TestAppContext,
     ) {
-        for mode in ["operator", "orchestrator", "plan"] {
-            let window = conversation(cx);
-            window
-                .update(cx, |view, _, cx| {
-                    // An unsupported synthetic provider stops before any CLI I/O.
-                    view.summary.provider = "fixture".into();
-                    view.loaded = true;
-                    view.input
-                        .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
-                    view.toggle_mode(mode, cx);
-                    view.send(cx);
-                    assert!(view.busy);
-                    assert!(view.input.read(cx).content.is_empty());
-                    assert!(
-                        !view.settings.plan
-                            && !view.settings.operator
-                            && !view.settings.orchestrator
-                    );
-                })
-                .unwrap();
-            cx.run_until_parked();
-            window
-                .update(cx, |view, _, cx| {
-                    let saved = locked(&view.store)
-                        .unwrap()
-                        .agent_settings(view.summary.id)
-                        .unwrap()
-                        .unwrap();
-                    assert!(!saved.plan && !saved.operator && !saved.orchestrator);
-                    assert!(view.input.read(cx).content.is_empty());
-                })
-                .unwrap();
-        }
+        let mode = "plan";
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                // An unsupported synthetic provider stops before any CLI I/O.
+                view.summary.provider = "fixture".into();
+                view.loaded = true;
+                view.input
+                    .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
+                view.toggle_mode(mode, cx);
+                view.send(cx);
+                assert!(view.busy);
+                assert!(view.input.read(cx).content.is_empty());
+                assert!(!view.settings.plan);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .agent_settings(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert!(!saved.plan);
+                assert!(view.input.read(cx).content.is_empty());
+            })
+            .unwrap();
     }
 
     #[gpui::test]
