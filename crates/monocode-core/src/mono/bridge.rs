@@ -20,7 +20,7 @@ Pass --input FILE or --input - to read a JSON object instead.
 Actions:
 models.list {}
 sessions.list {project?}
-sessions.read {sessionId,project?,before?,limit?,maxChars?}
+sessions.read {sessionId,project?,before?,limit?,maxChars?,charOffset?}
 sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,placement?,besideSessionId?,notifyOnComplete?,notifyGroup?}
 sessions.send {sessionId,prompt,project?,notifyOnComplete?,notifyGroup?}
 sessions.draft {sessionId,prompt,project?}
@@ -36,7 +36,7 @@ memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,unti
 habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
 Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
-sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
+sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before. maxChars (200-6000) caps each message; a longer one has nextCharOffset, so read on by repeating the call with that value as charOffset.
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits and cards require a Mono.
 Operator sessions.start and sessions.send accept notifyOnComplete:true (default false). Say what started and end the turn; never poll. By default workers are grouped by caller turn. Give each worker its own notifyGroup for a report per worker, or share a label to group across turns. Labels are trimmed, 1 to 64 characters, and require notifyOnComplete:true; Monos do not support notifyGroup. Reusing a label after delivery starts a fresh group. A report resumes the idle caller after all workers in its group stop. Completion is not verification; inspect and verify results before telling the user.

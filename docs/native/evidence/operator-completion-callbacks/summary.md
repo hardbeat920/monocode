@@ -1,5 +1,8 @@
 # MonoCode callback thermonuclear review
 
+The latest full validation is recorded under Main sync below. Earlier sections
+retain the results from previous branch revisions.
+
 Reviewed the full branch against origin/main, then reviewed the fixes. The maintainability review is complete with no remaining blocking findings in this feature. Publication validation has the suite limitations listed below.
 
 ## Findings and resolution
@@ -45,3 +48,9 @@ Subscription metadata now carries its read Result into the shell. A decode or da
 Sends to a session with a removed worktree now return an error before arming a subscription or installing the prompt. The regression confirms that the target composer remains empty and another worker's existing subscription is preserved.
 
 Before the fixes, 20 callback tests passed and all four new regressions failed at the expected assertions. After the fixes, all 36 Operator tests passed, including the four regressions; all 11 targeted core Operator tests passed; and the full core suite passed 676 tests with 2 ignored. Clippy passed both packages and all targets using the existing baseline lint allowances. Formatting and whitespace checks passed for changed code, with shell.rs retaining only its previously documented baseline formatting differences. The full GPUI suite and native screenshots were not repeated for this follow-up.
+
+## Main sync
+
+Merged main at `164957961717a02ffff91a6c25e1f0ae8007a40e`, bringing in ten upstream commits. The two conflicts were in the API field list and CLI help. Both now keep upstream's `charOffset` pagination and this branch's `notifyGroup` completion controls. The upstream Mono report-content and failed-completion composer changes are included without replacing the ordinary Operator callback path.
+
+On the merged source, all 679 core unit tests passed with 2 ignored, and all 878 GPUI unit tests passed with 11 ignored. This includes paginated reads, the upstream completion-report regressions, and all Operator callback regressions. The native script suite passed 29 tests. Native formatting now passes after main's pane-formatting fix. Strict Clippy still stops on six warnings in unchanged core files; both packages and all targets pass with the same two baseline lint categories allowed. No live screenshots were recaptured for this merge.
