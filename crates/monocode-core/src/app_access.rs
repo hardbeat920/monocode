@@ -31,6 +31,8 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
             | "notes.write"
             | "worktrees.list"
             | "worktrees.create"
+            | "cow.list"
+            | "cow.create"
     ) {
         return Err("Unknown Operator action. Run app help for project actions; memory, habits and artifacts require a Mono.".into());
     }
@@ -58,6 +60,15 @@ pub fn prompt(input: &Value) -> Result<String, String> {
         return Err("App calls cannot enable /operator in another session".into());
     }
     Ok(prompt)
+}
+/// Copies always have a new owning session and use the normal launch options.
+pub fn cow_launch_input(mut input: Value) -> Value {
+    let fields = input.as_object_mut().expect("validated app input");
+    if let Some(base) = fields.remove("base") {
+        fields.insert("worktreeBase".into(), base);
+    }
+    fields.insert("workspaceMode".into(), "cow".into());
+    input
 }
 pub fn fingerprint(action: &str, input: &Value) -> String {
     crate::mono::files::content_hash(&format!("{action}:{input}"))

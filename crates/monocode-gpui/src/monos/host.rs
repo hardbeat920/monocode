@@ -251,11 +251,15 @@ impl Monos {
             self.finish_call(call, Err("Input must be a JSON object".into()), cx);
             return;
         }
-        let mut input = call.input.clone();
+        let mut input = if call.action == "cow.create" {
+            app::cow_launch_input(call.input.clone())
+        } else {
+            call.input.clone()
+        };
         let action = call.action.clone();
         // Apply saved model and isolation defaults independently; the receipt
         // still keys on the request the Mono sent.
-        if action == "sessions.start"
+        if matches!(action.as_str(), "sessions.start" | "cow.create")
             && let Some(subsessions) = &mono.subsessions
         {
             subsessions.fill(&mut input);
@@ -265,6 +269,7 @@ impl Monos {
         let project = if action.starts_with("sessions.")
             || action.starts_with("folders.")
             || action.starts_with("worktrees.")
+            || action.starts_with("cow.")
         {
             match mono.project(input.get("project").and_then(Value::as_str)) {
                 Ok(p) => p,
@@ -307,7 +312,7 @@ impl Monos {
                 );
                 return;
             }
-            "sessions.start" => {
+            "sessions.start" | "cow.create" => {
                 let parsed = (|| {
                     let prompt = app::prompt(&input)?;
                     let provider = input["harness"]
@@ -377,10 +382,28 @@ impl Monos {
                             &models,
                         )?;
                         settings.revision = 0;
-                        let mut summary = locked(&store)?.create(&provider, &project)?;
-                        app::launch_checkout(&input, &project, summary.id, &mut settings)?;
-                        summary.title = app::optional_text(&input, "title", 160)?
+                        let title = app::optional_text(&input, "title", 160)?
                             .unwrap_or_else(|| prompt.chars().take(160).collect());
+                        let mut summary = locked(&store)?.create(&provider, &project)?;
+                        let workspace = (|| {
+                            app::launch_checkout(&input, &project, summary.id, &mut settings)?;
+                            if action == "cow.create" {
+                                let (isolation, owner) = {
+                                    let db = locked(&store)?;
+                                    (
+                                        monocode_core::isolation::Isolation::for_store(&db),
+                                        db.persisted_session_id(summary.id)?,
+                                    )
+                                };
+                                isolation.create(Path::new(&project), &owner, &mut settings)?;
+                            }
+                            Ok::<_, String>(())
+                        })();
+                        if let Err(error) = workspace {
+                            let _ = locked(&store)?.delete(summary.id);
+                            return Err(error);
+                        }
+                        summary.title = title;
                         // Worktree creation can run git; do not hold the
                         // application store lock while that command runs.
                         let db = locked(&store)?;
@@ -388,8 +411,14 @@ impl Monos {
                         db.configure_agent(summary.id, &provider, &settings)?;
                         db.prepare_app_prompt(summary.id, &request, &prompt)?;
                         summary.has_messages = true;
+                        let mut value =
+                            json!({"sessionId":summary.id,"accepted":true,"project":project});
+                        if action == "cow.create" {
+                            value["cowId"] = json!(settings.cow_id);
+                            value["path"] = json!(settings.worktree_cwd);
+                        }
                         Ok((
-                            json!({"sessionId":summary.id,"accepted":true,"project":project}),
+                            value,
                             Effect::Start(summary, Box::new(settings), prompt, draft, placement),
                         ))
                     },
@@ -722,7 +751,7 @@ impl Monos {
             "soul.read" | "soul.update" | "memory.read" | "memory.search" | "memory.add"
             | "memory.replace" | "memory.remove" | "habits.list" | "habits.add"
             | "habits.update" | "habits.run" | "habits.remove" | "notes.list" | "notes.read"
-            | "notes.write" | "worktrees.list" | "worktrees.create" => {
+            | "notes.write" | "worktrees.list" | "worktrees.create" | "cow.list" => {
                 let caller = call.session;
                 let request = call.request_id.clone();
                 let projects = mono.projects.clone();
@@ -742,6 +771,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                         "notes.list"|"notes.read"|"notes.write"=>app::notes_action(&*locked(&store)?,caller,&request,&action,&input,&projects)?,
                         "worktrees.list"=>json!(monocode_core::git::snapshot(Path::new(&project))?.worktrees.iter().map(|w|json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main})).collect::<Vec<_>>()),
                         "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=monocode_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
+                        "cow.list"=>{let isolation=monocode_core::isolation::Isolation::for_store(&*locked(&store)?);json!({"copies":isolation.list(Path::new(&project))?})},
                         _=>unreachable!(),
                     };Ok((value,Effect::None))
                 },cx);

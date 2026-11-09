@@ -2,7 +2,7 @@
 //! do filesystem/Git I/O and belong on a background executor, outside DB locks.
 use crate::{agent::Settings, store::Store};
 pub use monocode_isolation::{publication_hook, set_publication_helper};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ impl Drop for CopyLease {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
     pub id: String,

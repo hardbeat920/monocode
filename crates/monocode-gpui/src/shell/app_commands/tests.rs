@@ -495,7 +495,7 @@ fn operator_notes_and_conversation_paging_use_the_project_api(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn operator_creates_selects_and_validates_real_worktrees(cx: &mut TestAppContext) {
+fn operator_creates_selects_and_validates_real_worktrees_and_copies(cx: &mut TestAppContext) {
     let root = std::env::temp_dir().join(format!(
         "operator-worktrees-{}",
         monocode_core::mono::new_id()
@@ -627,6 +627,142 @@ fn operator_creates_selects_and_validates_real_worktrees(cx: &mut TestAppContext
             )
         })
         .unwrap();
+    let isolation = window
+        .update(cx, |shell, _, _| {
+            monocode_core::isolation::Isolation::for_store(&locked(&shell.store).unwrap())
+        })
+        .unwrap();
+    let input = json!({"prompt":"Review privately","base":"HEAD","draft":true});
+    std::fs::write(
+        std::path::Path::new(&project).join("private.txt"),
+        "Inherited context\n",
+    )
+    .unwrap();
+    let copy = call(window, id, "create-copy", "cow.create", input.clone(), cx);
+    if isolation.supported(std::path::Path::new(&project)) {
+        let copy = copy.unwrap();
+        let path = copy["path"].as_str().unwrap();
+        let child = copy["sessionId"].as_i64().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(path).join("private.txt")).unwrap(),
+            "Inherited context\n"
+        );
+        assert!(
+            monocode_core::scm::diff_index(std::path::Path::new(path))
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                let db = locked(&shell.store).unwrap();
+                let settings = db.agent_settings(child).unwrap().unwrap();
+                assert_eq!(settings.cow_id.as_deref(), copy["cowId"].as_str());
+                assert_eq!(settings.worktree_cwd.as_deref(), Some(path));
+                assert!(!settings.new_cow);
+                assert!(!shell.sessions[&child].read(cx).busy);
+                assert_eq!(
+                    db.follow_ups(child).unwrap().draft.unwrap().text,
+                    "Review privately"
+                );
+                let owner = isolation
+                    .owner(std::path::Path::new(&project), std::path::Path::new(path))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(owner.session_id, db.persisted_session_id(child).unwrap());
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| shell.app_results.clear())
+            .unwrap();
+        assert_eq!(
+            call(window, id, "create-copy", "cow.create", input, cx).unwrap(),
+            copy
+        );
+        let listed = call(window, id, "list-copies", "cow.list", json!({}), cx).unwrap();
+        assert_eq!(listed["copies"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["copies"][0]["id"], copy["cowId"]);
+        assert!(
+            call(
+                window,
+                id,
+                "share-copy",
+                "sessions.start",
+                json!({"prompt":"No sharing","draft":true,"worktreeCwd":path}),
+                cx
+            )
+            .is_err()
+        );
+    } else {
+        assert!(
+            std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+            "APFS required"
+        );
+        assert!(copy.unwrap_err().contains("APFS"));
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(
+                    locked(&shell.store).unwrap().sessions().unwrap().len(),
+                    before
+                )
+            })
+            .unwrap();
+    }
+    let before = window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store).unwrap().sessions().unwrap().len()
+        })
+        .unwrap();
+    assert!(
+        call(
+            window,
+            id,
+            "bad-copy-base",
+            "cow.create",
+            json!({"prompt":"Denied","draft":true,"base":"missing-branch"}),
+            cx
+        )
+        .is_err()
+    );
+    window
+        .update(cx, |shell, _, _| {
+            assert_eq!(
+                locked(&shell.store).unwrap().sessions().unwrap().len(),
+                before
+            )
+        })
+        .unwrap();
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&id].update(cx, |view, _| {
+                view.settings.access = monocode_core::agent::AccessMode::ReadOnly
+            });
+        })
+        .unwrap();
+    assert!(call(window, id, "readonly-copies", "cow.list", json!({}), cx).is_ok());
+    assert!(
+        call(
+            window,
+            id,
+            "readonly-create",
+            "cow.create",
+            json!({"prompt":"Denied","draft":true}),
+            cx
+        )
+        .unwrap_err()
+        .contains("read-only")
+    );
+    assert!(
+        call(
+            window,
+            id,
+            "other-copies",
+            "cow.list",
+            json!({"project":"/unrelated"}),
+            cx
+        )
+        .is_err()
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

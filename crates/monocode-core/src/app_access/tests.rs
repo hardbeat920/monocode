@@ -188,6 +188,13 @@ fn operator_rejects_unknown_fields_and_mono_only_capabilities() {
             json!({"sessionId":1,"prompt":"x","notifyOnComplete":true}),
         ),
         ("artifacts.write", json!({"body":"x"})),
+        ("cow.list", json!({"path":"/other"})),
+        ("cow.create", json!({"prompt":"x","base":true})),
+        (
+            "cow.create",
+            json!({"prompt":"x","workspaceMode":"current"}),
+        ),
+        ("cow.create", json!({"prompt":"x","worktreeCwd":"/other"})),
     ] {
         assert!(
             validate_operator(action, &input).is_err(),
@@ -201,6 +208,13 @@ fn operator_rejects_unknown_fields_and_mono_only_capabilities() {
         &json!({"prompt":"x","placement":"down","besideSessionId":"uuid","effort":"high"})
     )
     .is_ok());
+    let input = json!({"prompt":"Review", "base":"main", "draft":true});
+    assert!(validate_operator("cow.create", &input).is_ok());
+    assert!(validate_operator("cow.list", &json!({})).is_ok());
+    let input = cow_launch_input(input);
+    let settings = launch_settings(&input, "codex", Settings::default(), Kind::Codex, &[]).unwrap();
+    assert!(settings.new_cow && !settings.new_worktree);
+    assert_eq!(settings.worktree_base.as_deref(), Some("main"));
 }
 
 #[test]

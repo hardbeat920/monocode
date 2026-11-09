@@ -2,6 +2,7 @@ use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use monocode_core::store::Store;
 use serde_json::{Value, json};
+use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 struct Setup {
     window: WindowHandle<Shell>,
@@ -478,6 +479,120 @@ fn call(
         .unwrap();
     cx.run_until_parked();
     rx
+}
+
+#[gpui::test]
+fn mono_cli_creates_and_lists_owned_copies_in_assigned_projects(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let project = PathBuf::from(&s.project).join("repo");
+    std::fs::create_dir(&project).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Copy Test"]);
+    git(&["config", "user.email", "copy@example.invalid"]);
+    std::fs::write(project.join("file"), "Committed\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "Fixture"]);
+    std::fs::write(project.join("private"), "Inherited context\n").unwrap();
+    let isolation = monocode_core::isolation::Isolation::for_store(&locked(&s.store).unwrap());
+    let supported = isolation.supported(&project);
+    s.manager.update(cx, |m, _| {
+        let mono = m.roster.get_mut(&s.id).unwrap();
+        mono.projects = vec![project.to_string_lossy().into_owned()];
+        mono.subsessions = Some(mono::Subsessions {
+            workspace_mode: Some("current".into()),
+            ..Default::default()
+        });
+    });
+    let before = locked(&s.store).unwrap().sessions().unwrap().len();
+    let input = json!({"project":project,"prompt":"Review privately","base":"HEAD","draft":true});
+    let result = call(&s, "copy-create", "cow.create", input.clone(), cx)
+        .try_recv()
+        .unwrap();
+    if supported {
+        let copy = result.unwrap();
+        let child = copy["sessionId"].as_i64().unwrap();
+        let path = Path::new(copy["path"].as_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(path.join("private")).unwrap(),
+            "Inherited context\n"
+        );
+        let settings = locked(&s.store)
+            .unwrap()
+            .agent_settings(child)
+            .unwrap()
+            .unwrap();
+        assert_eq!(settings.cow_id.as_deref(), copy["cowId"].as_str());
+        assert_eq!(settings.worktree_cwd.as_deref(), path.to_str());
+        assert!(!settings.new_cow);
+        let owner = isolation.owner(&project, path).unwrap().unwrap();
+        assert_eq!(
+            owner.session_id,
+            locked(&s.store)
+                .unwrap()
+                .persisted_session_id(child)
+                .unwrap()
+        );
+        s.manager.update(cx, |m, _| m.app_results.clear());
+        assert_eq!(
+            call(&s, "copy-create", "cow.create", input, cx)
+                .try_recv()
+                .unwrap()
+                .unwrap(),
+            copy
+        );
+        let list = call(&s, "copy-list", "cow.list", json!({"project":project}), cx)
+            .try_recv()
+            .unwrap()
+            .unwrap();
+        assert_eq!(list["copies"].as_array().unwrap().len(), 1);
+        assert_eq!(list["copies"][0]["id"], copy["cowId"]);
+    } else {
+        assert!(
+            std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+            "APFS required"
+        );
+        assert!(result.unwrap_err().contains("APFS"));
+        assert_eq!(locked(&s.store).unwrap().sessions().unwrap().len(), before);
+    }
+    let before = locked(&s.store).unwrap().sessions().unwrap().len();
+    assert!(
+        call(
+            &s,
+            "bad-copy-base",
+            "cow.create",
+            json!({"project":project,"prompt":"Denied","draft":true,"base":"missing-branch"}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_err()
+    );
+    assert_eq!(locked(&s.store).unwrap().sessions().unwrap().len(), before);
+    for action in ["cow.list", "cow.create"] {
+        let mut input = json!({"project":"/unassigned"});
+        if action == "cow.create" {
+            input["prompt"] = json!("Denied");
+        }
+        assert!(
+            call(&s, action, action, input, cx)
+                .try_recv()
+                .unwrap()
+                .is_err()
+        );
+    }
+    std::fs::remove_dir_all(&s.project).unwrap();
 }
 #[gpui::test]
 fn settings_match_react_dialog_and_left_navigation_geometry(cx: &mut TestAppContext) {
