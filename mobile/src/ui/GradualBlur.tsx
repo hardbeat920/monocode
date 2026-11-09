@@ -18,8 +18,10 @@ export const GradualBlur = memo(function GradualBlur({
   edge,
   height,
   color,
-  steps = 6,
-  intensity = 6,
+  // Each layer is an offscreen pass for the GPU; 6 made every slide between
+  // screens miss frames at 120Hz (Instruments: 51–65 passes a frame).
+  steps = 3,
+  intensity = 8,
 }: {
   edge: "top" | "bottom";
   height: number;

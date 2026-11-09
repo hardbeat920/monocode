@@ -117,7 +117,7 @@ impl Fence {
             }
         }
         if matches!(language.as_str(), "" | "text" | "plaintext" | "txt") {
-            language = "javascript".into();
+            language = "text".into();
         }
         let mut hash = DefaultHasher::new();
         language.hash(&mut hash);
@@ -619,6 +619,8 @@ fn rich_inline(
                 children.push(
                     div()
                         .id(SharedString::from(format!("{id}-{run_ix}-{part_ix}")))
+                        .debug_selector(move || format!("rich-prose-{run_ix}-{part_ix}"))
+                        .max_w_full()
                         .text_size(px(font_size))
                         .line_height(px(24.))
                         .opacity(alpha)
@@ -1072,5 +1074,96 @@ mod file_link_tests {
             Some("/project/docs/src/lib.rs")
         );
         assert_eq!(runs[2].style.link.as_deref(), Some("https://example.com"));
+    }
+}
+
+#[cfg(test)]
+mod fence_highlight_tests {
+    use super::Fence;
+    use crate::syntax::{HighlightRequest, highlight};
+
+    #[test]
+    fn prose_fences_do_not_carry_regex_or_string_colors_after_paths() {
+        let source = "Don't open ~/Library, or docs/ROADMAP.md.\nThe owner's next step.\n";
+        for tag in ["", "text", "plaintext", "txt"] {
+            let fence = Fence::new(tag, source);
+            assert_eq!(fence.language, "text");
+            let result = highlight(HighlightRequest {
+                source,
+                path: None,
+                fence_tag: Some(&fence.language),
+            })
+            .unwrap();
+            assert_eq!(result.lines.len(), 2);
+            for line in result.lines {
+                assert!(!line.is_empty());
+                assert!(line.iter().all(|span| span.color == 0xD4D4D4));
+            }
+        }
+        assert_eq!(Fence::new("javascript", source).language, "javascript");
+    }
+}
+
+#[cfg(test)]
+mod rich_wrap_tests {
+    use super::*;
+    use crate::markdown_model::InlineStyle;
+    use gpui::{Context, TestAppContext};
+
+    struct Fixture;
+    impl gpui::Render for Fixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let runs = vec![
+                InlineRun {
+                    text: "メモには".into(),
+                    style: InlineStyle::default(),
+                },
+                InlineRun {
+                    text: "example".into(),
+                    style: InlineStyle {
+                        code: true,
+                        ..Default::default()
+                    },
+                },
+                InlineRun {
+                    text: "午後は近所を散歩してから部屋に戻り夕方まで穏やかな時間を過ごしました"
+                        .repeat(4),
+                    style: InlineStyle::default(),
+                },
+            ];
+            div()
+                .w(px(220.))
+                .debug_selector(|| "rich-wrap".into())
+                .child(rich_inline(
+                    &runs,
+                    "fixture".into(),
+                    Tone::Normal,
+                    None,
+                    Instant::now(),
+                    0,
+                    14.,
+                    None,
+                ))
+        }
+    }
+    #[gpui::test]
+    fn cjk_prose_with_inline_code_wraps_within_column(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Fixture))
+                .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let bounds = visual.debug_bounds("rich-wrap").unwrap();
+        let prose = visual.debug_bounds("rich-prose-2-0").unwrap();
+        assert!(
+            prose.right() <= bounds.right(),
+            "prose {prose:?} exceeds {bounds:?}"
+        );
+        assert!(
+            prose.size.height > px(24.),
+            "long prose did not wrap: {prose:?}"
+        );
     }
 }

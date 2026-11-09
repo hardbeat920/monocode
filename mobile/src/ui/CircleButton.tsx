@@ -12,19 +12,22 @@ export function CircleButton({
   label,
   onPress,
   on,
+  size = SIZE,
 }: {
   icon: IconName;
   label: string;
   onPress?: () => void;
   on?: boolean;
+  /** Its side, as the composer's pill beside it, say. */
+  size?: number;
 }) {
   const colors = useColors();
   return (
     <LiquidView
       onPress={onPress ?? (() => {})}
       accessibilityLabel={label}
-      borderRadius={SIZE / 2}
-      innerStyle={styles.surface}
+      borderRadius={size / 2}
+      innerStyle={size === SIZE ? styles.surface : { width: size, height: size }}
     >
       <Icon name={icon} size={20} color={on ? colors.accent : undefined} />
     </LiquidView>

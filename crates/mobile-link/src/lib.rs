@@ -180,6 +180,30 @@ impl Gate {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_identity_keys_and_proofs_remain_compatible() {
+        #[derive(Deserialize)]
+        struct Legacy {
+            #[serde(flatten)]
+            identity: Identity,
+            proof: String,
+            fingerprint: String,
+        }
+        // A synthetic public fixture produced by p256 0.13.2. Existing paired
+        // devices must retain their identity and verify each other's proofs.
+        let legacy: Legacy =
+            serde_json::from_str(include_str!("../tests/fixtures/legacy-identity.json")).unwrap();
+        let invitation = "legacy-enrollment-invitation";
+        assert_eq!(legacy.identity.fingerprint().unwrap(), legacy.fingerprint);
+        assert_eq!(
+            verify_proof(&legacy.identity.certificate, invitation, &legacy.proof).unwrap(),
+            legacy.fingerprint
+        );
+        let proof = legacy.identity.proof(invitation).unwrap();
+        assert_eq!(proof, legacy.proof, "ECDSA proof encoding must not change");
+        assert!(verify_proof(&legacy.identity.certificate, "another-invitation", &proof).is_err());
+    }
+
+    #[test]
     fn enrollment_proof_binds_both_device_and_invitation() {
         let device = Identity::generate().unwrap();
         let other = Identity::generate().unwrap();

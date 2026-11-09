@@ -76,3 +76,77 @@ export function usageLimitResumeDue(session: Session, now: number): boolean {
   }
   return now >= limit.resetsAt + USAGE_LIMIT_RESUME_GRACE_MS;
 }
+
+/** Desktop-owned contract for the paired phone. Never infer reset windows on the phone. */
+export type MobileUsageLimit = {
+  token: string;
+  resetsAt?: number;
+  resumeAtReset: boolean;
+  canResume: boolean;
+  canAutoResume: boolean;
+  resetLabel: string;
+  limitation: string;
+};
+
+export function usageLimitWaiting(limit: UsageLimit, now: number): boolean {
+  return limit.resetsAt != null && limit.resetsAt > now;
+}
+
+export function mobileUsageLimit(
+  session: Session,
+  now = Date.now(),
+): MobileUsageLimit | null {
+  const limit = session.usageLimit;
+  if (!limit) return null;
+  const supported =
+    !session.cwd.startsWith("remote://") && !session.worktreeRemoved;
+  const waiting = usageLimitWaiting(limit, now);
+  return {
+    token: JSON.stringify([
+      session.id,
+      session.harness,
+      session.model,
+      session.providerAccountId,
+      session.providerSessionId,
+      session.blocks.length,
+      session.blocks[session.blocks.length - 1]?.id,
+      limit,
+    ]),
+    resetsAt: limit.resetsAt,
+    resumeAtReset: !!limit.resumeAtReset,
+    canResume: supported && !session.busy && !waiting,
+    canAutoResume: supported && !session.busy && waiting,
+    resetLabel:
+      limit.resetsAt == null
+        ? "Reset time unknown"
+        : waiting
+          ? `Resets ${formatUsageLimitReset(limit.resetsAt, now)}`
+          : "Limit has reset",
+    limitation: supported
+      ? "Automatic continuation requires Monocode running with this session loaded. This preference is kept only until the session closes or the app restarts."
+      : session.worktreeRemoved
+        ? "This session’s working copy was removed. Open it on desktop to recover."
+        : "Continue this session on its remote desktop. Mobile usage-limit recovery is unavailable for this session.",
+  };
+}
+
+export function validateMobileUsageLimit(
+  session: Session,
+  token: unknown,
+  automatic: boolean,
+): MobileUsageLimit {
+  const state = mobileUsageLimit(session);
+  if (!state)
+    throw new Error("This session is no longer paused by a usage limit");
+  if (state.token !== token)
+    throw new Error(
+      "This session changed. Wait for it to refresh and try again.",
+    );
+  if (!(automatic ? state.canAutoResume : state.canResume))
+    throw new Error(
+      state.resetsAt != null && state.resetsAt > Date.now() && !automatic
+        ? `${state.resetLabel}. Enable Resume at reset or try again after the allowance resets.`
+        : "This session cannot continue right now. Check it on desktop and try again.",
+    );
+  return state;
+}

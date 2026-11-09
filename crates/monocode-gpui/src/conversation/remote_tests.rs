@@ -139,6 +139,10 @@ struct HostFixture {
     stop: Arc<AtomicBool>,
     server: Option<std::thread::JoinHandle<()>>,
     directory: PathBuf,
+    /// A running host turn goes idle after this many syncs.
+    idle_after: Arc<std::sync::atomic::AtomicUsize>,
+    /// From this sync on (0: never) the host reports a title it chose itself.
+    rename_at: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl HostFixture {
     fn new(running: bool, saved_draft: bool) -> Self {
@@ -161,6 +165,10 @@ impl HostFixture {
         let received = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let done = stop.clone();
+        let idle_after = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let idles = idle_after.clone();
+        let rename_at = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let renames = rename_at.clone();
         let server = std::thread::spawn(move || {
             let mut snapshot = snapshot;
             let mut syncs = 0;
@@ -199,7 +207,11 @@ impl HostFixture {
                     "environment.describe" => descriptor.clone(),
                     "sessions.sync" => {
                         syncs += 1;
-                        if running && syncs > 1 {
+                        let renamed = renames.load(Ordering::Relaxed);
+                        if renamed > 0 && syncs >= renamed {
+                            snapshot["session"]["title"] = json!("Named by the host");
+                        }
+                        if running && syncs > idles.load(Ordering::Relaxed) {
                             snapshot["status"] = json!("idle");
                             snapshot["runId"] = serde_json::Value::Null;
                             snapshot["revision"] = json!(2);
@@ -234,6 +246,8 @@ impl HostFixture {
             stop,
             server: Some(server),
             directory,
+            idle_after,
+            rename_at,
         }
     }
     fn conversation(&self, cx: &mut TestAppContext) -> Entity<Conversation> {
@@ -303,6 +317,57 @@ fn snapshot_load_restores_host_draft_without_replacing_unsent_composer(cx: &mut 
             .unwrap()
             .iter()
             .any(|r| r["method"] == "commands.dispatch")
+    );
+}
+
+/// The GPUI test executor runs the remote observer inline, so the host itself
+/// scripts the turn: it renames the conversation on sync 3 and goes idle on 4.
+#[gpui::test]
+fn a_host_title_change_reaches_the_busy_view_without_a_rename_request(cx: &mut TestAppContext) {
+    let host = HostFixture::new(true, false);
+    host.idle_after.store(3, Ordering::Relaxed);
+    host.rename_at.store(3, Ordering::Relaxed);
+    let view = host.conversation(cx);
+    let seen = Arc::new(Mutex::new(Vec::<(bool, String)>::new()));
+    let log = seen.clone();
+    let _changes = cx.update(|cx| {
+        cx.subscribe(&view, move |view, _: &SessionChanged, cx| {
+            let view = view.read(cx);
+            log.lock()
+                .unwrap()
+                .push((view.busy, view.summary.title.to_string()));
+        })
+    });
+    host.wait(&view, cx, true);
+    cx.update(|cx| {
+        let view = view.read(cx);
+        assert_eq!(view.summary.title, "Named by the host");
+        assert_eq!(view.display_title(), "Named by the host");
+    });
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.contains(&(true, "Named by the host".to_owned())),
+        "chrome must be told while the turn is still running: {seen:?}"
+    );
+    let requests = host.requests.lock().unwrap();
+    assert!(
+        !requests.iter().any(|r| matches!(
+            r["method"].as_str(),
+            Some("sessions.update" | "commands.dispatch")
+        )),
+        "a title from the host must never be written back: {requests:?}"
+    );
+    drop(requests);
+    assert_eq!(
+        host.store
+            .lock()
+            .unwrap()
+            .remote_session(host.summary.id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .title,
+        "Named by the host"
     );
 }
 

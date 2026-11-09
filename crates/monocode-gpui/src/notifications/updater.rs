@@ -331,66 +331,82 @@ pub(crate) fn row(entity: Entity<Updater>, cx: &App) -> gpui::AnyElement {
     let action = entity.clone();
     let state = entity.read(cx);
     let available = state.phase == Phase::Available;
-    let title = if available {
-        "Update available".to_string()
+    // Matches the desktop footer: one line, accent-tinted until it starts.
+    let label = if available {
+        format!("Update to v{}", state.pending_version())
     } else {
         state.progress_label()
     };
-    let detail = if available || state.busy() {
-        format!("v{}", state.pending_version())
+    let glyph = if state.busy() {
+        crate::pulse::looping(
+            "native-update-spin",
+            Duration::from_secs(1),
+            crate::pulse::Rate::Smooth,
+            |turn| {
+                icon("loader", 16.)
+                    .text_color(content(0.7))
+                    .with_transformation(gpui::Transformation::rotate(gpui::percentage(turn)))
+            },
+        )
+        .into_any_element()
     } else {
-        format!("v{}", version())
+        icon("arrow-down-circle", 16.)
+            .text_color(accent_color())
+            .into_any_element()
     };
     let mut button = div()
         .id("install-native-update")
         .role(Role::Button)
         .rounded(px(8.))
         .px_2()
-        .py(px(6.))
+        .py_2()
         .flex()
         .items_center()
         .gap_2()
-        .bg(content(0.06))
+        .bg(if available {
+            accent_color().opacity(0.15)
+        } else {
+            content(0.05)
+        })
+        .text_color(content(if available { 1. } else { 0.75 }))
         .child(
-            icon(
-                if state.busy() {
-                    "loader"
-                } else {
-                    "arrow-down-circle"
-                },
-                16.,
-            )
-            .text_color(content(if available { 0.9 } else { 0.5 })),
+            div()
+                .size(px(18.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(glyph),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .flex_col()
+                .items_center()
+                .gap_2()
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .truncate()
                         .text_size(px(12.))
-                        .line_height(px(16.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(content(0.9))
-                        .child(title),
+                        .child(label),
                 )
                 .child(
                     div()
-                        .truncate()
+                        .flex_shrink_0()
                         .text_size(px(11.))
-                        .line_height(px(14.))
-                        .text_color(content(0.45))
-                        .child(detail),
+                        .text_color(content(0.4))
+                        .child(format!("v{}", version())),
                 ),
         );
     if available {
         button = button
             .aria_label("Install the available Monocode Native update")
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.1)))
+            .hover(|s| s.bg(accent_color().opacity(0.2)))
             .on_click(move |_, _, cx| action.update(cx, |updater, cx| updater.install(cx)));
     }
     div()

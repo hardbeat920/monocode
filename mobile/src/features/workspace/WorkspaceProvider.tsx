@@ -25,7 +25,7 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { DisplayedQuestionPrompt, Message, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type { DisplayedQuestionPrompt, Message, UsageLimitState, Mono, MonoSubsessions, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -35,6 +35,21 @@ import { applyFrames, type WatchFrame } from "./watchUpdates";
 /** A new session's model and permissions, and where it works if not the
  *  project's checkout: a new worktree off HEAD, or an existing one. */
 type StartChoice = Partial<ModelChoice> & { workspaceMode?: "worktree"; worktreePath?: string };
+
+export type MonoChange = {
+  name?: string;
+  mascot?: string;
+  color?: string;
+  addProject?: string;
+  removeProject?: string;
+  /** Null goes back to its own model and effort. */
+  subsessions?: MonoSubsessions | null;
+};
+type MonoField = "name" | "mascot" | "color" | "projectIds" | "subsessions";
+/** A field changed here, with what the desktop had then: it shows only while
+ *  the catalog still has that, so the desktop's own copy takes over. */
+type MonoEdits = Record<string, Partial<Record<MonoField, { value: unknown; from: unknown }>>>;
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 type Workspace = {
   projects: Project[];
@@ -49,6 +64,7 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  recoverUsage: (conversationId: string, state: UsageLimitState, automatic?: boolean) => Promise<void>;
   /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
   answerQuestion: (
     conversationId: string,
@@ -73,6 +89,13 @@ type Workspace = {
   configureSession: (conversationId: string, choice: Partial<ModelChoice>) => Promise<void>;
   /** Renames a session as the desktop sidebar does; the new title shows at once. */
   renameSession: (session: SessionSummary, title: string) => Promise<void>;
+  /** Every project on the desktop, chosen for this phone or not, as a Mono can work in any. */
+  allProjects: Project[];
+  /**
+   * Changes a Mono's look or projects. Shown at once, as the desktop's catalog
+   * will have it; undone if the desktop refuses.
+   */
+  editMono: (mono: Mono, change: MonoChange) => Promise<void>;
   /** Deletes a session on the desktop. It leaves every list at once, and comes
    *  back if the desktop refuses. */
   deleteSession: (conversationId: string) => Promise<void>;
@@ -100,6 +123,7 @@ type Status = {
   errors: Record<string, string>;
   /** What each conversation's agent waits on the user to answer. */
   questions: Record<string, DisplayedQuestionPrompt>;
+  usageLimits: Record<string, UsageLimitState>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
 /** Narrows a page to sessions active since a time, and without some providers.
@@ -127,6 +151,7 @@ export type NativeTranscriptStatus = {
   notice?: Extract<TurnItem, { type: "notice" }> | null;
   /** Absent from a native build that predates questions. */
   question?: QuestionPrompt | null;
+  usageLimit?: UsageLimitState | null;
   /** Persistent across coalesced snapshots; absent from older native builds. */
   questionGeneration?: number;
 };
@@ -182,6 +207,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     turnsRef.current = turns;
   }, [turns]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [usageLimits, setUsageLimits] = useState<Record<string, UsageLimitState>>({});
+  const showUsageLimit = useCallback((id: string, state: UsageLimitState | null | undefined) => {
+    setUsageLimits(previous => state
+      ? JSON.stringify(previous[id]) === JSON.stringify(state) ? previous : withValue(previous, id, state)
+      : withoutKey(previous, id));
+  }, []);
+  const usagePending = useRef(new Set<string>());
   const [questions, setQuestions] = useState<Record<string, DisplayedQuestionPrompt>>({});
   // The question each conversation answered here last. A frame sent before
   // the desktop took the answer must not bring its card back.
@@ -230,6 +262,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Renames and deletes made here, until the desktop's catalog catches up. A
   // rename holds only while the desktop still has the title it replaced.
   const [renamed, setRenamed] = useState<Record<string, { title: string; from: string }>>({});
+  const [monoEdits, setMonoEdits] = useState<MonoEdits>({});
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
   const [watching, watch] = useState<string | null>(null);
   // Conversations showing turns from the disk cache, until the desktop's arrive.
@@ -256,6 +289,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
       showQuestion(id, result.question);
+      showUsageLimit(id, result.usageLimit);
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
       setErrors((previous) => withoutKey(previous, id));
@@ -264,7 +298,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (current.current.pairing === paired && !startupCatalogError(starting.current, id, message))
         setErrors((previous) => withValue(previous, id, message));
     }
-  }, [showQuestion]);
+  }, [showQuestion, showUsageLimit]);
   // The open conversation streams from the desktop: one watch, whose frames
   // land as the desktop sends them. A desktop that cannot watch, or a dropped
   // link, falls back to reading once a second until a watch opens again.
@@ -302,6 +336,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, applied.turns));
       if (countUserItems(applied.turns) > 0) starting.current.delete(id);
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
+      if (applied.usageLimit !== undefined) showUsageLimit(id, applied.usageLimit);
       for (const question of applied.questions) showQuestion(id, question);
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
@@ -377,7 +412,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       save();
       if (watchId !== null) void closeWatch(watchId);
     };
-  }, [watching, desktop, read, showQuestion]);
+  }, [watching, desktop, read, showQuestion, showUsageLimit]);
   const mutationIds = useRef(new Map<string, string>());
   const { command, refresh } = connection;
   const mutate = useCallback(async <T,>(method: string, params: object): Promise<T> => {
@@ -441,7 +476,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setPending((previous) => ({
       ...previous,
       [conversationId]: {
-        turn: { id, items: [userItem(id, text, at, attachments)] },
+        turn: {
+          id,
+          items: [
+            userItem(id, text, at, attachments),
+            // A Mono's chat shows it thinking at once, as the desktop's turn
+            // will, so taking that turn over moves nothing on screen.
+            ...(conversationId.startsWith("mono:")
+              ? [{ type: "header" as const, id: `${id}:header`, live: true, label: "Thinking…", entries: [] }]
+              : []),
+          ],
+        },
         userCount,
         ...(hasNativeTranscript && nativeLastUsers.current[conversationId]
           ? { afterUserId: nativeLastUsers.current[conversationId]! } : {}),
@@ -514,6 +559,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const recoverUsage = useCallback(async (conversationId: string, state: UsageLimitState, automatic?: boolean) => {
+    if (usagePending.current.has(conversationId)) return;
+    usagePending.current.add(conversationId);
+    try {
+      await mutate(automatic === undefined ? "session.resumeUsage" : "session.resumeUsageAtReset", {
+        conversationId, token: state.token, ...(automatic === undefined ? {} : { enabled: automatic }),
+      });
+    } finally {
+      usagePending.current.delete(conversationId);
+      // Refresh after errors too, so a stale card can be retried with current state.
+      if (!hasNativeTranscript) void read(conversationId);
+    }
+  }, [mutate, read]);
+
   const answerQuestion = useCallback(
     async (conversationId: string, requestId: number, reply: QuestionReply) => {
       const shown = displayed.current.get(conversationId);
@@ -543,6 +602,41 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       void refresh();
     },
     [mutate, refresh],
+  );
+  const editMono = useCallback(
+    async (mono: Mono, change: MonoChange) => {
+      const next: Partial<Record<MonoField, unknown>> = {};
+      if (change.name !== undefined) next.name = change.name.trim();
+      if (change.mascot !== undefined) next.mascot = change.mascot;
+      if (change.color !== undefined) next.color = change.color;
+      if (change.subsessions !== undefined) next.subsessions = change.subsessions;
+      if (change.addProject || change.removeProject)
+        next.projectIds = [
+          ...mono.projectIds.filter((id) => id !== change.removeProject),
+          ...(change.addProject && !mono.projectIds.includes(change.addProject) ? [change.addProject] : []),
+        ];
+      const fields = Object.keys(next) as MonoField[];
+      setMonoEdits((previous) => {
+        const edits = { ...previous[mono.id] };
+        for (const field of fields)
+          edits[field] = { value: next[field], from: edits[field]?.from ?? mono[field] };
+        return { ...previous, [mono.id]: edits };
+      });
+      try {
+        await command("mono.update", { monoId: mono.id, ...change });
+      } catch (reason) {
+        // Undone, unless a later change has replaced it meanwhile.
+        setMonoEdits((previous) => {
+          const edits = { ...previous[mono.id] };
+          for (const field of fields)
+            if (sameValue(edits[field]?.value, next[field])) delete edits[field];
+          return { ...previous, [mono.id]: edits };
+        });
+        throw reason;
+      }
+      void refresh();
+    },
+    [command, refresh],
   );
   const removeSession = useCallback(
     async (method: "session.delete" | "session.archive", conversationId: string) => {
@@ -605,6 +699,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (status.ready === false) return;
     setBusy((previous) => withValue(previous, id, status.busy));
     showQuestion(id, status.question, status.questionGeneration);
+    showUsageLimit(id, status.usageLimit);
     if (status.userCount > 0) starting.current.delete(id);
     if (!status.pendingId) {
       setPending((previous) => {
@@ -615,7 +710,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return confirmed ? withoutKey(previous, id) : previous;
       });
     }
-  }, [showQuestion]);
+  }, [showQuestion, showUsageLimit]);
   const workspace = useMemo<Workspace>(() => {
     const selected = selectedWorkspace(catalog, selection);
     const known = new Set(selected.sessions.map((session) => session.id));
@@ -627,7 +722,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           : session;
     return {
       projects: selected.projects,
-      monos: selected.monos,
+      allProjects: catalog.projects,
+      monos: selected.monos.map((mono) => {
+        const edits = monoEdits[mono.id];
+        if (!edits) return mono;
+        const shown = { ...mono };
+        for (const [field, edit] of Object.entries(edits) as [MonoField, { value: unknown; from: unknown }][])
+          if (sameValue(mono[field], edit.from)) Object.assign(shown, { [field]: edit.value });
+        return shown;
+      }),
       sessions: [
         ...selected.sessions,
         ...Object.values(remembered).filter((session) => !known.has(session.id)),
@@ -638,12 +741,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       stop,
       answerQuestion,
       keepQuestionOpen,
+      recoverUsage,
       listSessions,
       rememberSession,
       loadOlder,
       listModels,
       configureSession,
       renameSession,
+      editMono,
       deleteSession,
       archiveSession,
       edited,
@@ -651,6 +756,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [
     renamed,
+    monoEdits,
+    editMono,
     deleted,
     catalog,
     selection,
@@ -660,6 +767,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     stop,
     answerQuestion,
     keepQuestionOpen,
+    recoverUsage,
     listSessions,
     rememberSession,
     loadOlder,
@@ -675,8 +783,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [messages, turns, pending, history, windowOlder],
   );
   const status = useMemo<Status>(
-    () => ({ busy, errors, questions }),
-    [busy, errors, questions],
+    () => ({ busy, errors, questions, usageLimits }),
+    [busy, errors, questions, usageLimits],
   );
   return (
     <WorkspaceContext value={workspace}>
@@ -717,6 +825,7 @@ export function useConversation(id: string | null, watching = true) {
     busy: id ? !!status.busy[id] : false,
     error: id ? (status.errors[id] ?? null) : null,
     question: id ? (status.questions[id] ?? null) : null,
+    usageLimit: id ? (status.usageLimits[id] ?? null) : null,
   };
 }
 /** A conversation's turns as they stream in. Re-renders with every frame. */

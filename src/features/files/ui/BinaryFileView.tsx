@@ -204,7 +204,7 @@ function VideoView({
   useEffect(() => {
     const video = videoRef.current;
     const pauseWhenHidden = () => {
-      if (!visible || document.hidden) video?.pause();
+      if (video && !video.paused && (!visible || document.hidden)) video.pause();
     };
     pauseWhenHidden();
     document.addEventListener("visibilitychange", pauseWhenHidden);
@@ -225,7 +225,9 @@ function VideoView({
     }
     return () => {
       if (!video) return;
-      video.pause();
+      // A paused player may still be loading metadata. Leave that load alone,
+      // including during StrictMode's cleanup replay.
+      if (!video.paused) video.pause();
       // Free the decoder once the element is really gone.
       releaseSource.current = window.setTimeout(() => {
         video.removeAttribute("src");

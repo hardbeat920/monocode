@@ -371,14 +371,19 @@ pub(crate) fn git(root: &Path) -> Result<Value, String> {
 /// A Changes page action from the phone, as the desktop's Changes panel runs
 /// it: staging, then committing what is staged, pushing and pull requests.
 /// Replies `{}`, `{ message }` or `{ url }`.
-pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
+/// `chosen` is the background model picked in Settings.
+pub(crate) fn git_action(
+    root: &Path,
+    params: &Value,
+    chosen: Option<(Kind, Option<String>)>,
+) -> Result<Value, String> {
     // The harness picked in the phone's composer writes the commit message and
     // pull request, as the desktop's panel uses its session's.
     let preferred = params["harness"]
         .as_str()
         .and_then(Kind::parse)
         .unwrap_or(Kind::Claude);
-    let harness = || crate::changes::pick_text_harness(preferred);
+    let harness = || crate::changes::pick_text_harness(preferred, chosen.clone());
     let paths = params["paths"]
         .as_array()
         .map(|paths| paths.iter().filter_map(Value::as_str).collect::<Vec<_>>())
@@ -401,11 +406,10 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
         "stageAll" => scm::stage_all(root).map(|()| json!({})),
         "unstageAll" => scm::unstage_all(root).map(|()| json!({})),
         "generate" => {
-            let (kind, binary) =
+            let harness =
                 harness().ok_or("No provider CLI is installed to write a commit message.")?;
             let message = crate::changes::generate_commit_message(
-                kind,
-                binary,
+                harness,
                 root.to_path_buf(),
                 Arc::new(AtomicBool::new(false)),
             )?;
@@ -438,7 +442,10 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
 
 /// createMobilePr: the Changes panel's generated title and body (or the
 /// commits, when no provider can write them), then `gh pr create`.
-fn create_pr_url(root: &Path, harness: Option<(Kind, PathBuf)>) -> Result<String, String> {
+fn create_pr_url(
+    root: &Path,
+    harness: Option<crate::changes::TextHarness>,
+) -> Result<String, String> {
     crate::changes::create_pr_blocking(harness, root).map(|url| url.trim().to_string())
 }
 
@@ -962,9 +969,9 @@ mod tests {
         assert_eq!(status["remote"], false);
         assert_eq!(status["canGenerate"], true);
 
-        git_action(root, &json!({ "action": "stageAll" })).unwrap();
+        git_action(root, &json!({ "action": "stageAll" }), None).unwrap();
         assert_eq!(changes(root, None).unwrap()["files"][0]["staged"], true);
-        assert!(git_action(root, &json!({ "action": "nope" })).is_err());
+        assert!(git_action(root, &json!({ "action": "nope" }), None).is_err());
         assert!(resolve_root(root, Some("/not/a/worktree")).is_err());
         assert_eq!(worktrees(root).unwrap()["worktrees"], json!([]));
     }

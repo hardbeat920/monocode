@@ -31,13 +31,14 @@ impl Accounts {
         };
         if editor.surface == Surface::Footer {
             let back = cx.listener(|this, _: &(), window, cx| {
-                if !this.working {
-                    if let Some(focus) = this.editor.take().and_then(|e| e.previous_focus) {
-                        window.focus(&focus, cx);
-                    }
-                    this.error = None;
-                    cx.notify();
+                if this.working {
+                    this.cancel_auth(cx);
                 }
+                if let Some(focus) = this.editor.take().and_then(|e| e.previous_focus) {
+                    window.focus(&focus, cx);
+                }
+                this.error = None;
+                cx.notify();
             });
             return div()
                 .child(back_header(
@@ -154,7 +155,7 @@ impl Accounts {
                             .child(editor.input.clone()),
                     )
                     .child(
-                        secondary_button("cancel-account-edit", "Cancel", false, self.working)
+                        secondary_button("cancel-account-edit", "Cancel", false, false)
                             .h_6()
                             .border_0()
                             .px(px(10.))
@@ -164,16 +165,17 @@ impl Accounts {
                             .text_color(content(0.45))
                             .child("Cancel")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                if !this.working {
-                                    if let Some(focus) =
-                                        this.editor.take().and_then(|e| e.previous_focus)
-                                    {
-                                        window.focus(&focus, cx);
-                                    }
-                                    this.error = None;
-                                    this.signin = None;
-                                    cx.notify();
+                                if this.working {
+                                    this.cancel_auth(cx);
                                 }
+                                if let Some(focus) =
+                                    this.editor.take().and_then(|e| e.previous_focus)
+                                {
+                                    window.focus(&focus, cx);
+                                }
+                                this.error = None;
+                                this.signin = None;
+                                cx.notify();
                             })),
                     )
                     .child(
@@ -1087,6 +1089,16 @@ impl Render for Accounts {
 
 impl Accounts {
     fn close_auth(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_auth(cx);
+        if let Some(focus) = self.previous_focus.take() {
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+    /// Abandon a sign-in still waiting on the browser. The CLI cannot tell
+    /// that its browser tab was closed and would otherwise wait 10 minutes,
+    /// leaving every Sign in button disabled until then.
+    pub(crate) fn cancel_auth(&mut self, cx: &mut Context<Self>) {
         if let Some(signin) = self.signin.take() {
             signin.cancel.store(true, Ordering::Relaxed);
             if !signin.complete {
@@ -1101,8 +1113,10 @@ impl Accounts {
                 }
             }
         }
-        if let Some(focus) = self.previous_focus.take() {
-            window.focus(&focus, cx);
+        if let Some(editor) = &self.editor {
+            editor
+                .input
+                .update(cx, |input, _| input.set_read_only(false));
         }
         cx.notify();
     }

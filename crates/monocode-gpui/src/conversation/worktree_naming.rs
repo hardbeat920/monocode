@@ -7,14 +7,13 @@ impl Conversation {
         if message.trim().is_empty() {
             return;
         }
-        let kind = Kind::from_id(&self.summary.provider);
-        let account = self.settings.account.clone();
+        let text = self.background_text_model(cx);
         let message = message.to_owned();
         self.start_worktree_naming(cx, move |cwd, cancel| {
             if cfg!(test) {
                 None
             } else {
-                naming::generate(kind, cwd, &message, account, cancel)
+                naming::generate(text, cwd, &message, cancel)
             }
         });
     }

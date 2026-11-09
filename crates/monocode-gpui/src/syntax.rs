@@ -97,7 +97,7 @@ impl LineHighlighter {
             .find_syntax_by_extension(ext)
             .or_else(|| syntax.find_syntax_by_token(language))
             .or_else(|| {
-                matches!(ext, "ts" | "tsx" | "jsx" | "plaintext" | "text" | "")
+                matches!(ext, "ts" | "tsx" | "jsx")
                     .then(|| syntax.find_syntax_by_extension("js"))
                     .flatten()
             })

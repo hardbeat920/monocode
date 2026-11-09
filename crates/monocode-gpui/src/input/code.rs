@@ -757,6 +757,14 @@ impl Input {
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         self.history(false, cx);
     }
+    pub(super) fn history_available(&self, redo: bool) -> bool {
+        !self.read_only
+            && self.marked.is_none()
+            && self
+                .code
+                .as_ref()
+                .is_some_and(|code| !(if redo { &code.redo } else { &code.undo }).is_empty())
+    }
     pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
         self.history(true, cx);
     }

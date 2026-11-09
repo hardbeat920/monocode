@@ -4,11 +4,51 @@ use monocode_core::search::Target;
 
 pub(super) struct Open {
     pub(super) view: Entity<SearchView>,
+    /// Floating command panel rather than a page with its own tab.
+    pub(super) panel: bool,
     restore: Option<FocusHandle>,
     _events: Subscription,
 }
 
 impl Shell {
+    /// Search is open as a page that replaces the workspace.
+    pub(super) fn search_page(&self) -> bool {
+        self.app_search.as_ref().is_some_and(|s| !s.panel)
+    }
+    /// The panel floats over whatever is open, like Quick Open, so nothing
+    /// underneath is left or rearranged while searching.
+    pub(super) fn search_modal(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let open = self.app_search.as_ref().filter(|s| s.panel)?;
+        let viewport = window.viewport_size();
+        let width = 680f32.min(viewport.width.as_f32() - 32.);
+        let anchor = Anchor::Point(gpui::point(
+            px((viewport.width.as_f32() - width) / 2.),
+            px((viewport.height.as_f32() * 0.14).max(32.)),
+        ));
+        let weak = cx.weak_entity();
+        Some(
+            div()
+                .absolute()
+                .size_full()
+                .child(crate::modal::scrim("app-search-scrim"))
+                .child(
+                    popover("app-search-modal", anchor)
+                        .modal_surface(self.workspace.boxy_layout())
+                        .width(width)
+                        .gap(0.)
+                        .priority(80)
+                        .on_dismiss(move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| this.close_app_search(window, cx));
+                        })
+                        .child(open.view.clone()),
+                )
+                .into_any_element(),
+        )
+    }
     pub(super) fn leave_app_search(&mut self, cx: &mut Context<Self>) {
         if let Some(search) = self.app_search.take() {
             self.saved_search = Some(search.view.read(cx).draft(cx));
@@ -44,12 +84,18 @@ impl Shell {
                     .w_full()
                     .min_w_0()
                     .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
-                    .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
-                    .gap(px(6.))
+                    .when(width < NARROW_TAB, |d| {
+                        d.px(px(((width - TAB_TILE.w) / 2.).max(0.)))
+                    })
+                    .gap(px(TAB_TILE_GAP))
                     .group_hover("search-title-tab", |s| {
                         s.text_color(content(1.)).bg(title_tab_fill(active, true))
                     })
-                    .child(icon("search", 14.))
+                    .child(mark_tile(
+                        &TAB_TILE,
+                        Face::Neutral,
+                        icon("search", 14.).text_color(crate::tab_tile::tile_ink()),
+                    ))
                     .child(
                         div()
                             .min_w_0()
@@ -136,14 +182,21 @@ impl Shell {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
         }
+        let panel = self.workspace.preferences.search_panel;
         self.close_menu(cx);
-        self.close_preview(cx);
-        self.leave_app_views(cx);
-        if let Some(monos) = &self.monos {
-            monos.update(cx, |m, cx| m.close(cx));
-        }
-        if self.settings.is_some() {
-            self.close_settings(window, cx);
+        if panel {
+            if self.quick_open.is_some() {
+                self.close_quick_open(window, cx);
+            }
+        } else {
+            self.close_preview(cx);
+            self.leave_app_views(cx);
+            if let Some(monos) = &self.monos {
+                monos.update(cx, |m, cx| m.close(cx));
+            }
+            if self.settings.is_some() {
+                self.close_settings(window, cx);
+            }
         }
         self.navigation_revision += 1;
         let restore = window.focused(cx);
@@ -201,6 +254,7 @@ impl Shell {
                     projects,
                     recent,
                     classic: self.workspace.boxy_layout(),
+                    panel,
                     logos: self
                         .workspace
                         .project_appearance
@@ -255,9 +309,14 @@ impl Shell {
         window.focus(&view.focus_handle(cx), cx);
         self.app_search = Some(Open {
             view,
+            panel,
             restore,
             _events: events,
         });
+        if panel {
+            cx.notify();
+            return;
+        }
         self.remember_title_tab(TitleTab::Search);
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
@@ -481,5 +540,52 @@ mod tests {
             })
             .unwrap();
         visual.run_until_parked();
+    }
+    #[gpui::test]
+    fn search_panel_preference_floats_over_the_workspace_without_a_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            input::bind(cx);
+            super::super::bind_keys(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (window, _, active) = crate::shell::tests::window(cx);
+        let tabs = window
+            .update(cx, |shell, w, cx| {
+                assert!(
+                    !shell.workspace.preferences.search_panel,
+                    "search opens as a page by default"
+                );
+                shell.workspace.preferences.search_panel = true;
+                let tabs = shell.visible_tabs(cx);
+                shell.open_app_search(w, cx);
+                tabs
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("app-search").is_some());
+        assert!(visual.debug_bounds("title-tab-strip").is_some());
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(!shell.search_page());
+                assert_eq!(shell.visible_tabs(cx), tabs);
+                assert!(!shell.workspace.title_order.contains(&TitleTab::Search));
+                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(active)));
+            })
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.app_search.is_none());
+                assert!(shell.saved_search.is_some());
+                // Switching back to the page style takes effect on the next open.
+                shell.workspace.preferences.search_panel = false;
+                shell.open_app_search(w, cx);
+                assert!(shell.search_page());
+                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Search));
+            })
+            .unwrap();
     }
 }

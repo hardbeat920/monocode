@@ -34,7 +34,10 @@ for line in sys.stdin:
             send({{'method':'turn/completed','params':{{'turn':{{'status':'completed'}}}}}})
 "#
     );
-    std::fs::write(&path, script).unwrap();
+    let mut file = std::fs::File::create(&path).unwrap();
+    std::io::Write::write_all(&mut file, script.as_bytes()).unwrap();
+    let _ = file.sync_all();
+    drop(file);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let request = Request {
         kind: Kind::Codex,

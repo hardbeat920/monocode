@@ -222,7 +222,7 @@ pub(super) fn streak(days: &[Day]) -> usize {
     tail.take_while(|d| d.count() > 0).count()
 }
 
-fn local_day(ms: u64) -> Option<NaiveDate> {
+pub(super) fn local_day(ms: u64) -> Option<NaiveDate> {
     DateTime::from_timestamp_millis(ms as i64).map(|t| t.with_timezone(&Local).date_naive())
 }
 
@@ -469,7 +469,7 @@ fn figure(text: String) -> Div {
 impl Monos {
     /// The Mono's contributions as last loaded, reloading them in the
     /// background once they are stale. Drawing never touches the store.
-    fn contributions_for(
+    pub(super) fn contributions_for(
         &mut self,
         mono: &Mono,
         today: NaiveDate,

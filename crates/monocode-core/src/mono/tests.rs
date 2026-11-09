@@ -167,21 +167,90 @@ fn context_shows_how_to_delegate_without_running_help() {
         projects: vec!["/repo".into()],
         ..Default::default()
     };
-    let text = context(
-        &mono,
-        &files::AgentFiles {
-            id: mono.id.clone(),
-            dir: String::new(),
-            soul: Some(DEFAULT_SOUL.into()),
-            soul_hash: String::new(),
-            memory: String::new(),
-            memory_hash: String::new(),
-            memory_path: String::new(),
-            topics: Vec::new(),
-        },
-        std::path::Path::new("/Applications/Monocode.app/monocode"),
+    let files = files::AgentFiles {
+        id: mono.id.clone(),
+        dir: String::new(),
+        soul: Some(DEFAULT_SOUL.into()),
+        soul_hash: String::new(),
+        memory: String::new(),
+        memory_hash: String::new(),
+        memory_path: String::new(),
+        topics: Vec::new(),
+    };
+    let executable = std::path::Path::new("/Applications/Monocode.app/monocode");
+    let start = r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#;
+    let rules = instructions(&mono, executable);
+    assert!(rules.contains(start));
+    assert!(rules.contains("## Be quick"));
+    assert!(rules.contains("- /repo"));
+    // Without system instructions, the rules ride along in the message.
+    let inline = context(&mono, &files, executable, false);
+    assert!(inline.contains(&rules));
+    assert!(inline.contains("<soul>"));
+    // With them, the message carries only what changes between turns.
+    let system = context(&mono, &files, executable, true);
+    assert!(!system.contains(start));
+    assert!(system.contains("<soul>") && system.contains("<memory>"));
+    assert!(system_instructions_supported(crate::provider::Kind::Claude));
+    assert!(system_instructions_supported(crate::provider::Kind::Codex));
+    assert!(!system_instructions_supported(crate::provider::Kind::Devin));
+}
+
+#[test]
+fn a_resumed_codex_thread_gets_rules_it_has_not_seen_in_the_message() {
+    use crate::provider::Kind;
+    // A fresh thread takes them as developer instructions.
+    assert!(rules_in_system(Kind::Codex, false, None, "new"));
+    // Codex keeps a thread's first instructions, so a moved app CLI or
+    // rules from before they lived there must come with the message.
+    assert!(!rules_in_system(Kind::Codex, true, None, "new"));
+    assert!(!rules_in_system(Kind::Codex, true, Some("old"), "new"));
+    assert!(rules_in_system(Kind::Codex, true, Some("new"), "new"));
+    // Claude's system prompt is sent with every process.
+    assert!(rules_in_system(Kind::Claude, true, None, "new"));
+    assert!(!rules_in_system(Kind::Devin, false, None, "new"));
+}
+
+#[test]
+fn subsessions_fill_only_a_start_that_names_no_model() {
+    let set = Subsessions {
+        harness: Some("claude".into()),
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+    };
+    let mut bare = serde_json::json!({"prompt": "x"});
+    set.fill(&mut bare);
+    assert_eq!(
+        bare,
+        serde_json::json!({"prompt": "x", "harness": "claude", "model": "opus", "effort": "high"})
     );
-    assert!(text.contains(
-        r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#
-    ));
+    for chosen in ["harness", "model", "modelSettings", "effort"] {
+        let mut named = serde_json::json!({"prompt": "x", chosen: "codex"});
+        let before = named.clone();
+        set.fill(&mut named);
+        assert_eq!(named, before, "{chosen} is the agent's own choice");
+    }
+    let effort_only = Subsessions {
+        effort: Some("low".into()),
+        ..Default::default()
+    };
+    let mut input = serde_json::json!({"prompt": "x"});
+    effort_only.fill(&mut input);
+    assert_eq!(input, serde_json::json!({"prompt": "x", "effort": "low"}));
+}
+
+#[test]
+fn subsessions_normalize_away_when_everything_is_inherited() {
+    assert_eq!(Subsessions::default().normalized(), None);
+    let blank = Subsessions {
+        harness: Some(" ".into()),
+        ..Default::default()
+    };
+    assert_eq!(blank.normalized(), None);
+    // A model without its provider can't be named.
+    let orphan = Subsessions {
+        model: Some("opus".into()),
+        ..Default::default()
+    };
+    assert_eq!(orphan.normalized(), None);
 }

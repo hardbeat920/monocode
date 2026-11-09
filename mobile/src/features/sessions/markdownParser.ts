@@ -321,3 +321,27 @@ function findClose(text: string, mark: string, from: number): number {
   }
   return -1;
 }
+
+/** A message's words without its markdown, for a one-line preview. */
+export function plainText(source: string): string {
+  const inline = (parts: Inline[]): string =>
+    parts.map((part) => ("children" in part ? inline(part.children) : part.text)).join("");
+  const block = (item: MarkdownBlock): string => {
+    switch (item.type) {
+      case "paragraph":
+      case "heading":
+        return inline(item.inline);
+      case "code":
+        return item.text;
+      case "list":
+        return item.items.map((entry) => entry.map(block).join(" ")).join(" ");
+      case "quote":
+        return item.children.map(block).join(" ");
+      case "table":
+        return item.rows.map((row) => row.map(inline).join(" ")).join(" ");
+      case "rule":
+        return "";
+    }
+  };
+  return parseMarkdown(source).map(block).join(" ").replace(/\s+/g, " ").trim();
+}

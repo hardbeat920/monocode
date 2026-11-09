@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 
 import { useScenePager } from "@/ui/ScenePager";
+import { useContentWidth } from "@/ui/ContentPane";
 import { SegmentedSwitch } from "@/ui/SegmentedSwitch";
 
 import { PROJECT_VIEWS, projectSegments, type ProjectView } from "./projectHeader";
@@ -17,7 +18,7 @@ export function useProjectPages(key: string, active = true) {
   const view: ProjectView = viewFor?.key === key ? viewFor.view : "chat";
   const setView = (next: ProjectView) => setViewFor({ key, view: next });
 
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const progress = useScenePager(
     PROJECT_VIEWS.indexOf(view),
     (page) => setView(PROJECT_VIEWS[page] ?? "chat"),
@@ -56,7 +57,7 @@ export function ProjectPages({
   /** The second. */
   sessions: ReactNode;
 }) {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   return (
     <Animated.View
       style={[styles.pages, { width: width * PROJECT_VIEWS.length }, pages.slide]}

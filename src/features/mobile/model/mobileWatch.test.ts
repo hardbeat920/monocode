@@ -134,3 +134,17 @@ describe("mobile watch frames", () => {
     expect(() => turnsBefore(ids, "gone", 2)).toThrow();
   });
 });
+
+it("propagates reset metadata, automatic preference changes and clearing with unchanged turns", () => {
+  const conversation = { busy: false, older: false, turns: [] };
+  const usageLimit = { token: "a", resetsAt: 123456, resumeAtReset: false, canResume: false,
+    canAutoResume: true, resetLabel: "Resets tomorrow", limitation: "Keep desktop open" };
+  const initial = watchUpdate(null, { ...conversation, usageLimit })!;
+  expect(initial.update).toMatchObject({ usageLimit });
+  expect(watchUpdate(initial.baseline, { ...conversation, usageLimit })).toBeNull();
+  const armed = { ...usageLimit, token: "b", resumeAtReset: true };
+  const next = watchUpdate(initial.baseline, { ...conversation, usageLimit: armed })!;
+  expect(next.update).toMatchObject({ usageLimit: armed, turns: [] });
+  const cleared = watchUpdate(next.baseline, conversation)!;
+  expect(cleared.update).toMatchObject({ usageLimit: null });
+});

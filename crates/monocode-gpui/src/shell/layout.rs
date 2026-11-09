@@ -154,7 +154,7 @@ impl Shell {
             && !self.workspace.project_rail_open
             && self.settings.is_none()
             && !self.app_view_open()
-            && self.app_search.is_none()
+            && !self.search_page()
             && !self.mono_active(cx)
     }
     /// Switch navigation layouts without changing the new layout's frame style.
@@ -372,7 +372,7 @@ impl Shell {
             && !self.workspace.project_rail_open
             && self.settings.is_none()
             && self.classic_surface_open(cx);
-        let tab_bar = if spans_window || (original && self.app_search.is_some()) {
+        let tab_bar = if spans_window || (original && self.search_page()) {
             None
         } else if original && self.app_view_open() {
             Some(self.titlebar_controls_space(self.classic_app_surface_header(cx), window))
@@ -541,7 +541,7 @@ impl Shell {
         self.workspace.right_panel_open
             && !self.app_view_open()
             && self.settings.is_none()
-            && self.app_search.is_none()
+            && !self.search_page()
     }
     /// Classic: the panel toggle holds the corner while Explorer, Terminal (when
     /// it lives in the panel) and History start at the panel's left edge. The
@@ -718,7 +718,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        if let Some(search) = &self.app_search {
+        if let Some(search) = self.app_search.as_ref().filter(|s| !s.panel) {
             return div()
                 .flex_1()
                 .min_h_0()
@@ -808,8 +808,20 @@ impl Shell {
                     .clone()
                     .cached(StyleRefinement::default().flex_1().min_w_0().h(px(height))),
             )
-            .children(self.pressure_chip(cx))
-            .children(self.terminal_footer(cx))
+            .map(|d| {
+                let pressure = self.pressure_chip(cx);
+                let terminal = self.terminal_footer(cx);
+                let between = pressure.is_some() && terminal.is_some();
+                d.children(pressure)
+                    .when(between, |d| {
+                        d.child(
+                            super::terminal_dock::footer_separator()
+                                .mr(px(super::terminal_dock::FOOTER_GAP + 3.))
+                                .when(!self.workspace.boxy_layout(), |d| d.mb(px(2.))),
+                        )
+                    })
+                    .children(terminal)
+            })
     }
     /// ResourcePressureNotice's chip, just before the terminal controls.
     fn pressure_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

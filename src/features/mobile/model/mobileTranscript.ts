@@ -1,4 +1,9 @@
 import { monoReactionBlocks } from "../../monos/model/monoReaction";
+import {
+  launchAnchors,
+  monoSpawnedSessions,
+  type LaunchedSessionState,
+} from "../../monos/model/monoSpawnedSessions";
 import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { isEmojiOnlyMessage } from "../../sessions/model/emojiMessage";
 import { resolveModel } from "../../sessions/model/models";
@@ -11,6 +16,7 @@ import {
   hasPendingApproval,
   type Block,
   type HarnessId,
+  type MonoSpawnedSession,
   type Session,
   type TurnMetrics,
 } from "../../sessions/model/session";
@@ -44,6 +50,17 @@ export type MobilePhase = {
   kind: ActivityPhaseKind;
   title: string;
   steps: MobileStep[];
+};
+/** A session a Mono started, as its card in the Mono's chat. */
+export type MobileLaunchedSession = {
+  id: string;
+  /** The phone's ID for the project it runs in. */
+  projectId: string;
+  /** The project's name, for the card's pill. */
+  project: string;
+  title: string;
+  harness: HarnessId;
+  state: LaunchedSessionState;
 };
 /** What an opened fold holds, in order: the agent's notes between its work. */
 export type MobileFoldEntry =
@@ -79,7 +96,9 @@ export type MobileTurnItem =
     }
   /** Work left open in the turn: live, or after the last answer. */
   | { type: "work"; id: string; live: boolean; phases: MobilePhase[] }
-  | { type: "notice"; id: string; text: string; error?: boolean };
+  | { type: "notice"; id: string; text: string; error?: boolean }
+  /** Sessions the Mono started, as cards under the reply after the launch. */
+  | { type: "sessions"; id: string; sessions: MobileLaunchedSession[] };
 
 export type MobileTurn = {
   id: string;
@@ -104,6 +123,8 @@ type Options = {
   mono?: { name: string };
   pendingQuestion?: boolean;
   backgroundTasks?: string[];
+  /** A Mono's launched session as its card shows it: where it runs, and how it stands. */
+  launch?: (launch: MonoSpawnedSession) => MobileLaunchedSession;
   /**
    * Which turns to build, as [start, end) over every turn's ID; the latest
    * MAX_TURNS without one. Grouping covers the whole session, but building a
@@ -266,6 +287,20 @@ export function mobileTranscript(
       };
     };
 
+    // As AgentTranscript: a launch's card follows the reply after it, once
+    // that reply has finished streaming; one no reply followed waits for the
+    // turn to end.
+    const launchCards = options.launch
+      ? launchAnchors(items, inlineWork ? monoSpawnedSessions(turn) : [])
+      : undefined;
+    const launches = (
+      id: string,
+      entries: readonly MonoSpawnedSession[] | undefined,
+    ): MobileTurnItem[] =>
+      options.launch && entries?.length
+        ? [{ type: "sessions", id, sessions: entries.map(options.launch) }]
+        : [];
+
     const out: MobileTurnItem[] = [];
     items.forEach((item, itemIndex) => {
       if (showHeader && itemIndex === headerAt) out.push(header());
@@ -292,8 +327,16 @@ export function mobileTranscript(
       }
       const converted = blockItem(item.block, session.cwd);
       if (converted) out.push(converted);
+      if (settled || itemIndex < items.length - 1 || !item.block.streaming)
+        out.push(
+          ...launches(
+            `${item.block.id}:launches`,
+            launchCards?.afterItem.get(itemIndex),
+          ),
+        );
     });
     if (showHeader && headerAt >= items.length) out.push(header());
+    if (settled) out.push(...launches(`${turn[0].id}:launches`, launchCards?.atEnd));
     // Messages stacked one after another share the last one's time.
     out.forEach((entry, at) => {
       if (entry.type === "user" && out[at + 1]?.type === "user")

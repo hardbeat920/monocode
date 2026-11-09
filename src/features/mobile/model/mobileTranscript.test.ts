@@ -108,4 +108,54 @@ describe("mobile transcript", () => {
     ]);
     expect(turn.footer).toBeUndefined();
   });
+
+  it("puts a session the Mono started on a card after the reply that follows it", () => {
+    const launch = {
+      sessionId: "app-1",
+      cwd: "/repo",
+      title: "Fix the build",
+      harness: "codex" as const,
+      model: "gpt-5",
+    };
+    const [turn] = mobileTranscript(
+      session([
+        prompt("u", "Fix the build", { monoSpawnedSessions: [launch] }),
+        reply("a", "Started a session on it."),
+        reply("b", "It's done."),
+      ]),
+      {
+        busy: false,
+        mono: { name: "Pip" },
+        launch: (entry) => ({
+          id: entry.sessionId,
+          projectId: "repo",
+          project: "repo",
+          title: entry.title,
+          harness: entry.harness,
+          state: "working",
+        }),
+      },
+    );
+    expect(turn.items.map((item) => item.type)).toEqual([
+      "user",
+      "header",
+      "text",
+      "sessions",
+      "text",
+    ]);
+    expect(turn.items[3]).toEqual({
+      type: "sessions",
+      id: "a:launches",
+      sessions: [
+        {
+          id: "app-1",
+          projectId: "repo",
+          project: "repo",
+          title: "Fix the build",
+          harness: "codex",
+          state: "working",
+        },
+      ],
+    });
+  });
 });

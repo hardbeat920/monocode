@@ -25,7 +25,6 @@ impl DesktopPreferences {
             ("format_on_save", "formatOnSave", true),
             ("autosave", "autosave", false),
             ("composer_mascot", "composerRunner", true),
-            ("empty_session_games", "gridArcadeEnabled", true),
             ("show_remaining_usage", "showRemainingUsage", false),
             ("mask_emails", "maskEmails", true),
             ("claude_hooks", "claudeHooks", true),
@@ -41,6 +40,36 @@ impl DesktopPreferences {
                 field,
                 json!(self.flag(key).unwrap_or(default)),
             );
+        }
+        // Store reconciliation runs before Workspace::restore. Migrate the
+        // native choice here too, before a new desktop field can replace it.
+        let games = target
+            .remove("empty_session_games")
+            .and_then(|value| value.as_bool());
+        if let Some(games) = games {
+            target
+                .entry("empty_session")
+                .or_insert_with(|| json!(if games { "games" } else { "none" }));
+        }
+        let source = json!(if self.flag("gridArcadeEnabled") == Some(false) {
+            "none"
+        } else {
+            "ink"
+        });
+        let previous = baseline.get("empty_session").cloned().or_else(|| {
+            baseline["empty_session_games"]
+                .as_bool()
+                .map(|games| json!(if games { "ink" } else { "none" }))
+        });
+        if previous.is_none() && target.contains_key("empty_session") {
+            // First import of this field: retain the saved native choice and
+            // record the desktop baseline for subsequent deliberate changes.
+            next.insert("empty_session".into(), source);
+        } else {
+            // Translate the old desktop baseline too, so a desktop toggle
+            // changed since the last native launch still takes effect.
+            let baseline = json!({"empty_session":previous});
+            reconcile_preference(target, &baseline, next, "empty_session", source);
         }
         for (field, key, allowed, default) in [
             (
@@ -642,6 +671,53 @@ mod tests {
                 .iter()
                 .map(|(key, value)| ((*key).into(), (*value).into()))
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn empty_session_migration_precedes_desktop_reconciliation() {
+        let enabled = source(&[("monocode.gridArcadeEnabled", "1")]);
+        let disabled = source(&[("monocode.gridArcadeEnabled", "0")]);
+        for (preferences, expected) in [
+            (json!({}), "ink"),
+            (json!({"empty_session_games":false}), "none"),
+            (json!({"empty_session_games":true}), "games"),
+            (
+                json!({"empty_session_games":false,"empty_session":"games"}),
+                "games",
+            ),
+            (
+                json!({"empty_session_games":true,"empty_session":"none"}),
+                "none",
+            ),
+        ] {
+            let mut workspace = json!({
+                "preferences":preferences,
+                "desktop_project_preferences":{"empty_session_games":true}
+            });
+            for _ in 0..2 {
+                enabled.apply_workspace(&mut workspace);
+                assert_eq!(workspace["preferences"]["empty_session"], expected);
+                assert!(workspace["preferences"]
+                    .get("empty_session_games")
+                    .is_none());
+            }
+            disabled.apply_workspace(&mut workspace);
+            assert_eq!(workspace["preferences"]["empty_session"], "none");
+            enabled.apply_workspace(&mut workspace);
+            assert_eq!(workspace["preferences"]["empty_session"], "ink");
+        }
+    }
+
+    #[test]
+    fn desktop_empty_session_changes_during_upgrade_still_apply() {
+        for (before, value, expected) in [(true, "0", "none"), (false, "1", "ink")] {
+            let mut workspace = json!({
+                "preferences":{"empty_session_games":before},
+                "desktop_project_preferences":{"empty_session_games":before}
+            });
+            source(&[("monocode.gridArcadeEnabled", value)]).apply_workspace(&mut workspace);
+            assert_eq!(workspace["preferences"]["empty_session"], expected);
         }
     }
 

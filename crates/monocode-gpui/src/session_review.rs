@@ -91,10 +91,6 @@ impl SessionReview {
             cx.notify();
         }
     }
-    /// The card has a settled result or an error to show.
-    pub(crate) fn shown(&self) -> bool {
-        !self.busy && (self.error.is_some() || !self.files.is_empty())
-    }
     #[cfg(test)]
     pub(crate) fn set_files(&mut self, files: Vec<CheckpointFile>, cx: &mut Context<Self>) {
         self.publish(Ok(CheckpointStatus { files }), cx);
@@ -225,13 +221,33 @@ fn card() -> gpui::Div {
         .bg(content(0.03))
 }
 
-impl Render for SessionReview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl SessionReview {
+    /// The recorded files' absolute paths.
+    pub(crate) fn paths(&self) -> Vec<String> {
+        self.files.iter().map(|file| file.path.clone()).collect()
+    }
+    /// The session's pending file count and line totals, while there are files.
+    pub(crate) fn totals(&self) -> Option<(usize, i64, i64)> {
+        (!self.busy && !self.files.is_empty()).then(|| {
+            (
+                self.files.len(),
+                self.files.iter().map(|f| f.additions).sum(),
+                self.files.iter().map(|f| f.deletions).sum(),
+            )
+        })
+    }
+    /// The card's contents inside `frame`: the transcript's rounded card, or
+    /// the composer ledge's changes shelf.
+    pub(crate) fn contents(
+        &mut self,
+        frame: gpui::Div,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         if self.busy {
             return div().into_any_element();
         }
         if let Some(error) = self.error.clone() {
-            return card()
+            return frame
                 .id("session-review")
                 .role(Role::Status)
                 .px_3()
@@ -419,7 +435,7 @@ impl Render for SessionReview {
             .when(self.expanded, |d| d.max_h(px(256.)).overflow_y_scroll())
             .children(rows);
         let expanded = self.expanded;
-        card()
+        frame
             .id("session-review")
             .overflow_hidden()
             .child(header)
@@ -470,5 +486,11 @@ impl Render for SessionReview {
                 )
             })
             .into_any_element()
+    }
+}
+
+impl Render for SessionReview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.contents(card(), cx)
     }
 }

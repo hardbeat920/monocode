@@ -6,7 +6,7 @@ impl Shell {
         self.workspace.classic_layout
             && (self.settings.is_some()
                 || self.app_view_open()
-                || self.app_search.is_some()
+                || self.search_page()
                 || self.mono_active(cx))
     }
 

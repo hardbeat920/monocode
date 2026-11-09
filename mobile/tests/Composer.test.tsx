@@ -1,13 +1,23 @@
-import { act, forwardRef, useRef, type ReactNode } from "react";
+import {
+  act,
+  forwardRef,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Composer } from "@/features/sessions/Composer";
 
 const runtime = vi.hoisted(() => ({
   os: "android",
+  offline: false,
   values: [] as { get: () => unknown; set: (value: unknown) => void }[],
   photos: vi.fn(async () => []),
   files: vi.fn(async () => []),
+  paste: vi.fn(async () => [] as object[]),
+  merge: vi.fn((existing: object[], added: object[]) => [...existing, ...added]),
+  clipboard: null as ((hasImage: boolean) => void) | null,
 }));
 vi.mock("react-native", () => {
   const View = ({
@@ -90,6 +100,11 @@ vi.mock("react-native", () => {
     )),
   };
 });
+vi.mock("@/features/sessions/TypingPostureFocus", () => ({
+  TypingPostureFocus: ({ enabled, onEnterTypingPosture }: {
+    enabled: boolean; onEnterTypingPosture: () => void;
+  }) => <button aria-label="Enter typing posture" disabled={!enabled} onClick={onEnterTypingPosture} />,
+}));
 vi.mock("react-native-reanimated", () => {
   const transition = { duration: () => ({}) };
   return {
@@ -155,12 +170,15 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   frame: vi.fn(),
   shapes: { circle: vi.fn() },
 }));
+vi.mock("expo-router", () => ({
+  useNavigation: () => ({ addListener: () => () => {} }),
+}));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 24 }),
 }));
 vi.mock("@/features/connection/ConnectionNotice", () => ({
-  useOffline: () => false,
-  PulsingDot: () => null,
+  useOffline: () => runtime.offline,
+  PulsingDot: () => <i data-testid="pulsing-dot" />,
 }));
 vi.mock("@/features/files/FileTypeIcon", () => ({ FileTypeIcon: () => null }));
 vi.mock("@/features/sessions/SessionScreen", () => ({
@@ -180,7 +198,14 @@ vi.mock("@/features/sessions/attachments", () => ({
   MAX_ATTACHMENTS: 10,
   pickPhotos: runtime.photos,
   pickFiles: runtime.files,
-  merge: vi.fn(),
+  pasteImage: runtime.paste,
+  watchClipboardImage: (onChange: (hasImage: boolean) => void) => {
+    runtime.clipboard = onChange;
+    return () => {
+      runtime.clipboard = null;
+    };
+  },
+  merge: runtime.merge,
   isImage: () => false,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
@@ -196,10 +221,14 @@ let root: ReturnType<typeof createRoot>;
 const model = vi.fn();
 const send = vi.fn();
 const stop = vi.fn(async () => {});
-const render = () =>
+const render = (
+  active = true,
+  props: Partial<ComponentProps<typeof Composer>> = {},
+) =>
   act(() =>
     root.render(
       <Composer
+        active={active}
         context="Project"
         branch="main"
         model="GPT"
@@ -207,11 +236,20 @@ const render = () =>
         onSend={send}
         busy
         onStop={stop}
+        {...props}
       />,
     ),
   );
 const button = (label: string) =>
   container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+const type = (text: string) => {
+  const input = container.querySelector("textarea")!;
+  act(() => {
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return input;
+};
 const modelTouches = () =>
   button("Model: GPT").parentElement!.style.pointerEvents;
 beforeEach(() => {
@@ -219,6 +257,7 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
+  runtime.offline = false;
   runtime.values = [];
   vi.clearAllMocks();
   container = document.createElement("div");
@@ -287,9 +326,9 @@ it("opens a content-sized attachment menu with safe-area padding and retains bot
   await act(async () => button("Add photos or files").click());
   const scroll = container.querySelector<HTMLElement>("[data-scroll]")!;
   expect(scroll.style.flexGrow).toBe("0");
-  expect(scroll.style.maxHeight).toBe("75%");
+  expect(scroll.parentElement!.style.maxHeight).toBe("80%");
   expect((scroll.firstElementChild as HTMLElement).style.paddingBottom).toBe(
-    "44px",
+    "40px",
   );
   await act(async () =>
     [...container.querySelectorAll("button")]
@@ -305,4 +344,98 @@ it("opens a content-sized attachment menu with safe-area padding and retains bot
       .click(),
   );
   expect(runtime.files).toHaveBeenCalledWith(10);
+});
+
+// The native observer handles posture transitions; the composer focuses its
+// existing input, preserving its draft and leaving inactive routes alone.
+it("focuses the existing draft on typing posture only for the active route", () => {
+  render();
+  const input = container.querySelector("textarea")!;
+  act(() => {
+    input.value = "Unsent draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => button("Enter typing posture").click());
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("Unsent draft");
+  act(() => input.blur());
+  render(false);
+  act(() => button("Enter typing posture").click());
+  expect(document.activeElement).not.toBe(input);
+  expect(input.value).toBe("Unsent draft");
+});
+
+it("keeps the field open while the desktop is away and holds the message until it is back", async () => {
+  runtime.offline = true;
+  render();
+  const input = container.querySelector("textarea")!;
+  expect(input.disabled).toBe(false);
+  expect(input.placeholder).toBe("Reconnecting to desktop…");
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).toBeNull();
+
+  type("Written on the train");
+  expect(input.value).toBe("Written on the train");
+  expect(button("Send").disabled).toBe(true);
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).not.toBeNull();
+  act(() => button("Send").click());
+  expect(send).not.toHaveBeenCalled();
+  expect(input.value).toBe("Written on the train");
+
+  runtime.offline = false;
+  render();
+  expect(button("Send").disabled).toBe(false);
+  expect(container.querySelector('[data-testid="pulsing-dot"]')).toBeNull();
+  await act(async () => button("Send").click());
+  expect(send).toHaveBeenCalledWith("Written on the train", []);
+});
+
+it("can't stop a turn while the desktop is away, but dictation still works", () => {
+  runtime.offline = true;
+  render();
+  expect(button("Stop").disabled).toBe(true);
+  act(() => button("Stop").click());
+  expect(stop).not.toHaveBeenCalled();
+
+  render(true, { busy: false });
+  expect(button("Dictate").disabled).toBe(false);
+});
+
+it("leaves a session's error for when the desktop is back, so it can't lock the field", () => {
+  runtime.offline = true;
+  const notice = { text: "Turn failed", dismiss: vi.fn() };
+  render(true, { notice });
+  expect(container.querySelector("textarea")!.disabled).toBe(false);
+  expect(container.textContent).not.toContain("Turn failed");
+
+  runtime.offline = false;
+  render(true, { notice });
+  expect(container.querySelector("textarea")!.disabled).toBe(true);
+  expect(container.textContent).toContain("Turn failed");
+});
+
+it("offers to paste a copied image and holds it as a picked photo", async () => {
+  const pasted = { id: "p", name: "Pasted image.png", mimeType: "image/png", size: 3, uri: "file:///p.png", data: "AAA" };
+  runtime.paste.mockResolvedValueOnce([pasted]);
+  render();
+  const menuItems = () => [...container.querySelectorAll("button")].map((item) => item.textContent);
+  await act(async () => button("Add photos or files").click());
+  expect(menuItems()).not.toContain("Paste Image");
+  await act(async () => button("Add photos or files").click());
+
+  act(() => runtime.clipboard!(true));
+  await act(async () => button("Add photos or files").click());
+  expect(menuItems()).toContain("Paste Image");
+  await act(async () =>
+    [...container.querySelectorAll("button")].find((item) => item.textContent === "Paste Image")!.click(),
+  );
+  expect(runtime.paste).toHaveBeenCalledWith(10);
+  expect(runtime.merge).toHaveBeenCalledWith([], [pasted]);
+  // The same strip as a picked photo, removable the same way, and sent with the message.
+  expect(button("Remove Pasted image.png")).toBeTruthy();
+  await act(async () => button("Send").click());
+  expect(send).toHaveBeenCalledWith("", [pasted]);
+
+  act(() => runtime.clipboard!(false));
+  await act(async () => button("Add photos or files").click());
+  expect(menuItems()).not.toContain("Paste Image");
 });

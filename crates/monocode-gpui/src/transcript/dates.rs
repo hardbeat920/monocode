@@ -388,6 +388,15 @@ mod tests {
         visual.run_until_parked();
         assert!(visual.debug_bounds("prompt-outline").is_some());
         assert!(visual.debug_bounds("mono-day-separator").is_none());
+        for (width, outlined) in [(927., false), (928., true), (1100., true)] {
+            visual.simulate_resize(size(px(width), px(700.)));
+            visual.run_until_parked();
+            assert_eq!(
+                visual.debug_bounds("prompt-outline").is_some(),
+                outlined,
+                "the outline must follow pane width without an unrelated redraw at {width}px"
+            );
+        }
         window
             .update(visual, |view, _, cx| {
                 view.mono_mode("cat", 0xe86b5f, "MonoCat");

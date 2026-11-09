@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -27,13 +28,22 @@ Notifications.setNotificationHandler({
 
 type Seen = Pick<SessionSummary, "busy" | "waiting">;
 type Data = { projectId: string; sessionId: string };
+/** Further and further apart, for a push token that didn't come. */
+const RETRY_MS = [5_000, 15_000, 45_000];
+/** Where a pushed notification opens: a session, or a Mono's chat. */
+type Target = Partial<Data> & { monoId?: string };
 const SESSION_CHANNEL = "sessions";
 
 /**
- * Local notifications for the desktop's sessions, after its own: an agent
- * that finishes, or stops for an approval or a question. They come from the
- * session list as the phone polls it, so only while the app runs, and only
- * while it is out of view. Tapping one opens its session.
+ * Notifications for the desktop's sessions. A desktop that can sends them
+ * by push, so they arrive with the app closed: for sessions the phone
+ * started, and whatever a Mono says. The phone registers its push token and
+ * the categories it turned off each time it connects.
+ *
+ * With the older desktop app, they are local, after its own: an agent that
+ * finishes, or stops for an approval or a question, from the session list
+ * as the phone polls it, so only while the app runs and is out of view.
+ * Tapping one opens its session or Mono.
  */
 export function SessionNotifications() {
   const connection = useConnection();
@@ -49,6 +59,23 @@ export function SessionNotifications() {
   const anyOn = NOTIFICATION_CATEGORIES.some(({ id }) =>
     preferences.enabled(id),
   );
+  // Android has no push credentials yet (FCM), so it keeps local alerts.
+  const push = connection.catalog.push === true && Platform.OS === "ios";
+  const disabled = NOTIFICATION_CATEGORIES.filter(
+    ({ id }) => !preferences.enabled(id),
+  )
+    .map(({ id }) => id)
+    .join(",");
+  // Bumped once the permission prompt is answered, and on coming back from
+  // system settings, where notifications may have been turned on or off.
+  const [permissionCheck, setPermissionCheck] = useState(0);
+  const command = useRef(connection.command);
+  useEffect(() => {
+    command.current = connection.command;
+  });
+  // Whether the desktop holds this phone's token; until it does, the phone
+  // goes on posting its own alerts.
+  const registered = useRef(false);
 
   // Ask after pairing, only when alerts are enabled and the OS allows asking.
   useEffect(() => {
@@ -70,11 +97,58 @@ export function SessionNotifications() {
       if (shouldRequest && settings.canAskAgain) {
         await Notifications.requestPermissionsAsync();
       }
+      setPermissionCheck((count) => count + 1);
     };
     void prepare().catch((reason) =>
       console.warn("Could not enable session notifications", reason),
     );
   }, [anyOn, connection.pairing]);
+
+  useEffect(() => {
+    if (!push) return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") setPermissionCheck((count) => count + 1);
+    });
+    return () => subscription.remove();
+  }, [push]);
+
+  // Tell the desktop where to push, or that it no longer can.
+  useEffect(() => {
+    if (!push || !connection.connected) return;
+    let cancelled = false;
+    const register = async () => {
+      const settings = await Notifications.getPermissionsAsync();
+      const token = settings.granted
+        ? (
+            await Notifications.getExpoPushTokenAsync({
+              projectId: Constants.expoConfig?.extra?.eas?.projectId,
+            })
+          ).data
+        : null;
+      if (cancelled) return;
+      await command.current("device.push", {
+        token,
+        disabled: disabled ? disabled.split(",") : [],
+      });
+      registered.current = token !== null;
+    };
+    // A token can fail to come, say while offline: try again a few times.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (tries: number) =>
+      void register().catch((reason) => {
+        if (cancelled) return;
+        if (tries < RETRY_MS.length) {
+          timer = setTimeout(() => attempt(tries + 1), RETRY_MS[tries]);
+        } else {
+          console.warn("Could not register for push notifications", reason);
+        }
+      });
+    attempt(0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [push, connection.connected, disabled, permissionCheck]);
 
   useEffect(() => {
     if (!connection.connected) {
@@ -90,8 +164,10 @@ export function SessionNotifications() {
       ]),
     );
     if (!before) return;
-    // In front of the user, the app itself shows what changed.
-    if (AppState.currentState === "active") return;
+    // In front of the user, the app itself shows what changed; the desktop
+    // that pushes sends the rest.
+    if (AppState.currentState === "active" || (push && registered.current))
+      return;
     const preferences = current.current;
     const projects = connection.catalog.projects;
     for (const session of sessions) {
@@ -123,16 +199,29 @@ export function SessionNotifications() {
         trigger: Platform.OS === "android" ? { channelId: SESSION_CHANNEL } : null,
       });
     }
-  }, [connection.connected, connection.catalog]);
+  }, [connection.connected, connection.catalog, push]);
 
-  // A tap opens the session, the app's last one too if it launched it.
+  // A tap opens the session or Mono, the app's last one too if it launched it.
   const response = Notifications.useLastNotificationResponse();
   useEffect(() => {
     if (response?.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER)
       return;
     const data = response.notification.request.content.data as
-      Partial<Data> | undefined;
+      Target | undefined;
     void Notifications.clearLastNotificationResponseAsync();
+    // A Mono's habit run names its session too: that opens as the sheet a
+    // Mono's sessions do, in whichever project, picked for the phone or not.
+    if (data?.monoId && data.projectId && data.sessionId) {
+      router.push({
+        pathname: "/session",
+        params: { projectId: data.projectId, sessionId: data.sessionId },
+      });
+      return;
+    }
+    if (data?.monoId) {
+      router.push({ pathname: "/mono/[monoId]", params: { monoId: data.monoId } });
+      return;
+    }
     if (!data?.projectId || !data.sessionId) return;
     router.push({
       pathname: "/project/[projectId]/session/[sessionId]",

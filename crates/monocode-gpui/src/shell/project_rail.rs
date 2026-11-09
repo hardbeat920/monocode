@@ -162,8 +162,9 @@ impl Shell {
             }
     }
     pub(super) fn toggle_primary_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Settings stand in for the sidebar and can't be hidden.
-        if self.settings.is_some() {
+        // The classic layout's settings stand in for the project rail and
+        // can't be hidden.
+        if self.settings.is_some() && self.workspace.classic_layout {
             return;
         }
         if self.workspace.classic_layout && self.settings.is_none() {
@@ -515,6 +516,12 @@ impl Shell {
             .pl(px(if compact { 8. } else { 6. }))
             .pr_2()
             .flex_shrink_0()
+            .when(!compact, |d| {
+                d.children(
+                    self.github_star_prompt(cx)
+                        .map(|prompt| div().mb_1().child(prompt)),
+                )
+            })
             .child(
                 div()
                     .id("rail-settings")
@@ -562,48 +569,51 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_px()
-            .child(
-                div()
-                    .id("rail-search")
-                    .debug_selector(|| "sidebar-search-field".into())
-                    .group("rail-search")
-                    .role(Role::Button)
-                    .aria_label("Search")
-                    .cursor_pointer()
-                    .h(px(32.))
-                    .mb(px(2.))
-                    .px(px(6.))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(content(0.08))
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into()).blur_radius(px(3.)),
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
-                            .blur_radius(px(2.))
-                            .spread_radius(px(-1.)),
-                    ])
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(content(0.5))
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .child(icon("search", 16.).text_color(content(0.35)))
-                    .child(div().flex_1().min_w_0().child("Search"))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(content(0.4))
-                            .child(if cfg!(target_os = "macos") {
-                                "⌘K"
-                            } else {
-                                "Ctrl K"
-                            }),
-                    )
-                    .on_click(cx.listener(|this, _, w, cx| this.focus_search(w, cx))),
-            )
+            .when(self.workspace.sidebar_search_visible, |d| {
+                d.child(
+                    div()
+                        .id("rail-search")
+                        .debug_selector(|| "sidebar-search-field".into())
+                        .group("rail-search")
+                        .role(Role::Button)
+                        .aria_label("Search")
+                        .cursor_pointer()
+                        .h(px(32.))
+                        .mb(px(2.))
+                        .px(px(6.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.08))
+                        .shadow(vec![
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(3.)),
+                            BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                                .blur_radius(px(2.))
+                                .spread_radius(px(-1.)),
+                        ])
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.5))
+                        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                        .child(icon("search", 16.).text_color(content(0.35)))
+                        .child(div().flex_1().min_w_0().child("Search"))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(content(0.4))
+                                .child(if cfg!(target_os = "macos") {
+                                    "⌘K"
+                                } else {
+                                    "Ctrl K"
+                                }),
+                        )
+                        .on_click(cx.listener(|this, _, w, cx| this.focus_search(w, cx))),
+                )
+            })
             .children(
                 [
                     ("Inbox", "inbox"),
@@ -665,8 +675,7 @@ impl Shell {
     }
     fn project_rail_compact_actions(&mut self, cx: &mut Context<Self>) -> AnyElement {
         use classic_sidebar::ClassicSidebarTab;
-        let workspace_active =
-            !self.app_view_open() && self.app_search.is_none() && !self.mono_active(cx);
+        let workspace_active = !self.app_view_open() && !self.mono_active(cx);
         let inbox_unread = self
             .inbox
             .as_ref()
@@ -1147,10 +1156,8 @@ impl Shell {
             .iter()
             .position(|p| p == &path)
             .unwrap_or(ix);
-        let selected = self.workspace.project == path
-            && !self.app_view_open()
-            && self.app_search.is_none()
-            && !self.mono_active(cx);
+        let selected =
+            self.workspace.project == path && !self.app_view_open() && !self.mono_active(cx);
         let label = self.project_label(&path);
         let tooltip = label.clone();
         let menu_path = path.clone();

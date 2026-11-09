@@ -241,7 +241,10 @@ impl FileEditor {
             },
             |_, _, _, _| {},
         )
+        // Pinned to the corner, not left inside the parent's padding.
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
 }
