@@ -34,6 +34,20 @@ const MAX_IMAGE_SIDE = 2048;
 /** Sent as picked when already small and in a format every provider reads. */
 const SENT_AS_IS = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_AS_IS_BYTES = 1.5 * 1024 * 1024;
+/**
+ * A PNG is usually a screenshot: text that JPEG smears. One up to a tall
+ * iPhone's or an iPad's (2064 x 2752) is sent lossless, within a byte budget.
+ */
+const MAX_AS_IS_PNG_PIXELS = 6 * 1024 * 1024;
+const MAX_AS_IS_PNG_SIDE = 4096;
+const MAX_AS_IS_PNG_BYTES = 5 * 1024 * 1024;
+/**
+ * A pasted image arrives whole, as base64 on the JS thread; past these it is
+ * refused before it's decoded or written. A 48 MP photo goes through Photo
+ * Library instead, which never brings its bytes into JS.
+ */
+const MAX_PASTE_PIXELS = 25_000_000;
+const MAX_PASTE_BYTES = 20 * 1024 * 1024;
 
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -90,56 +104,80 @@ export async function pickFiles(room: number): Promise<Attachment[]> {
 
 /**
  * The clipboard's image (a screenshot, a photo copied from Photos), as if it
- * had been picked: the same scaling, re-encoding and limits.
- * iOS asks the user to allow the paste the first time; a refusal reads as no image.
+ * had been picked: the same scaling, re-encoding and limits. iOS asks the user
+ * to allow each paste unless they've allowed it in Settings; a refusal is a
+ * cancel, not an error.
  */
 export async function pasteImage(room: number): Promise<Attachment[]> {
   if (room <= 0) return [];
-  const image = await getImageAsync({ format: "png" });
-  if (!image) throw new Error("There's no image on the clipboard to paste.");
+  // Encoded and sent over on a native background thread, not the UI's.
+  const image = await getImageAsync({ format: "png" }).catch((reason: unknown) => {
+    throw pasteError(reason);
+  });
+  if (!image) {
+    // Still an image there, but none given: the user chose Don't Allow.
+    if (await hasImageAsync().catch(() => false)) return [];
+    throw new Error("There's no image on the clipboard to paste.");
+  }
+  const { width, height } = image.size;
+  // Arrives as a data URI; the bytes are what follows its prefix.
+  const start = image.data.indexOf(",") + 1;
+  const bytes = Math.floor(((image.data.length - start) * 3) / 4);
+  if (width * height > MAX_PASTE_PIXELS || bytes > MAX_PASTE_BYTES)
+    throw new Error(
+      `This image is too large to paste (${Math.round(width)} x ${Math.round(height)}). ` +
+        "Save it to Photos and attach it from Photo Library instead.",
+    );
+  const name = "Pasted image.png";
+  if (heldAsIs("image/png", bytes, width, height))
+    // Its data URI is the thumbnail: no cache file to write, or to clean up.
+    return [{ id: makeId(), name, mimeType: "image/png", size: bytes, uri: image.data, data: image.data.slice(start) }];
   const file = new File(Paths.cache, `pasted-${makeId()}.png`);
-  // Arrives as a data URI; the file takes the bytes after its prefix.
-  file.write(image.data.slice(image.data.indexOf(",") + 1), { encoding: "base64" });
-  const discard = () => {
+  try {
+    file.write(image.data.slice(start), { encoding: "base64" });
+    return [await reencode(file.uri, width, height, name)];
+  } finally {
+    // The re-encoded JPEG is the attachment now, or nothing is.
     try {
       if (file.exists) file.delete();
     } catch {
       // Only a cache file; the OS clears the cache in time anyway.
     }
-  };
-  try {
-    const attachment = await fromPhoto({
-      uri: file.uri,
-      width: image.size.width,
-      height: image.size.height,
-      mimeType: "image/png",
-      fileName: "Pasted image.png",
-      fileSize: file.size,
-    });
-    // Re-encoded to its own file: the pasted PNG is no longer the thumbnail.
-    if (attachment.uri !== file.uri) discard();
-    return [attachment];
-  } catch (reason) {
-    discard();
-    throw reason;
   }
+}
+
+/** A native paste error, in words for the user. */
+function pasteError(reason: unknown): Error {
+  const code = (reason as { code?: unknown } | null)?.code;
+  if (code === "ERR_NO_PERMISSION")
+    return new Error("The app this image was copied from no longer shares it. Copy it again and paste.");
+  if (code === "ERR_PASTE_FAILURE")
+    return new Error("The image on the clipboard couldn't be read. Copy it again and paste.");
+  return reason instanceof Error ? reason : new Error(String(reason));
 }
 
 /**
  * Tells whether the clipboard holds an image: now, whenever it changes, and
  * on coming back to the app (copied elsewhere). Only asks, never reads, so iOS
- * doesn't prompt to allow a paste until one is chosen.
+ * doesn't prompt to allow a paste until one is chosen. An answer overtaken by
+ * a newer check or change is dropped, so a slow one can't undo a later copy.
  */
 export function watchClipboardImage(onChange: (hasImage: boolean) => void): () => void {
   let live = true;
-  const check = () =>
+  let latest = 0;
+  const report = (turn: number, has: boolean) => {
+    if (live && turn === latest) onChange(has);
+  };
+  const check = () => {
+    const turn = ++latest;
     void hasImageAsync().then(
-      (has) => live && onChange(has),
-      () => live && onChange(false),
+      (has) => report(turn, has),
+      () => report(turn, false),
     );
+  };
   check();
   const clipboard = addClipboardListener(({ contentTypes }) => {
-    if (live) onChange(contentTypes.includes(ContentType.IMAGE));
+    report(++latest, contentTypes.includes(ContentType.IMAGE));
   });
   const app = AppState.addEventListener("change", (state) => {
     if (state === "active") check();
@@ -165,11 +203,7 @@ type PhotoSource = Pick<ImagePickerAsset, "uri" | "width" | "height"> &
 
 async function fromPhoto(asset: PhotoSource): Promise<Attachment> {
   const mimeType = asset.mimeType ?? mimeFor(asset.fileName ?? "", null);
-  const small =
-    SENT_AS_IS.has(mimeType) &&
-    (asset.fileSize ?? Infinity) <= MAX_AS_IS_BYTES &&
-    Math.max(asset.width, asset.height) <= MAX_IMAGE_SIDE;
-  if (small) {
+  if (heldAsIs(mimeType, asset.fileSize ?? Infinity, asset.width, asset.height)) {
     const file = new File(asset.uri);
     return {
       id: makeId(),
@@ -180,17 +214,29 @@ async function fromPhoto(asset: PhotoSource): Promise<Attachment> {
       data: await file.base64(),
     };
   }
-  const context = ImageManipulator.manipulate(asset.uri);
-  if (Math.max(asset.width, asset.height) > MAX_IMAGE_SIDE)
-    context.resize(
-      asset.width >= asset.height ? { width: MAX_IMAGE_SIDE } : { height: MAX_IMAGE_SIDE },
-    );
+  return reencode(asset.uri, asset.width, asset.height, asset.fileName ?? "photo");
+}
+
+/** Whether an image goes as it is: small, or a screenshot-sized PNG, in a format every provider reads. */
+function heldAsIs(mimeType: string, bytes: number, width: number, height: number): boolean {
+  if (!SENT_AS_IS.has(mimeType)) return false;
+  const side = Math.max(width, height);
+  if (mimeType === "image/png" && bytes <= MAX_AS_IS_PNG_BYTES)
+    return width * height <= MAX_AS_IS_PNG_PIXELS && side <= MAX_AS_IS_PNG_SIDE;
+  return bytes <= MAX_AS_IS_BYTES && side <= MAX_IMAGE_SIDE;
+}
+
+/** Scaled down to the longer side's limit and re-encoded as JPEG, natively. */
+async function reencode(uri: string, width: number, height: number, fileName: string): Promise<Attachment> {
+  const context = ImageManipulator.manipulate(uri);
+  if (Math.max(width, height) > MAX_IMAGE_SIDE)
+    context.resize(width >= height ? { width: MAX_IMAGE_SIDE } : { height: MAX_IMAGE_SIDE });
   const saved = await (await context.renderAsync()).saveAsync({
     format: SaveFormat.JPEG,
     compress: 0.85,
     base64: true,
   });
-  const base = (asset.fileName ?? "photo").replace(/\.[^.]+$/, "");
+  const base = fileName.replace(/\.[^.]+$/, "");
   return {
     id: makeId(),
     name: `${base}.jpg`,
