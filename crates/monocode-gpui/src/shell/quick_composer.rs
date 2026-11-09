@@ -32,12 +32,15 @@ impl Shell {
     fn quick_choice(&self, cx: &App) -> crate::quick_composer::Launch {
         let cwd = self.workspace.project.clone();
         let new = self.new_chat_choice(&cwd);
-        let initial = crate::quick_composer::Launch::choice(
+        let p = &self.workspace.preferences;
+        let mut initial = crate::quick_composer::Launch::choice(
             cwd.clone(),
             new.kind,
             new.model,
             crate::conversation::default_access(cx),
         );
+        initial.new_cow = p.default_isolation == "cow";
+        initial.new_worktree = p.default_isolation == "worktree";
         let mut choice = self
             .quick
             .last
@@ -150,6 +153,8 @@ impl Shell {
                 effort: choice.effort,
                 fast: choice.fast,
                 new_worktree: choice.new_worktree,
+                new_cow: choice.new_cow,
+                cow_source_cwd: choice.cow_source_cwd,
                 worktree_base: choice.worktree_base,
                 worktree_cwd: choice.worktree_cwd,
                 ..Default::default()

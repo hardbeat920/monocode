@@ -30,7 +30,11 @@ use std::{
 pub(crate) enum Event {
     Close,
     OpenSession(i64),
-    StartSession { item: Box<Item>, prompt: String },
+    StartSession {
+        item: Box<Item>,
+        prompt: String,
+        workspace_mode: Option<String>,
+    },
     ItemsChanged(Vec<Item>),
 }
 
@@ -98,6 +102,9 @@ pub(crate) struct Inbox {
     connect_error: Option<String>,
     start_project: PathBuf,
     project_picker: bool,
+    isolation_picker: bool,
+    isolation_anchor: AnchorSlot,
+    start_isolation: Option<String>,
     project_anchor: AnchorSlot,
     action_menu: bool,
     action_anchor: AnchorSlot,
@@ -302,6 +309,9 @@ impl Inbox {
             connect_error: None,
             start_project: cwd,
             project_picker: false,
+            isolation_picker: false,
+            isolation_anchor: AnchorSlot::default(),
+            start_isolation: None,
             project_anchor: AnchorSlot::default(),
             action_menu: false,
             action_anchor: AnchorSlot::default(),
@@ -602,6 +612,7 @@ impl Inbox {
         self.action_error = None;
         self.action_notice = None;
         self.action_menu = false;
+        self.isolation_picker = false;
         self.comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
     }
@@ -840,6 +851,7 @@ impl Inbox {
             cx.emit(Event::StartSession {
                 item: Box::new(item),
                 prompt,
+                workspace_mode: self.start_isolation.clone(),
             });
         }
     }

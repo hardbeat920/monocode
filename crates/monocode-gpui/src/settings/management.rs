@@ -642,6 +642,27 @@ impl SettingsView {
                 }
             }
         }
+        if busy && matches!(target, Target::DeleteTree(_)) {
+            rows.push(
+                div()
+                    .id("working-copy-deletion-progress")
+                    .debug_selector(|| "working-copy-deletion-progress".into())
+                    .role(Role::Status)
+                    .aria_label("Deleting working copy")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(content(0.65))
+                    .child(crate::right_panel::spinner(
+                        "delete-working-copy-spinner",
+                        "loader",
+                        14.,
+                    ))
+                    .child("Deleting working copy… Large copies may take a while.")
+                    .into_any_element(),
+            );
+        }
         if let Some(error) = error {
             rows.push(
                 div()
@@ -737,8 +758,10 @@ impl SettingsView {
                 }
             }
             Target::DeleteTree(_) => {
-                if deleting {
-                    "Delete worktree and sessions"
+                if busy {
+                    "Deleting…"
+                } else if deleting {
+                    "Delete working copy and sessions"
                 } else {
                     "Delete worktree"
                 }
@@ -750,6 +773,7 @@ impl SettingsView {
                     crate::modal::ghost_button("cancel-management", "Cancel"),
                     busy,
                 )
+                .debug_selector(|| "cancel-management".into())
                 .on_click(cx.listener(|this, _, window, cx| this.close_management(window, cx))),
             )
             .child(
@@ -761,6 +785,7 @@ impl SettingsView {
                     },
                     busy,
                 )
+                .debug_selector(|| "submit-management".into())
                 .on_click(cx.listener(|this, _, _, cx| this.submit_management(cx))),
             );
         rows.push(actions.into_any_element());
@@ -784,7 +809,7 @@ impl SettingsView {
             Target::Cli(kind) => format!("{} CLI details", kind.label()),
             Target::Mcp => "Add MCP server".into(),
             Target::Worktree => "Create worktree".into(),
-            Target::DeleteTree(_) => "Delete worktree?".into(),
+            Target::DeleteTree(_) => "Delete working copy?".into(),
             Target::ResetMono(ref mono) => format!("Reset {} to its defaults?", mono.name),
             _ => String::new(),
         };

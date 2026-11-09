@@ -416,6 +416,56 @@ mod tests {
     }
 
     #[gpui::test]
+    fn terminal_focus_preserves_checkout_and_blocks_cleanup(cx: &mut TestAppContext) {
+        let (window, mut visual, owner, pane) = title_terminal(cx, false);
+        let copy = "/tmp/monocode-terminal-copy-fixture";
+        window
+            .update(&mut visual, |shell, w, cx| {
+                shell.session_worktrees.insert(owner, Some(copy.into()));
+                shell.workspace.terminal_panes.get_mut(&pane).unwrap().cwd = copy.into();
+                shell.terminal_pane_views[&pane]
+                    .clone()
+                    .update(cx, |terminal, _| terminal.cwd = copy.into());
+                assert_eq!(shell.terminal_cwd(cx), copy);
+                shell.remove_settings_worktree(
+                    shell.workspace.project.clone(),
+                    copy.into(),
+                    false,
+                    w,
+                    cx,
+                );
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("Close the terminals")
+                );
+                shell.terminal_pane_views.remove(&pane);
+                assert_eq!(shell.terminal_cwd(cx), copy);
+                shell.error = None;
+                shell.remove_settings_worktree(
+                    shell.workspace.project.clone(),
+                    copy.into(),
+                    false,
+                    w,
+                    cx,
+                );
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("Close the terminals")
+                );
+                // This used to index session metadata with a negative terminal pane ID.
+                shell.create_session(shell.default_choice(), false, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+    }
+
+    #[gpui::test]
     fn cmd_w_asks_before_closing_a_running_terminal_tab_or_split_pane(cx: &mut TestAppContext) {
         for split in [false, true] {
             let (window, mut visual, owner, pane) = title_terminal(cx, split);

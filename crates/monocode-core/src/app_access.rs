@@ -241,10 +241,10 @@ pub fn launch_settings(
         settings.access = AccessMode::from_id(mode);
     }
     let workspace = input["workspaceMode"].as_str().unwrap_or("current");
-    if input.get("worktreeBase").is_some() && workspace != "worktree" {
-        return Err("worktreeBase requires workspaceMode worktree".into());
+    if input.get("worktreeBase").is_some() && !matches!(workspace, "worktree" | "cow") {
+        return Err("worktreeBase requires workspaceMode worktree or cow".into());
     }
-    if input.get("worktreeCwd").is_some() && workspace == "worktree" {
+    if input.get("worktreeCwd").is_some() && matches!(workspace, "worktree" | "cow") {
         return Err("worktreeCwd requires workspaceMode current".into());
     }
     settings.mono = None;
@@ -266,9 +266,28 @@ pub fn launch_settings(
     settings.turn_model = None;
     settings.text_only = false;
     settings.worktree_removed = false;
-    settings.new_worktree = false;
-    if workspace == "worktree" {
+    if matches!(
+        input["workspaceMode"].as_str(),
+        Some("current" | "checkout")
+    ) || input.get("worktreeCwd").is_some()
+    {
+        settings.clear_isolation();
         settings.worktree_cwd = None;
+    } else {
+        settings.fork_isolation();
+    }
+    if workspace == "worktree" {
+        settings.clear_isolation();
+        settings.worktree_cwd = None;
+    } else if workspace == "cow" {
+        let source = settings
+            .cow_source_cwd
+            .clone()
+            .or(settings.worktree_cwd.clone());
+        settings.isolation_default("cow");
+        settings.cow_source_cwd = source;
+        settings.worktree_cwd = None;
+        settings.worktree_base = Some(input["worktreeBase"].as_str().unwrap_or("HEAD").into());
     }
     Ok(settings)
 }

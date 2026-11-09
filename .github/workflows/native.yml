@@ -8,6 +8,7 @@ on:
     paths:
       - 'crates/monocode-core/**'
       - 'crates/monocode-gpui/**'
+      - 'crates/isolation/**'
       - 'crates/mobile-link/**'
       - 'vendor/gpui-pre*/**'
       - 'scripts/*native*'
@@ -52,12 +53,16 @@ jobs:
   desktop:
     name: Monocode Native (macOS)
     runs-on: macos-latest
+    env:
+      MONOCODE_REQUIRE_COW: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --manifest-path crates/monocode-gpui/Cargo.toml --all --check
+      - run: cargo fmt -p monocode-isolation --check
+      - run: cargo test --locked -p monocode-isolation
       - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core -p monocode-gpui --all-targets --profile native-dev -- -D warnings
       - run: cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --profile native-dev
       - run: cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev -- --test-threads=1

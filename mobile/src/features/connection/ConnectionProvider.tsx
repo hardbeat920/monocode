@@ -44,6 +44,10 @@ export type Catalog = {
   push?: boolean;
   /** The desktop reads and saves a Mono's soul and memory for the phone. */
   monoFiles?: boolean;
+  /** The desktop accepts isolation defaults for a Mono’s launched project sessions. */
+  subsessionIsolation?: boolean;
+  /** The desktop platform supports CoW; individual projects still require APFS. */
+  cowIsolation?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";

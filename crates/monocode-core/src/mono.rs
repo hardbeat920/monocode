@@ -62,19 +62,20 @@ pub struct Mono {
     pub seen_rows: usize,
     /// Minutes of inactivity before a heartbeat; zero turns heartbeats off.
     pub heartbeat_minutes: u32,
-    /// The model and effort for sessions it starts without naming any.
+    /// Defaults for project sessions it starts without naming its own choices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subsessions: Option<Subsessions>,
 }
 
-/// What a Mono's sessions start with when it names no provider, model or
-/// effort itself. Each part left unset is inherited from the Mono, as before.
+/// Model choices stay together; isolation fills independently when omitted.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Subsessions {
     pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_mode: Option<String>,
 }
 impl Subsessions {
     /// None when every part is inherited, as a cleared setting is kept.
@@ -86,20 +87,25 @@ impl Subsessions {
             model: harness.as_ref().and(keep(self.model)),
             harness,
             effort: keep(self.effort),
+            workspace_mode: keep(self.workspace_mode)
+                .filter(|mode| matches!(mode.as_str(), "current" | "worktree" | "cow")),
         };
         (next != Self::default()).then_some(next)
     }
-    /// Fills a `sessions.start` request that names no provider, model or
-    /// settings. One that names any is the agent's own choice and is left
-    /// as it is, rather than mixing an effort into a model it doesn't fit.
+    /// Explicit model settings and explicit checkout choices always win.
     pub fn fill(&self, input: &mut serde_json::Value) {
         const CHOSEN: [&str; 4] = ["harness", "model", "modelSettings", "effort"];
-        if CHOSEN.iter().any(|key| input.get(key).is_some()) {
-            return;
-        }
         let Some(object) = input.as_object_mut() else {
             return;
         };
+        if !object.contains_key("workspaceMode") && !object.contains_key("worktreeCwd") {
+            if let Some(mode) = &self.workspace_mode {
+                object.insert("workspaceMode".into(), mode.clone().into());
+            }
+        }
+        if CHOSEN.iter().any(|key| object.contains_key(*key)) {
+            return;
+        }
         for (key, value) in [
             ("harness", &self.harness),
             ("model", &self.model),
@@ -198,6 +204,7 @@ impl Mono {
         let mut seen = HashSet::new();
         self.projects
             .retain(|p| !p.trim().is_empty() && seen.insert(crate::files::path_key(p)));
+        self.subsessions = self.subsessions.take().and_then(Subsessions::normalized);
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

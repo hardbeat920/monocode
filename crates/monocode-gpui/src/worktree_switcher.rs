@@ -33,11 +33,13 @@ pub(crate) struct TabSession {
 }
 pub(crate) enum Event {
     Selected(Option<WorktreeFocus>),
+    CopySelected(monocode_core::isolation::Workspace),
     Metadata(Vec<(i64, Option<String>)>),
     Dismissed,
 }
 #[derive(Clone)]
 struct Row {
+    copy: Option<monocode_core::isolation::Workspace>,
     path: String,
     branch: Option<String>,
     /// The "All checkouts" entry: no workspace filter, the whole project.
@@ -45,10 +47,16 @@ struct Row {
     label: String,
     detail: String,
 }
-fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
+fn rows(
+    cwd: &str,
+    state: Option<&Snapshot>,
+    copies: &[monocode_core::isolation::Workspace],
+    query: &str,
+) -> Vec<Row> {
     let main = state.and_then(|s| s.worktrees.iter().find(|t| t.main));
     let mut rows = vec![
         Row {
+            copy: None,
             path: cwd.to_owned(),
             branch: None,
             all: true,
@@ -56,6 +64,7 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
             detail: "Every checkout · all sessions".into(),
         },
         Row {
+            copy: None,
             path: cwd.to_owned(),
             branch: main.and_then(|t| t.branch.clone()),
             all: false,
@@ -71,6 +80,7 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
             .flat_map(|s| &s.worktrees)
             .filter(|t| !t.main && !t.missing)
             .map(|t| Row {
+                copy: None,
                 path: t.path.clone(),
                 branch: t.branch.clone(),
                 all: false,
@@ -80,6 +90,26 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
                 detail: pretty_path(&t.path),
             }),
     );
+    rows.extend(copies.iter().map(|copy| {
+        Row {
+            path: Path::new(&copy.path)
+                .join(
+                    Path::new(cwd)
+                        .strip_prefix(&copy.project_cwd)
+                        .unwrap_or_else(|_| Path::new("")),
+                )
+                .to_string_lossy()
+                .into_owned(),
+            branch: copy.branch.clone(),
+            all: false,
+            label: format!(
+                "Copy-on-write · {}",
+                copy.branch.as_deref().unwrap_or("Detached")
+            ),
+            detail: pretty_path(&copy.path),
+            copy: Some(copy.clone()),
+        }
+    }));
     let needle = query.trim().to_lowercase();
     rows.retain(|r| {
         format!("{}\n{}\n{}", r.label, r.detail, r.path)
@@ -125,6 +155,7 @@ pub(crate) struct WorktreeSwitcher {
     cwd: String,
     focused: Option<WorktreeFocus>,
     state: Option<Snapshot>,
+    copies: Vec<monocode_core::isolation::Workspace>,
     search: Entity<input::Input>,
     active: usize,
     scroll: ScrollHandle,
@@ -147,7 +178,7 @@ impl WorktreeSwitcher {
         let search = cx.new(|cx| {
             let mut input = input::Input::field(
                 "Search working copies",
-                "Search or create a worktree...",
+                "Search working copies…",
                 content(0.35),
                 cx,
             );
@@ -175,6 +206,26 @@ impl WorktreeSwitcher {
                         this.load_error = None;
                     }
                     Err(error) => this.load_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        let folder = cwd.clone();
+        let registry_store = store.clone();
+        let work = cx.background_executor().spawn(async move {
+            let isolation = {
+                let store = locked(&registry_store)?;
+                monocode_core::isolation::Isolation::for_store(&store)
+            };
+            isolation.list(Path::new(&folder))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(copies) => this.copies = copies,
+                    Err(error) => this.error = Some(error),
                 }
                 cx.notify();
             });
@@ -212,6 +263,7 @@ impl WorktreeSwitcher {
             cwd,
             focused,
             state,
+            copies: Vec::new(),
             search,
             active: 0,
             scroll: ScrollHandle::new(),
@@ -232,13 +284,25 @@ impl WorktreeSwitcher {
         self.state.is_some()
             && self.load_error.is_none()
             && !self.query(cx).is_empty()
-            && rows(&self.cwd, self.state.as_ref(), &self.query(cx)).is_empty()
+            && rows(
+                &self.cwd,
+                self.state.as_ref(),
+                &self.copies,
+                &self.query(cx),
+            )
+            .is_empty()
     }
     fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.creating {
             return;
         }
-        let count = rows(&self.cwd, self.state.as_ref(), &self.query(cx)).len();
+        let count = rows(
+            &self.cwd,
+            self.state.as_ref(),
+            &self.copies,
+            &self.query(cx),
+        )
+        .len();
         self.active = self
             .active
             .saturating_add_signed(delta)
@@ -250,7 +314,18 @@ impl WorktreeSwitcher {
         if self.creating {
             return;
         }
-        if let Some(row) = rows(&self.cwd, self.state.as_ref(), &self.query(cx)).get(index) {
+        if let Some(row) = rows(
+            &self.cwd,
+            self.state.as_ref(),
+            &self.copies,
+            &self.query(cx),
+        )
+        .get(index)
+        {
+            if let Some(copy) = &row.copy {
+                cx.emit(Event::CopySelected(copy.clone()));
+                return;
+            }
             cx.emit(Event::Selected((!row.all).then(|| WorktreeFocus {
                 path: row.path.clone(),
                 branch: row.branch.clone(),
@@ -264,7 +339,12 @@ impl WorktreeSwitcher {
             return;
         }
         let branch = self.query(cx);
-        let cwd = self.focused.as_ref().map_or(&self.cwd, |f| &f.path).clone();
+        let cwd = self
+            .focused
+            .as_ref()
+            .filter(|f| !self.copies.iter().any(|copy| copy.path == f.path))
+            .map_or(&self.cwd, |f| &f.path)
+            .clone();
         self.creating = true;
         self.error = None;
         let work = cx
@@ -290,7 +370,12 @@ impl WorktreeSwitcher {
 }
 impl Render for WorktreeSwitcher {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = rows(&self.cwd, self.state.as_ref(), &self.query(cx));
+        let rows = rows(
+            &self.cwd,
+            self.state.as_ref(),
+            &self.copies,
+            &self.query(cx),
+        );
         let empty = rows.is_empty();
         let can_create = self.can_create(cx);
         div()
@@ -424,7 +509,9 @@ impl Render for WorktreeSwitcher {
                             })
                             .child(
                                 icon(
-                                    if row.all {
+                                    if row.copy.is_some() {
+                                        "copy"
+                                    } else if row.all {
                                         "dashboard"
                                     } else if is_project {
                                         "git-branch"
@@ -599,7 +686,7 @@ mod tests {
     #[test]
     fn rows_match_the_react_main_entry_filter_and_detached_names() {
         let state = snapshot();
-        let all = rows("/repo/project", Some(&state), "");
+        let all = rows("/repo/project", Some(&state), &[], "");
         assert_eq!(all.len(), 4);
         assert!(all[0].all);
         assert_eq!(all[0].label, "All checkouts");
@@ -609,17 +696,59 @@ mod tests {
         assert_eq!(all[1].detail, "Project folder");
         assert_eq!(all[1].path, "/repo/project");
         assert_eq!(all[3].label, "Detached 1234567");
-        assert_eq!(rows("/repo/project", Some(&state), "FEATURE").len(), 1);
+        assert_eq!(rows("/repo/project", Some(&state), &[], "FEATURE").len(), 1);
         assert_eq!(
             rows(
                 "/repo/project",
                 Some(&state),
+                &[],
                 "/repo/project-worktrees/detached"
             )
             .len(),
             1
         );
-        assert!(rows("/repo/project", Some(&state), "new-copy").is_empty());
+        assert!(rows("/repo/project", Some(&state), &[], "new-copy").is_empty());
+    }
+
+    #[test]
+    fn working_copy_rows_include_cow_and_keep_its_owning_session() {
+        let state = snapshot();
+        let copy = monocode_core::isolation::Workspace {
+            id: "copy".into(),
+            path: "/copies/owned".into(),
+            project_cwd: "/repo/project".into(),
+            session_id: "original-desktop-uuid".into(),
+            branch: Some("cow-feature".into()),
+            head: "abc".into(),
+            dirty: None,
+            unpushed: None,
+        };
+        let all = rows(
+            "/repo/project",
+            Some(&state),
+            std::slice::from_ref(&copy),
+            "",
+        );
+        assert_eq!(all.len(), 5);
+        let filtered = rows(
+            "/repo/project",
+            Some(&state),
+            std::slice::from_ref(&copy),
+            "cow-feature",
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].copy.as_ref().unwrap().session_id,
+            "original-desktop-uuid"
+        );
+        assert!(!filtered[0].all);
+        let nested = rows(
+            "/repo/project/src",
+            Some(&state),
+            std::slice::from_ref(&copy),
+            "cow-feature",
+        );
+        assert_eq!(nested[0].path, "/copies/owned/src");
     }
     #[gpui::test]
     fn cached_worktrees_show_before_metadata_and_membership_never_loads_full_settings(
@@ -677,7 +806,7 @@ mod tests {
             )
         });
         view.update(cx, |view, _| {
-            assert_eq!(rows(cwd, view.state.as_ref(), "").len(), 3);
+            assert_eq!(rows(cwd, view.state.as_ref(), &[], "").len(), 3);
             assert_eq!(view.tabs[&path_key(cwd)].tabs.len(), 1);
         });
         cx.run_until_parked();

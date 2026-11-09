@@ -129,6 +129,30 @@ pub fn rename(cwd: &Path, path: &Path, expected: &str, branch: &str) -> Result<S
     super::snapshot(&path)
 }
 
+/// A private copy has its own repository, so worktree registrations cannot
+/// authorize it. Use its persisted owner and original branch instead.
+pub fn rename_copy(
+    isolation: &crate::isolation::Isolation,
+    cwd: &Path,
+    owner: &str,
+    settings: &Settings,
+    expected: &str,
+    branch: &str,
+) -> Result<Snapshot, String> {
+    let _lease = isolation.lease(cwd, owner, settings)?;
+    let path = Path::new(settings.worktree_cwd.as_deref().ok_or("Copy unavailable")?);
+    let copy = isolation.owner(cwd, path)?.ok_or("Copy unavailable")?;
+    if copy.session_id != owner
+        || copy.branch.as_deref() != Some(expected)
+        || super::snapshot(path)?.current.as_deref() != Some(expected)
+    {
+        return Err("The copy no longer uses its temporary branch".into());
+    }
+    valid_branch(path, branch)?;
+    git(path, &["branch", "-m", expected, branch])?;
+    super::snapshot(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

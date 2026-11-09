@@ -368,7 +368,7 @@ impl Conversation {
                 }
             }
         } else {
-            if self.settings.new_worktree && self.settings.worktree_cwd.is_none() {
+            if self.settings.pending_isolation() && self.settings.worktree_cwd.is_none() {
                 self.prepare_worktree(cx);
                 return;
             }

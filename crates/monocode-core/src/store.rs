@@ -1101,8 +1101,7 @@ impl Store {
             settings.worktree_cwd = Some(execution.to_owned());
             settings.worktree_removed = true;
             settings.revision += 1;
-            settings.new_worktree = false;
-            settings.worktree_base = None;
+            settings.clear_isolation();
             if crate::files::is_equal_or_inside(&session.cwd, path) {
                 session.cwd = main.into();
             }

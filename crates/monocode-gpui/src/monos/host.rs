@@ -253,8 +253,8 @@ impl Monos {
         }
         let mut input = call.input.clone();
         let action = call.action.clone();
-        // A session it starts without naming a model takes the one set for
-        // its sessions, if any; the receipt still keys on what it sent.
+        // Apply saved model and isolation defaults independently; the receipt
+        // still keys on the request the Mono sent.
         if action == "sessions.start"
             && let Some(subsessions) = &mono.subsessions
         {
@@ -329,6 +329,10 @@ impl Monos {
                         .is_none_or(|v| v.read(cx).summary.cwd != project)
                     {
                         settings.worktree_cwd = None;
+                        settings.isolation_default(
+                            cx.try_global::<crate::settings::Preferences>()
+                                .map_or("local", |p| p.default_isolation.as_str()),
+                        );
                     }
                     if source_provider != provider {
                         settings.account = crate::accounts::get(cx)

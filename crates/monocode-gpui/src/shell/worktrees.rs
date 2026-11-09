@@ -112,6 +112,7 @@ impl Shell {
                         this.sync_git(cx);
                         this.invalidate_chrome(cx);
                     }
+                    Event::CopySelected(copy) => this.select_copy(copy.clone(), cx),
                     Event::Selected(focus) if this.workspace.project == project => {
                         this.close_menu(cx);
                         this.select_worktree(focus.clone(), window, cx);
@@ -133,6 +134,90 @@ impl Shell {
             max_height: Some(360.),
             surface: None,
         }
+    }
+    pub(super) fn select_copy(
+        &mut self,
+        copy: monocode_core::isolation::Workspace,
+        cx: &mut Context<Self>,
+    ) {
+        let project = self.workspace.project.clone();
+        let revision = self.navigation_revision;
+        let store = self.store.clone();
+        let owner = copy.session_id.clone();
+        let expected_copy = copy.clone();
+        let work = cx.background_executor().spawn(async move {
+            let (id, isolation, mut settings, cwd) = {
+                let store = locked(&store)?;
+                let id = store
+                    .resolve_existing_session_id(&owner)
+                    .ok_or("The copy's owning session is unavailable")?;
+                let summary = store
+                    .sessions()?
+                    .into_iter()
+                    .find(|summary| summary.id == id)
+                    .ok_or("Session unavailable")?;
+                (
+                    id,
+                    monocode_core::isolation::Isolation::for_store(&store),
+                    store.agent_settings(id)?.unwrap_or_default(),
+                    summary.cwd,
+                )
+            };
+            isolation.authorize(std::path::Path::new(&cwd), &owner, &mut settings)?;
+            if settings.cow_id.as_ref() != Some(&expected_copy.id)
+                || !settings.worktree_cwd.as_deref().is_some_and(|path| {
+                    monocode_core::files::is_equal_or_inside(path, &expected_copy.path)
+                })
+            {
+                return Err("The session no longer owns this copy".into());
+            }
+            let reattached = settings.worktree_removed;
+            if reattached {
+                settings.worktree_removed = false;
+                locked(&store)?.save_agent_settings(id, &settings)?;
+            }
+            let execution = settings.worktree_cwd.clone().ok_or("Copy unavailable")?;
+            Ok::<_, String>((id, execution, reattached.then_some(settings)))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.workspace.project != project || this.navigation_revision != revision {
+                    return;
+                }
+                this.close_menu(cx);
+                this.classic_worktree_picker = None;
+                match result {
+                    Ok((id, execution, settings))
+                        if this
+                            .session_summaries
+                            .get(&id)
+                            .is_some_and(|summary| summary.cwd == project) =>
+                    {
+                        this.worktree_focus.insert(
+                            project,
+                            WorktreeFocus {
+                                path: execution,
+                                branch: copy.branch,
+                            },
+                        );
+                        if let Some(settings) = settings
+                            && let Some(view) = this.sessions.get(&id)
+                        {
+                            view.update(cx, |view, cx| view.install_transfer(settings, None, cx));
+                        }
+                        this.open(id, window, cx);
+                    }
+                    Ok(_) => {
+                        this.error =
+                            Some("The copy's owning session is unavailable in this project".into())
+                    }
+                    Err(error) => this.error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
     pub(super) fn select_worktree(
         &mut self,
@@ -207,7 +292,9 @@ impl Shell {
         self.session_worktrees.insert(id, path.clone());
         if let Some(session) = self.sessions.get(&id) {
             session.update(cx, |session, cx| {
-                session.restore_worktree(path, focus.and_then(|f| f.branch.clone()), cx);
+                if !session.settings.new_cow {
+                    session.restore_worktree(path, focus.and_then(|f| f.branch.clone()), cx);
+                }
             });
         }
     }
@@ -218,6 +305,7 @@ mod tests {
     use super::*;
     use crate::shell::tests::window;
     use gpui::TestAppContext;
+    use monocode_core::store::Store;
 
     #[gpui::test]
     fn header_settings_and_worktree_actions_open_focused_native_surfaces(cx: &mut TestAppContext) {
@@ -327,6 +415,7 @@ mod tests {
         let (window, _, existing) = window(cx);
         window
             .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.default_isolation = "cow".into();
                 shell.sessions[&existing]
                     .update(cx, |session, _| session.summary.has_messages = true);
                 shell.open_menu(
@@ -358,6 +447,7 @@ mod tests {
                 assert_ne!(id, existing);
                 let session = shell.sessions[&id].read(cx);
                 assert_eq!(session.summary.cwd, project);
+                assert!(!session.settings.pending_isolation());
                 assert_eq!(
                     session
                         .settings
@@ -368,6 +458,129 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn new_tabs_fork_the_active_copy_under_all_checkouts(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!(
+            "monocode-cow-tabs-{}",
+            monocode_core::mono::new_id()
+        ));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Base",
+            ],
+        ] {
+            let result = std::process::Command::new("git")
+                .current_dir(&project)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let store = Store::open_monocode(&root.join("app/monocode.db")).unwrap();
+        let summary = store.create("codex", project.to_str().unwrap()).unwrap();
+        let isolation = monocode_core::isolation::Isolation::for_store(&store);
+        if !isolation.supported(&project) {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "APFS required"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let mut settings = monocode_core::agent::Settings::default();
+        settings.isolation_default("cow");
+        let copy = isolation
+            .create(
+                &project,
+                &store.persisted_session_id(summary.id).unwrap(),
+                &mut settings,
+            )
+            .unwrap();
+        store.save_agent_settings(summary.id, &settings).unwrap();
+        let original = summary.id;
+        let store = Arc::new(Mutex::new(store));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store,
+                        vec![summary],
+                        project.to_string_lossy().into_owned(),
+                        None,
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(original, w, cx);
+                assert!(shell.worktree_focus.is_empty());
+                shell
+                    .session_worktrees
+                    .insert(original, Some(copy.to_string_lossy().into_owned()));
+                shell.sessions[&original].update(cx, |session, _| session.settings.cow_id = None);
+                shell.workspace.preferences.default_isolation = "local".into();
+                shell.create(Kind::Codex, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let active = shell.workspace.active.unwrap();
+                assert_ne!(active, original);
+                let child = shell.sessions[&active].read(cx);
+                assert!(child.settings.new_cow);
+                assert!(child.settings.cow_id.is_none() && child.settings.worktree_cwd.is_none());
+                assert_eq!(child.settings.cow_source_cwd.as_deref(), copy.to_str());
+            })
+            .unwrap();
+        let metadata = isolation.owner(&project, &copy).unwrap().unwrap();
+        window
+            .update(cx, |shell, w, cx| {
+                let (_, detached) = locked(&shell.store)
+                    .unwrap()
+                    .detach_worktree(copy.to_str().unwrap(), project.to_str().unwrap())
+                    .unwrap()
+                    .remove(0);
+                shell.sessions[&original].update(cx, |session, cx| {
+                    session.install_transfer(detached, None, cx)
+                });
+                shell.open(original, w, cx);
+                shell.select_copy(metadata, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let session = shell.sessions[&original].read(cx);
+                assert!(!session.settings.worktree_removed);
+                assert!(session.settings.cow_id.is_some());
+                assert_eq!(shell.working_copy(), copy.to_str().unwrap());
+            })
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[gpui::test]

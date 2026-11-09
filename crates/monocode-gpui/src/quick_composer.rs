@@ -86,6 +86,8 @@ pub(crate) struct Launch {
     pub attachments: Vec<PathBuf>,
     pub staged_attachments: Vec<PathBuf>,
     pub new_worktree: bool,
+    pub new_cow: bool,
+    pub cow_source_cwd: Option<String>,
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,
     pub foreground: bool,
@@ -113,6 +115,8 @@ impl Launch {
             attachments: Vec::new(),
             staged_attachments: Vec::new(),
             new_worktree: false,
+            new_cow: false,
+            cow_source_cwd: None,
             worktree_base: None,
             worktree_cwd: None,
             foreground: false,
@@ -179,6 +183,7 @@ enum Picker {
 #[derive(Clone, Default)]
 struct Workspace {
     new_worktree: bool,
+    new_cow: bool,
     base: Option<String>,
     /// An existing linked worktree, rather than the project folder.
     tree: Option<String>,
@@ -328,7 +333,12 @@ impl QuickComposer {
         self.fast = choice.fast;
         if self.cwd != choice.cwd {
             self.cwd = choice.cwd;
-            self.workspace = Workspace::default();
+            self.workspace = Workspace {
+                new_worktree: choice.new_worktree,
+                new_cow: choice.new_cow,
+                base: choice.worktree_base,
+                tree: choice.worktree_cwd.or(choice.cow_source_cwd),
+            };
             self.load_git(cx);
         } else if self.git.is_none() {
             self.load_git(cx);
@@ -350,7 +360,15 @@ impl QuickComposer {
     }
     fn set_project(&mut self, path: String, cx: &mut Context<Self>) {
         self.cwd = path;
-        self.workspace = Workspace::default();
+        self.workspace = Workspace {
+            new_cow: cx
+                .try_global::<crate::settings::Preferences>()
+                .is_some_and(|p| p.default_isolation == "cow"),
+            new_worktree: cx
+                .try_global::<crate::settings::Preferences>()
+                .is_some_and(|p| p.default_isolation == "worktree"),
+            ..Default::default()
+        };
         let p = cx.global::<crate::settings::Preferences>();
         let kind = p
             .project_providers
@@ -445,11 +463,16 @@ impl QuickComposer {
             return;
         }
         let new_worktree = self.workspace.new_worktree;
+        let new_cow = self.workspace.new_cow;
         let base = self
             .workspace
             .base
             .clone()
-            .or_else(|| self.git.as_ref().and_then(|g| g.current.clone()))
+            .or_else(|| {
+                (!new_cow)
+                    .then(|| self.git.as_ref().and_then(|g| g.current.clone()))
+                    .flatten()
+            })
             .unwrap_or_else(|| "HEAD".into());
         cx.emit(Launch {
             cwd: self.cwd.clone(),
@@ -462,12 +485,14 @@ impl QuickComposer {
             attachments: std::mem::take(&mut self.attachments),
             staged_attachments: std::mem::take(&mut self.staged_attachments),
             new_worktree,
-            worktree_base: new_worktree.then_some(base),
+            new_cow,
+            cow_source_cwd: self.workspace.tree.clone().filter(|_| new_cow),
+            worktree_base: (new_worktree || new_cow).then_some(base),
             worktree_cwd: self
                 .workspace
                 .tree
                 .clone()
-                .filter(|_| !new_worktree)
+                .filter(|_| !new_worktree && !new_cow)
                 .filter(|tree| {
                     monocode_core::files::path_key(tree)
                         != monocode_core::files::path_key(&self.cwd)
@@ -561,7 +586,7 @@ impl QuickComposer {
                 window.focus(&self.permissions_focus, cx);
             }
             Picker::Workspace | Picker::Branch => {
-                let new = self.workspace.new_worktree;
+                let new = self.workspace.new_worktree || self.workspace.new_cow;
                 let (mode, selected) = match picker {
                     Picker::Workspace => (GitMode::Worktree, self.workspace.tree.clone()),
                     _ if new => (GitMode::Base, self.workspace.base.clone()),
@@ -691,6 +716,7 @@ impl QuickComposer {
     fn choose_workspace(&mut self, new: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace = Workspace {
             new_worktree: new,
+            new_cow: false,
             base: None,
             tree: None,
         };
@@ -935,12 +961,14 @@ fn effort_name(value: &str) -> String {
 }
 impl QuickComposer {
     fn header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let new = self.workspace.new_worktree;
+        let new = self.workspace.new_worktree || self.workspace.new_cow;
         let linked = self.workspace.tree.is_some();
         let enabled = !self.busy
             && !matches!(self.picker, Some(p) if !matches!(p, Picker::Workspace | Picker::Branch))
             && self.git.as_ref().is_some_and(|g| g.current.is_some());
-        let label = if new {
+        let label = if self.workspace.new_cow {
+            "New copy-on-write"
+        } else if new {
             "New worktree"
         } else {
             "Current checkout"
@@ -1579,7 +1607,7 @@ impl QuickComposer {
             .into_any_element()
     }
     fn workspace_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let new = self.workspace.new_worktree;
+        let new = self.workspace.new_worktree || self.workspace.new_cow;
         let current = !new && self.workspace.tree.is_none();
         let row = |id: &'static str, glyph: &'static str, label: &'static str, checked: bool| {
             div()
@@ -1624,13 +1652,34 @@ impl QuickComposer {
                         })),
                     )
                     .child(
-                        row("quick-workspace-new", "folder-tree", "New worktree", new).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.choose_workspace(true, window, cx)
-                            }),
-                        ),
+                        row(
+                            "quick-workspace-new",
+                            "folder-tree",
+                            "New worktree",
+                            self.workspace.new_worktree,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.choose_workspace(true, window, cx)
+                        })),
                     ),
             )
+            .when(cfg!(target_os = "macos"), |d| {
+                d.child(
+                    row(
+                        "quick-workspace-cow",
+                        "copy",
+                        "New copy-on-write",
+                        self.workspace.new_cow,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let source = this.workspace.tree.clone();
+                        this.choose_workspace(false, window, cx);
+                        this.workspace.new_cow = true;
+                        this.workspace.tree = source;
+                        cx.notify();
+                    })),
+                )
+            })
             .child(
                 div()
                     .px_4()
@@ -2264,5 +2313,48 @@ mod tests {
         assert_eq!(launch.worktree_cwd, None);
         assert!(launch.foreground);
         assert_eq!(launch.access, AccessMode::FullAccess);
+        window
+            .update(cx, |view, _, cx| {
+                view.workspace.new_worktree = false;
+                view.workspace.new_cow = true;
+                view.workspace.base = None;
+                view.workspace.tree = Some("/source/worktree".into());
+                view.input.update(cx, |input, cx| {
+                    input.set_text("Fork selected checkout".into(), cx)
+                });
+                view.launch(true, cx);
+            })
+            .unwrap();
+        let launch = launched.borrow_mut().take().expect("copy launch");
+        assert!(launch.new_cow);
+        assert_eq!(launch.worktree_base.as_deref(), Some("HEAD"));
+        assert!(launch.worktree_cwd.is_none());
+        assert_eq!(launch.cow_source_cwd.as_deref(), Some("/source/worktree"));
+    }
+    #[gpui::test]
+    fn changing_project_keeps_the_copy_on_write_default(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let prefs = crate::settings::Preferences {
+                default_isolation: "cow".into(),
+                ..Default::default()
+            };
+            cx.set_global(prefs);
+            let initial =
+                Launch::choice("/first".into(), Kind::Codex, None, AccessMode::Supervised);
+            let view = cx.new(|cx| {
+                QuickComposer::new(
+                    vec!["/first".into(), "/second".into()],
+                    Default::default(),
+                    initial,
+                    cx,
+                )
+            });
+            view.update(cx, |view, cx| {
+                view.set_project("/second".into(), cx);
+                assert!(view.workspace.new_cow);
+                assert!(!view.workspace.new_worktree);
+                assert!(view.workspace.tree.is_none());
+            });
+        });
     }
 }

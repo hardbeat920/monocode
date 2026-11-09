@@ -92,6 +92,7 @@ pub(crate) struct Preferences {
     pub model_picker_tab: Option<String>,
     /// The last access mode picked in a composer; new chats start with it.
     pub default_access: Option<String>,
+    pub default_isolation: String,
     /// Last explicit effort choice for each provider, shared across projects.
     pub provider_efforts: HashMap<String, String>,
     /// The model for session titles, branch names, commit messages and pull
@@ -179,6 +180,7 @@ impl Default for Preferences {
             recent_models: Vec::new(),
             model_picker_tab: None,
             default_access: None,
+            default_isolation: "local".into(),
             provider_efforts: HashMap::new(),
             background_model: None,
             monos: true,

@@ -870,3 +870,52 @@ fn observer_reports_a_host_title_change_once_and_never_writes_it_back() {
         "Named by the host"
     );
 }
+
+#[test]
+fn unsupported_cow_never_dispatches_a_remote_current_checkout_run() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let binding = binding(&store);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = requests.clone();
+    let host = Host::new(move |_| {
+        seen.fetch_add(1, Ordering::SeqCst);
+        None
+    });
+    for settings in [
+        Settings {
+            new_cow: true,
+            ..Default::default()
+        },
+        Settings {
+            cow_id: Some("existing-copy".into()),
+            ..Default::default()
+        },
+    ] {
+        let (tx, rx) = async_channel::unbounded();
+        let (_sender, controls) = std::sync::mpsc::channel();
+        run_with_client(
+            host.client.clone(),
+            binding.summary.clone(),
+            "must stay isolated".into(),
+            settings,
+            controls,
+            store.clone(),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+        );
+        let result = receive(&rx);
+        assert!(result.finished);
+        assert!(result.status.contains("Copy-on-write is not available"));
+        assert!(
+            locked(&store)
+                .unwrap()
+                .remote_session(binding.summary.id)
+                .unwrap()
+                .unwrap()
+                .outbox
+                .is_empty()
+        );
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+}

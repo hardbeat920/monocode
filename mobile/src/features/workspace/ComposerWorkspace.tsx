@@ -5,15 +5,17 @@ import { themedStyles, useColors } from "@/ui/theme";
 
 import type { Workspace } from "./WorkspaceMenu";
 
-/** A new draft's working copy, sharing the header's choice. A fresh worktree
+/** A new draft's working copy, sharing the header's choice. A fresh copy
  * is only created when the first message is sent. */
 export function ComposerWorkspace({
   value,
   onChange,
+  cowSupported = false,
   disabled = false,
 }: {
   value: Workspace;
   onChange: (value: Workspace) => void;
+  cowSupported?: boolean;
   disabled?: boolean;
 }) {
   const styles = useStyles();
@@ -24,11 +26,15 @@ export function ComposerWorkspace({
       ? value.worktree.name
       : current
         ? "Current checkout"
-        : "New worktree";
+        : value.mode === "cow"
+          ? "New copy-on-write"
+          : "New worktree";
+  const next = current ? "worktree" : value.mode === "worktree" && cowSupported ? "cow" : "current";
+  const hint = next === "cow" ? "Start this session in a new copy-on-write workspace" : next === "worktree" ? "Start this session in a new worktree" : "Start this session in the current checkout";
   const content = (
     <>
       <Icon
-        name={current ? "folder" : "branch"}
+        name={current ? "folder" : value.mode === "cow" ? "copy" : "branch"}
         size={14}
         color={colors.muted}
       />
@@ -46,14 +52,10 @@ export function ComposerWorkspace({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityHint={
-        current
-          ? "Start this session in a new worktree"
-          : "Start this session in the current checkout"
-      }
+      accessibilityHint={hint}
       disabled={disabled}
       hitSlop={6}
-      onPress={() => onChange({ mode: current ? "worktree" : "current" })}
+      onPress={() => onChange({ mode: next })}
       style={({ pressed }) => [
         styles.line,
         styles.choice,

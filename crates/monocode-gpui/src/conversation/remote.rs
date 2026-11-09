@@ -226,7 +226,11 @@ impl Conversation {
             .update(cx, |view, cx| view.set_saved_draft(draft, cx));
     }
     pub(super) fn remote_send_guard(&mut self, cx: &mut Context<Self>) -> bool {
-        let error = if !self.loaded {
+        let error = if self.settings.new_cow || self.settings.cow_id.is_some() {
+            Some(
+                "Copy-on-write is not available for remote sessions in the native preview. Select Current checkout or New worktree.",
+            )
+        } else if !self.loaded {
             Some("Wait for this remote conversation to load.")
         } else if !self.remote_state.online {
             Some("The machine is offline. Reconnect in Settings → Connections, then Retry.")

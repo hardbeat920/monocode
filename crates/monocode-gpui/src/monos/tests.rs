@@ -148,6 +148,78 @@ fn settings_reset_restores_only_mono_soul_and_name(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn subsession_isolation_picker_persists_and_explicit_launch_choices_win(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| {
+        cx.set_reduce_motion(true);
+        crate::popover::bind(cx);
+    });
+    let selected = if cfg!(target_os = "macos") {
+        "cow"
+    } else {
+        "current"
+    };
+    {
+        let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+        visual.run_until_parked();
+        let body = visual.debug_bounds("mono-general-settings").unwrap();
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position: body.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-500.))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        visual.run_until_parked();
+        for mode in ["worktree", "current", "", selected] {
+            let button = visual.debug_bounds("mono-subsession-isolation").unwrap();
+            visual.simulate_click(button.center(), Default::default());
+            visual.run_until_parked();
+            let option = visual
+                .debug_bounds(Box::leak(
+                    format!("menu-action-subsession-isolation:{mode}").into_boxed_str(),
+                ))
+                .unwrap();
+            visual.simulate_click(option.center(), Default::default());
+            visual.run_until_parked();
+            let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+            assert_eq!(
+                saved
+                    .get(&s.id)
+                    .unwrap()
+                    .subsessions
+                    .as_ref()
+                    .and_then(|s| s.workspace_mode.as_deref()),
+                (!mode.is_empty()).then_some(mode)
+            );
+        }
+    }
+    let start = call(
+        &s,
+        "isolation-default",
+        "sessions.start",
+        json!({"project":s.project,"prompt":"Prepare work","harness":"codex","draft":true}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    let inherited = locked(&s.store)
+        .unwrap()
+        .agent_settings(start["sessionId"].as_i64().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(inherited.new_cow, selected == "cow");
+    let start = call(&s, "isolation-explicit-current", "sessions.start", json!({"project":s.project,"prompt":"Prepare local work","workspaceMode":"current","draft":true}), cx)
+        .try_recv().unwrap().unwrap();
+    let current = locked(&s.store)
+        .unwrap()
+        .agent_settings(start["sessionId"].as_i64().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!current.pending_isolation());
+}
+
+#[gpui::test]
 fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
     cx: &mut TestAppContext,
 ) {

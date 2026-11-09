@@ -393,4 +393,81 @@ mod tests {
         assert_eq!(rows[0].text, "Create the checkout");
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cow_runtime_creates_and_persists_the_owned_path_before_provider_start() {
+        let root = std::env::temp_dir().join(format!(
+            "monocode-native-cow-run-{}",
+            monocode_core::mono::new_id()
+        ));
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.name", "Fixture"],
+            vec!["config", "user.email", "fixture@example.invalid"],
+            vec!["commit", "--allow-empty", "-m", "Initial"],
+        ] {
+            let output = std::process::Command::new("git")
+                .current_dir(&repo)
+                .args(&args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let db = Store::open_monocode(&root.join("app/monocode.db")).unwrap();
+        let mut summary = db.create("codex", repo.to_str().unwrap()).unwrap();
+        summary.provider = "invalid-test-provider".into();
+        let id = summary.id;
+        let isolation = monocode_core::isolation::Isolation::for_store(&db);
+        if !isolation.supported(&repo) {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "APFS required"
+            );
+            let _ = std::fs::remove_dir_all(root);
+            return;
+        }
+        let owner = db.persisted_session_id(id).unwrap();
+        let store = Arc::new(Mutex::new(db));
+        let (tx, rx) = async_channel::unbounded();
+        let (_control, controls) = std::sync::mpsc::channel();
+        run_turn(
+            summary,
+            "Stay isolated".into(),
+            monocode_core::app_access::launch_settings(
+                &serde_json::json!({"prompt":"Stay isolated", "workspaceMode":"cow"}),
+                "codex",
+                Settings::default(),
+                monocode_core::provider::Kind::Codex,
+                &[],
+            )
+            .unwrap(),
+            controls,
+            store.clone(),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+        );
+        let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(updates.first().unwrap().status.contains("copy-on-write"));
+        let created = updates
+            .iter()
+            .find(|update| update.worktree_cwd.is_some())
+            .unwrap();
+        assert!(created.cow_id.is_some());
+        assert!(updates.last().unwrap().finished);
+        let mut saved = locked(&store).unwrap().agent_settings(id).unwrap().unwrap();
+        assert!(!saved.pending_isolation());
+        assert_eq!(saved.worktree_cwd, created.worktree_cwd);
+        assert_eq!(saved.cow_id, created.cow_id);
+        isolation.authorize(&repo, &owner, &mut saved).unwrap();
+        isolation
+            .remove(&repo, saved.cow_id.as_deref().unwrap())
+            .unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

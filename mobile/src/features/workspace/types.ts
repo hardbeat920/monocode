@@ -109,6 +109,7 @@ export type Mono = {
 };
 
 export type MonoSubsessions = {
+  workspaceMode?: "current" | "worktree" | "cow";
   harness?: Harness;
   model?: string;
   effort?: string;

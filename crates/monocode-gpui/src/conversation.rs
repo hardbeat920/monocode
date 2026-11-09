@@ -203,6 +203,7 @@ pub(crate) struct Conversation {
     controls: Option<std::sync::mpsc::Sender<Control>>,
     branch: Option<String>,
     git: Option<monocode_core::git::Snapshot>,
+    cow_supported: bool,
     git_picker: Option<Entity<GitPicker>>,
     git_events: Option<Subscription>,
     preparing_worktree: bool,
@@ -662,6 +663,7 @@ impl Conversation {
             controls: None,
             branch: git.as_ref().and_then(|s| s.current.clone()),
             git,
+            cow_supported: cfg!(target_os = "macos"),
             git_picker: None,
             git_events: None,
             preparing_worktree: false,
@@ -1167,10 +1169,15 @@ impl Conversation {
         {
             settings.attachments.clear();
         }
-        self.preparing_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
+        self.preparing_worktree = settings.pending_isolation() && settings.worktree_cwd.is_none();
         if self.preparing_worktree {
             settings.worktree_base = settings.worktree_base.or(self.branch.clone());
-            self.status = "Creating worktree…".into();
+            self.status = if self.settings.new_cow {
+                "Creating copy-on-write workspace…"
+            } else {
+                "Creating worktree…"
+            }
+            .into();
         }
         if settings.mono.is_none()
             && settings
@@ -1235,13 +1242,19 @@ impl Conversation {
                         }
                         let source_selected = this.summary.provider == source_provider
                             && this.settings.account.id == source_account;
+                        if let Some(id) = &update.cow_id {
+                            this.settings.cow_id = Some(id.clone());
+                        }
                         if let Some(cwd) = update.worktree_cwd
                             && (this.settings.worktree_cwd.as_ref() != Some(&cwd)
-                                || this.settings.new_worktree)
+                                || this.settings.pending_isolation())
                         {
                             this.preparing_worktree = false;
                             this.settings.worktree_cwd = Some(cwd);
                             this.settings.new_worktree = false;
+                            this.settings.new_cow = false;
+                            this.settings.cow_source_cwd = None;
+                            this.settings.cow_id = update.cow_id;
                             this.save_settings(cx);
                             this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
@@ -1562,6 +1575,8 @@ impl Conversation {
     }
 }
 
+pub(crate) struct OpenIsolationSettings;
+impl EventEmitter<OpenIsolationSettings> for Conversation {}
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
@@ -1789,13 +1804,21 @@ impl Conversation {
     fn load_git(&mut self, cx: &mut Context<Self>) {
         let cwd = self.execution_cwd().to_owned();
         let work_cwd = cwd.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { crate::git_cache::load(Path::new(&work_cwd)).ok() });
+        let store = self.store.clone();
+        let work = cx.background_executor().spawn(async move {
+            let git = crate::git_cache::load(Path::new(&work_cwd)).ok();
+            let isolation = crate::runtime::locked(&store)
+                .ok()
+                .map(|store| monocode_core::isolation::Isolation::for_store(&store));
+            let supported =
+                isolation.is_some_and(|service| service.supported(Path::new(&work_cwd)));
+            (git, supported)
+        });
         cx.spawn(async move |this, cx| {
-            let git = work.await;
+            let (git, supported) = work.await;
             let _ = this.update(cx, |this, cx| {
                 if this.execution_cwd() == cwd {
+                    this.cow_supported = supported;
                     this.branch = git.as_ref().and_then(|s| s.current.clone());
                     this.git = git;
                     cx.notify();
@@ -1806,7 +1829,12 @@ impl Conversation {
     }
     fn prepare_worktree(&mut self, cx: &mut Context<Self>) {
         self.preparing_worktree = true;
-        self.status = "Creating worktree…".into();
+        self.status = if self.settings.new_cow {
+            "Creating copy-on-write workspace…"
+        } else {
+            "Creating worktree…"
+        }
+        .into();
         let cwd = self.summary.cwd.clone();
         let base = self
             .settings
@@ -1815,17 +1843,38 @@ impl Conversation {
             .or(self.branch.clone())
             .unwrap_or_else(|| "HEAD".into());
         let id = self.summary.id;
-        let work = cx
-            .background_executor()
-            .spawn(async move { monocode_core::git::create_worktree(Path::new(&cwd), &base, id) });
+        let store = self.store.clone();
+        let mut settings = self.settings.clone();
+        let work = cx.background_executor().spawn(async move {
+            let (isolation, owner) = {
+                let store = crate::runtime::locked(&store)?;
+                (
+                    monocode_core::isolation::Isolation::for_store(&store),
+                    store.persisted_session_id(id)?,
+                )
+            };
+            let path = if settings.new_cow {
+                isolation.create(Path::new(&cwd), &owner, &mut settings)?
+            } else {
+                let path = monocode_core::git::create_worktree(Path::new(&cwd), &base, id)?;
+                settings.worktree_cwd = Some(path.to_string_lossy().into_owned());
+                settings.new_worktree = false;
+                path
+            };
+            crate::runtime::locked(&store)?.save_agent_settings(id, &settings)?;
+            Ok::<_, String>((path, settings))
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.preparing_worktree = false;
                 match result {
-                    Ok(path) => {
+                    Ok((path, settings)) => {
                         this.settings.worktree_cwd = Some(path.to_string_lossy().into_owned());
+                        this.settings.cow_id = settings.cow_id;
                         this.settings.new_worktree = false;
+                        this.settings.new_cow = false;
+                        this.settings.cow_source_cwd = None;
                         this.save_settings(cx);
                         this.refresh_git(cx);
                         if this.follow_ups.state.messages.is_empty() {
@@ -1907,7 +1956,7 @@ impl Conversation {
         self.settings.worktree_cwd = (monocode_core::files::path_key(path)
             != monocode_core::files::path_key(&self.summary.cwd))
         .then(|| path.to_owned());
-        self.settings.new_worktree = false;
+        self.settings.clear_isolation();
         self.save_settings(cx);
         self.refresh_git(cx);
         true
@@ -2073,18 +2122,30 @@ impl Conversation {
                 .insert(key.to_owned(), value.to_owned());
         } else {
             match id {
+                "workspace:settings" => cx.emit(OpenIsolationSettings),
                 "workspace:current" => {
                     self.settings.worktree_removed = false;
-                    self.settings.new_worktree = false;
+                    self.settings.clear_isolation();
                     self.settings.worktree_cwd = None;
                     self.refresh_git(cx);
                 }
-                "workspace:new" => {
+                "workspace:new" | "workspace:cow" => {
+                    let source = self
+                        .settings
+                        .worktree_cwd
+                        .clone()
+                        .or(self.settings.cow_source_cwd.clone());
+                    self.settings.clear_isolation();
+                    self.settings.new_cow = id == "workspace:cow";
+                    self.settings.cow_source_cwd = source.filter(|_| self.settings.new_cow);
                     self.settings.worktree_removed = false;
-                    self.settings.new_worktree = true;
+                    self.settings.new_worktree = id == "workspace:new";
                     self.settings.worktree_cwd = None;
-                    self.settings.worktree_base =
-                        self.settings.worktree_base.clone().or(self.branch.clone());
+                    self.settings.worktree_base = if self.settings.new_cow {
+                        Some("HEAD".into())
+                    } else {
+                        self.branch.clone()
+                    };
                     self.refresh_git(cx);
                 }
                 "fast" => self.settings.fast = !self.settings.fast,
@@ -2504,18 +2565,24 @@ impl Conversation {
                 ));
                 let focus = picker.read(cx).focus(cx);
                 (
-                    "Workspace",
+                    "Isolation",
                     vec![
-                        MenuItem::Header("Workspace".into()),
+                        MenuItem::Header("Isolation".into()),
                         MenuAction::new("workspace:current", "Current checkout")
                             .icon("folder")
                             .checked(
-                                !self.settings.new_worktree && self.settings.worktree_cwd.is_none(),
+                                !self.settings.pending_isolation()
+                                    && self.settings.worktree_cwd.is_none(),
                             )
                             .into(),
                         MenuAction::new("workspace:new", "New worktree")
                             .icon("folder-tree")
                             .checked(self.settings.new_worktree)
+                            .into(),
+                        MenuAction::new("workspace:cow", "New copy-on-write")
+                            .icon("copy")
+                            .disabled(!self.cow_supported || self.is_remote())
+                            .checked(self.settings.new_cow)
                             .into(),
                         MenuItem::Separator,
                         MenuAction::new("workspace:existing", "Existing worktrees")
@@ -2529,6 +2596,10 @@ impl Conversation {
                                 focus: Some(focus),
                                 surface: None,
                             })
+                            .into(),
+                        MenuItem::Separator,
+                        MenuAction::new("workspace:settings", "Isolation settings")
+                            .icon("settings")
                             .into(),
                     ],
                     240.,
@@ -3067,8 +3138,15 @@ impl Conversation {
         let draft = !self.summary.has_messages;
         let linked =
             self.git.as_ref().is_some_and(|s| s.linked) || self.settings.worktree_cwd.is_some();
-        let new = draft && self.settings.new_worktree;
-        let label = if new {
+        let new = draft && self.settings.pending_isolation();
+        let cow = self.settings.new_cow || self.settings.cow_id.is_some();
+        let label = if cow {
+            if new {
+                "New copy-on-write"
+            } else {
+                "Copy-on-write"
+            }
+        } else if new {
             "New worktree"
         } else if linked {
             "Worktree"
@@ -3081,7 +3159,9 @@ impl Conversation {
         let workspace = if draft {
             bar_trigger(
                 "composer-workspace",
-                if new || linked {
+                if cow {
+                    "copy"
+                } else if new || linked {
                     "folder-tree"
                 } else {
                     "folder"
@@ -3115,8 +3195,17 @@ impl Conversation {
                 .text_size(px(12.))
                 .text_color(content(0.55 * 0.4))
                 .child(
-                    icon(if linked { "folder-tree" } else { "folder" }, 14.)
-                        .text_color(content(0.55 * 0.4)),
+                    icon(
+                        if cow {
+                            "copy"
+                        } else if linked {
+                            "folder-tree"
+                        } else {
+                            "folder"
+                        },
+                        14.,
+                    )
+                    .text_color(content(0.55 * 0.4)),
                 )
                 .child(label)
                 .into_any_element()
@@ -4500,11 +4589,11 @@ mod menu_tests {
             .unwrap();
         cx.run_until_parked();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.simulate_keystrokes("down down right");
-        visual.run_until_parked();
         let parent = visual
             .debug_bounds("menu-action-workspace:existing")
             .unwrap();
+        visual.simulate_click(parent.center(), Default::default());
+        visual.run_until_parked();
         let submenu = visual
             .debug_bounds("existing-worktrees-submenu")
             .expect("existing copies open beside the workspace menu");
@@ -4840,6 +4929,35 @@ mod menu_tests {
             .update(cx, |c, _, _| assert!(c.menu.is_none()))
             .unwrap();
         assert!(input_focused(window, cx));
+    }
+    #[gpui::test]
+    fn cow_selection_and_existing_checkout_keep_shared_workspace_controls(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.menu_choice("workspace:cow", cx);
+                assert!(view.settings.new_cow);
+                assert!(!view.settings.new_worktree);
+                assert!(view.settings.worktree_cwd.is_none());
+                view.menu_choice("workspace:new", cx);
+                assert!(view.settings.new_worktree);
+                assert!(!view.settings.new_cow);
+                view.settings.cow_source_cwd = Some("/donor".into());
+                view.menu_choice("workspace:current", cx);
+                assert!(!view.settings.pending_isolation());
+                assert!(view.settings.cow_source_cwd.is_none());
+                view.menu_choice("workspace:cow", cx);
+                assert!(view.use_existing_worktree("/work/linked", cx));
+                assert!(!view.settings.pending_isolation());
+                assert_eq!(view.settings.worktree_cwd.as_deref(), Some("/work/linked"));
+                view.menu_choice("workspace:cow", cx);
+                assert!(view.settings.new_cow && view.settings.worktree_cwd.is_none());
+                assert_eq!(
+                    view.settings.cow_source_cwd.as_deref(),
+                    Some("/work/linked")
+                );
+            })
+            .unwrap();
     }
 }
 

@@ -868,6 +868,7 @@ impl Shell {
                     this.sync_git(cx);
                     this.invalidate_chrome(cx);
                 }
+                Event::CopySelected(copy) => this.select_copy(copy.clone(), cx),
                 Event::Selected(focus) if this.workspace.project == observed_project => {
                     this.classic_worktree_picker = None;
                     this.select_worktree(focus.clone(), window, cx);

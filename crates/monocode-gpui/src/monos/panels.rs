@@ -7,6 +7,12 @@ use crate::{
 use gpui::{AnyView, Div, FontWeight, Stateful};
 use monocode_core::mono::heartbeat;
 use monocode_core::project_appearance::{MASCOTS, ProjectAppearance};
+const SUBSESSION_ISOLATION: [(&str, &str); 4] = [
+    ("", "App default"),
+    ("current", "Current checkout"),
+    ("worktree", "New worktree"),
+    ("cow", "New copy-on-write"),
+];
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum OverviewTab {
     Overview,
@@ -1802,6 +1808,16 @@ impl Monos {
             .map(|v| v.read(cx).mono_model_options())
             .unwrap_or_default();
         let sub = self.subsession_choice(mono, cx);
+        let isolation = mono
+            .subsessions
+            .as_ref()
+            .and_then(|s| s.workspace_mode.as_deref())
+            .unwrap_or("");
+        let isolation_label = SUBSESSION_ISOLATION
+            .iter()
+            .find(|(mode, _)| *mode == isolation)
+            .map_or("App default", |(_, label)| *label);
+        let isolation_anchor = AnchorSlot::default();
         let access_icon = match mode {
             AccessMode::FullAccess => "shield-alert",
             AccessMode::Auto => "sparkles",
@@ -1913,7 +1929,13 @@ impl Monos {
                 .when(!sub.efforts.is_empty(),|d|d.child(setting("Effort",None,
                     plain(SharedString::from("mono-subsession-effort"),sub.effort_label.clone()).child(self.subsession_effort_anchor.probe())
                         .on_click(cx.listener(|this,_,w,cx|this.open_subsession_effort_picker(w,cx))).into_any_element())
-                    .border_t_1().border_color(content(0.04)))))
+                    .border_t_1().border_color(content(0.04))))
+                .child(setting("Isolation",Some("For project sessions that do not choose a working copy."),
+                    plain(SharedString::from("mono-subsession-isolation"),isolation_label.into())
+                        .debug_selector(||"mono-subsession-isolation".into())
+                        .child(isolation_anchor.probe()).child(icon("chevron-down",12.))
+                        .on_click(cx.listener(move|this,_,w,cx|this.open_subsession_isolation_picker(isolation_anchor.clone(),w,cx))).into_any_element())
+                    .border_t_1().border_color(content(0.04))))
             .child(heading("Heartbeat",Some("When it has been quiet for a while, it looks over its recent work, sessions you left, your notes and inbox, and suggests what to do next. It never acts without asking.")))
             .child(card()
                 .child(switch_setting("Check in on its own","Quiet check-ins leave nothing behind; you only hear from it when it has an idea.",false,
@@ -2325,6 +2347,53 @@ impl Monos {
         self.picker = Some(OpenPicker {
             menu,
             anchor: Anchor::Slot(self.subsession_effort_anchor.clone()),
+            width: 228.,
+            align: crate::popover::Align::Start,
+            _events: vec![picked],
+        });
+        cx.notify();
+    }
+    fn open_subsession_isolation_picker(
+        &mut self,
+        anchor: AnchorSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = self
+            .current()
+            .and_then(|mono| mono.subsessions.as_ref())
+            .and_then(|s| s.workspace_mode.as_deref());
+        let items = SUBSESSION_ISOLATION
+            .into_iter()
+            .map(|(value, label)| {
+                MenuAction::new(format!("subsession-isolation:{value}"), label)
+                    .checked(mode.unwrap_or("") == value)
+                    .disabled(value == "cow" && !cfg!(target_os = "macos"))
+                    .icon(match value {
+                        "cow" => "copy",
+                        "worktree" => "folder-tree",
+                        "current" => "folder",
+                        _ => "settings",
+                    })
+                    .into()
+            })
+            .collect();
+        let menu = cx.new(|cx| Menu::new("Isolation", items, window, cx));
+        let picked = cx.subscribe(&menu, |this, _, event: &MenuEvent, cx| {
+            if let MenuEvent::Picked(id, _) = event
+                && let Some(value) = id.strip_prefix("subsession-isolation:")
+            {
+                this.set_subsessions(
+                    |s| s.workspace_mode = (!value.is_empty()).then(|| value.into()),
+                    cx,
+                );
+            }
+            this.picker = None;
+            cx.notify();
+        });
+        self.picker = Some(OpenPicker {
+            menu,
+            anchor: Anchor::Slot(anchor),
             width: 228.,
             align: crate::popover::Align::Start,
             _events: vec![picked],

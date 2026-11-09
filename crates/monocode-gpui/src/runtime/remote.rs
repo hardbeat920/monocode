@@ -14,6 +14,7 @@ use std::{
 fn update(status: impl Into<String>, finished: bool) -> Update {
     Update {
         worktree_cwd: None,
+        cow_id: None,
         commands: None,
         provider_turn_id: None,
         turn_ready: false,
@@ -502,6 +503,9 @@ pub(crate) fn run_with_client(
 ) {
     let mut latest_rows = Vec::new();
     let result = (|| -> Result<(), String> {
+        if settings.new_cow || settings.cow_id.is_some() {
+            return Err("Copy-on-write is not available for remote sessions in the native preview. Select Current checkout or New worktree.".into());
+        }
         if tx.is_closed() {
             return Ok(());
         }

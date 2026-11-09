@@ -10,6 +10,7 @@ export type { Workspace } from "./WorkspaceMenu";
 export function WorkspaceMenu({
   value,
   worktrees,
+  cowSupported = false,
   onChange,
   branch,
   checkoutBranch,
@@ -19,6 +20,7 @@ export function WorkspaceMenu({
 }: {
   value: Workspace;
   worktrees: Worktree[];
+  cowSupported?: boolean;
   onChange: (value: Workspace) => void;
   branch: string;
   checkoutBranch?: string;
@@ -41,6 +43,11 @@ export function WorkspaceMenu({
           selected: value.mode === "worktree",
           onPress: () => onChange({ mode: "worktree" }),
         },
+        ...(cowSupported ? [{
+          label: "New copy-on-write",
+          selected: value.mode === "cow",
+          onPress: () => onChange({ mode: "cow" }),
+        }] : []),
         ...worktrees.map((worktree) => ({
           label: `${worktree.name} — ${worktree.path}`,
           selected:
@@ -49,7 +56,7 @@ export function WorkspaceMenu({
         })),
         {
           label: "View changes",
-          disabled: value.mode === "worktree",
+          disabled: value.mode === "worktree" || value.mode === "cow",
           onPress: onOpenChanges,
         },
       ]}

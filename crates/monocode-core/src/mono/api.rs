@@ -85,11 +85,13 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }) {
         return Err("Unknown runtimeMode".into());
     }
-    if input
-        .get("workspaceMode")
-        .is_some_and(|v| !matches!(v.as_str(), Some("current" | "checkout" | "worktree")))
-    {
-        return Err("workspaceMode must be current or worktree".into());
+    if input.get("workspaceMode").is_some_and(|v| {
+        !matches!(
+            v.as_str(),
+            Some("current" | "checkout" | "worktree" | "cow")
+        )
+    }) {
+        return Err("workspaceMode must be current, worktree or cow".into());
     }
     if input
         .get("placement")

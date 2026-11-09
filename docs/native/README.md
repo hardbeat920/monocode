@@ -101,6 +101,10 @@ verification.
 
 ## Data and configuration
 
+APFS copy-on-write sessions are available alongside Local and Git worktrees.
+See [native work isolation](isolation.md) for selection, ownership, cleanup and
+preview limits.
+
 Development stores `monocode.db` under:
 
 | Platform | Development directory |

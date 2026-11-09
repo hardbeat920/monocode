@@ -68,6 +68,70 @@ fn operator_launch_applies_validated_overrides_without_transferring_app_access()
 }
 
 #[test]
+fn app_launch_can_fork_copies_and_explicit_checkout_clears_inherited_isolation() {
+    for mode in ["cow", "worktree"] {
+        let mut defaults = Settings::default();
+        defaults.isolation_default(mode);
+        let child = launch_settings(
+            &json!({"prompt":"Use default"}),
+            "codex",
+            defaults,
+            Kind::Codex,
+            &[],
+        )
+        .unwrap();
+        assert!(child.pending_isolation());
+        assert_eq!(child.new_cow, mode == "cow");
+    }
+    let inherited = Settings {
+        cow_id: Some("owned".into()),
+        worktree_cwd: Some("/copies/owned".into()),
+        ..Default::default()
+    };
+    let fork = launch_settings(
+        &json!({"prompt":"Fork"}),
+        "codex",
+        inherited.clone(),
+        Kind::Codex,
+        &[],
+    )
+    .unwrap();
+    assert!(fork.new_cow && fork.cow_id.is_none() && fork.worktree_cwd.is_none());
+    assert_eq!(fork.cow_source_cwd.as_deref(), Some("/copies/owned"));
+    let fresh = launch_settings(
+        &json!({"prompt":"Create", "workspaceMode":"cow", "worktreeBase":"main"}),
+        "codex",
+        inherited.clone(),
+        Kind::Codex,
+        &[],
+    )
+    .unwrap();
+    assert!(fresh.new_cow && fresh.cow_id.is_none());
+    assert_eq!(fresh.cow_source_cwd.as_deref(), Some("/copies/owned"));
+    assert_eq!(fresh.worktree_base.as_deref(), Some("main"));
+    for mode in ["current", "checkout", "worktree"] {
+        let selected = launch_settings(
+            &json!({"prompt":"Select", "workspaceMode":mode}),
+            "codex",
+            inherited.clone(),
+            Kind::Codex,
+            &[],
+        )
+        .unwrap();
+        assert!(selected.cow_id.is_none() && !selected.new_cow);
+        assert!(selected.cow_source_cwd.is_none() && selected.worktree_cwd.is_none());
+    }
+    assert!(launch_settings(
+        &json!({"workspaceMode":"cow", "worktreeCwd":"/other"}),
+        "codex",
+        inherited,
+        Kind::Codex,
+        &[]
+    )
+    .is_err());
+}
+
+#[test]
 fn operator_thread_access_survives_reopen_without_enabling_other_sessions() {
     let dir = tempfile::tempdir().unwrap();
     for shared in [false, true] {

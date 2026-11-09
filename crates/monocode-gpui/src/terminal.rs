@@ -247,6 +247,34 @@ fn detached(size: GridSize) -> Spawned {
 }
 
 impl Terminal {
+    pub(crate) fn uses_working_copy(&self, path: &str) -> bool {
+        let inside = |cwd: &std::path::Path| {
+            monocode_core::files::is_equal_or_inside(&cwd.to_string_lossy(), path)
+                || cwd
+                    .canonicalize()
+                    .ok()
+                    .zip(std::path::Path::new(path).canonicalize().ok())
+                    .is_some_and(|(cwd, root)| cwd.starts_with(root))
+        };
+        if inside(std::path::Path::new(&self.cwd)) {
+            return true;
+        }
+        #[cfg(target_os = "macos")]
+        if !self.exited && self.master_fd >= 0 && self.shell_pid > 1 {
+            // Query the kernel even for hidden terminals; their title poll stops.
+            let foreground = unsafe { libc::tcgetpgrp(self.master_fd) };
+            if foreground <= 0 {
+                return true;
+            }
+            for pid in [self.shell_pid as i32, foreground] {
+                if process_cwd(pid).is_none_or(|cwd| inside(&cwd)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub(crate) fn new(cwd: String, cx: &mut Context<Self>) -> Self {
         let size = GridSize {
             columns: 80,
@@ -1390,6 +1418,35 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
         home().unwrap_or(path)
     }
 }
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    if unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            &mut info as *mut _ as *mut _,
+            size,
+        )
+    } != size
+    {
+        return None;
+    }
+    let bytes: Vec<_> = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .map(|c| *c as u8)
+        .collect();
+    let path = std::ffi::CStr::from_bytes_until_nul(&bytes)
+        .ok()?
+        .to_bytes();
+    (!path.is_empty()).then(|| std::ffi::OsString::from_vec(path.into()).into())
+}
 /// pty.rs's foreground_label: the command holding the terminal, unless it
 /// is the shell itself.
 #[cfg(unix)]
@@ -1711,5 +1768,103 @@ mod tests {
             }
         }
         assert!(exited);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn hidden_terminals_block_cleanup_after_shell_or_foreground_changes_directory(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        struct Shutdown(EventLoopSender);
+        impl Drop for Shutdown {
+            fn drop(&mut self) {
+                let _ = self.0.send(Msg::Shutdown);
+            }
+        }
+        fn wait_for(check: impl Fn() -> bool) {
+            for _ in 0..250 {
+                if check() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(check(), "the PTY did not reach the requested directory");
+        }
+        let root = Cleanup(std::env::temp_dir().join(format!(
+            "monocode-terminal-copy-{}",
+            monocode_core::mono::new_id()
+        )));
+        let outside = root.0.join("project");
+        let copy = root.0.join("project-cow/copy");
+        let nested = copy.join("nested");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let outside = outside.canonicalize().unwrap();
+        let copy = copy.canonicalize().unwrap();
+        let nested = nested.canonicalize().unwrap();
+        let spawned = spawn(
+            outside.to_str().unwrap(),
+            GridSize {
+                columns: 60,
+                lines: 10,
+            },
+            2,
+        );
+        let sender = spawned.sender.as_ref().expect("the shell started");
+        let _shutdown = Shutdown(sender.clone());
+        let pid = spawned.shell_pid as i32;
+        wait_for(|| {
+            process_cwd(pid).as_ref() == Some(&outside)
+                && unsafe { libc::tcgetpgrp(spawned.master_fd) } == pid
+        });
+        let view = cx.new(|cx| Terminal::new(outside.to_string_lossy().into_owned(), cx));
+        view.update(cx, |terminal, _| {
+            terminal.master_fd = spawned.master_fd;
+            terminal.shell_pid = spawned.shell_pid;
+            terminal.visible = false;
+            assert!(!terminal.uses_working_copy(copy.to_str().unwrap()));
+        });
+        let send = |command: String| {
+            sender
+                .send(Msg::Input(Cow::Owned(command.into_bytes())))
+                .unwrap()
+        };
+        send(format!("cd '{}'\r", nested.display()));
+        wait_for(|| process_cwd(pid).as_ref() == Some(&nested));
+        assert!(view.update(cx, |terminal, _| {
+            terminal.uses_working_copy(copy.to_str().unwrap())
+        }));
+        send(format!("cd '{}'\r", outside.display()));
+        wait_for(|| {
+            process_cwd(pid).as_ref() == Some(&outside)
+                && unsafe { libc::tcgetpgrp(spawned.master_fd) } == pid
+        });
+        assert!(!view.update(cx, |terminal, _| {
+            terminal.uses_working_copy(copy.to_str().unwrap())
+        }));
+        let ready = root.0.join("foreground-ready");
+        send(format!(
+            "/bin/sh -c 'cd \"$1\"; : > \"$2\"; sleep 15' sh '{}' '{}'\r",
+            nested.display(),
+            ready.display()
+        ));
+        wait_for(|| ready.exists());
+        assert_eq!(process_cwd(pid).as_ref(), Some(&outside));
+        assert!(view.update(cx, |terminal, _| {
+            terminal.uses_working_copy(copy.to_str().unwrap())
+        }));
+        view.update(cx, |terminal, _| {
+            terminal.shell_pid = u32::MAX;
+            assert!(terminal.uses_working_copy(copy.to_str().unwrap()));
+            terminal.exited = true;
+            assert!(!terminal.uses_working_copy(copy.to_str().unwrap()));
+        });
+        let _ = sender.send(Msg::Input(Cow::Borrowed(b"\x03exit\r")));
     }
 }

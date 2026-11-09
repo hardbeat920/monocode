@@ -641,6 +641,17 @@ impl ReviewPane {
         cx.emit(ReviewEvent::Changed);
         cx.notify();
     }
+    pub(crate) fn uses_working_copy(&self, path: &str) -> bool {
+        self.state.tabs.iter().any(|tab| {
+            let cwd = match tab {
+                ReviewTab::File { cwd, .. }
+                | ReviewTab::Changes { cwd, .. }
+                | ReviewTab::Commit { cwd, .. }
+                | ReviewTab::Session { cwd, .. } => cwd,
+            };
+            monocode_core::files::is_equal_or_inside(cwd, path)
+        })
+    }
     pub(crate) fn unsaved_files(&self, cx: &gpui::App) -> bool {
         self.sources
             .iter()

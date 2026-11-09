@@ -90,7 +90,7 @@ impl Section {
             Section::Monos => "Monos",
             Section::Inbox => "Inbox",
             Section::Archive => "Archive",
-            Section::Worktrees => "Worktrees",
+            Section::Worktrees => "Work Isolation",
         }
     }
     pub(crate) fn description(self) -> &'static str {
@@ -120,7 +120,7 @@ impl Section {
                 "Manage Inbox services and notification preferences for each project."
             }
             Section::Archive => "Projects and conversations you have archived.",
-            Section::Worktrees => "Manage additional worktrees for each project.",
+            Section::Worktrees => "Choose isolation defaults and manage project working copies.",
         }
     }
     fn keywords(self) -> &'static str {
@@ -146,7 +146,9 @@ impl Section {
                 "github gitlab linear jira atlassian azure devops connect token integration"
             }
             Section::Archive => "archived restore delete hidden",
-            Section::Worktrees => "git branch worktree working copy project create delete",
+            Section::Worktrees => {
+                "git branch worktree copy-on-write cow APFS isolation default local working copy project create delete"
+            }
         }
     }
     /// SettingsRail.tsx's SECTION_ICONS.
@@ -211,6 +213,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Monos,
         "Your monos",
         "mono reset soul name projects sessions sidebar visibility hidden show",
+    ),
+    (
+        "default-isolation",
+        Section::Worktrees,
+        "Start new session on",
+        "local new worktree copy-on-write cow APFS default isolation",
     ),
     (
         "project-worktrees",

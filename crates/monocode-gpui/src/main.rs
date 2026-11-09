@@ -178,6 +178,24 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
     }
 }
 fn main() {
+    if let Ok(path) = std::env::current_exe() {
+        monocode_core::isolation::set_publication_helper(path);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--cow-git-hook") {
+        use std::io::Read;
+        let kind = std::env::args().nth(2).unwrap_or_default();
+        let mut input = String::new();
+        if kind == "pre-push" {
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .expect("Git push input");
+        }
+        if let Err(error) = monocode_core::isolation::publication_hook(&kind, &input) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(code) = monocode_core::remote::ssh_askpass::maybe_run() {
         std::process::exit(code);
     }
@@ -326,6 +344,7 @@ fn main() {
         }
         return;
     }
+    let _ = monocode_core::isolation::Isolation::for_store(&db);
     monocode_core::checkpoint::init(
         database
             .parent()

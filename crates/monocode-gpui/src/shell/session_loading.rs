@@ -141,6 +141,7 @@ impl NewSessionDefaults {
         store: &monocode_core::store::Store,
         cwd: &str,
         worktree_cwd: Option<String>,
+        isolation_default: &str,
     ) -> Result<(Session, monocode_core::agent::Settings), String> {
         let Self {
             kind,
@@ -167,10 +168,15 @@ impl NewSessionDefaults {
             settings.effort = Some(effort);
         }
         settings.account = account;
-        settings.worktree_cwd = worktree_cwd;
+        settings.isolation_default(isolation_default);
+        if let Some(path) = worktree_cwd {
+            let isolation = monocode_core::isolation::Isolation::for_store(store);
+            settings.select_checkout(&isolation, std::path::Path::new(cwd), &path)?;
+        }
         if settings.model.is_some()
             || settings.effort.is_some()
             || !settings.model_settings.is_empty()
+            || settings.pending_isolation()
             || settings.worktree_cwd.is_some()
             || settings.account.id != monocode_core::accounts::DEFAULT
             || access != Default::default()
@@ -186,6 +192,47 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use monocode_core::{agent::Settings, store::Store};
+
+    #[test]
+    fn new_chat_defaults_persist_cow_without_losing_provider_controls() {
+        let store = Store::open_monocode(std::path::Path::new(":memory:")).unwrap();
+        let defaults = NewSessionDefaults {
+            kind: Kind::Claude,
+            model: Some("fixture-model".into()),
+            account: Default::default(),
+            access: monocode_core::agent::AccessMode::ReadOnly,
+            effort: Some("high".into()),
+        };
+        let (summary, settings) = defaults
+            .create(&store, "/work/project", None, "cow")
+            .unwrap();
+        assert_eq!(summary.provider, "claude");
+        assert!(settings.new_cow);
+        assert_eq!(settings.model.as_deref(), Some("fixture-model"));
+        assert_eq!(settings.effort.as_deref(), Some("high"));
+        assert_eq!(settings.access, monocode_core::agent::AccessMode::ReadOnly);
+        assert!(store.agent_settings(summary.id).unwrap().unwrap().new_cow);
+    }
+
+    #[test]
+    fn explicit_project_folder_overrides_default_isolation() {
+        let store = Store::open_monocode(std::path::Path::new(":memory:")).unwrap();
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        for mode in ["cow", "worktree"] {
+            let defaults = NewSessionDefaults {
+                kind: Kind::Codex,
+                model: None,
+                account: Default::default(),
+                access: Default::default(),
+                effort: None,
+            };
+            let (_, settings) = defaults
+                .create(&store, &cwd, Some(cwd.clone()), mode)
+                .unwrap();
+            assert!(!settings.pending_isolation());
+            assert!(settings.worktree_cwd.is_none());
+        }
+    }
 
     #[gpui::test]
     fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(

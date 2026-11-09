@@ -923,7 +923,7 @@ impl Inbox {
                             .items_center()
                             .gap(px(8.))
                             .when(!is_pr, |d| {
-                                d.child(
+                                d.child(self.isolation_control(cx)).child(
                                     action("inbox-send-agent", "Open in new session")
                                         .px(px(12.))
                                         .bg(content(1.))
@@ -2059,12 +2059,13 @@ impl Inbox {
                 d.when(checks.checks.is_empty(), |d| d.child(message("No checks reported")))
                     .when(!failed.is_empty(), |d| d.child(div().mb(px(12.)).flex().items_center().gap(px(8.))
                         .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(format!("{} failing checks", failed.len())))
+                        .child(self.isolation_control(cx))
                         .child(action("inbox-fix-checks", "Fix with agent").bg(content(0.1)).on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(mut item) = this.item() {
                                 if item.project_path.is_empty() { item.project_path = this.start_project.to_string_lossy().into_owned(); }
                                 let evidence = failed.iter().map(|check| format!("{}: {} {}", check.name, check.state, check.url.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n");
                                 let prompt = format!("Investigate and repair the failing CI checks for {} {}: {}\n{}\n\n{}\n\nRead the check logs, reproduce the failures, implement the fix, and run relevant checks.", item.repo, item.reference(), item.title, item.url, evidence);
-                                cx.emit(Event::StartSession { item: Box::new(item), prompt });
+                                cx.emit(Event::StartSession { item: Box::new(item), prompt, workspace_mode: this.start_isolation.clone() });
                             }
                         })))))
                     .children(checks.checks.iter().enumerate().map(|(ix, check)| {
@@ -2536,6 +2537,82 @@ impl Inbox {
             .into_any_element()
     }
 
+    fn isolation_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        let label = match self.start_isolation.as_deref() {
+            Some("cow") => "New copy-on-write",
+            Some("worktree") => "New worktree",
+            Some("current") => "Project folder",
+            _ => "App isolation default",
+        };
+        action("inbox-isolation", label)
+            .debug_selector(|| "inbox-isolation".into())
+            .aria_label(format!("Session isolation: {label}"))
+            .child(self.isolation_anchor.probe())
+            .child(icon("chevron-down", 12.))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.isolation_picker = !this.isolation_picker;
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+    fn isolation_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let weak = cx.entity().downgrade();
+        popover(
+            "inbox-isolation-menu",
+            Anchor::Slot(self.isolation_anchor.clone()),
+        )
+        .width(250.)
+        .padding(4.)
+        .on_dismiss(move |_, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.isolation_picker = false;
+                cx.notify();
+            });
+        })
+        .child(
+            div().flex().flex_col().children(
+                [
+                    ("", "App isolation default"),
+                    ("current", "Project folder"),
+                    ("worktree", "New worktree"),
+                    ("cow", "New copy-on-write"),
+                ]
+                .into_iter()
+                .map(|(mode, label)| {
+                    let disabled = mode == "cow"
+                        && (!cfg!(target_os = "macos")
+                            || self
+                                .document_cwd()
+                                .to_string_lossy()
+                                .starts_with("remote://"));
+                    action(format!("inbox-isolation-{mode}"), label)
+                        .debug_selector(move || format!("inbox-isolation-{mode}"))
+                        .w_full()
+                        .role(Role::MenuItemRadio)
+                        .aria_selected(self.start_isolation.as_deref().unwrap_or("") == mode)
+                        .child(icon(
+                            if self.start_isolation.as_deref().unwrap_or("") == mode {
+                                "check"
+                            } else {
+                                "minus"
+                            },
+                            12.,
+                        ))
+                        .when(disabled, |d| d.opacity(0.4))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if disabled {
+                                return;
+                            }
+                            this.start_isolation = (!mode.is_empty()).then(|| mode.to_owned());
+                            this.isolation_picker = false;
+                            cx.notify();
+                        }))
+                }),
+            ),
+        )
+        .into_any_element()
+    }
+
     fn project_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
         popover(
@@ -2835,12 +2912,14 @@ impl gpui::Render for Inbox {
                         this.confirm_action = None;
                     } else if this.filters_open
                         || this.connections_open
+                        || this.isolation_picker
                         || this.project_picker
                         || this.action_menu
                     {
                         this.filters_open = false;
                         this.connections_open = false;
                         this.project_picker = false;
+                        this.isolation_picker = false;
                         this.action_menu = false;
                     } else {
                         cx.emit(Event::Close);
@@ -2891,6 +2970,7 @@ impl gpui::Render for Inbox {
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
             .when(self.connections_open, |d| d.child(self.connection_menu(cx)))
             .when(self.project_picker, |d| d.child(self.project_menu(cx)))
+            .when(self.isolation_picker, |d| d.child(self.isolation_menu(cx)))
             .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
             .when(self.connect_provider.is_some(), |d| {
                 d.child(crate::modal::window_overlay(
@@ -2926,6 +3006,10 @@ mod tests {
                     .flex_col()
                     .child(inbox.pr_actions(&self.item, cx))
                     .child(inbox.summary_view(&self.item, window, cx))
+                    .child(inbox.isolation_control(cx))
+                    .when(inbox.isolation_picker, |d| {
+                        d.child(inbox.isolation_menu(cx))
+                    })
             })
         }
     }
@@ -2958,6 +3042,50 @@ mod tests {
         cx.refresh().unwrap();
         cx.run_until_parked();
     }
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn inbox_isolation_picker_reaches_the_new_session_request(cx: &mut TestAppContext) {
+        let window = fixture(cx);
+        let modes = Arc::new(Mutex::new(Vec::new()));
+        let seen = modes.clone();
+        let _subscription = window
+            .update(cx, |fixture, _, cx| {
+                cx.subscribe(&fixture.inbox, move |_, _, event: &Event, _| {
+                    if let Event::StartSession { workspace_mode, .. } = event {
+                        seen.lock().unwrap().push(workspace_mode.clone());
+                    }
+                })
+            })
+            .unwrap();
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| inbox.start(cx))
+            })
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for selector in [
+            "inbox-isolation-cow",
+            "inbox-isolation-current",
+            "inbox-isolation-",
+        ] {
+            let button = visual.debug_bounds("inbox-isolation").unwrap().center();
+            visual.simulate_click(button, Default::default());
+            visual.run_until_parked();
+            let option = visual.debug_bounds(selector).unwrap().center();
+            visual.simulate_click(option, Default::default());
+            visual.run_until_parked();
+            window
+                .update(&mut visual, |fixture, _, cx| {
+                    fixture.inbox.update(cx, |inbox, cx| inbox.start(cx))
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            *modes.lock().unwrap(),
+            [None, Some("cow".into()), Some("current".into()), None]
+        );
+    }
+
     #[gpui::test]
     fn the_inbox_opens_scoped_to_its_project_and_labels_projects_by_appearance(
         cx: &mut TestAppContext,
