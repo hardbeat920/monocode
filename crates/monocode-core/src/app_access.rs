@@ -324,13 +324,19 @@ fn bounded(
     }
     Ok(value as usize)
 }
-/// `offset` pages through a long message; `nextCharOffset` is set while more remains.
+/// `offset` pages through a long message; `nextCharOffset` is set while more
+/// remains. Text is counted as completion reports count it (see
+/// `response::normalized`), so their offsets agree. Past the end, `pastEnd` says so.
 fn capped(text: &str, max: usize, offset: usize) -> Value {
-    let text = text.trim();
+    let text = crate::response::normalized(text);
     let total = text.chars().count();
     let mut value = json!({"text":text.chars().skip(offset).take(max).collect::<String>(),"truncated":total>offset.saturating_add(max)});
     if offset > 0 {
         value["charOffset"] = json!(offset);
+        value["totalChars"] = json!(total);
+        if offset >= total {
+            value["pastEnd"] = json!(true);
+        }
     }
     if total > offset.saturating_add(max) {
         value["nextCharOffset"] = json!(offset + max);
@@ -343,6 +349,9 @@ pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, Strin
     let limit = bounded(input, "limit", 3, 1, 3)?;
     let max = bounded(input, "maxChars", 1200, 200, 6000)?;
     let offset = bounded(input, "charOffset", 0, 0, usize::MAX)?;
+    if offset > 0 && limit != 1 {
+        return Err("charOffset pages through one message; pass limit 1".into());
+    }
     let mut turns: Vec<(&Value, Vec<&Value>)> = Vec::new();
     for block in blocks {
         if block["role"] == "user"
