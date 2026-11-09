@@ -250,6 +250,35 @@ export function merge(existing: Attachment[], added: Attachment[]): Attachment[]
   return next;
 }
 
+/**
+ * A failed send's attachments, back with any picked while it was sending: the
+ * failed ones first, as the restored text refers to them, and each once. Those
+ * picked since that no longer fit, by count or the link's limit, are dropped.
+ */
+export function restore(
+  failed: Attachment[],
+  since: Attachment[],
+): { kept: Attachment[]; dropped: Attachment[] } {
+  const seen = new Set(failed.map((attachment) => attachment.id));
+  let kept = failed;
+  const dropped: Attachment[] = [];
+  for (const attachment of since) {
+    if (seen.has(attachment.id)) continue;
+    seen.add(attachment.id);
+    try {
+      const next = merge(kept, [attachment]);
+      if (next.length > kept.length) {
+        kept = next;
+        continue;
+      }
+    } catch {
+      // Over the link's limit with what's already kept.
+    }
+    dropped.push(attachment);
+  }
+  return { kept, dropped };
+}
+
 type PhotoSource = Pick<ImagePickerAsset, "uri" | "width" | "height"> &
   Partial<Pick<ImagePickerAsset, "mimeType" | "fileName" | "fileSize">>;
 

@@ -28,6 +28,7 @@ import {
   pasteImage,
   pickFiles,
   pickPhotos,
+  restore,
   watchClipboardImage,
   type Attachment,
 } from "./attachments";
@@ -314,8 +315,22 @@ export function Composer({
       await onSend(message, files);
     } catch (reason) {
       setText((current) => current || message);
-      hold((current) => (current.length ? current : files));
-      Alert.alert("Message not sent", reason instanceof Error ? reason.message : String(reason));
+      // Back with anything pasted or picked while it was sending, not instead of it.
+      let dropped: Attachment[] = [];
+      hold((current) => {
+        const restored = restore(files, current);
+        dropped = restored.dropped;
+        return restored.kept;
+      });
+      const why = reason instanceof Error ? reason.message : String(reason);
+      Alert.alert(
+        "Message not sent",
+        dropped.length
+          ? `${why}\n\nA message can carry up to ${MAX_ATTACHMENTS} files within its size limit, so ` +
+              `${dropped.map((attachment) => attachment.name).join(", ")}, added while it was sending, ` +
+              `${dropped.length === 1 ? "was" : "were"} removed.`
+          : why,
+      );
     } finally {
       setSending(false);
     }
