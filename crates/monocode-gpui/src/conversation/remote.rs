@@ -201,6 +201,12 @@ impl Conversation {
                             this.launch_prompt(String::new(), cx);
                         } else {
                             this.run_history_actions(cx);
+                            if initial {
+                                // A launch installed in this run was sent
+                                // above; one from before a restart is sent
+                                // here, and one the outbox holds is dropped.
+                                this.resume_remote_app_launch(None, cx);
+                            }
                             // A Mono's send to an unloaded remote conversation
                             // waits for this load, as a local one does.
                             this.mono_flush_external(cx);
@@ -320,41 +326,49 @@ impl Conversation {
     /// An app launch saves its prompt as a local follow-up draft. A remote
     /// conversation's drafts live on its host, so that local draft is never
     /// loaded here, and its ID means nothing to the host. Send its text as the
-    /// first turn, and drop the local draft once the turn has started.
+    /// first turn instead.
     pub(super) fn install_remote_app_launch(
         &mut self,
         settings: Settings,
         send: bool,
         cx: &mut Context<Self>,
     ) {
-        let saved = locked(&self.store).and_then(|store| store.follow_ups(self.summary.id));
         self.install_transfer(settings, None, cx);
-        let saved = match saved {
-            Ok(saved) => saved,
+        self.resume_remote_app_launch(Some(send), cx);
+        cx.emit(SessionChanged);
+    }
+    /// Hands a remote app launch's saved prompt to the host, if it does not
+    /// have it yet: when the launch is installed, and on the conversation's
+    /// first load, so a launch the app quit or crashed before sending still
+    /// runs. `send` overrides the launch's recorded choice to send or save it.
+    ///
+    /// Idempotent: the local prompt is dropped only once the runtime journals
+    /// it, and a second call finds the turn running or its commands journaled.
+    pub(super) fn resume_remote_app_launch(&mut self, send: Option<bool>, cx: &mut Context<Self>) {
+        // Read first: this also drops a prompt the outbox already holds, which
+        // a pending view (waiting for Retry) must not keep either.
+        let pending =
+            locked(&self.store).and_then(|store| store.pending_remote_app_launch(self.summary.id));
+        let (text, saved_send) = match pending {
+            Ok(Some(pending)) => pending,
+            Ok(None) => return,
             Err(error) => {
                 self.status = error;
-                cx.emit(SessionChanged);
                 cx.notify();
                 return;
             }
         };
-        if let Some(draft) = saved.draft.as_ref() {
-            self.input
-                .update(cx, |input, cx| input.set_text(draft.text.clone(), cx));
-            if send {
-                self.send(cx);
-            } else {
-                self.remote_save_draft(cx);
-            }
-            // A guard that kept the text in the composer has set the status;
-            // the local draft stays recoverable until a turn takes it.
-            if self.busy {
-                self.follow_ups.state.revision = self.follow_ups.state.revision.max(saved.revision);
-                self.follow_ups.state.draft = None;
-                self.save_follow_ups(cx);
-            }
+        if self.busy || self.stopping || self.remote_state.pending || !self.remote_state.online {
+            return;
         }
-        cx.emit(SessionChanged);
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        // A guard that keeps the text in the composer sets the status; the
+        // local prompt stays until a turn takes it.
+        if send.unwrap_or(saved_send) {
+            self.send(cx);
+        } else {
+            self.remote_save_draft(cx);
+        }
     }
     pub(super) fn remote_save_draft(&mut self, cx: &mut Context<Self>) {
         if self.remote_send_guard(cx) {

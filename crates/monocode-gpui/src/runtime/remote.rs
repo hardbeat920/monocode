@@ -654,6 +654,12 @@ pub(crate) fn run_with_client(
             binding.summary.has_messages = true;
             binding.summary.updated_at = monocode_core::time::now_ms();
             journal(&store, &binding)?;
+            if binding.session_id.is_none() {
+                // An app launch's local prompt was its only record until now.
+                // If this fails, the next load drops it, as the outbox has it.
+                let _ = locked(&store)
+                    .and_then(|store| store.finish_remote_app_launch(summary.id, &prompt));
+            }
             offers_provider(&client, &machine.id, &summary.provider)?;
         }
         if !attaching {

@@ -8,6 +8,27 @@ mod notes;
 mod remote;
 mod remote_legacy;
 pub use app_access::{AppConversation, REMOTE_READ_TIMEOUT};
+
+/// Deletes `keys`, and keys starting with `prefix`, from a key/value table.
+fn delete_settings_in(
+    conn: &rusqlite::Connection,
+    table: &str,
+    keys: &[String],
+    prefix: Option<&str>,
+) -> Result<(), String> {
+    for key in keys {
+        conn.execute(&format!("DELETE FROM {table} WHERE key=?1"), [key])
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(prefix) = prefix {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE substr(key,1,length(?1))=?1"),
+            [prefix],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 pub use remote::{RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_metadata;
@@ -205,6 +226,13 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())
+    }
+    /// Removes the settings named in `keys`, and those starting with `prefix`.
+    pub fn delete_settings(&self, keys: &[String], prefix: Option<&str>) -> Result<(), String> {
+        if self.shared.is_some() {
+            return self.shared_delete_settings(keys, prefix);
+        }
+        delete_settings_in(&self.conn, "native_settings", keys, prefix)
     }
     pub fn save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         if self.shared.is_some() {
@@ -1043,7 +1071,7 @@ impl Store {
         tx.execute("DELETE FROM native_reminders WHERE session_id=?1", [id])
             .map_err(|e| e.to_string())?;
         tx.execute(
-            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8) OR key LIKE ?4",
+            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8,?9) OR key LIKE ?4",
             params![
                 format!("agent:{id}"),
                 format!("context:{id}"),
@@ -1052,7 +1080,8 @@ impl Store {
                 format!("started-by:{id}"),
                 format!("orchestration:{id}"),
                 format!("inbox-ask:{id}"),
-                format!("automation:{id}")
+                format!("automation:{id}"),
+                format!("{}{id}", app_access::APP_LAUNCH_DRAFT)
             ],
         )
         .map_err(|e| e.to_string())?;

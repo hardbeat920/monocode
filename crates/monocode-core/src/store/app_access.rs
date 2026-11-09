@@ -7,9 +7,17 @@ use std::time::Duration;
 impl Store {
     /// A launch is recoverable as an unsent draft if the app exits before its
     /// provider accepts it. Queue delivery uses this same stable message ID.
-    pub fn prepare_app_prompt(&self, id: i64, request: &str, prompt: &str) -> Result<(), String> {
+    /// `draft` records that the launch saves the prompt rather than sending it,
+    /// so a remote launch resumed after a restart does the same.
+    pub fn prepare_app_prompt(
+        &self,
+        id: i64,
+        request: &str,
+        prompt: &str,
+        draft: bool,
+    ) -> Result<(), String> {
         let mut state = self.follow_ups(id)?;
-        let message_id = format!("app-prompt-{}", crate::mono::files::content_hash(request));
+        let message_id = format!("{APP_PROMPT}{}", crate::mono::files::content_hash(request));
         if state.draft.is_none() && !state.messages.iter().any(|m| m.id == message_id) {
             state.revision += 1;
             state.draft = Some(crate::follow_up::Message {
@@ -18,8 +26,53 @@ impl Store {
                 ..Default::default()
             });
             self.save_follow_ups(id, &state)?;
+            if draft {
+                self.save_setting(&format!("{APP_LAUNCH_DRAFT}{id}"), "1")?;
+            }
         }
         Ok(())
+    }
+    /// A remote app launch's saved prompt that the host does not have yet, and
+    /// whether to send it (`true`) or save it as a draft.
+    ///
+    /// The local prompt is the launch's only durable record until the remote
+    /// runtime journals its commands. Once the outbox holds them, the host has
+    /// the session, or the host rejected them, the local copy is dropped here.
+    pub fn pending_remote_app_launch(&self, id: i64) -> Result<Option<(String, bool)>, String> {
+        let Some(remote) = self.remote_session(id)? else {
+            return Ok(None);
+        };
+        let state = self.follow_ups(id)?;
+        let Some(draft) = state
+            .draft
+            .as_ref()
+            .filter(|draft| draft.id.starts_with(APP_PROMPT))
+        else {
+            return Ok(None);
+        };
+        if remote.session_id.is_some() || !remote.outbox.is_empty() || remote.rejected.is_some() {
+            let text = draft.text.clone();
+            self.finish_remote_app_launch(id, &text)?;
+            return Ok(None);
+        }
+        let send = self.setting(&format!("{APP_LAUNCH_DRAFT}{id}"))?.is_none();
+        Ok(Some((draft.text.clone(), send)))
+    }
+    /// Drops a remote app launch's local prompt once `text`, its first turn,
+    /// is journaled in the session's remote outbox.
+    pub fn finish_remote_app_launch(&self, id: i64, text: &str) -> Result<(), String> {
+        let mut state = self.follow_ups(id)?;
+        if !state
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.id.starts_with(APP_PROMPT) && draft.text == text)
+        {
+            return Ok(());
+        }
+        state.revision += 1;
+        state.draft = None;
+        self.save_follow_ups(id, &state)?;
+        self.delete_settings(&[format!("{APP_LAUNCH_DRAFT}{id}")], None)
     }
     /// Reserve a request's child durably before its UI/provider is installed.
     /// Shared stores use a deterministic desktop ID; legacy stores reserve their
@@ -110,6 +163,11 @@ impl Store {
         Ok(AppConversation { id, title, source })
     }
 }
+
+/// Follow-up draft IDs of prompts saved by `sessions.start`.
+const APP_PROMPT: &str = "app-prompt-";
+/// Marks a launch whose prompt is saved as a draft instead of sent.
+pub(super) const APP_LAUNCH_DRAFT: &str = "app-launch-draft:";
 
 /// How long `sessions.read` waits for a remote session's host.
 pub const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(20);

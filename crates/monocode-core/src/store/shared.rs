@@ -474,6 +474,22 @@ impl Store {
             .get(key)
             .cloned())
     }
+    pub(super) fn shared_delete_settings(
+        &self,
+        keys: &[String],
+        prefix: Option<&str>,
+    ) -> Result<(), String> {
+        self.shared_writable()?;
+        let shared = self.shared.as_ref().unwrap();
+        if let Some(conn) = &shared.extras_db {
+            super::delete_settings_in(conn, "settings", keys, prefix)?;
+        }
+        shared
+            .extras
+            .borrow_mut()
+            .retain(|key, _| !keys.contains(key) && !prefix.is_some_and(|p| key.starts_with(p)));
+        Ok(())
+    }
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();

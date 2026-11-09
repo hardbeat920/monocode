@@ -514,7 +514,21 @@ impl Store {
         self.save_setting(
             SESSIONS,
             &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )
+        )?;
+        // The handle's own settings, as a local session's are deleted with it.
+        let keys = [
+            "remote-agent:",
+            "agent:",
+            "context:",
+            "follow-up:",
+            "started-by:",
+            "orchestration:",
+            "inbox-ask:",
+            "automation:",
+            super::app_access::APP_LAUNCH_DRAFT,
+        ]
+        .map(|key| format!("{key}{id}"));
+        self.delete_settings(&keys, Some(&format!("mono-delivered:{id}:")))
     }
 }
 

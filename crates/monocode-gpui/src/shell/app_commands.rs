@@ -391,7 +391,7 @@ impl Shell {
                         store.title(summary.id,&title)?;summary.title=title;
                         store.configure_agent(summary.id,kind.id(),&settings)?;
                         store.save_started_link(summary.id,caller)?;
-                        store.prepare_app_prompt(summary.id,&request,&prompt)?;
+                        store.prepare_app_prompt(summary.id,&request,&prompt,input["draft"].as_bool().unwrap_or(false))?;
                         summary.has_messages=true;
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);

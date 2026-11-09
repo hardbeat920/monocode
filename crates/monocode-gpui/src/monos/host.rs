@@ -455,7 +455,7 @@ impl Monos {
                             let db = locked(&store)?;
                             db.title(summary.id, &summary.title)?;
                             db.configure_agent(summary.id, &provider, &settings)?;
-                            db.prepare_app_prompt(summary.id, &request, &prompt)
+                            db.prepare_app_prompt(summary.id, &request, &prompt, draft)
                         })();
                         if let Err(error) = configured {
                             // Never leave a blank placeholder behind. A new

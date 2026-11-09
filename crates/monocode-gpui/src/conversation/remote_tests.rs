@@ -220,18 +220,27 @@ impl HostFixture {
                     }
                     "commands.dispatch" => {
                         let command = &request["params"];
-                        // As a host does, a sent message becomes a transcript block.
-                        if command["type"] == "send"
-                            && command["draftBlockId"].is_null()
-                            && let Some(blocks) = snapshot["session"]["blocks"].as_array_mut()
-                        {
-                            blocks.push(json!({"id": command["commandId"], "role": "user", "text": command["text"]}));
+                        match host_rejects(command, &snapshot) {
+                            Some(error) => json!({"error": error}),
+                            None => {
+                                // As a host does, a sent message becomes a transcript block.
+                                if command["type"] == "send"
+                                    && command["draftBlockId"].is_null()
+                                    && let Some(blocks) =
+                                        snapshot["session"]["blocks"].as_array_mut()
+                                {
+                                    blocks.push(json!({"id": command["commandId"], "role": "user", "text": command["text"]}));
+                                }
+                                json!({"commandId": command["commandId"], "sessionId": "host-session", "revision": 2})
+                            }
                         }
-                        json!({"commandId": command["commandId"], "sessionId": "host-session", "revision": 2})
                     }
                     _ => json!({}),
                 };
-                let body = json!({"result": result}).to_string();
+                let body = match result.get("error") {
+                    Some(_) => result.to_string(),
+                    None => json!({"result": result}).to_string(),
+                };
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
             }
         });
@@ -289,6 +298,73 @@ impl HostFixture {
         });
     }
 }
+/// The commands `host/engine.ts` refuses (`parseCommand`, and the engine's
+/// draft lookups) that a desktop could plausibly send here.
+fn host_rejects(command: &serde_json::Value, snapshot: &serde_json::Value) -> Option<&'static str> {
+    let text = |key: &str| command[key].as_str().is_some_and(|v| !v.trim().is_empty());
+    if !text("commandId") {
+        return Some("Invalid command ID");
+    }
+    if command["type"] == "create" {
+        // REMOTE_PROVIDERS and RUNTIME_MODES.
+        let providers = [
+            "codex",
+            "claude",
+            "cursor",
+            "grok",
+            "opencode",
+            "pi",
+            "omp",
+            "fx",
+            "hermes",
+            "antigravity",
+            "devin",
+        ];
+        let modes = ["supervised", "auto-accept-edits", "auto", "full-access"];
+        if !command["harness"]
+            .as_str()
+            .is_some_and(|h| providers.contains(&h))
+            || !command["runtimeMode"]
+                .as_str()
+                .is_some_and(|m| modes.contains(&m))
+        {
+            return Some("Invalid provider or permission mode");
+        }
+        if !text("projectId") {
+            return Some("Invalid project ID");
+        }
+        if !text("model") {
+            return Some("Invalid model");
+        }
+        return None;
+    }
+    if command["sessionId"] != "host-session" {
+        return Some("Invalid session ID");
+    }
+    let has_draft = |id: &serde_json::Value| {
+        snapshot["session"]["blocks"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|b| &b["id"] == id && b["draft"] == true))
+    };
+    match command["type"].as_str() {
+        Some("send" | "draft") => {
+            let attachments = command["attachments"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty());
+            let names_draft = command["type"] == "send" && !command["draftBlockId"].is_null();
+            if !command["text"].is_string() || (!text("text") && !attachments && !names_draft) {
+                return Some("Invalid prompt");
+            }
+            if names_draft && !has_draft(&command["draftBlockId"]) {
+                return Some("Draft not found");
+            }
+            None
+        }
+        Some("removeDraft") if !has_draft(&command["draftBlockId"]) => Some("Draft not found"),
+        _ => None,
+    }
+}
+
 impl Drop for HostFixture {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -536,7 +612,7 @@ fn an_app_launch_sends_its_prompt_as_the_new_remote_conversations_first_turn(
             .configure_agent(summary.id, "codex", &settings)
             .unwrap();
         store
-            .prepare_app_prompt(summary.id, "request", "Report the current branch")
+            .prepare_app_prompt(summary.id, "request", "Report the current branch", false)
             .unwrap();
         summary.has_messages = true;
         (summary, settings)
@@ -601,4 +677,135 @@ fn a_mono_send_waits_for_the_remote_conversation_to_load(cx: &mut TestAppContext
         "{commands:?}"
     );
     cx.update(|cx| assert!(!view.read(cx).mono_external_pending()));
+}
+
+/// The app quit after `sessions.start` answered `accepted: true` and before
+/// the prompt reached the host: the next load of the conversation sends it,
+/// once, and a later load does not send it again.
+#[gpui::test]
+fn a_remote_launch_left_unsent_by_a_restart_is_sent_on_load(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let summary = {
+        let store = locked(&host.store).unwrap();
+        let summary = store.create("codex", &host.summary.cwd).unwrap();
+        let settings = Settings {
+            model: Some("gpt-test".into()),
+            ..Default::default()
+        };
+        store
+            .configure_agent(summary.id, "codex", &settings)
+            .unwrap();
+        store
+            .prepare_app_prompt(summary.id, "request", "Report the current branch", false)
+            .unwrap();
+        summary
+    };
+    // No install_app_launch: the view that would have called it is gone.
+    let open = |cx: &mut TestAppContext| {
+        let view = cx.update(|cx| {
+            cx.new(|cx| {
+                let mut view = Conversation::new(summary.clone(), host.store.clone(), cx);
+                view.remote_state.client = Some(host.client.clone());
+                view.load_remote(cx);
+                view
+            })
+        });
+        host.wait(&view, cx, true);
+        view
+    };
+    let view = open(cx);
+    let commands = dispatched(&host);
+    let kinds: Vec<_> = commands
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create", "send"], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Report the current branch");
+    cx.update(|cx| {
+        let view = view.read(cx);
+        assert!(view.summary.has_messages, "{}", view.status);
+        assert!(view.input.read(cx).content.is_empty());
+    });
+    {
+        let store = locked(&host.store).unwrap();
+        assert!(store.follow_ups(summary.id).unwrap().draft.is_none());
+        assert!(!store.draft_sessions().unwrap().contains(&summary.id));
+    }
+    drop(view);
+    open(cx);
+    assert_eq!(dispatched(&host).len(), 2, "the launch was sent again");
+}
+
+/// A launch whose commands reached the outbox before the app quit is the
+/// outbox's to retry. Its leftover local prompt is dropped, not sent again.
+#[gpui::test]
+fn a_remote_launch_already_in_the_outbox_is_not_sent_twice(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let summary = {
+        let store = locked(&host.store).unwrap();
+        let summary = store.create("codex", &host.summary.cwd).unwrap();
+        store
+            .prepare_app_prompt(summary.id, "request", "Report the current branch", false)
+            .unwrap();
+        let mut remote = store.remote_session(summary.id).unwrap().unwrap();
+        remote
+            .outbox
+            .push(json!({"type":"create","commandId":"journaled"}));
+        store.save_remote_session(&remote).unwrap();
+        summary
+    };
+    let view = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut view = Conversation::new(summary.clone(), host.store.clone(), cx);
+            view.remote_state.client = Some(host.client.clone());
+            view.load_remote(cx);
+            view
+        })
+    });
+    host.wait(&view, cx, true);
+    assert!(dispatched(&host).is_empty());
+    cx.update(|cx| assert!(view.read(cx).remote_state.pending));
+    let store = locked(&host.store).unwrap();
+    assert!(store.follow_ups(summary.id).unwrap().draft.is_none());
+}
+
+/// A draft launch (`draft: true`) resumed after a restart is saved as a host
+/// draft, as it would have been, not sent.
+#[gpui::test]
+fn a_remote_draft_launch_left_unsent_is_saved_as_a_draft_on_load(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let summary = {
+        let store = locked(&host.store).unwrap();
+        let summary = store.create("codex", &host.summary.cwd).unwrap();
+        store
+            .configure_agent(
+                summary.id,
+                "codex",
+                &Settings {
+                    model: Some("gpt-test".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .prepare_app_prompt(summary.id, "request", "Draft the release notes", true)
+            .unwrap();
+        summary
+    };
+    let view = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut view = Conversation::new(summary.clone(), host.store.clone(), cx);
+            view.remote_state.client = Some(host.client.clone());
+            view.load_remote(cx);
+            view
+        })
+    });
+    host.wait(&view, cx, true);
+    let commands = dispatched(&host);
+    let kinds: Vec<_> = commands
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create", "draft"], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Draft the release notes");
 }

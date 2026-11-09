@@ -299,7 +299,7 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
         assert!(fresh);
         store.save_started_link(child.id, caller.id).unwrap();
         store
-            .prepare_app_prompt(child.id, "start", "Saved request")
+            .prepare_app_prompt(child.id, "start", "Saved request", false)
             .unwrap();
         assert!(store.draft_sessions().unwrap().contains(&child.id));
         assert!(!store
@@ -434,4 +434,94 @@ fn a_remote_read_asks_its_host_only_after_leaving_the_store_and_gives_up_in_time
     let error = reader.join().unwrap().unwrap_err();
     assert!(error.contains("did not return this session"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn deleting_a_remote_handle_removes_its_settings() {
+    // sessions.start writes these for the handle before a failure deletes it.
+    for mut store in [
+        Store::open_monocode(Path::new(":memory:")).unwrap(),
+        Store::open(Path::new(":memory:")).unwrap(),
+    ] {
+        let project = store
+            .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
+            .unwrap();
+        let caller = store.create("codex", "/project").unwrap();
+        let mut handles = Vec::new();
+        for request in ["first", "second"] {
+            let session = store.create("claude", &project.key).unwrap();
+            store
+                .configure_agent(session.id, "claude", &Default::default())
+                .unwrap();
+            store.save_started_link(session.id, caller.id).unwrap();
+            store
+                .prepare_app_prompt(session.id, request, "Prompt", true)
+                .unwrap();
+            store
+                .save_setting(&format!("mono-delivered:{}:message", session.id), "1")
+                .unwrap();
+            handles.push(session.id);
+        }
+        // A shared store answers `mono-delivered:` from the desktop's own
+        // tables, which have no row for a remote handle; check it natively.
+        let shared = store.uses_monocode_schema();
+        let keys = |id: i64| {
+            let mut keys = vec![
+                format!("remote-agent:{id}"),
+                format!("started-by:{id}"),
+                format!("follow-up:{id}"),
+                format!("app-launch-draft:{id}"),
+            ];
+            if !shared {
+                keys.push(format!("mono-delivered:{id}:message"));
+            }
+            keys
+        };
+        for key in keys(handles[0]) {
+            assert!(
+                store.setting(&key).unwrap().is_some(),
+                "{key} was not written"
+            );
+        }
+        store.delete(handles[0]).unwrap();
+        for key in keys(handles[0]) {
+            assert_eq!(store.setting(&key).unwrap(), None, "{key} was left behind");
+        }
+        for key in keys(handles[1]) {
+            assert!(
+                store.setting(&key).unwrap().is_some(),
+                "{key} of another handle was removed"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_remote_launch_prompt_is_kept_until_the_outbox_holds_it() {
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let project = store
+        .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
+        .unwrap();
+    let session = store.create("claude", &project.key).unwrap();
+    store
+        .prepare_app_prompt(session.id, "request", "Run the tests", false)
+        .unwrap();
+    // Unsent: still pending, however often it is asked.
+    for _ in 0..2 {
+        assert_eq!(
+            store.pending_remote_app_launch(session.id).unwrap(),
+            Some(("Run the tests".into(), true))
+        );
+    }
+    // Another first turn does not take the launch's prompt.
+    store
+        .finish_remote_app_launch(session.id, "Something else")
+        .unwrap();
+    assert!(store.follow_ups(session.id).unwrap().draft.is_some());
+    // Journaled: the outbox owns it, and the local copy goes.
+    let mut remote = store.remote_session(session.id).unwrap().unwrap();
+    remote.outbox.push(json!({"type":"create","commandId":"c"}));
+    store.save_remote_session(&remote).unwrap();
+    assert_eq!(store.pending_remote_app_launch(session.id).unwrap(), None);
+    assert!(store.follow_ups(session.id).unwrap().draft.is_none());
 }
