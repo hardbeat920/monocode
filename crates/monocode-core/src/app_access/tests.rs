@@ -1,6 +1,7 @@
 use super::*;
 use crate::{follow_up::State, notes::NoteUpsert};
 use std::path::Path;
+use std::time::Duration;
 
 fn model() -> Model {
     Model {
@@ -321,7 +322,15 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             .create_app_session(caller.id, "start", "different", "codex", "/project")
             .is_err());
         let page = store
-            .app_conversation(child.id, &json!({}), false, true)
+            .app_conversation(child.id)
+            .unwrap()
+            .page(
+                &no_machines(),
+                Duration::from_secs(1),
+                &json!({}),
+                false,
+                true,
+            )
             .unwrap();
         assert_eq!(page["hasDraft"], true);
         store
@@ -349,11 +358,80 @@ fn a_remote_session_reads_through_its_negative_handle_before_its_first_turn() {
             .unwrap();
         let session = store.create("claude", &project.key).unwrap();
         assert!(session.id < 0);
+        // No machine is connected: a session that has not run asks no host.
         let page = store
-            .app_conversation(session.id, &json!({}), false, false)
+            .app_conversation(session.id)
+            .unwrap()
+            .page(
+                &no_machines(),
+                Duration::from_secs(1),
+                &json!({}),
+                false,
+                false,
+            )
             .unwrap();
         assert_eq!(page["turns"], json!([]));
         assert_eq!(page["sessionId"], session.id);
         assert_eq!(page["title"], session.title);
     }
+}
+
+fn no_machines() -> std::sync::Arc<crate::remote::Connections> {
+    let dir = tempfile::tempdir().unwrap();
+    std::sync::Arc::new(crate::remote::Connections::new(dir.path()))
+}
+
+#[test]
+fn a_remote_read_asks_its_host_only_after_leaving_the_store_and_gives_up_in_time() {
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+    // A host that accepts the request and never answers.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let client = Arc::new(crate::remote::Connections::new(dir.path()));
+    client.add_test_machine("m", "env", &endpoint);
+    let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
+    let id = {
+        let db = store.lock().unwrap();
+        let project = db
+            .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
+            .unwrap();
+        let session = db.create("claude", &project.key).unwrap();
+        let mut remote = db.remote_session(session.id).unwrap().unwrap();
+        remote.session_id = Some("host-session".into());
+        db.save_remote_session(&remote).unwrap();
+        session.id
+    };
+    listener.set_nonblocking(true).unwrap();
+    let read = store.lock().unwrap().app_conversation(id).unwrap();
+    // Taking the read from the store contacts no host.
+    assert!(listener.accept().is_err());
+    let started = Instant::now();
+    let reader = std::thread::spawn({
+        let client = client.clone();
+        move || {
+            read.page(
+                &client,
+                Duration::from_millis(500),
+                &json!({}),
+                false,
+                false,
+            )
+        }
+    });
+    // The store stays free while the host is asked.
+    let mut held = Vec::new();
+    while held.is_empty() && started.elapsed() < Duration::from_secs(5) {
+        if let Ok((stream, _)) = listener.accept() {
+            held.push(stream);
+        }
+        assert!(store.try_lock().is_ok());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!held.is_empty(), "the host was never asked");
+    let error = reader.join().unwrap().unwrap_err();
+    assert!(error.contains("did not return this session"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

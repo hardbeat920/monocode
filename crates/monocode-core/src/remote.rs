@@ -52,6 +52,21 @@ impl Connections {
         }
         self.tunnels.clear();
     }
+    /// Records a machine reached directly at `endpoint`, as `connect` would
+    /// after pairing, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) fn add_test_machine(&self, id: &str, environment_id: &str, endpoint: &str) {
+        let mut machines = read(&self.store_path()).unwrap();
+        machines.push(StoredMachine {
+            id: id.into(),
+            name: id.into(),
+            endpoint: endpoint.into(),
+            environment_id: environment_id.into(),
+            token: "t".into(),
+            ssh: None,
+        });
+        write(&self.store_path(), &machines).unwrap();
+    }
     fn job(&self, id: &str) -> Result<Arc<Job>, String> {
         self.jobs
             .lock()

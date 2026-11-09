@@ -66,12 +66,11 @@ impl RemoteSession {
     }
     /// The host's current snapshot, with attachment paths qualified. A
     /// conversation that has not sent its first turn has none yet.
-    pub fn host_snapshot(&self) -> Result<Option<Value>, String> {
+    pub fn host_snapshot(&self, client: &Connections) -> Result<Option<Value>, String> {
         let Some(id) = self.session_id.as_deref() else {
             return Ok(None);
         };
-        let client = crate::remote::default_connections()?;
-        let machine = self.machine(&client)?;
+        let machine = self.machine(client)?;
         let mut snapshot = client.load_session(&machine.id, id, None)?;
         crate::remote::attachments::qualify_snapshot(
             &mut snapshot,

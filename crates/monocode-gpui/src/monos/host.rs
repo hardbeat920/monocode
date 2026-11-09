@@ -481,22 +481,33 @@ impl Monos {
                 return;
             }
             "sessions.list" | "sessions.read" => {
-                let views = self
+                let (views, remote) = self
                     .owner
                     .upgrade()
-                    .map(|owner| owner.read(cx).mono_session_views(cx))
+                    .map(|owner| {
+                        let owner = owner.read(cx);
+                        (
+                            owner.mono_session_views(cx),
+                            Some(owner.remote_connections()),
+                        )
+                    })
                     .unwrap_or_default();
                 self.call_work(call,target,move|store|{
                     let db=locked(&store)?;let all=db.sessions()?;
                     let sessions:Vec<_>=all.iter().filter(|s|!hidden.contains(&s.id)&&s.cwd==project).collect();
-                    let value=if action=="sessions.list" {
+                    if action=="sessions.list" {
                         let drafts=db.draft_sessions()?;let metadata=db.mobile_session_metadata()?;
-                        json!({"cwd":project,"sessions":sessions.iter().map(|s|json!({"id":s.id,"sessionId":s.id,"title":s.title,"harness":s.provider,"model":metadata.get(&s.id).and_then(|m|m.model.clone()),"busy":views.iter().any(|v|v.id==s.id&&v.busy),"hasDraft":drafts.contains(&s.id),"archived":s.archived})).collect::<Vec<_>>()})
-                    }else{
-                        let session=if let Some(id)=input["sessionId"].as_str(){db.resolve_session_id(id)?}else{id(&input,"sessionId")?};
-                        if !sessions.iter().any(|s|s.id==session){return Err("Session is outside the assigned project".into());}
-                        db.app_conversation(session,&input,views.iter().any(|v|v.id==session&&v.busy),db.draft_sessions()?.contains(&session))?
-                    };
+                        return Ok((json!({"cwd":project,"sessions":sessions.iter().map(|s|json!({"id":s.id,"sessionId":s.id,"title":s.title,"harness":s.provider,"model":metadata.get(&s.id).and_then(|m|m.model.clone()),"busy":views.iter().any(|v|v.id==s.id&&v.busy),"hasDraft":drafts.contains(&s.id),"archived":s.archived})).collect::<Vec<_>>()}),Effect::None));
+                    }
+                    let session=if let Some(id)=input["sessionId"].as_str(){db.resolve_session_id(id)?}else{id(&input,"sessionId")?};
+                    if !sessions.iter().any(|s|s.id==session){return Err("Session is outside the assigned project".into());}
+                    let draft=db.draft_sessions()?.contains(&session);
+                    let read=db.app_conversation(session)?;
+                    // Release the store before a remote session's host is
+                    // asked for its blocks.
+                    drop(db);
+                    let remote=remote.ok_or("The window is closing")?;
+                    let value=read.page(&remote,monocode_core::store::REMOTE_READ_TIMEOUT,&input,views.iter().any(|v|v.id==session&&v.busy),draft)?;
                     Ok((value,Effect::None))
                 },cx);
                 return;

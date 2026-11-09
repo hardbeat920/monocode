@@ -408,13 +408,21 @@ impl Shell {
                         .get(&id)
                         .is_some_and(|v| v.read(cx).has_saved_draft())
                         || self.draft_sessions.contains(&id);
+                    let remote = self.remote.clone();
                     self.app_background(
                         call,
                         move |store| {
-                            Ok((
-                                locked(&store)?.app_conversation(id, &input, busy, draft)?,
-                                Effect::None,
-                            ))
+                            // Release the store before a remote session's
+                            // host is asked for its blocks.
+                            let read = locked(&store)?.app_conversation(id)?;
+                            let page = read.page(
+                                &remote,
+                                monocode_core::store::REMOTE_READ_TIMEOUT,
+                                &input,
+                                busy,
+                                draft,
+                            )?;
+                            Ok((page, Effect::None))
                         },
                         cx,
                     );

@@ -7,6 +7,7 @@ mod monos;
 mod notes;
 mod remote;
 mod remote_legacy;
+pub use app_access::{AppConversation, REMOTE_READ_TIMEOUT};
 pub use remote::{RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_metadata;
@@ -709,7 +710,8 @@ impl Store {
     }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
         if let Some(remote) = self.remote_session(session)? {
-            return match remote.host_snapshot()? {
+            let client = crate::remote::default_connections()?;
+            return match remote.host_snapshot(&client)? {
                 Some(snapshot) => {
                     Self::project_remote_history(&snapshot).map(|(history, _)| history)
                 }
