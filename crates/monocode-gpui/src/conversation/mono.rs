@@ -30,6 +30,23 @@ pub(crate) struct QueueChanged {
 }
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
+/// The most of a queued message's error the Mono keeps and shows: its first
+/// line, cut to fit. A failure report must never carry a whole reply, nor
+/// grow the queue card past its Retry and Discard buttons.
+pub(crate) const QUEUE_ERROR_LIMIT: usize = 240;
+pub(crate) fn short_error(error: &str) -> String {
+    let line = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Failed");
+    if line.chars().count() <= QUEUE_ERROR_LIMIT {
+        line.into()
+    } else {
+        let cut: String = line.chars().take(QUEUE_ERROR_LIMIT - 1).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
 impl Conversation {
     #[cfg(test)]
     pub(crate) fn queue_test_focus(&self, id: &str, index: usize) -> gpui::FocusHandle {
@@ -736,14 +753,23 @@ impl Conversation {
                                                     .bg(content(0.04))
                                                     .text_size(px(13.))
                                                     .text_color(content(0.6))
-                                                    .child(if message.internal {
-                                                        "Completion update".into()
-                                                    } else {
-                                                        message.text.clone()
-                                                    })
+                                                    // Title and buttons share the first row, so no
+                                                    // length of error can push the buttons away.
+                                                    .child(
+                                                        div()
+                                                            .debug_selector(|| "mono-internal-queue-header".into())
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_2()
+                                                            .child(div().flex_1().min_w_0().truncate().child(if message.internal {
+                                                                SharedString::from("Completion update")
+                                                            } else {
+                                                                message.text.clone().into()
+                                                            }))
                                                     .when(message.error.is_some(), |d| {
                                                         d.child(
                                                             div()
+                                                                .flex_none()
                                                                 .flex()
                                                                 .gap_2()
                                                                 .child(
@@ -783,15 +809,20 @@ impl Conversation {
                                                                     )),
                                                                 ),
                                                         )
-                                                    })
+                                                    }))
                                                     .child(
                                                         div()
+                                                            .debug_selector(|| "mono-internal-queue-error".into())
                                                             .text_size(px(11.))
+                                                            .line_height(px(16.))
+                                                            .max_h(px(48.))
+                                                            .overflow_hidden()
                                                             .text_color(content(0.4))
                                                             .child(
                                                                 message
                                                                     .error
-                                                                    .clone()
+                                                                    .as_deref()
+                                                                    .map(short_error)
                                                                     .unwrap_or_else(|| {
                                                                         "Pending".into()
                                                                     }),

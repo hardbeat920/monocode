@@ -1313,6 +1313,76 @@ fn an_unsaved_message_still_holds_back_the_messages_behind_it(cx: &mut TestAppCo
         );
     });
 }
+#[test]
+fn queue_errors_keep_the_first_line_and_fit_the_card() {
+    use crate::conversation::{MONO_QUEUE_ERROR_LIMIT, mono_short_error};
+    assert_eq!(
+        mono_short_error("disk is full · Saving failed\nThe whole reply"),
+        "disk is full · Saving failed"
+    );
+    assert_eq!(mono_short_error("\n  \nLate reason\nreply"), "Late reason");
+    assert_eq!(mono_short_error(""), "Failed");
+    let long = mono_short_error(&"é".repeat(5_000));
+    assert_eq!(long.chars().count(), MONO_QUEUE_ERROR_LIMIT);
+    assert!(long.ends_with('…'));
+}
+#[gpui::test]
+fn a_long_failure_keeps_retry_and_discard_on_screen(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    let error = format!(
+        "database or disk is full · Saving failed: database or disk is full {}\n{}",
+        "detail ".repeat(200),
+        "A long reply line.\n".repeat(400)
+    );
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(queued(
+                    "completion",
+                    true,
+                    Some(&error),
+                ));
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let viewport = s
+        .window
+        .update(visual, |_, w, _| w.viewport_size())
+        .unwrap();
+    let card = visual.debug_bounds("mono-internal-queue").unwrap();
+    let header = visual.debug_bounds("mono-internal-queue-header").unwrap();
+    let text = visual.debug_bounds("mono-internal-queue-error").unwrap();
+    assert!(
+        text.size.height <= px(48.),
+        "error text is clamped: {text:?}"
+    );
+    assert!(
+        card.size.height <= px(120.),
+        "the card stays compact: {card:?}"
+    );
+    for button in [
+        "mono-queue-retry-completion",
+        "mono-queue-discard-completion",
+    ] {
+        let bounds = visual.debug_bounds(button).unwrap();
+        assert!(
+            bounds.top() >= px(0.) && bounds.bottom() <= viewport.height,
+            "{button} {bounds:?} in viewport {viewport:?}"
+        );
+        assert!(
+            bounds.top() >= header.top() && bounds.bottom() <= header.bottom(),
+            "{button} sits in the card's header row, above the error"
+        );
+        assert!(bounds.bottom() <= text.top());
+    }
+}
+
 #[gpui::test]
 fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
     let s = setup(cx);
@@ -1519,8 +1589,13 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
             .iter()
             .any(|m| m.id == "first" && m.error.is_none())
     }));
+    // A card's error is clamped, so overflow the list with more failures to
+    // give the keyboard something to scroll.
+    let fillers = ["filler-0", "filler-1", "filler-2", "filler-3"];
     s.manager.update(visual, |m, cx| {
-        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Long failure. ".repeat(500));
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox[0].error = Some("Long failure. ".repeat(500));
+        outbox.extend(fillers.map(|id| queued(id, true, Some("Delivery failed"))));
         m.configure_chat(&s.id, cx);
     });
     visual.run_until_parked();
@@ -1544,6 +1619,10 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
         retry.top() < list.top(),
         "test must scroll before clearing the queue"
     );
+    for id in fillers {
+        s.manager
+            .update(visual, |m, cx| m.queue_changed(&s.id, id, true, cx));
+    }
     s.manager
         .update(visual, |m, cx| m.queue_changed(&s.id, "first", true, cx));
     visual.run_until_parked();

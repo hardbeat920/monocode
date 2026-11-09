@@ -45,8 +45,12 @@ use gpui::{
 pub(crate) use mobile::{
     Waiting as MobileWaiting, mobile_access_modes, usage_state as mobile_usage_state,
 };
+#[cfg(test)]
+pub(crate) use mono::QUEUE_ERROR_LIMIT as MONO_QUEUE_ERROR_LIMIT;
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
+#[cfg(test)]
+pub(crate) use mono::short_error as mono_short_error;
 use monocode_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
     catalog::{self, Model},
