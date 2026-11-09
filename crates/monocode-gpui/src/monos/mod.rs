@@ -1017,12 +1017,19 @@ impl Monos {
             return;
         };
         let busy = view.read(cx).busy;
+        // A failed message waits for Retry or Discard; the messages behind it
+        // still go out in order. A sendable message that isn't saved yet
+        // holds the rest back, so nothing overtakes it.
         let Some(message) = self
             .roster
             .get(id)
-            .and_then(|m| m.outbox.iter().find(|message| !busy || !message.internal))
+            .and_then(|m| {
+                m.outbox
+                    .iter()
+                    .find(|message| message.error.is_none() && (!busy || !message.internal))
+            })
             .cloned()
-            .filter(|m| m.error.is_none() && self.persisted_messages.contains(&m.id))
+            .filter(|m| self.persisted_messages.contains(&m.id))
         else {
             return;
         };

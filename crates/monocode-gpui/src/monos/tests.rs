@@ -1253,6 +1253,66 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
     );
 }
 
+fn queued(id: &str, internal: bool, error: Option<&str>) -> Message {
+    Message {
+        id: id.into(),
+        text: format!("{id} text"),
+        sent_at: None,
+        internal,
+        error: error.map(Into::into),
+        attachments: Vec::new(),
+    }
+}
+#[gpui::test]
+fn a_failed_message_waits_without_blocking_the_queue_behind_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        let chat = m.chats[&s.id].clone();
+        chat.update(cx, |chat, _| {
+            // Fails at startup without launching a real provider.
+            chat.summary.provider = "fixture".into();
+        });
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox.push(queued(
+            "failed-update",
+            true,
+            Some("Saving failed: disk is full"),
+        ));
+        outbox.push(queued("failed-user", false, Some("Delivery failed")));
+        outbox.push(queued("user", false, None));
+        m.persisted_messages
+            .extend(["failed-update", "failed-user", "user"].map(String::from));
+        m.dispatch(&s.id, cx);
+        assert_eq!(
+            m.inflight.get(&s.id).map(|sent| sent.id.as_str()),
+            Some("user"),
+            "the user's message goes out past the failed ones"
+        );
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert!(
+            outbox[0].error.is_some() && outbox[1].error.is_some(),
+            "failed messages keep waiting for Retry or Discard"
+        );
+    });
+}
+#[gpui::test]
+fn an_unsaved_message_still_holds_back_the_messages_behind_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| chat.summary.provider = "fixture".into());
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox.push(queued("failed", true, Some("Delivery failed")));
+        outbox.push(queued("unsaved", false, None));
+        outbox.push(queued("later", false, None));
+        m.persisted_messages
+            .extend(["failed", "later"].map(String::from));
+        m.dispatch(&s.id, cx);
+        assert!(
+            !m.inflight.contains_key(&s.id),
+            "nothing overtakes a message that isn't saved yet"
+        );
+    });
+}
 #[gpui::test]
 fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
     let s = setup(cx);
