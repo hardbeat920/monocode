@@ -214,7 +214,7 @@ export function NativeTranscript({
       if (action.type === "error" && action.notice) showError(action.notice);
       else if (action.type === "handoff" && action.turnId && action.handoffFrom) handoff?.(action.turnId, action.handoffFrom);
       else if (action.type === "metrics" && action.metrics) setMetrics(action);
-      else if (action.type === "copy" && action.copyText) {
+      else if (action.type === "copy" && typeof action.copyText === "string") {
         void Clipboard.setStringAsync(action.copyText)
           .then(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light))
           .catch(() => {});
