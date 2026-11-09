@@ -237,6 +237,7 @@ impl Store {
                     notify_on_complete: false,
                     completed: true,
                     dismissed: false,
+                    adopted: false,
                 });
             }
         }

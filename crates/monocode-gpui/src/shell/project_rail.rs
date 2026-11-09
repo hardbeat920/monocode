@@ -128,7 +128,7 @@ impl ProjectRailDrag {
 fn rail_shift_key(id: &str, group: bool) -> String {
     format!("{}:{id}", if group { "group" } else { "project" })
 }
-struct ProjectTooltip(String);
+pub(super) struct ProjectTooltip(pub(super) String);
 impl Render for ProjectTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()

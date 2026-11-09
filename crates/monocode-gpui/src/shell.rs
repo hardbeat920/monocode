@@ -15,6 +15,7 @@ mod image_lightbox_tests;
 mod layout;
 mod live_agents;
 mod mobile_host;
+mod mono_origin;
 mod mono_panes;
 pub(crate) mod monos;
 mod new_chat_choice;
@@ -6163,6 +6164,7 @@ impl Shell {
             mark.update(cx, |mark, cx| mark.set_size(side, cx));
         }
         let work_item = self.work_item_badge(id, compact, cx);
+        let origin = self.origin_tile(id, if compact { side } else { 18. }, cx);
         let has_badges = work_item.is_some()
             || mode.is_some()
             || self.automation_state.session_automations.contains_key(&id);
@@ -6317,6 +6319,7 @@ impl Shell {
                 .items_center()
                 .gap(px(if nested { 6. } else { 8. }))
                 .child(mark)
+                .children(origin)
                 .child(title)
                 .when(has_badges, |d| d.child(badges))
                 .child(suffix)
@@ -6337,6 +6340,7 @@ impl Shell {
                         .when(pinned, |d| {
                             d.child(icon("pin", 12.).text_color(content(0.45)))
                         })
+                        .children(origin)
                         .child(title)
                         .child(suffix),
                 )

@@ -137,6 +137,7 @@ impl Monos {
                                     ),
                                     completed: false,
                                     dismissed: false,
+                                    adopted: false,
                                 });
                             }
                             let _ = this.owner.update(cx, |owner, cx| {
@@ -484,6 +485,7 @@ impl Monos {
                                             notify_on_complete: true,
                                             completed: false,
                                             dismissed: false,
+                                            adopted: true,
                                         });
                                     }
                                 }
