@@ -132,13 +132,22 @@ pub(crate) struct Monos {
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
     menu_anchor: Anchor,
-    documents: HashMap<String, Entity<crate::transcript::TranscriptView>>,
-    html_documents: HashMap<String, Entity<html::Html>>,
+    /// Open readers, each with the body it was built from. A reader is only
+    /// rebuilt when its own body changes, so background refreshes of a Mono's
+    /// work keep its selection, scroll position and focus.
+    documents: HashMap<String, (String, Entity<crate::transcript::TranscriptView>)>,
+    html_documents: HashMap<String, (String, Entity<html::Html>)>,
     /// Native visuals the Mono published in its chat, opened as documents.
-    visual_documents: HashMap<String, Entity<crate::visuals::VisualView>>,
+    visual_documents: HashMap<String, (String, Entity<crate::visuals::VisualView>)>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
-    activity: Option<(String, Entity<crate::transcript::TranscriptView>)>,
+    /// The activity reader, its turn and the rows it shows. New rows of the
+    /// same turn are patched in, so a live turn keeps the reader's selection.
+    activity: Option<(
+        usize,
+        Vec<monocode_core::transcript::Row>,
+        Entity<crate::transcript::TranscriptView>,
+    )>,
     activity_turn: Option<usize>,
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
@@ -250,7 +259,7 @@ impl Monos {
         }
     }
     pub(crate) fn hide_html(&self, cx: &App) {
-        for view in self.html_documents.values() {
+        for (_, view) in self.html_documents.values() {
             view.read(cx).hide();
         }
     }

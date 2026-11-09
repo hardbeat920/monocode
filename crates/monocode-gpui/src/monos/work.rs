@@ -58,10 +58,9 @@ impl Monos {
             let _ = this.update(cx, |this, cx| {
                 this.work.loading_documents.remove(&id);
                 match result {
+                    // The open reader is rebuilt only if this body differs.
                     Ok(Some(document)) => {
                         this.work.documents.insert(id.clone(), document);
-                        this.documents.remove(&id);
-                        this.html_documents.remove(&id);
                     }
                     Ok(None) => {
                         this.forget_document(&id, cx);
@@ -75,6 +74,12 @@ impl Monos {
             });
         })
         .detach();
+    }
+    /// Let the next `refresh_work` read the store without waiting out its
+    /// once-a-second throttle.
+    #[cfg(test)]
+    pub(super) fn expire_work_check(&mut self) {
+        self.work.checked.clear();
     }
     pub(super) fn refresh_work(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.work.pending.contains(id)
@@ -131,22 +136,37 @@ impl Monos {
                 else {
                     return;
                 };
-                let old_documents = mono.desktop_document_ids.clone();
+                let old_documents: Vec<String> =
+                    mono.documents.iter().map(|d| d.id.clone()).collect();
                 let changed = mono.apply_work(documents, launches).unwrap_or(false);
                 if changed {
-                    // Replace readers whose body changed while they were open.
-                    for id in old_documents
+                    // Readers compare their body on render and rebuild only
+                    // when it changed, so drop just the readers whose
+                    // document is gone. Any refresh of this Mono's work can
+                    // change a desktop body, so forget the loaded bodies:
+                    // the open one is reloaded in place, the rest on open.
+                    let open = (this.active.as_deref() == Some(&id))
+                        .then(|| match &this.route {
+                            Some(Route::Document(document)) => Some(document.clone()),
+                            _ => None,
+                        })
+                        .flatten();
+                    for gone in old_documents
+                        .iter()
+                        .filter(|old| !mono.documents.iter().any(|d| &d.id == *old))
+                    {
+                        this.documents.remove(gone);
+                        this.html_documents.remove(gone);
+                        this.visual_documents.remove(gone);
+                    }
+                    for loaded in old_documents
                         .iter()
                         .chain(mono.documents.iter().map(|d| &d.id))
+                        .filter(|loaded| open.as_ref() != Some(*loaded))
                     {
-                        this.documents.remove(id);
-                        this.html_documents.remove(id);
-                        this.visual_documents.remove(id);
-                        this.work.documents.remove(id);
+                        this.work.documents.remove(loaded);
                     }
-                    if this.active.as_deref() == Some(&id)
-                        && let Some(Route::Document(document)) = this.route.clone()
-                    {
+                    if let Some(document) = open {
                         this.open_document(&document, cx);
                     }
                     this.configure_chat(&id, cx);

@@ -228,7 +228,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         advance(visual, 1000);
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         let reader = s.manager.read_with(visual, |m, cx| match kind {
-            "html" => m.html_documents["slide-document"].entity_id(),
+            "html" => m.html_documents["slide-document"].1.entity_id(),
             "session" => m
                 .owner
                 .upgrade()
@@ -237,7 +237,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
                 .mono_session_entity(session)
                 .unwrap()
                 .entity_id(),
-            _ => m.documents["slide-document"].entity_id(),
+            _ => m.documents["slide-document"].1.entity_id(),
         });
         assert_eq!(
             s.manager
@@ -274,7 +274,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         s.manager.read_with(visual, |m, cx| {
             let reopened = match kind {
-                "html" => m.html_documents["slide-document"].entity_id(),
+                "html" => m.html_documents["slide-document"].1.entity_id(),
                 "session" => m
                     .owner
                     .upgrade()
@@ -283,7 +283,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
                     .mono_session_entity(session)
                     .unwrap()
                     .entity_id(),
-                _ => m.documents["slide-document"].entity_id(),
+                _ => m.documents["slide-document"].1.entity_id(),
             };
             assert_eq!(reader, reopened);
         });
@@ -2552,4 +2552,269 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     search(visual, "mono-document-search", "release");
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
+}
+
+const DOCUMENT_BODY: &str = "# QA note\n\nSelect this text.\n\nThen keep reading.";
+/// Drag across the whole prose row reading `text` with real mouse events,
+/// then wait out the selection menu's delay.
+fn drag_select(
+    visual: &mut gpui::VisualTestContext,
+    reader: &Entity<crate::transcript::TranscriptView>,
+    text: &str,
+) {
+    let key = reader
+        .read_with(visual, |view, _| view.prose_key(text))
+        .expect("the document renders this paragraph");
+    let selector: &'static str =
+        Box::leak(format!("document-prose-{}-{}", key.0, key.1).into_boxed_str());
+    let row = visual
+        .debug_bounds(selector)
+        .expect("the paragraph is on screen");
+    let (start, end) = (
+        gpui::point(row.left() + px(1.), row.bottom() - px(8.)),
+        gpui::point(row.right() - px(1.), row.bottom() - px(8.)),
+    );
+    visual.simulate_mouse_down(start, MouseButton::Left, Default::default());
+    visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
+    visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
+    settle_selection_menu(visual);
+}
+fn settle_selection_menu(visual: &mut gpui::VisualTestContext) {
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(400));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+}
+/// The selection menu is open with Copy alone, and Cmd+C copies `expected`.
+#[track_caller]
+fn assert_copy_menu_and_cmd_c(visual: &mut gpui::VisualTestContext, expected: &str) {
+    assert!(
+        visual.debug_bounds("selection-copy").is_some(),
+        "the selection menu offers Copy"
+    );
+    assert!(
+        visual.debug_bounds("selection-chat").is_none()
+            && visual.debug_bounds("selection-note").is_none(),
+        "documents leave out the conversation actions"
+    );
+    visual.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into())));
+    visual.simulate_keystrokes("cmd-c");
+    visual.run_until_parked();
+    assert_eq!(
+        visual
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(expected),
+        "Cmd+C copies the selection"
+    );
+}
+
+#[gpui::test]
+fn document_text_drag_selects_and_copies_from_the_menu_and_cmd_c(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_reduce_motion(true);
+        crate::input::bind(cx);
+    });
+    let s = setup(cx);
+    s.window
+        .update(cx, |_, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.settings = None;
+                m.roster
+                    .get_mut(&s.id)
+                    .unwrap()
+                    .documents
+                    .push(mono::Document {
+                        id: "qa-note".into(),
+                        kind: "markdown".into(),
+                        title: "QA note".into(),
+                        summary: String::new(),
+                        body: DOCUMENT_BODY.into(),
+                        created_at: 1,
+                        updated_at: 1,
+                    });
+                m.card_action(
+                    &s.id,
+                    &json!({"type":"document", "documentId":"qa-note"}),
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let reader = s
+        .manager
+        .read_with(visual, |m, _| m.documents["qa-note"].1.clone());
+    drag_select(visual, &reader, "Select this text.");
+    assert_copy_menu_and_cmd_c(visual, "Select this text.");
+
+    // The menu's Copy writes the same text.
+    visual.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into())));
+    let copy = visual.debug_bounds("selection-copy").unwrap().center();
+    visual.simulate_click(copy, Default::default());
+    visual.run_until_parked();
+    assert_eq!(
+        visual
+            .update(|_, cx| cx.read_from_clipboard())
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("Select this text.")
+    );
+}
+
+#[gpui::test]
+fn document_selection_survives_unrelated_shared_store_writes(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_reduce_motion(true);
+        crate::input::bind(cx);
+    });
+    let dir = std::env::temp_dir().join(format!("native-monos-{}", mono::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("monocode.db");
+    let project = dir.to_string_lossy().to_string();
+    let db = Store::open_monocode(&path).unwrap();
+    let session = db.create("codex", &project).unwrap();
+    let original = db.persisted_session_id(session.id).unwrap();
+    let mut roster = Roster::default();
+    roster.monos.push(Mono {
+        id: "desk-mono".into(),
+        session_id: Some(session.id),
+        name: "Desk".into(),
+        projects: vec![project.clone()],
+        ..Default::default()
+    });
+    roster.save(&db).unwrap();
+    let summaries = db.sessions().unwrap();
+    // The Tauri app writes the same database through its own connection.
+    let tauri = rusqlite::Connection::open(&path).unwrap();
+    let note = |id: &str, body: &str, updated: i64| {
+        tauri
+            .execute(
+                "INSERT INTO notes(id,slug,title,body,tags_json,created_at,updated_at,content_kind,artifact_kind)
+                 VALUES(?1,?1,?1,?2,'[]',10,?3,'artifact','document')
+                 ON CONFLICT(id) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at",
+                rusqlite::params![id, body, updated],
+            )
+            .unwrap();
+    };
+    let cards = |ids: &[&str], updated: i64| {
+        let cards: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({"id":id,"kind":"document","title":id,"summary":""}))
+            .collect();
+        tauri
+            .execute(
+                "UPDATE sessions SET blocks_json=?2, updated_at=?3 WHERE id=?1",
+                rusqlite::params![
+                    original,
+                    json!([{"id":"user","role":"user","text":"Write it","artifactCards":cards}])
+                        .to_string(),
+                    updated
+                ],
+            )
+            .unwrap();
+    };
+    note("desk-note", DOCUMENT_BODY, 20);
+    cards(&["desk-note"], 100);
+
+    let store = Arc::new(Mutex::new(db));
+    let database = store.clone();
+    let cwd = project.clone();
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(database, summaries, cwd, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let manager = window
+        .update(cx, |shell, window, cx| {
+            shell.workspace.right_panel_open = true;
+            let manager = shell.mono_manager();
+            manager.update(cx, |m, cx| m.open("desk-mono", window, cx));
+            manager
+        })
+        .unwrap();
+    cx.run_until_parked();
+    // Opening reads the work once; read it again past the throttle so the
+    // desktop document is listed before the test opens it.
+    cx.update(|cx| {
+        manager.update(cx, |m, cx| {
+            m.expire_work_check();
+            m.refresh_work("desk-mono", cx);
+        })
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |_, _, cx| {
+            manager.update(cx, |m, cx| {
+                m.settings = None;
+                assert!(
+                    m.current()
+                        .unwrap()
+                        .documents
+                        .iter()
+                        .any(|d| d.id == "desk-note"),
+                    "the desktop document is listed"
+                );
+                m.card_action(
+                    "desk-mono",
+                    &json!({"type":"document", "documentId":"desk-note"}),
+                    cx,
+                );
+            })
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let reader = manager.read_with(visual, |m, _| m.documents["desk-note"].1.clone());
+    drag_select(visual, &reader, "Select this text.");
+    assert_copy_menu_and_cmd_c(visual, "Select this text.");
+
+    let refresh = |visual: &mut gpui::VisualTestContext| {
+        manager.update(visual, |m, cx| {
+            m.expire_work_check();
+            m.refresh_work("desk-mono", cx);
+        });
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+    };
+    // Another document arrives from the desktop app: this one is untouched.
+    note("other-note", "Something else.", 40);
+    cards(&["desk-note", "other-note"], 200);
+    refresh(visual);
+    assert_eq!(
+        manager.read_with(visual, |m, _| m.current().unwrap().documents.len()),
+        2,
+        "the write landed"
+    );
+    assert_copy_menu_and_cmd_c(visual, "Select this text.");
+    manager.read_with(visual, |m, _| {
+        assert_eq!(
+            m.documents["desk-note"].1.entity_id(),
+            reader.entity_id(),
+            "an unrelated refresh keeps the open reader"
+        );
+    });
+    // A plain chat-side save that changes no document keeps it too.
+    manager.update(visual, |m, cx| m.refresh_cards(cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert_copy_menu_and_cmd_c(visual, "Select this text.");
+
+    // When the document's own text changes, the reader shows the new text.
+    note("desk-note", "# QA note\n\nEdited elsewhere.", 60);
+    cards(&["desk-note", "other-note"], 300);
+    refresh(visual);
+    let edited = manager.read_with(visual, |m, _| m.documents["desk-note"].1.clone());
+    assert_ne!(edited.entity_id(), reader.entity_id());
+    assert!(
+        edited
+            .read_with(visual, |view, _| view.prose_key("Edited elsewhere."))
+            .is_some()
+    );
 }

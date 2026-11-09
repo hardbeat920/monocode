@@ -121,7 +121,11 @@ impl Conversation {
             && reader.text != plan.text
         {
             reader.text = plan.text.clone();
-            reader.view = cx.new(|cx| TranscriptView::document(plan.text.clone(), cx));
+            // Patch the open reader so a streaming plan keeps its selection.
+            let text = plan.text.clone();
+            reader
+                .view
+                .update(cx, |view, cx| view.set_document_text(text, cx));
         }
     }
     pub(super) fn remote_plan_request(

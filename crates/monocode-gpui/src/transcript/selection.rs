@@ -32,6 +32,9 @@ struct State {
     quote: bool,
     drag: Option<Drag>,
     menu: Option<Point<Pixels>>,
+    /// The selected text, read once when the menu opens rather than on every
+    /// frame it stays open. Dropped when the rows change underneath it.
+    menu_text: Option<SharedString>,
     layouts: HashMap<((usize, usize), usize, usize), Fragment>,
 }
 struct Fragment {
@@ -77,7 +80,11 @@ impl Selection {
         state.head = None;
         state.drag = None;
         state.menu = None;
+        state.menu_text = None;
         state.layouts.clear();
+    }
+    pub(super) fn forget_text(&self) {
+        self.0.borrow_mut().menu_text = None;
     }
     pub(super) fn begin_frame(&self) {
         self.0.borrow_mut().layouts.clear();
@@ -483,16 +490,28 @@ impl TranscriptView {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(MENU_DELAY).await;
             let _ = this.update(cx, |this, cx| {
+                let text = this.selected_text();
                 let mut state = this.selection.0.borrow_mut();
                 if state.drag.is_some() || state.anchor != anchor || state.head != head {
                     return;
                 }
+                state.menu_text = text.map(SharedString::from);
                 state.menu = Some(menu_anchor(&state).unwrap_or(fallback));
                 drop(state);
                 cx.notify();
             });
         })
         .detach();
+    }
+    /// The key of the prose row reading `text`, for tests that drag across it.
+    #[cfg(test)]
+    pub(crate) fn prose_key(&self, text: &str) -> Option<(usize, usize)> {
+        self.rows
+            .iter()
+            .find(|row| {
+                matches!(&row.body, Body::Markdown(md) if crate::markdown::selection_text(md) == text)
+            })
+            .map(|row| row.key)
     }
     pub(super) fn selected_text(&self) -> Option<String> {
         let state = self.selection.0.borrow();
@@ -546,8 +565,16 @@ impl TranscriptView {
         let position = state.menu?;
         let quote = state.quote;
         let response = state.response;
+        let cached = state.menu_text.clone();
         drop(state);
-        let text = self.selected_text()?;
+        let text = match cached {
+            Some(text) => text,
+            None => {
+                let text = SharedString::from(self.selected_text()?);
+                self.selection.0.borrow_mut().menu_text = Some(text.clone());
+                text
+            }
+        };
         let copy = text.clone();
         let note = text.clone();
         let turn = self
@@ -558,6 +585,7 @@ impl TranscriptView {
         let button = |id: &'static str, label: &'static str, glyph: &'static str| {
             div()
                 .id(id)
+                .debug_selector(move || id.into())
                 .role(Role::Button)
                 .aria_label(label)
                 .flex()
@@ -584,7 +612,7 @@ impl TranscriptView {
             .child(
                 button("selection-copy", "Copy", "copy").on_click(cx.listener(
                     move |_, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.to_string()))
                     },
                 )),
             )
@@ -594,11 +622,13 @@ impl TranscriptView {
                         move |this, _, window, cx| {
                             if this.mono {
                                 cx.emit(MonoResponseAction::Quote {
-                                    text: text.clone(),
+                                    text: text.to_string(),
                                     window: window.window_handle(),
                                 })
                             } else {
-                                cx.emit(ResponseRequest::QuoteSelection { text: text.clone() })
+                                cx.emit(ResponseRequest::QuoteSelection {
+                                    text: text.to_string(),
+                                })
                             }
                             this.selection.clear();
                             cx.notify();
@@ -613,7 +643,7 @@ impl TranscriptView {
                             if this.note_pending.insert(turn) {
                                 cx.emit(ResponseRequest::SaveNote {
                                     turn,
-                                    text: note.clone(),
+                                    text: note.to_string(),
                                     selection: true,
                                 });
                                 cx.notify()
@@ -704,28 +734,115 @@ mod tests {
         assert_eq!(snap("e\u{301}🙂", 4), 3);
         assert_eq!(word("hello café", 7), 6..11);
     }
+    /// Drag across the rendered prose row reading `text`.
+    fn drag(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<TranscriptView>, text: &str) {
+        let key = view
+            .read_with(cx, |view, _| view.prose_key(text))
+            .expect("the paragraph is rendered");
+        let selector: &'static str =
+            Box::leak(format!("document-prose-{}-{}", key.0, key.1).into_boxed_str());
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "the paragraph is on screen"
+        );
+        // The text itself, inside any indent its row draws around it.
+        let row = view.read_with(cx, |view, _| {
+            let state = view.selection.0.borrow();
+            state
+                .layouts
+                .values()
+                .find(|fragment| fragment.row == key)
+                .expect("the paragraph is selectable")
+                .layout
+                .bounds()
+        });
+        let y = row.center().y;
+        let (start, end) = (
+            gpui::point(row.left() + px(1.), y),
+            gpui::point(row.right() - px(1.), y),
+        );
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        cx.run_until_parked();
+    }
+    fn row(role: &str, text: &str) -> Row {
+        Row {
+            role: role.into(),
+            text: text.into(),
+            first: true,
+            sent_at: None,
+        }
+    }
     #[gpui::test]
-    fn documents_are_selectable_and_copy_without_chat_actions(cx: &mut TestAppContext) {
-        let view =
-            cx.new(|cx| TranscriptView::document("# QA note\n\nSelect **this** text.".into(), cx));
+    fn documents_select_with_the_mouse_and_keep_it_through_in_place_updates(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            TranscriptView::document("# QA note\n\nSelect **this** text.".into(), cx)
+        });
+        cx.run_until_parked();
+        drag(cx, &view, "Select this text.");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected_text().as_deref(), Some("Select this text."));
+            assert!(
+                !view.selection.0.borrow().quote,
+                "documents offer Copy alone"
+            );
+        });
+        // A streaming plan patches its reader rather than replacing it.
         view.update(cx, |view, cx| {
-            let row = view
-                .rows
-                .iter()
-                .find(|row| matches!(&row.body, Body::Markdown(md) if crate::markdown::selection_text(md) == "Select this text."))
-                .unwrap();
-            let (key, response) = (row.key, view.messages[row.message].start);
-            let selection = view.text_selection(key, response, true, cx).expect("documents select");
-            assert!(!selection.quote, "documents offer Copy alone");
-            {
-                let mut state = view.selection.0.borrow_mut();
-                state.response = response;
-                state.anchor = Some(Position { row: key, byte: 7 });
-                state.head = Some(Position { row: key, byte: 11 });
-                state.menu = Some(gpui::point(px(10.), px(10.)));
-            }
-            assert_eq!(view.selected_text().as_deref(), Some("this"));
-            assert!(view.selection_menu(cx).is_some());
+            view.set_document_text("# QA note\n\nSelect **this** text.\n\nMore.".into(), cx)
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected_text().as_deref(), Some("Select this text."))
+        });
+    }
+    fn tool(id: &str, state: ToolState) -> Row {
+        let call = ToolCall {
+            id: id.into(),
+            name: "Bash".into(),
+            input: format!(r#"{{"command":"cargo test {id}"}}"#),
+            output: String::new(),
+            state,
+            panel: None,
+            display: None,
+        };
+        row("tool", &serde_json::to_string(&call).unwrap())
+    }
+    #[gpui::test]
+    fn activity_reasoning_selects_like_its_code_and_survives_new_rows(cx: &mut TestAppContext) {
+        // Opening a phase or "Thinking" animates its text into place; hold it still.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let rows = vec![
+            row("reasoning", "Checking the **plan** first."),
+            tool("1", ToolState::Completed),
+        ];
+        let (view, cx) = cx.add_window_view(|_, cx| TranscriptView::activity(rows, cx));
+        // Open the turn's steps and its "Thinking", as a reader would.
+        view.update(cx, |view, cx| {
+            view.toggle_phase(0, true, cx);
+            view.toggle(0, cx);
+        });
+        cx.run_until_parked();
+        drag(cx, &view, "Checking the plan first.");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.selected_text().as_deref(),
+                Some("Checking the plan first.")
+            )
+        });
+        // The Mono panel patches a live turn's next step into the open view.
+        view.update(cx, |view, cx| {
+            view.patch(2, vec![tool("2", ToolState::Running)], cx)
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.selected_text().as_deref(),
+                Some("Checking the plan first.")
+            )
         });
     }
 }
