@@ -29,7 +29,7 @@ fn delete_settings_in(
     }
     Ok(())
 }
-pub use remote::{RemoteProject, RemoteSession, RemoteUpload};
+pub use remote::{RemoteLaunch, RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_metadata;
 pub use session_metadata::{MobileSessionMetadata, SessionSidebarMetadata};

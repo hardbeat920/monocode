@@ -460,6 +460,13 @@ fn deleting_a_remote_handle_removes_its_settings() {
             store
                 .save_setting(&format!("mono-delivered:{}:message", session.id), "1")
                 .unwrap();
+            // A remote launch is recorded on its binding now; an earlier
+            // version's local prompt may still be stored.
+            for key in ["follow-up", "app-launch-draft"] {
+                store
+                    .save_setting(&format!("{key}:{}", session.id), "{}")
+                    .unwrap();
+            }
             handles.push(session.id);
         }
         // A shared store answers `mono-delivered:` from the desktop's own
@@ -497,7 +504,7 @@ fn deleting_a_remote_handle_removes_its_settings() {
 }
 
 #[test]
-fn a_remote_launch_prompt_is_kept_until_the_outbox_holds_it() {
+fn a_remote_launch_is_recorded_on_its_binding_until_the_host_confirms_it() {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let project = store
         .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
@@ -506,22 +513,67 @@ fn a_remote_launch_prompt_is_kept_until_the_outbox_holds_it() {
     store
         .prepare_app_prompt(session.id, "request", "Run the tests", false)
         .unwrap();
-    // Unsent: still pending, however often it is asked.
+    // Not a local draft: a remote view never loads those.
+    assert!(store.follow_ups(session.id).unwrap().draft.is_none());
     for _ in 0..2 {
-        assert_eq!(
-            store.pending_remote_app_launch(session.id).unwrap(),
-            Some(("Run the tests".into(), true))
-        );
+        let launch = store.remote_app_launch(session.id).unwrap().unwrap();
+        assert_eq!((launch.text.as_str(), launch.send), ("Run the tests", true));
+        assert_eq!((launch.command, launch.offered), (None, false));
     }
-    // Another first turn does not take the launch's prompt.
+    // A second prepare (a replayed request) does not replace it.
     store
-        .finish_remote_app_launch(session.id, "Something else")
+        .prepare_app_prompt(session.id, "request", "Something else", true)
         .unwrap();
-    assert!(store.follow_ups(session.id).unwrap().draft.is_some());
-    // Journaled: the outbox owns it, and the local copy goes.
-    let mut remote = store.remote_session(session.id).unwrap().unwrap();
+    let launch = store.remote_app_launch(session.id).unwrap().unwrap();
+    assert_eq!(launch.text, "Run the tests");
+    assert_eq!(
+        store.pending_remote_app_launches().unwrap(),
+        vec![session.id]
+    );
+}
+
+/// Earlier versions kept a remote launch's prompt as a local follow-up draft.
+#[test]
+fn a_remote_launch_saved_by_an_earlier_version_is_adopted_once() {
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let project = store
+        .remember_remote_project("env", &json!({"id":"project","cwd":"/host/repo"}))
+        .unwrap();
+    let legacy = |store: &Store, draft: bool| {
+        let session = store.create("claude", &project.key).unwrap();
+        let mut state = store.follow_ups(session.id).unwrap();
+        state.draft = Some(crate::follow_up::Message {
+            id: "app-prompt-legacy".to_string(),
+            text: "Run the tests".into(),
+            ..Default::default()
+        });
+        store.save_follow_ups(session.id, &state).unwrap();
+        if draft {
+            store
+                .save_setting(&format!("app-launch-draft:{}", session.id), "1")
+                .unwrap();
+        }
+        session.id
+    };
+    let unsent = legacy(&store, true);
+    let launch = store.remote_app_launch(unsent).unwrap().unwrap();
+    assert_eq!(
+        (launch.text.as_str(), launch.send),
+        ("Run the tests", false)
+    );
+    assert!(store.follow_ups(unsent).unwrap().draft.is_none());
+    assert_eq!(
+        store
+            .setting(&format!("app-launch-draft:{unsent}"))
+            .unwrap(),
+        None
+    );
+    // One whose commands the outbox already holds is the outbox's.
+    let journaled = legacy(&store, false);
+    let mut remote = store.remote_session(journaled).unwrap().unwrap();
     remote.outbox.push(json!({"type":"create","commandId":"c"}));
     store.save_remote_session(&remote).unwrap();
-    assert_eq!(store.pending_remote_app_launch(session.id).unwrap(), None);
-    assert!(store.follow_ups(session.id).unwrap().draft.is_none());
+    assert_eq!(store.remote_app_launch(journaled).unwrap(), None);
+    assert!(store.follow_ups(journaled).unwrap().draft.is_none());
+    assert_eq!(store.pending_remote_app_launches().unwrap(), vec![unsent]);
 }

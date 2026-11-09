@@ -153,6 +153,10 @@ impl Monos {
                                 owner.mono_apply_groups(project, groups, cx)
                             });
                         }
+                        Effect::Start(summary, _, _, _, _)
+                            if this.roster.get(&mono_id).is_some_and(|mono| {
+                                mono.launches.iter().any(|l| l.session_id == summary.id)
+                            }) => {}
                         Effect::Start(summary, settings, _prompt, draft, placement) => {
                             let id = summary.id;
                             let caller = call.session;
@@ -414,6 +418,19 @@ impl Monos {
                     };
                 let draft = flag(&input, "draft", false);
                 let request = call.request_id.clone();
+                // The request's child is reserved under this key before
+                // anything is sent, so a retry after a lost receipt resumes
+                // it instead of starting a second one.
+                let reservation = format!(
+                    "mono-app-launch:{}:{}",
+                    call.session,
+                    files::content_hash(&request)
+                );
+                let name = format!(
+                    "mono-{}",
+                    files::content_hash(&format!("{}:{request}", call.session))
+                );
+                let request_fingerprint = fingerprint(&call);
                 self.call_work_retryable(
                     call,
                     target,
@@ -446,76 +463,87 @@ impl Monos {
                             Ok::<_, String>((settings, title))
                         })();
                         let (mut settings, title) = prepared.map_err(Failure::uncommitted)?;
-                        let mut summary = locked(&store)
-                            .and_then(|db| db.create(&provider, &project))
+                        let (mut summary, fresh) = locked(&store)
+                            .and_then(|db| {
+                                db.reserve_app_session(
+                                    &reservation,
+                                    &name,
+                                    &request_fingerprint,
+                                    &provider,
+                                    &project,
+                                )
+                            })
                             .map_err(Failure::uncommitted)?;
-                        summary.title = title;
-                        let configured = (|| {
-                            app::launch_checkout(&input, &project, summary.id, &mut settings)?;
-                            // Worktree creation can run git; do not hold the
-                            // application store lock while that command runs.
-                            let db = locked(&store)?;
-                            db.title(summary.id, &summary.title)?;
-                            db.configure_agent(summary.id, &provider, &settings)?;
-                            db.prepare_app_prompt(summary.id, &request, &prompt, draft)
-                        })();
-                        if let Err(error) = configured {
-                            // Never leave a blank placeholder behind. A new
-                            // worktree stays recorded on its session instead.
-                            if settings.worktree_cwd.is_some() {
-                                return Err(Failure::committed(error));
+                        // Removes a child nothing was sent for, with its
+                        // reservation, so the request ID is unused again.
+                        let forget = |error: String, id: i64| {
+                            match locked(&store).and_then(|mut db| {
+                                db.delete(id)?;
+                                db.delete_settings(std::slice::from_ref(&reservation), None)
+                            }) {
+                                Ok(()) => Failure::uncommitted(error),
+                                Err(cleanup) => Failure::committed(format!(
+                                    "{error} Session {id} was left behind and could not be removed: {cleanup}"
+                                )),
                             }
-                            return Err(
-                                match locked(&store).and_then(|mut db| db.delete(summary.id)) {
-                                    Ok(()) => Failure::uncommitted(error),
-                                    Err(cleanup) => Failure::committed(format!(
-                                        "{error} Session {} was left behind and could not be removed: {cleanup}",
-                                        summary.id
-                                    )),
-                                },
-                            );
+                        };
+                        if fresh {
+                            summary.title = title;
+                            let configured = (|| {
+                                app::launch_checkout(&input, &project, summary.id, &mut settings)?;
+                                // Worktree creation can run git; do not hold the
+                                // application store lock while that command runs.
+                                let db = locked(&store)?;
+                                db.title(summary.id, &summary.title)?;
+                                db.configure_agent(summary.id, &provider, &settings)?;
+                                db.prepare_app_prompt(summary.id, &request, &prompt, draft)
+                            })();
+                            if let Err(error) = configured {
+                                // Never leave a blank placeholder behind. A new
+                                // worktree stays recorded on its session instead.
+                                if settings.worktree_cwd.is_some() {
+                                    return Err(Failure::committed(error));
+                                }
+                                return Err(forget(error, summary.id));
+                            }
+                        } else if let Some(saved) = locked(&store)
+                            .and_then(|db| db.agent_settings(summary.id))
+                            .map_err(Failure::committed)?
+                        {
+                            // The app lost this request's receipt: resume the
+                            // child it created, with what it was given.
+                            settings = saved;
                         }
                         let mut value =
                             json!({"sessionId":summary.id,"accepted":true,"project":project});
                         if project.starts_with("remote://") {
                             // Send the first turn now, from here: a Mono's
                             // children are hidden, and no view may ever load.
-                            match crate::runtime::remote::send_app_launch(
-                                &remote, &store, summary.id,
-                            ) {
-                                Ok(_) => value["started"] = json!(true),
-                                Err(error) => {
-                                    let journaled = locked(&store)
-                                        .and_then(|db| db.remote_session(summary.id))
-                                        .ok()
-                                        .flatten()
-                                        .is_none_or(|r| {
-                                            r.session_id.is_some() || !r.outbox.is_empty()
-                                        });
-                                    if !journaled {
-                                        // Nothing reached the host, as when
-                                        // the start check fails.
-                                        return Err(
-                                            match locked(&store)
-                                                .and_then(|mut db| db.delete(summary.id))
-                                            {
-                                                Ok(()) => Failure::uncommitted(format!(
-                                                    "Cannot start a session on its machine: {error}"
-                                                )),
-                                                Err(cleanup) => Failure::committed(format!(
-                                                    "Cannot start a session on its machine: {error} Session {} was left behind and could not be removed: {cleanup}",
-                                                    summary.id
-                                                )),
-                                            },
-                                        );
-                                    }
-                                    // Journaled, so the host may have it.
-                                    value["started"] = json!(false);
-                                    value["status"] = json!(format!(
-                                        "The machine has not confirmed the first turn yet ({error}). It is offered again for {} minutes; if it never starts, you are told.",
-                                        crate::monos::LAUNCH_START_MINUTES
+                            if let Err(error) =
+                                crate::runtime::remote::send_app_launch(&remote, &store, summary.id)
+                            {
+                                let unsent = locked(&store)
+                                    .and_then(|db| db.remote_session(summary.id))
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|r| r.launch)
+                                    .is_some_and(|launch| !launch.offered);
+                                if fresh && unsent {
+                                    // Nothing reached the host, as when the
+                                    // start check fails.
+                                    return Err(forget(
+                                        format!("Cannot start a session on its machine: {error}"),
+                                        summary.id,
                                     ));
                                 }
+                                // Offered, so the host may have it.
+                                value["started"] = json!(false);
+                                value["status"] = json!(format!(
+                                    "The machine has not confirmed the first turn yet ({error}). It is offered again for {} minutes; if it never starts, you are told.",
+                                    crate::monos::LAUNCH_START_MINUTES
+                                ));
+                            } else {
+                                value["started"] = json!(true);
                             }
                         }
                         summary.has_messages = true;
@@ -937,10 +965,16 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             })
             .detach();
     }
-    /// Offers remote launches their machine has not confirmed again, and
-    /// abandons one after `LAUNCH_START_MINUTES` (or once its machine refused
-    /// it), telling its Mono, so a launch never ends in silence. A started
-    /// launch's conversation is loaded so its completion can be seen.
+    /// Offers remote launches their machine has not confirmed again, and ends
+    /// a Mono's launch after `LAUNCH_START_MINUTES` (or once its machine
+    /// refused it), telling the Mono, so a launch never ends in silence. A
+    /// started launch's conversation is loaded so its completion can be seen.
+    ///
+    /// Candidates are the store's unconfirmed launches, not the roster's, so
+    /// a launch the app quit before recording in the roster is offered too.
+    /// Only a Mono's launches have a deadline; any other (the app CLI's, or a
+    /// child no roster records) is offered with its same command IDs until
+    /// its machine answers.
     pub(super) fn watch_remote_launches(&mut self, cx: &mut Context<Self>) {
         if self.launch_watching
             || self
@@ -949,14 +983,6 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
         {
             return;
         }
-        let candidates: Vec<(i64, u64)> = self
-            .roster
-            .monos
-            .iter()
-            .flat_map(|mono| &mono.launches)
-            .filter(|l| !l.completed && !l.dismissed && l.session_id < 0 && l.launched_at > 0)
-            .map(|l| (l.session_id, l.launched_at))
-            .collect();
         let Some(remote) = self
             .owner
             .upgrade()
@@ -964,61 +990,99 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
         else {
             return;
         };
-        if candidates.is_empty() {
-            return;
-        }
+        let rostered: HashSet<i64> = self
+            .roster
+            .monos
+            .iter()
+            .flat_map(|mono| &mono.launches)
+            .map(|l| l.session_id)
+            .collect();
         self.launch_watching = true;
         self.launch_watched = Some(std::time::Instant::now());
         let store = self.store.clone();
         let errors: HashMap<i64, String> = self.launch_errors.clone();
         let work = cx.background_executor().spawn(async move {
+            use crate::runtime::remote::{LaunchEnd, end_app_launch, send_app_launch};
             let deadline = LAUNCH_START_MINUTES * 60_000;
-            let (mut started, mut failed, mut latest) = (Vec::new(), Vec::new(), Vec::new());
-            for (id, launched_at) in candidates {
-                let Some(remote_session) = locked(&store)
-                    .and_then(|db| db.remote_session(id))
+            let (mut started, mut ended, mut latest) = (Vec::new(), Vec::new(), Vec::new());
+            let pending = locked(&store)
+                .and_then(|db| db.pending_remote_app_launches())
+                .unwrap_or_default();
+            for id in pending {
+                let Some(at) = locked(&store)
+                    .and_then(|db| db.remote_app_launch(id))
                     .ok()
                     .flatten()
+                    .map(|launch| launch.at)
                 else {
                     continue;
                 };
-                if remote_session.session_id.is_some() {
-                    continue;
-                }
-                if let Some(rejected) = &remote_session.rejected {
-                    let error = rejected["error"].as_str().unwrap_or("Its machine refused it");
-                    let _ = locked(&store).and_then(|db| db.abandon_remote_app_launch(id));
-                    failed.push((id, format!("its machine refused it: {error}")));
-                    continue;
-                }
-                if now_ms().saturating_sub(launched_at) >= deadline {
-                    if locked(&store)
-                        .and_then(|db| db.abandon_remote_app_launch(id))
-                        .unwrap_or(false)
-                    {
-                        let last = errors
-                            .get(&id)
-                            .map(|error| format!(" Last error: {error}"))
-                            .unwrap_or_default();
-                        failed.push((
-                            id,
-                            format!(
-                                "its machine did not confirm it within {LAUNCH_START_MINUTES} minutes.{last}"
-                            ),
-                        ));
+                let late = rostered.contains(&id) && now_ms().saturating_sub(at) >= deadline;
+                let refused = if late {
+                    None
+                } else {
+                    match send_app_launch(&remote, &store, id) {
+                        Ok(true) => {
+                            started.push(id);
+                            continue;
+                        }
+                        Ok(false) => continue,
+                        Err(error) if error.starts_with("Host rejected request:") => Some(error),
+                        Err(error) => {
+                            latest.push((id, error));
+                            continue;
+                        }
                     }
+                };
+                if refused.is_none() && !late {
                     continue;
                 }
-                match crate::runtime::remote::send_app_launch(&remote, &store, id) {
-                    Ok(true) => started.push(id),
-                    Ok(false) => {}
+                // Waits for any sender still holding the launch, and changes
+                // nothing if that sender got it confirmed.
+                match end_app_launch(&store, id) {
+                    Ok(Some(end)) => ended.push((id, end)),
+                    Ok(None) => started.push(id),
                     Err(error) => latest.push((id, error)),
                 }
             }
-            (started, failed, latest)
+            let last = |id: i64| {
+                errors
+                    .get(&id)
+                    .map(|error| format!(" Last error: {error}"))
+                    .unwrap_or_default()
+            };
+            let ended: Vec<_> = ended
+                .into_iter()
+                .map(|(id, end)| {
+                    let (heading, reason) = match end {
+                        LaunchEnd::Refused(error) => (
+                            "did not start",
+                            format!(
+                                "never started: its machine refused it: {error} Nothing ran there, and it will not be sent again. Start it again once the cause is fixed."
+                            ),
+                        ),
+                        LaunchEnd::NeverSent => (
+                            "did not start",
+                            format!(
+                                "never started: its machine did not answer within {LAUNCH_START_MINUTES} minutes.{} Nothing reached it, and it will not be sent again. Start it again once its machine answers.",
+                                last(id)
+                            ),
+                        ),
+                        LaunchEnd::Unconfirmed => (
+                            "may not have started",
+                            format!(
+                                "was offered to its machine, which did not confirm it within {LAUNCH_START_MINUTES} minutes.{} It may have started there, so it is not offered again. Read the session before starting it again; opening it and choosing Retry reuses the same command, which cannot run twice.",
+                                last(id)
+                            ),
+                        ),
+                    };
+                    (id, heading, reason)
+                })
+                .collect();
+            (started, ended, latest)
         });
         cx.spawn(async move |this, cx| {
-            let (started, failed, latest) = work.await;
+            let (started, ended, latest) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.launch_watching = false;
                 this.launch_errors.extend(latest);
@@ -1028,17 +1092,23 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                         owner.update(cx, |owner, cx| owner.mono_load_session(id, cx));
                     }
                 }
-                for (id, reason) in failed {
+                for (id, heading, reason) in ended {
                     this.launch_errors.remove(&id);
-                    this.report_unstarted(id, &reason, cx);
+                    this.report_unstarted(id, heading, &reason, cx);
                 }
             });
         })
         .detach();
     }
-    /// Ends a launch that never started, telling its Mono if it asked to hear
-    /// when the launch finished.
-    fn report_unstarted(&mut self, session: i64, reason: &str, cx: &mut Context<Self>) {
+    /// Ends a launch whose first turn its machine never confirmed, telling
+    /// its Mono if it asked to hear when the launch finished.
+    fn report_unstarted(
+        &mut self,
+        session: i64,
+        heading: &str,
+        reason: &str,
+        cx: &mut Context<Self>,
+    ) {
         let mut report = None;
         for mono in &mut self.roster.monos {
             for launch in &mut mono.launches {
@@ -1049,7 +1119,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                             mono.id.clone(),
                             (launch.origin_turn >> 32) as i64,
                             format!(
-                                "[Delegated session did not start]\nSession {session}: {} never started: {reason} Nothing ran there, and it will not be sent again. Start it again once its machine answers.",
+                                "[Delegated session {heading}]\nSession {session}: {} {reason}",
                                 launch.title
                             ),
                         ));
@@ -1104,12 +1174,22 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                             && !l.dismissed
                     })
                     .collect();
+                // A remote child whose first turn its machine has not
+                // confirmed has not run yet, so it has not finished either.
+                let owed = |id: i64| {
+                    id < 0
+                        && locked(&self.store)
+                            .ok()
+                            .and_then(|db| db.remote_session(id).ok().flatten())
+                            .is_some_and(|remote| remote.launch.is_some())
+                };
                 if !children.is_empty()
                     && children.iter().all(|l| {
-                        views
-                            .iter()
-                            .find(|v| v.id == l.session_id)
-                            .is_none_or(|v| !v.busy && v.has_messages)
+                        !owed(l.session_id)
+                            && views
+                                .iter()
+                                .find(|v| v.id == l.session_id)
+                                .is_none_or(|v| !v.busy && v.has_messages)
                     })
                     && !self.completion_work.contains(&(mono.id.clone(), group))
                 {

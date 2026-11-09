@@ -2335,6 +2335,10 @@ fn an_unconfirmed_remote_launch_is_offered_again_then_reported_if_it_never_start
             store
                 .prepare_app_prompt(child, request, "Run hostname", false)
                 .unwrap();
+            // The deadline counts from when the launch was recorded.
+            let mut remote = store.remote_session(child).unwrap().unwrap();
+            remote.launch.as_mut().unwrap().at -= age_minutes * 60_000;
+            store.save_remote_session(&remote).unwrap();
             child
         };
         s.manager.update(cx, |m, _| {
@@ -2387,10 +2391,10 @@ fn an_unconfirmed_remote_launch_is_offered_again_then_reported_if_it_never_start
     assert!(
         locked(&s.store)
             .unwrap()
-            .pending_remote_app_launch(recent)
+            .remote_app_launch(recent)
             .unwrap()
             .is_some(),
-        "an unconfirmed launch keeps its prompt"
+        "an unconfirmed launch is still owed"
     );
     assert!(launch_of(&s, stale, cx).completed);
     assert!(
@@ -2439,4 +2443,56 @@ fn an_unconfirmed_remote_launch_is_offered_again_then_reported_if_it_never_start
     watch(&s, cx);
     assert_eq!(host.commands.lock().unwrap().len(), 2, "sent again");
     assert!(!launch_of(&s, recent, cx).completed);
+}
+
+/// Review finding 5: the app quit after the host took a launch but before
+/// its receipt was stored. The retry with the same request ID resumes that
+/// child; it does not start a second one.
+#[gpui::test]
+fn a_start_retried_after_its_receipt_was_lost_resumes_the_same_child(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let (environment, project) = remote_project(&s, cx);
+    let host = DescribingHost::new(&environment);
+    s.window
+        .read_with(cx, |shell, _| shell.remote_connections())
+        .unwrap()
+        .connect(String::new(), host.url.clone(), "a".repeat(43))
+        .unwrap();
+    let input = json!({"project": project, "harness": "codex", "prompt": "Run hostname", "notifyOnComplete": true});
+    let first = call(&s, "lost-receipt", "sessions.start", input.clone(), cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    let child = first["sessionId"].as_i64().unwrap();
+    // As after a crash before the receipt was written.
+    let receipt = format!(
+        "mono-app-receipt:{}:{}",
+        s.session,
+        mono::files::content_hash("lost-receipt")
+    );
+    locked(&s.store)
+        .unwrap()
+        .delete_settings(&[receipt], None)
+        .unwrap();
+    s.manager.update(cx, |m, _| m.app_results.clear());
+    let retried = call(&s, "lost-receipt", "sessions.start", input, cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried["sessionId"], child, "{retried}");
+    let commands = host.commands.lock().unwrap().clone();
+    let kinds: Vec<_> = commands.iter().map(|c| c["type"].clone()).collect();
+    assert_eq!(kinds, [json!("create"), json!("send")], "{commands:?}");
+    let launches = cx.update(|cx| {
+        s.manager
+            .read(cx)
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .launches
+            .iter()
+            .filter(|l| l.cwd == project)
+            .count()
+    });
+    assert_eq!(launches, 1);
 }

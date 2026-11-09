@@ -3,7 +3,7 @@ use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use monocode_core::{
     agent::{Decision, Question, QuestionItem, QuestionOption},
-    store::{RemoteSession, RemoteUpload},
+    store::{RemoteLaunch, RemoteSession, RemoteUpload},
 };
 use serde_json::{Value, json};
 use std::{
@@ -159,6 +159,21 @@ pub(crate) fn configure_saved(store: Database, id: i64) -> Result<(), String> {
     dispatch_outbox(&client, &machine.id, &store, &mut binding)
 }
 
+/// Records what observing the host learned, on the durable binding: an
+/// observer holds no operation lock, so writing back its whole copy could
+/// restore commands or a launch another worker has since settled.
+fn observed(store: &Database, binding: &RemoteSession) -> Result<(), String> {
+    let db = locked(store)?;
+    let Some(mut durable) = db.remote_session(binding.summary.id)? else {
+        return Ok(());
+    };
+    durable.running = binding.running;
+    durable.needs_input = binding.needs_input;
+    durable.summary.title = binding.summary.title.clone();
+    durable.summary.provider_id = binding.summary.provider_id.clone();
+    durable.summary.updated_at = binding.summary.updated_at;
+    db.save_remote_session(&durable)
+}
 fn journal(store: &Database, binding: &RemoteSession) -> Result<(), String> {
     locked(store)?.save_remote_session(binding)
 }
@@ -231,6 +246,14 @@ fn dispatch_outbox(
         if next["type"] == "create" {
             durable.session_id = Some(id.into());
         }
+        if durable
+            .launch
+            .as_ref()
+            .is_some_and(|launch| launch.command.as_deref() == next["commandId"].as_str())
+        {
+            // The first turn is confirmed: the launch is done.
+            durable.launch = None;
+        }
         durable.outbox.remove(0);
         commit(store, binding, durable)?;
     }
@@ -251,7 +274,19 @@ fn journal_turn(
     settings: &mut Settings,
     prompt: &str,
     action: &Value,
+    launch: bool,
 ) -> Result<(), String> {
+    if !launch
+        && binding
+            .launch
+            .as_ref()
+            .is_some_and(|launch| launch.command.is_none())
+    {
+        return Err(
+            "This conversation's first turn is still being sent to its machine. Wait for it to start."
+                .into(),
+        );
+    }
     if !binding.outbox.is_empty() {
         return Err(
             "A remote command needs confirmation. Choose Retry before sending another message."
@@ -339,16 +374,15 @@ fn journal_turn(
     } else if operation == "removeDraft" {
         send["draftBlockId"] = action["draftBlockId"].clone();
     }
+    if launch && let Some(launch) = binding.launch.as_mut() {
+        // Journaled with its commands, in one write.
+        launch.command = send["commandId"].as_str().map(str::to_owned);
+    }
     binding.outbox.push(send);
     binding.rejected = None;
     binding.summary.has_messages = true;
     binding.summary.updated_at = monocode_core::time::now_ms();
     journal(store, binding)?;
-    if binding.session_id.is_none() {
-        // An app launch's local prompt was its only record until now.
-        // If this fails, the next load drops it, as the outbox has it.
-        let _ = locked(store).and_then(|store| store.finish_remote_app_launch(summary.id, prompt));
-    }
     offers_provider(client, machine, &summary.provider)
 }
 
@@ -357,14 +391,20 @@ fn journal_turn(
 /// same journaled commands again cannot run the turn twice.
 const LAUNCH_ATTEMPTS: usize = 3;
 
-/// Sends an app launch's first turn to its machine without any conversation
-/// view: a Mono's children are hidden, and nothing may ever open them.
+/// Sends an app launch's first turn to its machine. This is the one sender of
+/// a launch's first turn: `sessions.start`, the startup sweep, the Mono's
+/// launch watch and a conversation view all call it, and none sends the
+/// prompt any other way. A Mono's children are hidden, and nothing may ever
+/// open them, so it needs no view.
 ///
-/// Journals the commands before any I/O and drops the local prompt, so a
-/// failure here leaves them in the outbox rather than losing them. A launch
-/// journaled earlier whose host session was never confirmed is offered again:
-/// its commands keep their IDs, so the host answers a repeat from its receipt.
-/// Returns `Ok(false)` when there is nothing to send.
+/// It holds the session's operation lock throughout and reads the launch
+/// ([`RemoteLaunch`]) under it, so concurrent callers and
+/// [`end_app_launch`] serialize: the second finds the launch journaled (and
+/// offers the same command IDs, which the host answers from its receipts),
+/// confirmed, or ended. The commands are journaled before any I/O.
+///
+/// Returns `Ok(true)` once the host has confirmed the first turn, and
+/// `Ok(false)` when no launch is owed.
 pub(crate) fn send_app_launch(
     client: &monocode_core::remote::Connections,
     store: &Database,
@@ -374,36 +414,105 @@ pub(crate) fn send_app_launch(
     let _guard = operation
         .lock()
         .map_err(|_| "Remote session is unavailable")?;
-    let (mut binding, mut settings, pending) = {
+    let (mut binding, mut settings) = {
         let db = locked(store)?;
+        db.remote_app_launch(id)?;
         (
             db.remote_session(id)?
                 .ok_or("Remote session no longer exists")?,
             db.agent_settings(id)?.unwrap_or_default(),
-            db.pending_remote_app_launch(id)?,
         )
     };
-    let Some((prompt, send)) = pending else {
-        if binding.session_id.is_some() || binding.outbox.is_empty() || binding.rejected.is_some() {
-            return Ok(false);
-        }
-        let machine = binding.machine(client)?;
-        return offer_outbox(client, &machine.id, store, &mut binding).map(|()| true);
+    let Some(launch) = binding.launch.clone() else {
+        return Ok(false);
     };
+    if let Some(error) = launch_refusal(&binding) {
+        return Err(error);
+    }
     let machine = binding.machine(client)?;
-    let summary = binding.summary.clone();
-    let action = json!({"type": if send { "send" } else { "draft" }});
-    journal_turn(
-        client,
-        &machine.id,
-        store,
-        &mut binding,
-        &summary,
-        &mut settings,
-        &prompt,
-        &action,
-    )?;
+    if launch.command.is_none() {
+        let summary = binding.summary.clone();
+        let action = json!({"type": if launch.send { "send" } else { "draft" }});
+        journal_turn(
+            client,
+            &machine.id,
+            store,
+            &mut binding,
+            &summary,
+            &mut settings,
+            &launch.text,
+            &action,
+            true,
+        )?;
+    }
+    if let Some(launch) = binding.launch.as_ref().filter(|launch| !launch.offered) {
+        let mut durable = binding.clone();
+        durable.launch = Some(RemoteLaunch {
+            offered: true,
+            ..launch.clone()
+        });
+        commit(store, &mut binding, durable)?;
+    }
     offer_outbox(client, &machine.id, store, &mut binding).map(|()| true)
+}
+
+/// The host's refusal of a launch's first turn, if it refused it.
+fn launch_refusal(binding: &RemoteSession) -> Option<String> {
+    let command = binding.launch.as_ref()?.command.as_deref()?;
+    let rejected = binding.rejected.as_ref()?;
+    rejected["commands"]
+        .as_array()?
+        .iter()
+        .any(|c| c["commandId"].as_str() == Some(command))
+        .then(|| {
+            rejected["error"]
+                .as_str()
+                .unwrap_or("Its machine refused it")
+                .to_owned()
+        })
+}
+
+/// How an app launch ended without its machine confirming it.
+#[derive(Debug, PartialEq)]
+pub(crate) enum LaunchEnd {
+    /// The host refused its first turn, which therefore never ran.
+    Refused(String),
+    /// Nothing carrying it ever left this desktop; it is dropped.
+    NeverSent,
+    /// It was offered and never confirmed, so it may have started. Its
+    /// commands stay journaled for an explicit Retry, which reuses their IDs;
+    /// nothing offers them on its own again.
+    Unconfirmed,
+}
+
+/// Ends an unconfirmed app launch, so nothing sends it again. Waits for a
+/// sender that holds the launch (see [`send_app_launch`]); returns `None`,
+/// changing nothing, if that sender got it confirmed meanwhile.
+pub(crate) fn end_app_launch(store: &Database, id: i64) -> Result<Option<LaunchEnd>, String> {
+    let operation = operation_lock(store, id);
+    let _guard = operation
+        .lock()
+        .map_err(|_| "Remote session is unavailable")?;
+    let db = locked(store)?;
+    db.remote_app_launch(id)?;
+    let Some(mut binding) = db.remote_session(id)? else {
+        return Ok(None);
+    };
+    let refusal = launch_refusal(&binding);
+    let Some(launch) = binding.launch.take() else {
+        return Ok(None);
+    };
+    let end = if let Some(error) = refusal {
+        LaunchEnd::Refused(error)
+    } else if launch.offered {
+        LaunchEnd::Unconfirmed
+    } else {
+        binding.outbox.clear();
+        binding.uploads.clear();
+        LaunchEnd::NeverSent
+    };
+    db.save_remote_session(&binding)?;
+    Ok(Some(end))
 }
 
 /// Sends a launch's journaled commands, a few times if the result is unknown.
@@ -764,6 +873,7 @@ pub(crate) fn run_with_client(
                 &mut settings,
                 &prompt,
                 &action,
+                false,
             )?;
         }
         if !attaching {
@@ -848,7 +958,7 @@ pub(crate) fn run_with_client(
             binding.summary.updated_at = snapshot["updatedAt"]
                 .as_u64()
                 .unwrap_or(binding.summary.updated_at);
-            journal(&store, &binding)?;
+            observed(&store, &binding)?;
             tx.send_blocking(next).map_err(|_| "Window closed")?;
             last_revision = revision;
             if !running {
@@ -898,6 +1008,13 @@ pub(crate) fn run_with_client(
                     }
                 }
                 control_commands.push(next);
+            }
+            if !control_commands.is_empty() {
+                // Commands are prepared against the durable binding, never
+                // this worker's copy from before it observed anything.
+                binding = locked(&store)?
+                    .remote_session(summary.id)?
+                    .ok_or("Remote session no longer exists")?;
             }
             for command in control_commands.drain(..) {
                 binding.outbox.push(command);

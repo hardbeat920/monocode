@@ -42,7 +42,8 @@ impl Conversation {
             return;
         }
         if self.is_remote() {
-            self.install_remote_app_launch(settings, send, cx);
+            // The launch recorded whether to send or save its prompt.
+            self.install_remote_app_launch(settings, cx);
             return;
         }
         self.install_transfer(settings, None, cx);

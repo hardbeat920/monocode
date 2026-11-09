@@ -883,3 +883,223 @@ fn an_app_launch_is_refused_until_its_machine_offers_the_harness() {
     assert!(offline.contains("Reconnect"), "{offline}");
     assert!(check_launch(&host.client, "/local/repo", "codex").is_err());
 }
+
+/// A remote session prepared as `sessions.start` leaves an app launch.
+fn launch(store: &Database, prompt: &str) -> i64 {
+    let id = binding(store).summary.id;
+    let db = locked(store).unwrap();
+    let settings = Settings {
+        model: Some("fixture".into()),
+        ..Default::default()
+    };
+    db.configure_agent(id, "codex", &settings).unwrap();
+    db.prepare_app_prompt(id, "request", prompt, false).unwrap();
+    id
+}
+fn sends(requests: &Mutex<Vec<Value>>) -> Vec<Value> {
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c["type"] == "send")
+        .cloned()
+        .collect()
+}
+fn abandon(store: &Database, id: i64) -> bool {
+    // Abandoning says nothing ran there only when it ends a never-sent launch.
+    end_app_launch(store, id).unwrap() == Some(LaunchEnd::NeverSent)
+}
+
+/// Review finding 1: a confirmed `create` is not a started launch. The
+/// first turn's `send` is still owed to the host, and is offered again.
+#[test]
+fn a_launch_whose_create_was_confirmed_still_sends_its_first_turn() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let id = launch(&store, "Run hostname");
+    let lose_sends = Arc::new(AtomicBool::new(true));
+    let losing = lose_sends.clone();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    let host = Host::new(move |request| {
+        let command = request["params"].clone();
+        recorded.lock().unwrap().push(command.clone());
+        if command["type"] == "send" && losing.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(receipt(&command))
+    });
+    assert!(send_app_launch(&host.client, &store, id).is_err());
+    let durable = locked(&store).unwrap().remote_session(id).unwrap().unwrap();
+    assert_eq!(durable.session_id.as_deref(), Some("host-session"));
+    assert_eq!(durable.outbox.len(), 1, "{:?}", durable.outbox);
+    let lost = sends(&requests);
+    assert_eq!(lost.len(), LAUNCH_ATTEMPTS);
+    // Still owed: startup and the Mono's watch find it.
+    assert_eq!(
+        locked(&store)
+            .unwrap()
+            .pending_remote_app_launches()
+            .unwrap(),
+        vec![id]
+    );
+    lose_sends.store(false, Ordering::Relaxed);
+    send_app_launch(&host.client, &store, id).unwrap();
+    let durable = locked(&store).unwrap().remote_session(id).unwrap().unwrap();
+    assert!(durable.outbox.is_empty(), "{:?}", durable.outbox);
+    let sent = sends(&requests);
+    assert_eq!(sent.len(), LAUNCH_ATTEMPTS + 1);
+    assert!(sent.iter().all(|c| c["commandId"] == lost[0]["commandId"]));
+    assert!(
+        locked(&store)
+            .unwrap()
+            .pending_remote_app_launches()
+            .unwrap()
+            .is_empty()
+    );
+    // Confirmed: a later pass sends nothing.
+    assert!(!send_app_launch(&host.client, &store, id).unwrap());
+    assert_eq!(sends(&requests).len(), LAUNCH_ATTEMPTS + 1);
+}
+
+/// Review finding 2: abandoning a launch while a sender waits for the host
+/// must not leave that sender free to send it afterwards.
+#[test]
+fn a_launch_is_not_abandoned_under_a_sender_that_is_still_waiting_for_its_host() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let id = launch(&store, "Run hostname");
+    let (seen, create_seen) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    let host = Host::new(move |request| {
+        let command = request["params"].clone();
+        recorded.lock().unwrap().push(command.clone());
+        if command["type"] == "create" {
+            let _ = seen.send(());
+            let _ = released.recv_timeout(Duration::from_secs(5));
+        }
+        Some(receipt(&command))
+    });
+    let sender = {
+        let (client, store) = (host.client.clone(), store.clone());
+        thread::spawn(move || send_app_launch(&client, &store, id))
+    };
+    create_seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let abandoner = {
+        let store = store.clone();
+        thread::spawn(move || abandon(&store, id))
+    };
+    thread::sleep(Duration::from_millis(100));
+    release.send(()).unwrap();
+    let sent = sender.join().unwrap();
+    let abandoned = abandoner.join().unwrap();
+    // Whatever the order, "nothing ran, and it will not be sent again" must
+    // be true when it is said.
+    if abandoned {
+        assert!(sends(&requests).is_empty(), "abandoned, then sent");
+    } else {
+        assert!(sent.unwrap());
+        assert_eq!(sends(&requests).len(), 1);
+    }
+    assert!(!send_app_launch(&host.client, &store, id).unwrap());
+    let durable = locked(&store).unwrap().remote_session(id).unwrap().unwrap();
+    assert!(durable.outbox.is_empty() || !abandoned);
+}
+
+/// Review finding 3: a launch whose commands were journaled, but never
+/// confirmed, before the app quit is still owed to its host at startup.
+#[test]
+fn startup_finds_a_launch_journaled_but_never_confirmed() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let id = launch(&store, "Run hostname");
+    let host = Host::new(|_| None);
+    assert!(send_app_launch(&host.client, &store, id).is_err());
+    let durable = locked(&store).unwrap().remote_session(id).unwrap().unwrap();
+    assert_eq!(durable.outbox.len(), 2);
+    assert_eq!(
+        locked(&store)
+            .unwrap()
+            .pending_remote_app_launches()
+            .unwrap(),
+        vec![id]
+    );
+}
+
+/// Review finding 2: a deadline is not proof that nothing ran. A launch that
+/// was offered and never confirmed ends as unconfirmed: nothing offers it
+/// again, and its commands stay journaled for an explicit Retry.
+#[test]
+fn an_offered_launch_its_host_never_confirmed_ends_as_unconfirmed() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let id = launch(&store, "Run hostname");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    let host = Host::new(move |request| {
+        recorded.lock().unwrap().push(request["params"].clone());
+        None
+    });
+    assert!(send_app_launch(&host.client, &store, id).is_err());
+    assert_eq!(
+        end_app_launch(&store, id).unwrap(),
+        Some(LaunchEnd::Unconfirmed)
+    );
+    let durable = locked(&store).unwrap().remote_session(id).unwrap().unwrap();
+    assert!(durable.launch.is_none());
+    assert_eq!(durable.outbox.len(), 2, "kept for Retry");
+    let offered = requests.lock().unwrap().len();
+    assert!(!send_app_launch(&host.client, &store, id).unwrap());
+    assert_eq!(requests.lock().unwrap().len(), offered);
+    assert!(
+        locked(&store)
+            .unwrap()
+            .pending_remote_app_launches()
+            .unwrap()
+            .is_empty()
+    );
+    // Ending it twice changes nothing.
+    assert_eq!(end_app_launch(&store, id).unwrap(), None);
+}
+
+/// A launch whose machine could not be reached ends as never sent, and one
+/// its host refused ends as refused; neither is offered again.
+#[test]
+fn a_launch_never_sent_or_refused_says_so_when_it_ends() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let never = launch(&store, "Run hostname");
+    // Not reachable: no machine is connected to this store's client.
+    let offline = Arc::new(Connections::new(dir.0.join("offline")));
+    assert!(send_app_launch(&offline, &store, never).is_err());
+    assert_eq!(
+        end_app_launch(&store, never).unwrap(),
+        Some(LaunchEnd::NeverSent)
+    );
+    let durable = locked(&store)
+        .unwrap()
+        .remote_session(never)
+        .unwrap()
+        .unwrap();
+    assert!(durable.outbox.is_empty() && durable.launch.is_none());
+
+    let dir = Directory::new();
+    let store = dir.store();
+    let refused = launch(&store, "Run hostname");
+    let host = Host::new(|request| {
+        let command = &request["params"];
+        if command["type"] == "send" {
+            return Some(json!({"error":"Invalid prompt"}));
+        }
+        Some(receipt(command))
+    });
+    let error = send_app_launch(&host.client, &store, refused).unwrap_err();
+    assert!(error.starts_with("Host rejected request:"), "{error}");
+    assert!(matches!(
+        end_app_launch(&store, refused).unwrap(),
+        Some(LaunchEnd::Refused(error)) if error.contains("Invalid prompt")
+    ));
+    assert!(!send_app_launch(&host.client, &store, refused).unwrap());
+}

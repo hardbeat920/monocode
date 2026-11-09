@@ -1,4 +1,7 @@
-use super::{remote::RemoteSession, Session, Store};
+use super::{
+    remote::{RemoteLaunch, RemoteSession},
+    Session, Store,
+};
 use crate::remote::Connections;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -7,8 +10,11 @@ use std::time::Duration;
 impl Store {
     /// A launch is recoverable as an unsent draft if the app exits before its
     /// provider accepts it. Queue delivery uses this same stable message ID.
-    /// `draft` records that the launch saves the prompt rather than sending it,
-    /// so a remote launch resumed after a restart does the same.
+    /// `draft` records that the launch saves the prompt rather than sending it.
+    ///
+    /// A remote conversation's drafts live on its host, so its launch is
+    /// recorded on its binding instead ([`RemoteLaunch`]), for the remote
+    /// runtime's one launch sender to take.
     pub fn prepare_app_prompt(
         &self,
         id: i64,
@@ -16,6 +22,19 @@ impl Store {
         prompt: &str,
         draft: bool,
     ) -> Result<(), String> {
+        if let Some(mut remote) = self.remote_session(id)? {
+            if remote.launch.is_none() && remote.session_id.is_none() && remote.outbox.is_empty() {
+                remote.launch = Some(RemoteLaunch {
+                    text: prompt.into(),
+                    send: !draft,
+                    at: crate::time::now_ms(),
+                    command: None,
+                    offered: false,
+                });
+                self.save_remote_session(&remote)?;
+            }
+            return Ok(());
+        }
         let mut state = self.follow_ups(id)?;
         let message_id = format!("{APP_PROMPT}{}", crate::mono::files::content_hash(request));
         if state.draft.is_none() && !state.messages.iter().any(|m| m.id == message_id) {
@@ -32,89 +51,51 @@ impl Store {
         }
         Ok(())
     }
-    /// A remote app launch's saved prompt that the host does not have yet, and
-    /// whether to send it (`true`) or save it as a draft.
+    /// A remote app launch whose first turn the host has not confirmed yet.
     ///
-    /// The local prompt is the launch's only durable record until the remote
-    /// runtime journals its commands. Once the outbox holds them, the host has
-    /// the session, or the host rejected them, the local copy is dropped here.
-    pub fn pending_remote_app_launch(&self, id: i64) -> Result<Option<(String, bool)>, String> {
-        let Some(remote) = self.remote_session(id)? else {
+    /// Earlier versions saved a remote launch's prompt as a local follow-up
+    /// draft. One the host never received becomes the binding's launch here;
+    /// one the outbox, host or a rejection already holds is only dropped.
+    pub fn remote_app_launch(&self, id: i64) -> Result<Option<RemoteLaunch>, String> {
+        let Some(mut remote) = self.remote_session(id)? else {
             return Ok(None);
         };
-        let state = self.follow_ups(id)?;
-        let Some(draft) = state
+        let mut state = self.follow_ups(id)?;
+        if let Some(draft) = state
             .draft
-            .as_ref()
-            .filter(|draft| draft.id.starts_with(APP_PROMPT))
-        else {
-            return Ok(None);
-        };
-        if remote.session_id.is_some() || !remote.outbox.is_empty() || remote.rejected.is_some() {
-            let text = draft.text.clone();
-            self.finish_remote_app_launch(id, &text)?;
-            return Ok(None);
+            .take_if(|draft| draft.id.starts_with(APP_PROMPT))
+        {
+            if remote.launch.is_none()
+                && remote.session_id.is_none()
+                && remote.outbox.is_empty()
+                && remote.rejected.is_none()
+            {
+                remote.launch = Some(RemoteLaunch {
+                    text: draft.text,
+                    send: self.setting(&format!("{APP_LAUNCH_DRAFT}{id}"))?.is_none(),
+                    at: crate::time::now_ms(),
+                    command: None,
+                    offered: false,
+                });
+                self.save_remote_session(&remote)?;
+            }
+            state.revision += 1;
+            self.save_follow_ups(id, &state)?;
+            self.delete_settings(&[format!("{APP_LAUNCH_DRAFT}{id}")], None)?;
         }
-        let send = self.setting(&format!("{APP_LAUNCH_DRAFT}{id}"))?.is_none();
-        Ok(Some((draft.text.clone(), send)))
+        Ok(remote.launch)
     }
-    /// Remote handles whose app launch the host does not have yet, such as a
-    /// hidden Mono child the app quit before sending.
+    /// Remote handles whose app launch the host has not confirmed: unsent,
+    /// or journaled and unconfirmed, such as a hidden Mono child the app quit
+    /// before its first turn's receipt arrived.
     pub fn pending_remote_app_launches(&self) -> Result<Vec<i64>, String> {
         let mut pending = Vec::new();
-        for (id, remote) in self.stored_remote_sessions()? {
-            if remote.session_id.is_none()
-                && remote.outbox.is_empty()
-                && self.pending_remote_app_launch(id)?.is_some()
-            {
+        for id in self.stored_remote_sessions()?.into_keys() {
+            if self.remote_app_launch(id)?.is_some() {
                 pending.push(id);
             }
         }
         Ok(pending)
-    }
-    /// Gives up on a remote app launch the host never confirmed: its prompt
-    /// and unconfirmed commands are dropped, so nothing sends it later.
-    /// Returns false, changing nothing, once the host has the session.
-    pub fn abandon_remote_app_launch(&self, id: i64) -> Result<bool, String> {
-        let Some(mut remote) = self.remote_session(id)? else {
-            return Ok(false);
-        };
-        if remote.session_id.is_some() {
-            return Ok(false);
-        }
-        let mut state = self.follow_ups(id)?;
-        if state
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.id.starts_with(APP_PROMPT))
-        {
-            state.revision += 1;
-            state.draft = None;
-            self.save_follow_ups(id, &state)?;
-        }
-        self.delete_settings(&[format!("{APP_LAUNCH_DRAFT}{id}")], None)?;
-        if !remote.outbox.is_empty() || !remote.uploads.is_empty() {
-            remote.outbox.clear();
-            remote.uploads.clear();
-            self.save_remote_session(&remote)?;
-        }
-        Ok(true)
-    }
-    /// Drops a remote app launch's local prompt once `text`, its first turn,
-    /// is journaled in the session's remote outbox.
-    pub fn finish_remote_app_launch(&self, id: i64, text: &str) -> Result<(), String> {
-        let mut state = self.follow_ups(id)?;
-        if !state
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.id.starts_with(APP_PROMPT) && draft.text == text)
-        {
-            return Ok(());
-        }
-        state.revision += 1;
-        state.draft = None;
-        self.save_follow_ups(id, &state)?;
-        self.delete_settings(&[format!("{APP_LAUNCH_DRAFT}{id}")], None)
     }
     /// Reserve a request's child durably before its UI/provider is installed.
     /// Shared stores use a deterministic desktop ID; legacy stores reserve their
@@ -131,8 +112,30 @@ impl Store {
             "operator-app-launch:{caller}:{}",
             crate::mono::files::content_hash(request)
         );
+        let name = format!(
+            "operator-{}",
+            crate::mono::files::content_hash(&format!("{caller}:{request}"))
+        );
+        self.reserve_app_session(&key, &name, fingerprint, provider, project)
+    }
+    /// Creates the session for the request reserved under `key`, or returns
+    /// the one it already created (`false`), so a retry after a lost receipt
+    /// resumes that child instead of starting another. `name` is a shared
+    /// store's deterministic desktop identity for it.
+    ///
+    /// A remote handle lives in the remote session settings `create` writes.
+    /// It is reserved before anything records its launch, so no first turn is
+    /// ever sent for a child its request does not lead back to.
+    pub fn reserve_app_session(
+        &self,
+        key: &str,
+        name: &str,
+        fingerprint: &str,
+        provider: &str,
+        project: &str,
+    ) -> Result<(Session, bool), String> {
         let previous = self
-            .setting(&key)?
+            .setting(key)?
             .map(|raw| serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string()))
             .transpose()?;
         if previous
@@ -149,15 +152,11 @@ impl Store {
                 .map(|s| (s, false))
                 .ok_or("The session created by this request was removed".into());
         }
-        if self.shared.is_some() {
-            self.save_setting(&key, &json!({"fingerprint":fingerprint}).to_string())?;
-            let original = format!(
-                "operator-{}",
-                crate::mono::files::content_hash(&format!("{caller}:{request}"))
-            );
-            let result = self.shared_create_named(provider, project, &original)?;
+        if self.shared.is_some() && !project.starts_with("remote://") {
+            self.save_setting(key, &json!({"fingerprint":fingerprint}).to_string())?;
+            let result = self.shared_create_named(provider, project, name)?;
             self.save_setting(
-                &key,
+                key,
                 &json!({"fingerprint":fingerprint,"sessionId":result.0.id}).to_string(),
             )?;
             return Ok(result);
@@ -168,7 +167,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let session = self.create(provider, project)?;
         self.save_setting(
-            &key,
+            key,
             &json!({"fingerprint":fingerprint,"sessionId":session.id}).to_string(),
         )?;
         transaction.commit().map_err(|e| e.to_string())?;

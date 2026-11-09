@@ -284,7 +284,11 @@ impl HostFixture {
             cx.run_until_parked();
             if cx.update(|cx| {
                 let view = view.read(cx);
-                view.loaded && (!settled || (!view.busy && !view.remote_state.refreshing))
+                view.loaded
+                    && (!settled
+                        || (!view.busy
+                            && !view.remote_state.refreshing
+                            && !view.remote_state.launching))
             }) {
                 return;
             }
@@ -669,8 +673,9 @@ fn a_remote_launch_left_unsent_by_a_restart_is_sent_on_load(cx: &mut TestAppCont
     assert_eq!(dispatched(&host).len(), 2, "the launch was sent again");
 }
 
-/// A launch whose commands reached the outbox before the app quit is the
-/// outbox's to retry. Its leftover local prompt is dropped, not sent again.
+/// A launch whose commands reached the outbox before the app quit is offered
+/// again with those same command IDs, which the host answers from its
+/// receipts; it is never journaled a second time with new ones.
 #[gpui::test]
 fn a_remote_launch_already_in_the_outbox_is_not_sent_twice(cx: &mut TestAppContext) {
     let host = HostFixture::new(false, false);
@@ -681,9 +686,13 @@ fn a_remote_launch_already_in_the_outbox_is_not_sent_twice(cx: &mut TestAppConte
             .prepare_app_prompt(summary.id, "request", "Report the current branch", false)
             .unwrap();
         let mut remote = store.remote_session(summary.id).unwrap().unwrap();
-        remote
-            .outbox
-            .push(json!({"type":"create","commandId":"journaled"}));
+        remote.outbox = vec![
+            json!({"type":"create","commandId":"journaled-create","projectId":"project","harness":"codex","model":"codex:gpt-test","modelSettings":{},"runtimeMode":"supervised"}),
+            json!({"type":"send","commandId":"journaled-send","text":"Report the current branch","attachments":[]}),
+        ];
+        let launch = remote.launch.as_mut().unwrap();
+        launch.command = Some("journaled-send".into());
+        launch.offered = true;
         store.save_remote_session(&remote).unwrap();
         summary
     };
@@ -696,10 +705,14 @@ fn a_remote_launch_already_in_the_outbox_is_not_sent_twice(cx: &mut TestAppConte
         })
     });
     host.wait(&view, cx, true);
-    assert!(dispatched(&host).is_empty());
-    cx.update(|cx| assert!(view.read(cx).remote_state.pending));
+    let ids: Vec<_> = dispatched(&host)
+        .iter()
+        .map(|c| c["commandId"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, ["journaled-create", "journaled-send"]);
     let store = locked(&host.store).unwrap();
-    assert!(store.follow_ups(summary.id).unwrap().draft.is_none());
+    let remote = store.remote_session(summary.id).unwrap().unwrap();
+    assert!(remote.outbox.is_empty() && remote.launch.is_none());
 }
 
 /// A draft launch (`draft: true`) resumed after a restart is saved as a host
@@ -741,4 +754,51 @@ fn a_remote_draft_launch_left_unsent_is_saved_as_a_draft_on_load(cx: &mut TestAp
         .collect();
     assert_eq!(kinds, ["create", "draft"], "{commands:?}");
     assert_eq!(commands[1]["text"], "Draft the release notes");
+}
+
+/// Review finding 4: two views (or a view and the startup sweep) that load
+/// the same unsent launch at once send its first turn once, not once each.
+#[gpui::test]
+fn two_views_loading_one_unsent_launch_send_it_once(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let summary = {
+        let store = locked(&host.store).unwrap();
+        let summary = store.create("codex", &host.summary.cwd).unwrap();
+        let settings = Settings {
+            model: Some("gpt-test".into()),
+            ..Default::default()
+        };
+        store
+            .configure_agent(summary.id, "codex", &settings)
+            .unwrap();
+        store
+            .prepare_app_prompt(summary.id, "request", "Report the current branch", false)
+            .unwrap();
+        summary
+    };
+    let views: Vec<_> = (0..2)
+        .map(|_| {
+            cx.update(|cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(summary.clone(), host.store.clone(), cx);
+                    view.remote_state.client = Some(host.client.clone());
+                    view.load_remote(cx);
+                    view
+                })
+            })
+        })
+        .collect();
+    for view in &views {
+        host.wait(view, cx, true);
+    }
+    for _ in 0..300 {
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let sends: Vec<_> = dispatched(&host)
+        .into_iter()
+        .filter(|c| c["type"] == "send")
+        .collect();
+    assert_eq!(sends.len(), 1, "{sends:?}");
+    assert_eq!(sends[0]["text"], "Report the current branch");
 }

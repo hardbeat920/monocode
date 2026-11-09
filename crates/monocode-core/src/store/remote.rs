@@ -53,6 +53,29 @@ pub struct RemoteSession {
     pub running: bool,
     #[serde(default)]
     pub needs_input: bool,
+    /// An app launch whose first turn the host has not confirmed yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<RemoteLaunch>,
+}
+
+/// An app launch's first turn, owed to the host until a receipt confirms it.
+/// It is the launch's one durable record: whoever sends it reads it under the
+/// session's operation lock, so a launch is sent, confirmed or given up once.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteLaunch {
+    pub text: String,
+    /// Send the prompt (`true`) or save it as a host draft.
+    pub send: bool,
+    /// When the launch was recorded (ms); its start deadline counts from here.
+    pub at: u64,
+    /// The first turn's command ID, once it is journaled in the outbox.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// A request carrying its commands may have reached the host, so giving
+    /// up cannot claim that nothing ran.
+    #[serde(default)]
+    pub offered: bool,
 }
 impl RemoteSession {
     pub fn machine(&self, client: &Connections) -> Result<Machine, String> {
@@ -308,6 +331,7 @@ impl Store {
             configuration: None,
             running: false,
             needs_input: false,
+            launch: None,
         })?;
         Ok(summary)
     }
@@ -428,6 +452,7 @@ impl Store {
                 .map(|r| r.uploads.clone())
                 .unwrap_or_default(),
             rejected: prior.as_ref().and_then(|remote| remote.rejected.clone()),
+            launch: prior.as_ref().and_then(|remote| remote.launch.clone()),
             configuration,
             running: value["status"] == "running",
             needs_input: host["needsInput"] == true
