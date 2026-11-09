@@ -228,25 +228,86 @@ fn write(path: &Path, machines: &[StoredMachine]) -> Result<(), String> {
 
 const INCOMPLETE: &str = "The host request did not complete. Retry to confirm its result.";
 
-/// A request through an SSH tunnel that was reset before any response, while
-/// OpenSSH reported the forward refused, never reached a host: nothing listens
-/// on the host's port. Say so instead of suggesting a retry.
+/// Methods that change nothing on the host, so a request that never reached
+/// it and one that did look the same afterwards.
+fn read_only_method(method: &str) -> bool {
+    matches!(
+        method,
+        "environment.describe"
+            | "projects.list"
+            | "projects.browse"
+            | "models.list"
+            | "sessions.list"
+            | "sessions.sync"
+            | "sessions.syncChunk"
+            | "attachments.read"
+            | "git.diff"
+            | "git.branches"
+            | "git.worktrees"
+            | "git.index"
+            | "git.fileDiff"
+            | "files.read"
+            | "files.list"
+            | "files.index"
+            | "files.search"
+            | "files.searchContent"
+    )
+}
+
+/// Explains a request through an SSH tunnel that was reset before any
+/// response, using the forward OpenSSH refused meanwhile (`refusal`).
+///
+/// The refusal log is shared by every request on the tunnel, so it may belong
+/// to a concurrent request. A read-only request is rewritten to name the cause.
+/// A request that may change something keeps its "retry to confirm" advice,
+/// because it may have reached the host before another request was refused;
+/// the cause is only added as a likely reason.
 fn explain_incomplete(
     error: String,
     machine: &StoredMachine,
-    forward_failed: impl FnOnce() -> bool,
+    method: &str,
+    refusal: impl FnOnce() -> Option<ssh::ForwardRefusal>,
 ) -> String {
+    use ssh::ForwardRefusal;
     let Some(target) = machine.ssh.as_ref() else {
         return error;
     };
-    if error != INCOMPLETE || !forward_failed() {
+    if error != INCOMPLETE {
         return error;
     }
-    format!(
-        "MonoCode Host is not running on {}. SSH connects, but nothing answers on the host's port {}. \
-         Start it on the machine with `monocode-host service install --port {}`, then retry.",
-        machine.name, target.remote_port, target.remote_port
-    )
+    let Some(refusal) = refusal() else {
+        return error;
+    };
+    let (name, port) = (&machine.name, target.remote_port);
+    if !read_only_method(method) {
+        let cause = match refusal {
+            ForwardRefusal::NotListening => {
+                format!("nothing answers on port {port}, so MonoCode Host may not be running")
+            }
+            ForwardRefusal::Prohibited => {
+                format!("its SSH server does not allow forwarding to port {port}")
+            }
+            ForwardRefusal::Other(reason) => {
+                format!("its SSH server could not open port {port} ({reason})")
+            }
+        };
+        return format!("{INCOMPLETE} OpenSSH reported that on {name} {cause}.");
+    }
+    match refusal {
+        ForwardRefusal::NotListening => format!(
+            "MonoCode Host is not running on {name}. SSH connects, but nothing answers on the host's port {port}. \
+             Start it on the machine with `monocode-host service install --port {port}`, then retry."
+        ),
+        ForwardRefusal::Prohibited => format!(
+            "The SSH server on {name} does not allow forwarding to the host's port {port} \
+             (OpenSSH: administratively prohibited). Allow TCP forwarding for this account \
+             (`AllowTcpForwarding`, and `PermitOpen` must include 127.0.0.1:{port}), then reconnect."
+        ),
+        ForwardRefusal::Other(reason) => format!(
+            "The SSH server on {name} could not open the host's port {port} (OpenSSH: {reason}). \
+             Retry, or reconnect from Settings → Connections."
+        ),
+    }
 }
 
 /// Hosts split large session syncs into pieces below this cap
@@ -451,11 +512,11 @@ impl Connections {
             params,
         )
         .map_err(|error| {
-            explain_incomplete(error, &machine, || {
+            explain_incomplete(error, &machine, method, || {
                 tunnel_lease
                     .as_ref()
                     .zip(before)
-                    .is_some_and(|(lease, before)| lease.forward_failed_since(before))
+                    .and_then(|(lease, before)| lease.forward_refused_since(before))
             })
         });
         if response
@@ -976,7 +1037,16 @@ mod tests {
             port: None,
             remote_port: 3774,
         }));
-        let explained = explain_incomplete(error.clone(), &tunneled, || true);
+        use ssh::ForwardRefusal::{NotListening, Other, Prohibited};
+        let explain = |error: &str, machine: &StoredMachine, method, refusal| {
+            explain_incomplete(error.into(), machine, method, || refusal)
+        };
+        let explained = explain(
+            &error,
+            &tunneled,
+            "environment.describe",
+            Some(NotListening),
+        );
         assert!(
             explained.starts_with("MonoCode Host is not running on VPS.")
                 && explained.contains("port 3774")
@@ -984,19 +1054,132 @@ mod tests {
                 && !explained.contains("Retry to confirm"),
             "{explained}"
         );
+        // A server that forbids the forward says nothing about the host.
+        let explained = explain(&error, &tunneled, "sessions.list", Some(Prohibited));
+        assert!(
+            explained.contains("does not allow forwarding to the host's port 3774")
+                && explained.contains("AllowTcpForwarding")
+                && !explained.contains("not running"),
+            "{explained}"
+        );
+        let explained = explain(
+            &error,
+            &tunneled,
+            "models.list",
+            Some(Other("resource shortage".into())),
+        );
+        assert!(
+            explained.contains("resource shortage") && !explained.contains("not running"),
+            "{explained}"
+        );
+        // A request that may have changed something keeps its retry advice:
+        // the refusal may belong to another request on the same tunnel.
+        for method in ["commands.dispatch", "sessions.update", "sessions.delete"] {
+            let explained = explain(&error, &tunneled, method, Some(NotListening));
+            assert!(
+                explained.starts_with(INCOMPLETE)
+                    && explained.contains("MonoCode Host may not be running"),
+                "{method}: {explained}"
+            );
+        }
         // Without OpenSSH's proof the result stays unknown, so keep the retry advice.
         assert_eq!(
-            explain_incomplete(error.clone(), &tunneled, || false),
+            explain(&error, &tunneled, "environment.describe", None),
             INCOMPLETE
         );
         assert_eq!(
-            explain_incomplete(error, &machine(None), || true),
+            explain(
+                &error,
+                &machine(None),
+                "environment.describe",
+                Some(NotListening)
+            ),
             INCOMPLETE
         );
         assert_eq!(
-            explain_incomplete("Host returned HTTP 500".into(), &tunneled, || true),
+            explain(
+                "Host returned HTTP 500",
+                &tunneled,
+                "environment.describe",
+                Some(NotListening)
+            ),
             "Host returned HTTP 500"
         );
+    }
+
+    /// `Connections::request` through a tunnel: OpenSSH's refusal line
+    /// arriving after the reset is attributed to the request, by reason and
+    /// method, and a refusal from before the request is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_tunneled_request_reads_the_refusal_openssh_logs_for_it() {
+        use std::{io::Write as _, net::TcpListener, thread};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (stderr, mut openssh) = std::io::pipe().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let connections = Connections::new(dir.path());
+        write(
+            &connections.store_path(),
+            &[StoredMachine {
+                id: "m".into(),
+                name: "VPS".into(),
+                endpoint: "ssh://vps".into(),
+                environment_id: "env".into(),
+                token: "t".into(),
+                ssh: Some(SshTarget {
+                    target: "vps".into(),
+                    port: None,
+                    remote_port: 3774,
+                }),
+            }],
+        )
+        .unwrap();
+        connections
+            .tunnels
+            .insert("m".into(), Tunnel::for_test(port, stderr));
+        // A refusal logged before the request belongs to an earlier one.
+        writeln!(
+            openssh,
+            "channel 1: open failed: connect failed: Connection refused"
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Each accepted connection is reset, then OpenSSH logs `lines[i]`.
+        let lines = [
+            None,
+            Some("channel 2: open failed: connect failed: Connection refused"),
+            Some("channel 3: open failed: administratively prohibited: open failed"),
+            Some("channel 4: open failed: connect failed: Connection refused"),
+        ];
+        let server = thread::spawn(move || {
+            for line in lines {
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.read(&mut [0; 1]);
+                drop(stream);
+                if let Some(line) = line {
+                    writeln!(openssh, "{line}").unwrap();
+                }
+            }
+        });
+        let request = |method| connections.request("m", method, json!({})).unwrap_err();
+        assert_eq!(request("sessions.list"), INCOMPLETE);
+        let error = request("sessions.list");
+        assert!(
+            error.starts_with("MonoCode Host is not running on VPS."),
+            "{error}"
+        );
+        let error = request("environment.describe");
+        assert!(
+            error.contains("does not allow forwarding") && !error.contains("not running"),
+            "{error}"
+        );
+        let error = request("commands.dispatch");
+        assert!(
+            error.starts_with(INCOMPLETE) && error.contains("may not be running"),
+            "{error}"
+        );
+        server.join().unwrap();
     }
 
     #[test]

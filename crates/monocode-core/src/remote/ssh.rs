@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc, Mutex, PoisonError,
 };
 use std::time::{Duration, Instant};
@@ -435,14 +435,60 @@ pub struct Tunnel {
     child: Child,
     pub port: u16,
     stderr: Arc<Mutex<String>>,
-    forward_failures: Arc<AtomicU64>,
+    forwards: Arc<ForwardLog>,
 }
 
-/// Copies OpenSSH's stderr into `buffer` (bounded) and counts forwarded
+/// Why the SSH server would not open a forwarded channel to the host's port,
+/// from OpenSSH's `channel N: open failed: <reason>: <message>` line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForwardRefusal {
+    /// `connect failed`: the server tried the port and nothing listens there.
+    NotListening,
+    /// `administratively prohibited`: sshd does not allow this forward
+    /// (`AllowTcpForwarding`, `DisableForwarding` or `PermitOpen`).
+    Prohibited,
+    /// Any other reason, such as `resource shortage`, as OpenSSH words it.
+    Other(String),
+}
+
+impl ForwardRefusal {
+    fn parse(line: &str) -> Option<Self> {
+        let (_, rest) = line.split_once(": open failed: ")?;
+        let reason = rest.split(": ").next().unwrap_or(rest).trim();
+        Some(match reason {
+            "connect failed" => Self::NotListening,
+            "administratively prohibited" => Self::Prohibited,
+            reason => Self::Other(reason.chars().take(120).collect()),
+        })
+    }
+}
+
+/// Refused forwards seen on one tunnel: how many, and the latest reason.
+#[derive(Default)]
+pub struct ForwardLog {
+    state: Mutex<(u64, Option<ForwardRefusal>)>,
+}
+
+impl ForwardLog {
+    fn record(&self, refusal: ForwardRefusal) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.0 += 1;
+        state.1 = Some(refusal);
+    }
+    fn count(&self) -> u64 {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).0
+    }
+    fn latest_since(&self, before: u64) -> Option<ForwardRefusal> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        (state.0 > before).then(|| state.1.clone()).flatten()
+    }
+}
+
+/// Copies OpenSSH's stderr into `buffer` (bounded) and records forwarded
 /// connections the remote side refused. OpenSSH accepts every local
-/// connection on a `-L` forward, so when nothing listens on the host's port
-/// the client only sees a reset; this line is the one proof of that cause.
-fn watch_stderr(reader: impl Read, buffer: &Mutex<String>, forward_failures: &AtomicU64) {
+/// connection on a `-L` forward, so when the server cannot open the host's
+/// port the client only sees a reset; this line is the one proof of why.
+fn watch_stderr(reader: impl Read, buffer: &Mutex<String>, forwards: &ForwardLog) {
     use std::io::BufRead;
     let mut reader = std::io::BufReader::new(reader);
     let mut line = Vec::new();
@@ -451,14 +497,36 @@ fn watch_stderr(reader: impl Read, buffer: &Mutex<String>, forward_failures: &At
             break;
         }
         let text = String::from_utf8_lossy(&line);
-        if text.contains(": open failed: ") {
-            forward_failures.fetch_add(1, Ordering::SeqCst);
+        if let Some(refusal) = ForwardRefusal::parse(&text) {
+            forwards.record(refusal);
         }
         let mut buffer = buffer.lock().unwrap_or_else(PoisonError::into_inner);
         if buffer.len() < 8192 {
             buffer.push_str(&text);
         }
         line.clear();
+    }
+}
+#[cfg(all(test, unix))]
+impl Tunnel {
+    /// A tunnel to `port` whose OpenSSH stderr is `stderr`, kept alive by a
+    /// placeholder process, for testing how requests read the forward log.
+    pub(crate) fn for_test(port: u16, stderr: impl Read + Send + 'static) -> Self {
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let forwards = Arc::new(ForwardLog::default());
+        let (errors, log) = (buffer.clone(), forwards.clone());
+        std::thread::spawn(move || watch_stderr(stderr, &errors, &log));
+        Self {
+            child,
+            port,
+            stderr: buffer,
+            forwards,
+        }
     }
 }
 impl Drop for Tunnel {
@@ -504,14 +572,14 @@ impl Tunnel {
             .map_err(|e| format!("Could not start OpenSSH: {e}"))?;
         let reader = child.stderr.take().unwrap();
         let stderr = Arc::new(Mutex::new(String::new()));
-        let forward_failures = Arc::new(AtomicU64::new(0));
-        let (errors, failures) = (stderr.clone(), forward_failures.clone());
-        std::thread::spawn(move || watch_stderr(reader, &errors, &failures));
+        let forwards = Arc::new(ForwardLog::default());
+        let (errors, log) = (stderr.clone(), forwards.clone());
+        std::thread::spawn(move || watch_stderr(reader, &errors, &log));
         let mut tunnel = Self {
             child,
             port,
             stderr,
-            forward_failures,
+            forwards,
         };
         let deadline = Instant::now() + Duration::from_secs(if job.is_some() { 150 } else { 20 });
         loop {
@@ -558,23 +626,25 @@ pub struct TunnelLease {
     pub endpoint: String,
     slot: Arc<Mutex<Slot>>,
     generation: u64,
-    forward_failures: Arc<AtomicU64>,
+    forwards: Arc<ForwardLog>,
 }
 
 impl TunnelLease {
     pub fn forward_failures(&self) -> u64 {
-        self.forward_failures.load(Ordering::SeqCst)
+        self.forwards.count()
     }
-    /// Whether OpenSSH reported a refused forward after `before`. It may log
-    /// the line just after closing the local socket, so wait briefly for it.
-    pub fn forward_failed_since(&self, before: u64) -> bool {
+    /// The latest forward OpenSSH refused after `before`. It may log the line
+    /// just after closing the local socket, so wait briefly for it. The log is
+    /// shared by every request on the tunnel, so a refusal here may belong to
+    /// a concurrent request.
+    pub fn forward_refused_since(&self, before: u64) -> Option<ForwardRefusal> {
         let deadline = Instant::now() + Duration::from_millis(500);
         loop {
-            if self.forward_failures() > before {
-                return true;
+            if let Some(refusal) = self.forwards.latest_since(before) {
+                return Some(refusal);
             }
             if Instant::now() >= deadline {
-                return false;
+                return None;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -616,7 +686,7 @@ impl Tunnels {
                     endpoint: format!("http://127.0.0.1:{}", tunnel.port),
                     slot: slot.clone(),
                     generation,
-                    forward_failures: tunnel.forward_failures.clone(),
+                    forwards: tunnel.forwards.clone(),
                 });
             }
         }
@@ -629,7 +699,7 @@ impl Tunnels {
         match Tunnel::start(target, None, None) {
             Ok(tunnel) => {
                 let endpoint = format!("http://127.0.0.1:{}", tunnel.port);
-                let forward_failures = tunnel.forward_failures.clone();
+                let forwards = tunnel.forwards.clone();
                 current.failure = None;
                 current.generation = current.generation.wrapping_add(1);
                 current.tunnel = Some(tunnel);
@@ -637,7 +707,7 @@ impl Tunnels {
                     endpoint,
                     slot: slot.clone(),
                     generation: current.generation,
-                    forward_failures,
+                    forwards,
                 })
             }
             Err(error) => {
@@ -720,7 +790,7 @@ mod tests {
             endpoint: String::new(),
             slot: old,
             generation: 1,
-            forward_failures: Default::default(),
+            forwards: Default::default(),
         };
         let newer = slot(2);
         tunnels.slots().insert("host".into(), newer.clone());
@@ -730,7 +800,7 @@ mod tests {
             endpoint: String::new(),
             slot: newer.clone(),
             generation: 1,
-            forward_failures: Default::default(),
+            forwards: Default::default(),
         };
         tunnels.invalidate("host", &stale_lease);
         assert!(newer.lock().unwrap().failure.is_some());
@@ -744,9 +814,8 @@ mod tests {
         assert!(newer.lock().unwrap().failure.is_none());
     }
     #[test]
-    fn refused_forwards_are_counted_from_openssh_stderr() {
-        // OpenSSH's own wording when nothing listens on the forwarded port,
-        // delivered in pieces as a pipe would.
+    fn refused_forwards_are_recorded_with_openssh_reason() {
+        // OpenSSH's own wording, delivered in pieces as a pipe would.
         struct Chunks(Vec<&'static [u8]>);
         impl Read for Chunks {
             fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
@@ -758,19 +827,35 @@ mod tests {
                 Ok(chunk.len())
             }
         }
-        let buffer = Mutex::new(String::new());
-        let failures = AtomicU64::new(0);
-        watch_stderr(
-            Chunks(vec![
-                b"Warning: Permanently added '[127.0.0.1]:62183' (ED25519) to the list of known hosts.\nchannel 1: open fai",
-                b"led: connect failed: Connection refused\n",
-                b"channel 2: open failed: connect failed: Connection refused\n",
-            ]),
-            &buffer,
-            &failures,
+        let read = |chunks| {
+            let buffer = Mutex::new(String::new());
+            let forwards = ForwardLog::default();
+            watch_stderr(Chunks(chunks), &buffer, &forwards);
+            let buffer = buffer.into_inner().unwrap();
+            (forwards, buffer)
+        };
+        let (forwards, buffer) = read(vec![
+            b"Warning: Permanently added '[127.0.0.1]:62183' (ED25519) to the list of known hosts.\nchannel 1: open fai",
+            b"led: connect failed: Connection refused\n",
+            b"channel 2: open failed: connect failed: Connection refused\n",
+        ]);
+        assert_eq!(forwards.count(), 2);
+        assert_eq!(forwards.latest_since(1), Some(ForwardRefusal::NotListening));
+        assert_eq!(forwards.latest_since(2), None);
+        assert!(buffer.contains("channel 2: open failed"));
+        // sshd with `AllowTcpForwarding no`, `DisableForwarding yes` or a
+        // `PermitOpen` without the host's port: the host may well be running.
+        let (forwards, _) = read(vec![
+            b"channel 2: open failed: administratively prohibited: open failed\n",
+        ]);
+        assert_eq!(forwards.latest_since(0), Some(ForwardRefusal::Prohibited));
+        let (forwards, _) = read(vec![b"channel 3: open failed: resource shortage: \n"]);
+        assert_eq!(
+            forwards.latest_since(0),
+            Some(ForwardRefusal::Other("resource shortage".into()))
         );
-        assert_eq!(failures.load(Ordering::SeqCst), 2);
-        assert!(buffer.lock().unwrap().contains("channel 2: open failed"));
+        let (forwards, _) = read(vec![b"Connection to vps closed by remote host.\n"]);
+        assert_eq!(forwards.count(), 0);
     }
     // scripts/test-remote-ssh.py creates an isolated sshd, host and keypair.
     // This test uses the production tunnel lifecycle and shell transport.
