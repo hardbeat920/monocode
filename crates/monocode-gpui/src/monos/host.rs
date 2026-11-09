@@ -405,8 +405,9 @@ impl Monos {
                 let (prompt, provider, kind, source_provider, settings, placement, remote) =
                     match parsed {
                         Ok(value) => value,
+                        // Nothing exists yet, so a retry runs again.
                         Err(error) => {
-                            self.finish_call(call, Err(error), cx);
+                            self.finish_uncommitted(call, error);
                             return;
                         }
                     };
@@ -460,15 +461,18 @@ impl Monos {
                         if let Err(error) = configured {
                             // Never leave a blank placeholder behind. A new
                             // worktree stays recorded on its session instead.
-                            let removed = settings.worktree_cwd.is_none()
-                                && locked(&store)
-                                    .and_then(|mut db| db.delete(summary.id))
-                                    .is_ok();
-                            return Err(if removed {
-                                Failure::uncommitted(error)
-                            } else {
-                                Failure::committed(error)
-                            });
+                            if settings.worktree_cwd.is_some() {
+                                return Err(Failure::committed(error));
+                            }
+                            return Err(
+                                match locked(&store).and_then(|mut db| db.delete(summary.id)) {
+                                    Ok(()) => Failure::uncommitted(error),
+                                    Err(cleanup) => Failure::committed(format!(
+                                        "{error} Session {} was left behind and could not be removed: {cleanup}",
+                                        summary.id
+                                    )),
+                                },
+                            );
                         }
                         summary.has_messages = true;
                         Ok((

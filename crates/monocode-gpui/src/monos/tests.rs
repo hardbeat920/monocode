@@ -1947,10 +1947,12 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
 
-/// Answers `environment.describe` as a machine offering Codex, and every other
-/// method with an empty result, until dropped.
+/// A machine offering Codex with one project, until dropped. It refuses the
+/// commands the real host refuses, keeps one session's transcript, and
+/// records every command it accepts.
 struct DescribingHost {
     url: String,
+    commands: Arc<Mutex<Vec<Value>>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     server: Option<std::thread::JoinHandle<()>>,
 }
@@ -1961,10 +1963,13 @@ impl DescribingHost {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let descriptor = json!({"protocolVersion": 1, "environmentId": environment, "name": "Test host", "providers": ["codex"], "capabilities": ["sessions.draft"]});
+        let descriptor = json!({"protocolVersion": 1, "environmentId": environment, "name": "Test host", "providers": ["codex"], "capabilities": ["sessions.draft", "sessions.sync"]});
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let accepted = commands.clone();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done = stop.clone();
         let server = std::thread::spawn(move || {
+            let mut snapshot: Option<Value> = None;
             while !done.load(Ordering::Relaxed) {
                 let mut stream = match listener.accept() {
                     Ok((stream, _)) => stream,
@@ -1993,12 +1998,58 @@ impl DescribingHost {
                     continue;
                 }
                 let request: Value = serde_json::from_slice(&body).unwrap_or_default();
-                let result = if request["method"] == "environment.describe" {
-                    descriptor.clone()
-                } else {
-                    json!({})
+                let params = &request["params"];
+                let reply = match request["method"].as_str().unwrap_or("") {
+                    "environment.describe" => Ok(descriptor.clone()),
+                    "projects.list" => Ok(json!([{"id": "project", "cwd": "/home/me/project"}])),
+                    "models.list" => Ok(
+                        json!({"models": {"codex": [{"id": "gpt-test", "name": "GPT test"}]}, "errors": {}}),
+                    ),
+                    "sessions.sync" => snapshot
+                        .clone()
+                        .map(|value| json!({"kind": "snapshot", "value": value}))
+                        .ok_or("Session not found"),
+                    "commands.dispatch" => {
+                        let empty = json!({"session": {"blocks": []}});
+                        match crate::runtime::remote::fake_host::rejects(
+                            params,
+                            snapshot.as_ref().unwrap_or(&empty),
+                        ) {
+                            Some(error) => Err(error),
+                            None => {
+                                if params["type"] == "create" {
+                                    snapshot = Some(
+                                        json!({"projectId": "project", "revision": 1, "status": "idle", "updatedAt": 1,
+                                        "session": {"id": "host-session", "title": "New session", "harness": "codex", "model": params["model"], "runtimeMode": params["runtimeMode"], "modelSettings": {}, "blocks": []}}),
+                                    );
+                                }
+                                let value = snapshot.as_mut().unwrap();
+                                if matches!(params["type"].as_str(), Some("send" | "draft")) {
+                                    let mut block = json!({"id": params["commandId"], "role": "user", "text": params["text"]});
+                                    if params["type"] == "draft" {
+                                        block["draft"] = json!(true);
+                                    }
+                                    value["session"]["blocks"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .push(block);
+                                }
+                                let revision = value["revision"].as_u64().unwrap() + 1;
+                                value["revision"] = json!(revision);
+                                accepted.lock().unwrap().push(params.clone());
+                                Ok(
+                                    json!({"commandId": params["commandId"], "sessionId": "host-session", "revision": revision}),
+                                )
+                            }
+                        }
+                    }
+                    _ => Ok(json!({})),
                 };
-                let body = json!({"result": result}).to_string();
+                let body = match reply {
+                    Ok(result) => json!({"result": result}),
+                    Err(error) => json!({"error": error}),
+                }
+                .to_string();
                 let _ = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
@@ -2009,9 +2060,22 @@ impl DescribingHost {
         });
         Self {
             url,
+            commands,
             stop,
             server: Some(server),
         }
+    }
+    /// Waits for the host to accept `count` commands.
+    fn wait_for(&self, count: usize, cx: &mut TestAppContext) -> Vec<Value> {
+        for _ in 0..5000 {
+            cx.run_until_parked();
+            let commands = self.commands.lock().unwrap().clone();
+            if commands.len() >= count {
+                return commands;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("host accepted only {:?}", self.commands.lock().unwrap());
     }
 }
 impl Drop for DescribingHost {
@@ -2038,7 +2102,7 @@ fn a_remote_launch_that_failed_its_start_check_runs_again_on_retry(cx: &mut Test
     s.manager.update(cx, |m, _| {
         m.roster.get_mut(&s.id).unwrap().projects = vec![project.clone()];
     });
-    let input = json!({"project": project, "harness": "codex", "prompt": "Run hostname", "title": "Remote session smoke test", "draft": true});
+    let input = json!({"project": project, "harness": "codex", "prompt": "Run hostname", "title": "Remote session smoke test"});
     let remote_sessions = |s: &Setup| {
         locked(&s.store)
             .unwrap()
@@ -2048,6 +2112,21 @@ fn a_remote_launch_that_failed_its_start_check_runs_again_on_retry(cx: &mut Test
             .filter(|session| session.cwd == project)
             .count()
     };
+    // Input refused before the background work stores no receipt either, so
+    // the corrected call with the same ID is not answered "different input".
+    let mut wrong = input.clone();
+    wrong["harness"] = json!("nope");
+    let error = call(&s, "smoke", "sessions.start", wrong, cx)
+        .try_recv()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("Unknown provider"), "{error}");
+    let receipt = format!(
+        "mono-app-receipt:{}:{}",
+        s.session,
+        mono::files::content_hash("smoke")
+    );
+    assert_eq!(locked(&s.store).unwrap().setting(&receipt).unwrap(), None);
     // The machine is not connected yet, so the start check fails before any
     // session exists: nothing may be left behind, and the ID stays unused.
     let error = call(&s, "smoke", "sessions.start", input.clone(), cx)
@@ -2083,5 +2162,66 @@ fn a_remote_launch_that_failed_its_start_check_runs_again_on_retry(cx: &mut Test
         .unwrap();
     assert_eq!(again, started);
     assert_eq!(remote_sessions(&s), 1);
+    // The launch reaches the host through the real send path, once.
+    let commands = host.wait_for(2, cx);
+    let kinds: Vec<_> = commands.iter().map(|c| c["type"].clone()).collect();
+    assert_eq!(kinds, [json!("create"), json!("send")], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Run hostname");
+    assert_eq!(commands[0]["model"], "codex:gpt-test");
     drop(host);
+}
+
+/// After a restart a Mono's hidden child has no view, so nothing would load
+/// its conversation: the window's startup sweep sends its unsent launch.
+#[gpui::test]
+fn a_hidden_remote_launch_left_unsent_is_sent_when_the_window_starts(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let environment = format!("mono-launch-{}", mono::new_id());
+    let host = DescribingHost::new(&environment);
+    let connections = s
+        .window
+        .read_with(cx, |shell, _| shell.remote_connections())
+        .unwrap();
+    connections
+        .connect(String::new(), host.url.clone(), "a".repeat(43))
+        .unwrap();
+    // As `sessions.start` left it before the app quit: no view, no commands.
+    let child = {
+        let store = locked(&s.store).unwrap();
+        let project = store
+            .remember_remote_project(
+                &environment,
+                &json!({"id": "project", "cwd": "/home/me/project", "name": "project"}),
+            )
+            .unwrap();
+        let child = store.create("codex", &project.key).unwrap().id;
+        let settings = monocode_core::agent::Settings {
+            model: Some("gpt-test".into()),
+            ..Default::default()
+        };
+        store.configure_agent(child, "codex", &settings).unwrap();
+        store
+            .prepare_app_prompt(child, "launch", "Run hostname", false)
+            .unwrap();
+        child
+    };
+    s.window
+        .update(cx, |shell, _, cx| {
+            assert!(shell.mono_session_entity(child).is_none());
+            shell.resume_remote_launches(cx);
+        })
+        .unwrap();
+    let commands = host.wait_for(2, cx);
+    let kinds: Vec<_> = commands.iter().map(|c| c["type"].clone()).collect();
+    assert_eq!(kinds, [json!("create"), json!("send")], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Run hostname");
+    // A second sweep finds nothing left to send.
+    s.window
+        .update(cx, |shell, _, cx| shell.resume_remote_launches(cx))
+        .unwrap();
+    for _ in 0..200 {
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(host.commands.lock().unwrap().len(), 2);
 }

@@ -369,8 +369,11 @@ impl Shell {
                 })();
                 let (prompt, kind, placement, settings) = match parsed {
                     Ok(p) => p,
+                    // Nothing exists yet, so a retry with this ID runs again.
                     Err(e) => {
-                        self.finish_app_call(call, Err(e), cx);
+                        self.app_pending
+                            .remove(&(call.session, call.request_id.clone()));
+                        let _ = call.reply.send(Err(e));
                         return;
                     }
                 };

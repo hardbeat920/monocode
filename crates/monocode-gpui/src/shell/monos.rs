@@ -51,6 +51,38 @@ impl Shell {
             .as_ref()
             .is_some_and(|m| m.read(cx).active.is_some())
     }
+    /// Loads the conversations of remote app launches the host does not have
+    /// yet, so each sends its prompt (`Conversation::resume_remote_app_launch`).
+    /// A Mono's children are hidden, so after a restart no window opens them.
+    pub(crate) fn resume_remote_launches(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let pending = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.pending_remote_app_launches() });
+        cx.spawn(async move |this, cx| {
+            let Ok(ids) = pending.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                for id in ids {
+                    let view = this.ensure_session(id, cx).or_else(|| {
+                        let summary = locked(&this.store)
+                            .ok()?
+                            .sessions()
+                            .ok()?
+                            .into_iter()
+                            .find(|s| s.id == id)?;
+                        this.add_loaded(summary, cx);
+                        this.sessions.get(&id).cloned()
+                    });
+                    if let Some(view) = view {
+                        view.update(cx, |view, cx| view.load(cx));
+                    }
+                }
+            });
+        })
+        .detach();
+    }
     /// This window's machine connections, for a Mono's remote launch check.
     pub(crate) fn remote_connections(&self) -> Arc<monocode_core::remote::Connections> {
         self.remote.clone()

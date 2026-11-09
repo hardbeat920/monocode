@@ -58,6 +58,20 @@ impl Store {
         let send = self.setting(&format!("{APP_LAUNCH_DRAFT}{id}"))?.is_none();
         Ok(Some((draft.text.clone(), send)))
     }
+    /// Remote handles whose app launch the host does not have yet, such as a
+    /// hidden Mono child the app quit before sending.
+    pub fn pending_remote_app_launches(&self) -> Result<Vec<i64>, String> {
+        let mut pending = Vec::new();
+        for (id, remote) in self.stored_remote_sessions()? {
+            if remote.session_id.is_none()
+                && remote.outbox.is_empty()
+                && self.pending_remote_app_launch(id)?.is_some()
+            {
+                pending.push(id);
+            }
+        }
+        Ok(pending)
+    }
     /// Drops a remote app launch's local prompt once `text`, its first turn,
     /// is journaled in the session's remote outbox.
     pub fn finish_remote_app_launch(&self, id: i64, text: &str) -> Result<(), String> {

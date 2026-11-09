@@ -168,7 +168,7 @@ impl Store {
         )?;
         Ok(remote)
     }
-    fn stored_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
+    pub(super) fn stored_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
         self.setting(SESSIONS)?
             .map(|raw| {
                 serde_json::from_str(&raw).map_err(|e| format!("Cannot read remote sessions: {e}"))

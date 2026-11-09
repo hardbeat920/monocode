@@ -891,6 +891,7 @@ impl Shell {
         })
         .detach();
         let remote_clock = cx.spawn(async move |this, cx| {
+            let _ = this.update(cx, |this, cx| this.resume_remote_launches(cx));
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(3))

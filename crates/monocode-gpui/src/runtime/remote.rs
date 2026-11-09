@@ -823,4 +823,6 @@ pub(crate) fn run_with_client(
 }
 
 #[cfg(test)]
+pub(crate) mod fake_host;
+#[cfg(test)]
 mod tests;

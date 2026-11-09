@@ -10,7 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Native: a session a Mono starts in a remote (SSH) project now runs and reports back when it finishes. Before, `sessions.start` answered `accepted` but never sent the prompt to the machine. When the machine is unreachable or lacks the harness, the launch now fails with that reason.
-- Native: when MonoCode Host is not running on an SSH machine, requests now say so ("MonoCode Host is not running on <machine>…") instead of "The host request did not complete. Retry to confirm its result." SSH accepted the connection, but nothing answered on the host's port. The error names the command that starts the host.
+- Native: a remote session a Mono started is no longer lost if the app quits or crashes before its prompt reaches the machine. The prompt is sent when the app next starts.
+- Native: when MonoCode Host is not running on an SSH machine, requests that only read now say so ("MonoCode Host is not running on <machine>…") instead of "The host request did not complete. Retry to confirm its result." SSH accepted the connection, but nothing answered on the host's port. The error names the command that starts the host. When the SSH server forbids port forwarding, the error says that instead. A request that may have changed something still asks you to retry to confirm its result.
+- Native: reading a remote session for a Mono no longer freezes the window while the machine answers, and gives up after 20 seconds.
 - Native: a Mono can retry a `sessions.start` that failed before creating anything (for example, its machine was not answering) with the same request ID, and the retry runs the launch again. Before, it replayed the first error. A launch that fails after creating its session no longer leaves a blank "New … session" behind.
 - Native: the app CLI accepts the negative IDs of remote sessions. `sessions.read` returns a remote conversation from its machine, and `sessions.send`, `stop`, `archive` and `delete` find it, instead of failing with "sessionId must be an ID" or "Query returned no rows".
 
