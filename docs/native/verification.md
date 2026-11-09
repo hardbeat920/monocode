@@ -297,15 +297,24 @@ debug-profile incremental compiler cache made room for the test build; the
 `native-dev` artifacts used for this check were retained.
 
 The [candidate native workflow](https://github.com/hardbeat920/monocode/actions/runs/42036909502)
-has passed core checks on macOS, Linux, and Windows. Its macOS desktop job was
-still running when these local results were recorded.
+passed all jobs: core checks on macOS, Linux, and Windows, plus the macOS desktop
+formatting, strict Clippy, tests, and build. The desktop job completed after the
+local results above were first recorded.
 
-These results cover automated fixtures. The native release workflow builds the
-platform packages, signs and verifies the update packages and manifest, and
-handles macOS notarization before publication. No live-provider requests,
-performance benchmarks, companion device tests, or manual packaged upgrade tests
-were performed in this preflight. Existing platform runtime limitations remain
-as recorded above and in [preview limitations](parity.md).
+The [preview 14 release workflow](https://github.com/hardbeat920/monocode/actions/runs/42040307219)
+built all platform packages and passed macOS signing and notarization. Its native
+client verifier checked the signed manifest and all six updater packages before
+publication. [Preview 14](https://github.com/hardbeat920/monocode/releases/tag/native-v0.16.0-preview.14)
+was published on November 5 at 14:34 UTC, with all 14 download and signature
+assets uploaded. The public native update feed was checked afterward: it served
+`0.16.0-preview.14`, its notes matched the release notes, and all six versioned
+updater downloads returned HTTP 200. The GitHub release is marked as a prerelease;
+the production channel is unchanged.
+
+These results cover automated fixtures and publication checks. No live-provider
+requests, performance benchmarks, companion device tests, or manual packaged
+upgrade tests were performed in this preflight. Existing platform runtime
+limitations remain as recorded above and in [preview limitations](parity.md).
 
 ## Local checks
 
