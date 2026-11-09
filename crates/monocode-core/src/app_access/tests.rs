@@ -175,6 +175,44 @@ fn conversation_pages_keep_source_cursors_prose_boundaries_and_character_caps() 
 }
 
 #[test]
+fn conversation_pages_read_a_long_message_through_char_offsets() {
+    let long = format!("{}{}", "a".repeat(6000), "🙂".repeat(500));
+    let blocks = vec![
+        json!({"id":"u1","role":"user","text":"Go"}),
+        json!({"id":"a1","role":"assistant","text":long}),
+    ];
+    let first = conversation_page(&blocks, &json!({"limit":1,"maxChars":6000})).unwrap();
+    let answer = &first["turns"][0]["assistant"];
+    assert_eq!(answer["truncated"], true);
+    assert_eq!(answer["nextCharOffset"], 6000);
+    assert_eq!(answer["totalChars"], 6500);
+    let rest = conversation_page(
+        &blocks,
+        &json!({"limit":1,"maxChars":6000,"charOffset":answer["nextCharOffset"]}),
+    )
+    .unwrap();
+    let rest = &rest["turns"][0]["assistant"];
+    assert_eq!(rest["text"], "🙂".repeat(500));
+    assert_eq!(rest["truncated"], false);
+    assert_eq!(rest["charOffset"], 6000);
+    assert!(rest.get("nextCharOffset").is_none());
+    let joined = format!(
+        "{}{}",
+        answer["text"].as_str().unwrap(),
+        rest["text"].as_str().unwrap()
+    );
+    assert_eq!(joined, long);
+    assert!(
+        crate::mono::api::validate("sessions.read", &json!({"sessionId":1,"charOffset":"x"}))
+            .is_err()
+    );
+    assert!(
+        crate::mono::api::validate("sessions.read", &json!({"sessionId":1,"charOffset":10}))
+            .is_ok()
+    );
+}
+
+#[test]
 fn operator_notes_support_desktop_ids_partial_updates_empty_bodies_and_pagination() {
     let store = Store::open_monocode(Path::new(":memory:")).unwrap();
     let caller = store.create("codex", "/project").unwrap();

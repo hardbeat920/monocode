@@ -2362,45 +2362,47 @@ impl Shell {
                     .text_color(content(1.))
                     .child(title),
             )
-            .children([
-                (SplitDir::Right, "split-right", "Split right"),
-                (SplitDir::Down, "split-down", "Split down"),
-            ]
-            .map(|(dir, glyph, label)| {
-                let key = format!("split-pane-{glyph}-{id}");
-                div()
-                    .id(SharedString::from(key.clone()))
-                    .debug_selector(move || key.clone())
-                    .role(Role::Button)
-                    .aria_label(label)
-                    .group(glyph)
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.1)))
-                    .child(
-                        icon(glyph, 13.)
-                            .text_color(content(0.5))
-                            .group_hover(glyph, |s| s.text_color(content(1.))),
-                    )
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.review_focused = false;
-                        this.focus_pane(id, window, cx);
-                        // A terminal splits off a fresh shell; a chat or a
-                        // Mono, a new session with its provider.
-                        if this.workspace.terminal_panes.contains_key(&id) {
-                            this.split_title_terminal_toward(dir, window, cx);
-                        } else {
-                            this.split_session(dir, cx);
-                        }
-                    }))
-            }))
+            .children(
+                [
+                    (SplitDir::Right, "split-right", "Split right"),
+                    (SplitDir::Down, "split-down", "Split down"),
+                ]
+                .map(|(dir, glyph, label)| {
+                    let key = format!("split-pane-{glyph}-{id}");
+                    div()
+                        .id(SharedString::from(key.clone()))
+                        .debug_selector(move || key.clone())
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .group(glyph)
+                        .size(px(20.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(content(0.1)))
+                        .child(
+                            icon(glyph, 13.)
+                                .text_color(content(0.5))
+                                .group_hover(glyph, |s| s.text_color(content(1.))),
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.review_focused = false;
+                            this.focus_pane(id, window, cx);
+                            // A terminal splits off a fresh shell; a chat or a
+                            // Mono, a new session with its provider.
+                            if this.workspace.terminal_panes.contains_key(&id) {
+                                this.split_title_terminal_toward(dir, window, cx);
+                            } else {
+                                this.split_session(dir, cx);
+                            }
+                        }))
+                }),
+            )
             .child(
                 div()
                     .id(("close-chat-pane", id as usize))
@@ -2658,7 +2660,8 @@ impl Shell {
                                     .sash_snaps(tab, &sash.path, sash.index)
                                     .first()
                                 {
-                                    this.workspace.place_sash(tab, &sash.path, sash.index, *middle);
+                                    this.workspace
+                                        .place_sash(tab, &sash.path, sash.index, *middle);
                                     this.persist(cx);
                                     cx.notify();
                                 }

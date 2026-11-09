@@ -25,8 +25,10 @@ import {
   isImage,
   MAX_ATTACHMENTS,
   merge,
+  pasteImage,
   pickFiles,
   pickPhotos,
+  watchClipboardImage,
   type Attachment,
 } from "./attachments";
 import { DictationBar } from "./DictationBar";
@@ -134,6 +136,10 @@ export function Composer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inputHeight, setInputHeight] = useState(INPUT_MIN);
   const [dictating, setDictating] = useState(false);
+  // A copied screenshot or photo: the add menu offers to paste it, as
+  // React Native's field pastes only text.
+  const [clipboardImage, setClipboardImage] = useState(false);
+  useEffect(() => watchClipboardImage(setClipboardImage), []);
   // Where dictated words go: the cursor, or the selection they replace.
   const selection = useRef({ start: 0, end: 0 });
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
@@ -426,6 +432,7 @@ export function Composer({
         style={[styles.button, styles.leading, undictated, blocked && styles.disabled]}
       >
         <AddMenu
+          onPaste={clipboardImage ? () => void attach(pasteImage) : undefined}
           onPhotos={() => void attach(pickPhotos)}
           onFiles={() => void attach(pickFiles)}
         />
@@ -506,15 +513,25 @@ export function Composer({
 }
 
 /**
- * The add button: a native menu to attach photos or files. The menu lies
+ * The add button: a native menu to attach photos or files, or the
+ * clipboard's image when it holds one. The menu lies
  * over the button, its label an invisible box of the button's size, as in
  * SessionFilterMenu.
  */
-function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => void }) {
+function AddMenu({
+  onPaste,
+  onPhotos,
+  onFiles,
+}: {
+  onPaste?: () => void;
+  onPhotos: () => void;
+  onFiles: () => void;
+}) {
   const styles = useStyles();
   const colors = useColors();
   if (Platform.OS === "android") return (
     <ChoiceMenu label="Add photos or files" actions={[
+      ...(onPaste ? [{ label: "Paste Image", icon: "copy" as const, onPress: onPaste }] : []),
       { label: "Photo Library", icon: "image", onPress: onPhotos },
       { label: "Files", icon: "folder", onPress: onFiles },
     ]}>
@@ -540,6 +557,9 @@ function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => v
             </HStack>
           }
         >
+          {onPaste ? (
+            <Button label="Paste Image" systemImage="doc.on.clipboard" onPress={onPaste} />
+          ) : null}
           <Button label="Photo Library" systemImage="photo.on.rectangle" onPress={onPhotos} />
           <Button label="Files" systemImage="folder" onPress={onFiles} />
         </Menu>

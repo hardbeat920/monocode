@@ -83,6 +83,8 @@ pub(super) struct PanelStack {
     route: Option<Route>,
     base: Motion,
     layers: Vec<Layer>,
+    /// Whether the next Mono's remembered page appears in place.
+    restoring: bool,
 }
 impl Default for PanelStack {
     fn default() -> Self {
@@ -91,13 +93,23 @@ impl Default for PanelStack {
             route: None,
             base: Motion::still(Pose::SHOWN),
             layers: Vec::new(),
+            restoring: false,
         }
     }
 }
 impl PanelStack {
+    /// An empty stack whose first Mono shows its page without sliding.
+    pub fn restoring() -> Self {
+        Self {
+            restoring: true,
+            ..Self::default()
+        }
+    }
     pub fn sync(&mut self, mono: &str, route: Option<Route>, now: Instant, reduced: bool) -> bool {
-        let changed = self.mono.as_deref() != Some(mono) || self.route != route;
-        if self.mono.as_deref() != Some(mono) {
+        let switched = self.mono.as_deref() != Some(mono);
+        let changed = switched || self.route != route;
+        let still = reduced || (switched && self.restoring);
+        if switched {
             *self = Self {
                 mono: Some(mono.into()),
                 ..Self::default()
@@ -108,7 +120,8 @@ impl PanelStack {
         } else {
             Pose::SHOWN
         };
-        if reduced {
+        // A Mono opened again shows its remembered page in place, not sliding in.
+        if still {
             self.base = Motion::still(base);
             self.layers = route
                 .iter()
@@ -264,5 +277,18 @@ mod tests {
         assert!(frame.pages.is_empty());
         assert_eq!(frame.base, Pose::SHOWN);
         assert!(!frame.animating);
+    }
+
+    #[test]
+    fn a_restored_mono_shows_its_page_in_place_then_slides_again() {
+        let mut stack = PanelStack::restoring();
+        let now = Instant::now();
+        stack.sync("a", Some(Route::Session(1)), now, false);
+        let frame = stack.frame(now);
+        assert_eq!(frame.base, Pose::COVERED);
+        assert_eq!(frame.pages[0].pose, Pose::SHOWN);
+        assert!(!frame.animating);
+        stack.sync("a", Some(Route::Session(2)), now, false);
+        assert!(stack.frame(now).animating);
     }
 }
