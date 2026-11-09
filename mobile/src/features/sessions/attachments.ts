@@ -119,10 +119,11 @@ export async function pasteImage(room: number): Promise<Attachment[]> {
     if (await hasImageAsync().catch(() => false)) return [];
     throw new Error("There's no image on the clipboard to paste.");
   }
-  const { width, height } = image.size;
-  // Arrives as a data URI; the bytes are what follows its prefix.
-  const start = image.data.indexOf(",") + 1;
-  const bytes = Math.floor(((image.data.length - start) * 3) / 4);
+  // The bytes follow the data URI's prefix, wrapped into lines on Android.
+  const { data, wrapped } = clipboardBase64(image.data);
+  // The PNG's own pixels: iOS reports its size in points, a third of them at 3x.
+  const { width, height } = pngSize(data) ?? image.size;
+  const bytes = base64Bytes(data);
   if (width * height > MAX_PASTE_PIXELS || bytes > MAX_PASTE_BYTES)
     throw new Error(
       `This image is too large to paste (${Math.round(width)} x ${Math.round(height)}). ` +
@@ -131,10 +132,21 @@ export async function pasteImage(room: number): Promise<Attachment[]> {
   const name = "Pasted image.png";
   if (heldAsIs("image/png", bytes, width, height))
     // Its data URI is the thumbnail: no cache file to write, or to clean up.
-    return [{ id: makeId(), name, mimeType: "image/png", size: bytes, uri: image.data, data: image.data.slice(start) }];
+    // (A cache file's URI would spare the Image a multi-MB string, at the cost
+    // of deleting it on remove, send, failure and unmount; not done yet.)
+    return [
+      {
+        id: makeId(),
+        name,
+        mimeType: "image/png",
+        size: bytes,
+        uri: wrapped ? `data:image/png;base64,${data}` : image.data,
+        data,
+      },
+    ];
   const file = new File(Paths.cache, `pasted-${makeId()}.png`);
   try {
-    file.write(image.data.slice(start), { encoding: "base64" });
+    file.write(data, { encoding: "base64" });
     return [await reencode(file.uri, width, height, name)];
   } finally {
     // The re-encoded JPEG is the attachment now, or nothing is.
@@ -144,6 +156,46 @@ export async function pasteImage(room: number): Promise<Attachment[]> {
       // Only a cache file; the OS clears the cache in time anyway.
     }
   }
+}
+
+/** A data URI's base64, without the line breaks Android's clipboard puts in every 76 characters. */
+function clipboardBase64(uri: string): { data: string; wrapped: boolean } {
+  const body = uri.slice(uri.indexOf(",") + 1);
+  // Unwrapped (iOS), the check scans the whole string once; wrapped, it stops at the first line.
+  const wrapped = /\s/.test(body);
+  return { data: wrapped ? body.replace(/\s+/g, "") : body, wrapped };
+}
+
+/** The bytes unbroken base64 decodes to: three for every four characters, less its padding. */
+export function base64Bytes(data: string): number {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.floor((data.length * 3) / 4) - padding;
+}
+
+const BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/**
+ * A PNG's size in pixels, from its header: the signature, then the IHDR chunk
+ * whose first eight bytes are the width and height. Only its first 24 bytes
+ * (32 base64 characters) are decoded. Null when it isn't a PNG.
+ */
+export function pngSize(data: string): { width: number; height: number } | null {
+  if (data.length < 32) return null;
+  const bytes: number[] = [];
+  for (let i = 0; i < 32; i += 4) {
+    const [a, b, c, d] = [0, 1, 2, 3].map((j) => BASE64.indexOf(data[i + j]));
+    if (a < 0 || b < 0 || c < 0 || d < 0) return null;
+    const word = (a << 18) | (b << 12) | (c << 6) | d;
+    bytes.push((word >> 16) & 0xff, (word >> 8) & 0xff, word & 0xff);
+  }
+  const ihdr = String.fromCharCode(...bytes.slice(12, 16));
+  if (PNG_SIGNATURE.some((byte, i) => bytes[i] !== byte) || ihdr !== "IHDR") return null;
+  const word = (at: number) =>
+    ((bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]) >>> 0;
+  const width = word(16);
+  const height = word(20);
+  return width > 0 && height > 0 ? { width, height } : null;
 }
 
 /** A native paste error, in words for the user. */
@@ -241,7 +293,7 @@ async function reencode(uri: string, width: number, height: number, fileName: st
     id: makeId(),
     name: `${base}.jpg`,
     mimeType: "image/jpeg",
-    size: Math.floor(((saved.base64 ?? "").length * 3) / 4),
+    size: base64Bytes(saved.base64 ?? ""),
     uri: saved.uri,
     data: saved.base64 ?? "",
   };

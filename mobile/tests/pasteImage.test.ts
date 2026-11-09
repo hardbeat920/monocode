@@ -92,9 +92,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-/** A clipboard PNG of about this many bytes, as the data URI expo-clipboard returns. */
-const png = (bytes: number) => `data:image/png;base64,${"A".repeat(Math.ceil((bytes * 4) / 3))}`;
 const MB = 1024 * 1024;
+/**
+ * A clipboard PNG of exactly this many bytes, with a real header for these
+ * pixel dimensions, as the data URI expo-clipboard returns. Android's wraps
+ * its base64 every 76 characters, as `Base64.DEFAULT` does.
+ */
+const png = (width: number, height: number, bytes: number, { wrap = false } = {}) => {
+  const file = Buffer.alloc(Math.round(bytes));
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(file, 0);
+  file.writeUInt32BE(13, 8);
+  file.write("IHDR", 12, "latin1");
+  file.writeUInt32BE(width, 16);
+  file.writeUInt32BE(height, 20);
+  file.set([8, 6, 0, 0, 0], 24);
+  const base64 = file.toString("base64");
+  return `data:image/png;base64,${wrap ? `${base64.replace(/.{76}/g, "$&\n")}\n` : base64}`;
+};
+const base64Of = (uri: string) => uri.slice(uri.indexOf(",") + 1).replace(/\s+/g, "");
 
 it.each([
   ["iPhone 15", 1179, 2556, 1.2 * MB],
@@ -102,7 +117,7 @@ it.each([
   ["iPhone 16 Pro Max", 1320, 2868, 4 * MB],
   ["iPad Pro 13-inch", 2064, 2752, 4.5 * MB],
 ])("holds a real %s screenshot as the lossless PNG it is", async (_, width, height, bytes) => {
-  runtime.image = { data: png(bytes), size: { width, height } };
+  runtime.image = { data: png(width, height, bytes), size: { width, height } };
   runtime.fileSize = bytes;
   const [attachment] = await pasteImage(10);
   expect(runtime.manipulated).toEqual([]);
@@ -111,14 +126,14 @@ it.each([
     mimeType: "image/png",
     data: runtime.image.data.slice("data:image/png;base64,".length),
   });
-  expect(Math.abs(attachment.size - bytes)).toBeLessThan(4);
+  expect(attachment.size).toBe(Math.round(bytes));
   // Its own data URI is the thumbnail: no cache file to write, or to leave behind.
   expect(attachment.uri).toBe(runtime.image.data);
   expect(runtime.written).toEqual([]);
 });
 
 it("scales and re-encodes a large pasted image as picked photos are", async () => {
-  runtime.image = { data: png(5 * MB), size: { width: 3000, height: 4000 } };
+  runtime.image = { data: png(3000, 4000, 5 * MB), size: { width: 3000, height: 4000 } };
   runtime.fileSize = 5 * MB;
   const [attachment] = await pasteImage(10);
   expect(runtime.manipulated[0].resize).toEqual({ height: 2048 });
@@ -133,7 +148,7 @@ it("scales and re-encodes a large pasted image as picked photos are", async () =
 });
 
 it("leaves no pasted file behind when it can't be attached", async () => {
-  runtime.image = { data: png(5 * MB), size: { width: 3000, height: 4000 } };
+  runtime.image = { data: png(3000, 4000, 5 * MB), size: { width: 3000, height: 4000 } };
   runtime.fileSize = 5 * MB;
   runtime.failRender = true;
   await expect(pasteImage(10)).rejects.toThrow("Could not decode");
@@ -141,7 +156,7 @@ it("leaves no pasted file behind when it can't be attached", async () => {
 });
 
 it("re-encodes a screenshot-sized PNG too heavy to send as it is", async () => {
-  runtime.image = { data: png(7 * MB), size: { width: 1290, height: 2796 } };
+  runtime.image = { data: png(1290, 2796, 7 * MB), size: { width: 1290, height: 2796 } };
   runtime.fileSize = 7 * MB;
   const [attachment] = await pasteImage(10);
   expect(runtime.manipulated).toHaveLength(1);
@@ -150,12 +165,65 @@ it("re-encodes a screenshot-sized PNG too heavy to send as it is", async () => {
 
 it("refuses an image too large to paste before writing or decoding it", async () => {
   // A 48 MP photo copied from Photos.
-  runtime.image = { data: png(2 * MB), size: { width: 8064, height: 6048 } };
+  runtime.image = { data: png(8064, 6048, 2 * MB), size: { width: 8064, height: 6048 } };
   await expect(pasteImage(10)).rejects.toThrow(/too large to paste.*Photo Library/);
-  runtime.image = { data: png(40 * MB), size: { width: 3000, height: 4000 } };
+  runtime.image = { data: png(3000, 4000, 40 * MB), size: { width: 3000, height: 4000 } };
   await expect(pasteImage(10)).rejects.toThrow(/too large to paste/);
   expect(runtime.written).toEqual([]);
   expect(runtime.manipulated).toEqual([]);
+});
+
+// iOS reports a UIImage's size in points; the PNG it encodes is in pixels.
+it.each([
+  ["a 48 MP photo at 2x", 2, 8064, 6048],
+  ["a 36 MP image at 3x", 3, 6000, 6000],
+])("refuses %s by its pixels, not its points", async (_, scale, width, height) => {
+  runtime.image = { data: png(width, height, 2 * MB), size: { width: width / scale, height: height / scale } };
+  await expect(pasteImage(10)).rejects.toThrow(`too large to paste (${width} x ${height})`);
+  expect(runtime.written).toEqual([]);
+});
+
+it("scales a 2x image that is small only in points", async () => {
+  // 12 MP, reported as 1500 x 2000 points: past the lossless budget, and over 2048 px.
+  runtime.image = { data: png(3000, 4000, 3 * MB), size: { width: 1500, height: 2000 } };
+  const [attachment] = await pasteImage(10);
+  expect(runtime.manipulated[0].resize).toEqual({ height: 2048 });
+  expect(attachment.mimeType).toBe("image/jpeg");
+});
+
+it("scales a heavy 3x screenshot by its pixels", async () => {
+  runtime.image = { data: png(1290, 2796, 7 * MB), size: { width: 430, height: 932 } };
+  await pasteImage(10);
+  expect(runtime.manipulated[0].resize).toEqual({ height: 2048 });
+});
+
+it("counts Android's wrapped base64 as the bytes it decodes to", async () => {
+  // Just under the lossless budget; its line breaks put the string's length over it.
+  const bytes = 4.98 * MB;
+  runtime.image = { data: png(1290, 2796, bytes, { wrap: true }), size: { width: 1290, height: 2796 } };
+  const [attachment] = await pasteImage(10);
+  expect(runtime.manipulated).toEqual([]);
+  expect(attachment.mimeType).toBe("image/png");
+  expect(attachment.size).toBe(Math.round(bytes));
+  // Sent, and shown, without the line breaks.
+  expect(attachment.data).toBe(base64Of(runtime.image.data));
+  expect(attachment.uri).toBe(`data:image/png;base64,${attachment.data}`);
+});
+
+it("keeps a PNG of exactly the lossless budget, padding and all", async () => {
+  // 5 MiB isn't a multiple of three, so its base64 ends in padding.
+  runtime.image = { data: png(1290, 2796, 5 * MB), size: { width: 1290, height: 2796 } };
+  expect(runtime.image.data.endsWith("=")).toBe(true);
+  const [attachment] = await pasteImage(10);
+  expect(attachment).toMatchObject({ mimeType: "image/png", size: 5 * MB });
+});
+
+it("doesn't refuse a wrapped paste just under the paste limit", async () => {
+  runtime.image = { data: png(3000, 4000, 19.9 * MB, { wrap: true }), size: { width: 3000, height: 4000 } };
+  const [attachment] = await pasteImage(10);
+  expect(attachment.mimeType).toBe("image/jpeg");
+  // Written to the cache as the bytes, not the lines.
+  expect(runtime.written[0].content).toBe(base64Of(runtime.image.data));
 });
 
 it("says so when there is no image to paste", async () => {
