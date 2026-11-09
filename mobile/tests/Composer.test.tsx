@@ -439,3 +439,28 @@ it("offers to paste a copied image and holds it as a picked photo", async () => 
   await act(async () => button("Add photos or files").click());
   expect(menuItems()).not.toContain("Paste Image");
 });
+
+it("keeps every image when a second pick lands while the first paste is pending", async () => {
+  const chip = (name: string) => ({ id: name, name, mimeType: "image/png", size: 3, uri: `file:///${name}`, data: "AAA" });
+  let releaseFirst!: (picked: object[]) => void;
+  runtime.paste
+    .mockReturnValueOnce(new Promise<object[]>((resolve) => (releaseFirst = resolve)))
+    .mockResolvedValueOnce([chip("B.png")]);
+  runtime.photos.mockResolvedValueOnce([chip("C.jpg")] as never);
+  render();
+  act(() => runtime.clipboard!(true));
+  const choose = async (label: string) => {
+    await act(async () => button("Add photos or files").click());
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((item) => item.textContent === label)!.click(),
+    );
+  };
+  // The first waits, as on iOS's "Allow Paste" prompt; a second paste and a photo land meanwhile.
+  await choose("Paste Image");
+  await choose("Paste Image");
+  await choose("Photo Library");
+  await act(async () => releaseFirst([chip("A.png")]));
+  expect(button("Remove A.png")).toBeTruthy();
+  expect(button("Remove B.png")).toBeTruthy();
+  expect(button("Remove C.jpg")).toBeTruthy();
+});
