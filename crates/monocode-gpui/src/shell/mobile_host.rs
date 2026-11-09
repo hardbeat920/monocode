@@ -1,6 +1,8 @@
 //! A paired phone browses and drives this workspace. The core host pairs and
 //! serves devices; the shell answers their requests from its own state, through
 //! the same paths as the sidebar, composer and Changes panel.
+mod composer;
+
 use super::*;
 use crate::{
     accounts::Tone,
@@ -73,6 +75,7 @@ struct CatalogEntry {
     project: String,
     summary: Session,
     live: Option<mobile_catalog::LiveSession>,
+    draft: bool,
 }
 
 enum Receipt {
@@ -397,6 +400,7 @@ impl Shell {
             .filter(|id| !self.sidebar_hidden_sessions.contains(id))
             .filter_map(|&id| {
                 let metadata = self.session_metadata(id, cx);
+                let draft = metadata.has_any_draft();
                 let summary = metadata.summary;
                 if summary.archived
                     || !summary.has_messages
@@ -436,6 +440,7 @@ impl Shell {
                     project: project_id(project),
                     summary: summary.clone(),
                     live,
+                    draft,
                 })
             })
             .collect()
@@ -561,7 +566,11 @@ impl Shell {
                 let branch = if !metadata.worktree_removed && metadata.branch.as_ref().is_none_or(|branch| branch.is_empty()) {
                     mobile_catalog::checkout_branch(metadata.worktree_cwd.as_deref().unwrap_or(&entry.summary.cwd), &mut branches)
                 } else { String::new() };
-                sessions.push(mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch));
+                let mut session = mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch);
+                if entry.draft {
+                    session["draft"] = json!(true);
+                }
+                sessions.push(session);
             }
             sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_u64()));
             let monos: Vec<Value> = monos
@@ -739,6 +748,7 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
+            "composer.read" => self.mobile_composer_read(request, cx),
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1425,6 +1435,7 @@ impl Shell {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
             }
+            ("composer.write", _) => self.mobile_composer_write(params, cx),
             ("session.answerQuestion" | "session.keepQuestionOpen", target) => {
                 let view = match target {
                     Target::Session(id) => self.sessions.get(id).cloned(),
@@ -1466,6 +1477,8 @@ impl Shell {
             let text = message_text(&request.params)?;
             Ok::<_, String>((target, text))
         })();
+        // The composer revision the phone's text was based on.
+        let draft_rev = request.params["draftRev"].as_u64();
         let (target, text) = match staged {
             Ok(staged) => staged,
             Err(error) => return finish(self, request, Err(error)),
@@ -1479,7 +1492,10 @@ impl Shell {
                         let view = this
                             .ensure_session(*id, cx)
                             .ok_or("Session is no longer available")?;
-                        view.update(cx, |v, cx| v.mobile_submit(text, attachments, cx));
+                        view.update(cx, |v, cx| {
+                            v.clear_composer_text_sent_from_phone(&text, draft_rev, cx);
+                            v.mobile_submit(text, attachments, cx)
+                        });
                         this.mobile.started.insert(*id);
                         Ok(())
                     }
@@ -2512,6 +2528,13 @@ mod tests {
                     entries[0].live.is_none(),
                     "history must not need an open desktop view"
                 );
+                shell.draft_sessions.insert(saved);
+                assert!(shell.mobile_catalog_sessions(&paths, cx)[0].draft);
+                shell.draft_sessions.remove(&saved);
+                shell.composer_draft_sessions.insert(saved);
+                assert!(shell.mobile_catalog_sessions(&paths, cx)[0].draft);
+                shell.composer_draft_sessions.remove(&saved);
+                assert!(!shell.mobile_catalog_sessions(&paths, cx)[0].draft);
                 shell.sessions.insert(saved, view.clone());
                 shell.sidebar_hidden_sessions.insert(saved);
                 assert!(ids(shell, cx).is_empty());

@@ -200,6 +200,7 @@ function sameRow(a: SessionSummary, b: SessionSummary) {
     (a.id === b.id &&
       a.title === b.title &&
       a.busy === b.busy &&
+      a.draft === b.draft &&
       a.updatedAt === b.updatedAt &&
       a.branch === b.branch &&
       a.model === b.model &&

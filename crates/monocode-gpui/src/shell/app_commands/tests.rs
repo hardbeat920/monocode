@@ -273,15 +273,17 @@ fn operator_children_are_visible_durable_and_do_not_navigate_by_default(cx: &mut
                 view.settings.access,
                 monocode_core::agent::AccessMode::ReadOnly
             );
-            assert!(view.has_saved_draft());
+            // A draft launch opens with its prompt in the composer.
+            assert!(view.has_unsent_draft());
+            assert_eq!(view.input.read(cx).content.as_ref(), "Review this project");
             assert!(!view.busy);
             let db = locked(&shell.store).unwrap();
             assert_eq!(
-                db.follow_ups(child).unwrap().draft.unwrap().text,
+                db.composer_draft(child).unwrap().unwrap().text,
                 "Review this project"
             );
             assert_eq!(db.started_links().unwrap()[&child], caller);
-            assert!(db.draft_sessions().unwrap().contains(&child));
+            assert!(db.composer_draft_sessions().unwrap().contains(&child));
         })
         .unwrap();
     let opened = launch(window, caller, "visible", json!({"reveal":true}), cx);
@@ -637,14 +639,17 @@ fn app_launch_submission_uses_the_saved_message_identity(cx: &mut TestAppContext
     let expected = window
         .update(cx, |shell, _, cx| {
             let view = shell.sessions[&child].clone();
-            let expected = locked(&shell.store)
-                .unwrap()
-                .follow_ups(child)
-                .unwrap()
-                .draft
-                .unwrap()
-                .id;
+            // A draft launch hands its prompt to the composer. Record it again
+            // as the saved prompt a launch that sends right away keeps.
+            let saved = {
+                let db = locked(&shell.store).unwrap();
+                db.prepare_app_prompt(child, "queued-seed-send", "Review this project")
+                    .unwrap();
+                db.follow_ups(child).unwrap().draft.unwrap()
+            };
+            let expected = saved.id.clone();
             view.update(cx, |v, cx| {
+                v.hold_saved_draft(saved);
                 // Hold the provider boundary: verify queue acceptance without starting
                 // a real CLI or making an inference request.
                 v.busy = true;
