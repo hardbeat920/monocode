@@ -13,6 +13,12 @@ export function useAnyUnreadMono() {
   return useUnreadMonos(desktop, monos).size > 0;
 }
 
+/** What the drawer's menu button says it is holding. */
+export function menuLabel(replies: boolean, inbox: boolean) {
+  if (replies) return "Projects and monos, new replies";
+  return inbox ? "Projects and monos, new in Inbox" : "Projects and monos";
+}
+
 /** The unread dot on the drawer's menu button, at its top right. */
 export function UnreadDot() {
   const styles = useStyles();

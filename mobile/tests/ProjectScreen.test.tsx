@@ -239,6 +239,11 @@ vi.mock("@/features/sessions/Transcript", () => ({
   Transcript: () => null,
   TranscriptLoading: () => null,
 }));
+vi.mock("@/features/workspace/useCreateMono", () => ({ useCreateMono: () => undefined }));
+vi.mock("@/features/inbox/InboxProvider", () => ({
+  useInboxBadge: () => 0,
+  useInboxSupported: () => false,
+}));
 vi.mock("@/features/workspace/ProjectPages", () => ({
   useProjectPages: () => ({ progress: { get: () => 0 }, view: desktop.page }),
   ProjectPages: () => null,
@@ -296,6 +301,7 @@ vi.mock("@/ui/ScenePager", () => ({
 }));
 vi.mock("@/ui/DitherLoading", () => ({ DitherLoading: () => null }));
 vi.mock("@/features/workspace/UnreadDot", () => ({
+  menuLabel: () => "Projects and monos",
   UnreadDot: () => null,
   useAnyUnreadMono: () => false,
 }));

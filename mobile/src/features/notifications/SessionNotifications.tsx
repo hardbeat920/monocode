@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
+import { inboxTarget } from "@/features/inbox/routing";
 import {
   NOTIFICATION_CATEGORIES,
   useNotificationPreferences,
@@ -43,7 +44,7 @@ const SESSION_CHANNEL = "sessions";
  * With the older desktop app, they are local, after its own: an agent that
  * finishes, or stops for an approval or a question, from the session list
  * as the phone polls it, so only while the app runs and is out of view.
- * Tapping one opens its session or Mono.
+ * Tapping one opens its session, Mono or inbox item.
  */
 export function SessionNotifications() {
   const connection = useConnection();
@@ -209,6 +210,12 @@ export function SessionNotifications() {
     const data = response.notification.request.content.data as
       Target | undefined;
     void Notifications.clearLastNotificationResponseAsync();
+    // An inbox item's push, `{kind: "inbox", key}`, opens the item's sheet.
+    const inbox = inboxTarget(data);
+    if (inbox) {
+      router.push(inbox);
+      return;
+    }
     // A Mono's habit run names its session too: that opens as the sheet a
     // Mono's sessions do, in whichever project, picked for the phone or not.
     if (data?.monoId && data.projectId && data.sessionId) {

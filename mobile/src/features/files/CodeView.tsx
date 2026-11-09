@@ -5,12 +5,16 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import {
   FlatList,
+  Pressable,
   ScrollView,
   Text,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
 import Animated, {
   scrollTo,
@@ -60,6 +64,10 @@ export type CodeRow = {
   dim?: boolean;
   /** A diff's hunk header, across the whole row. */
   hunk?: boolean;
+  /** Tapping the line does this. */
+  press?: () => void;
+  /** The line has something on it, such as a comment: its sign shows a dot. */
+  marked?: boolean;
 };
 
 const ROW_HEIGHT = 20;
@@ -288,6 +296,29 @@ function PannedList({
   );
 }
 
+/** A row's box, which takes taps when the row does. */
+function Line({
+  row,
+  style,
+  children,
+}: {
+  row: CodeRow;
+  style: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  if (!row.press) return <View style={style}>{children}</View>;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Comment on line ${row.number ?? ""}`}
+      onPress={row.press}
+      style={({ pressed }) => [style, pressed && { opacity: 0.6 }]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
 const GutterCell = memo(function GutterCell({
   row,
   signs,
@@ -299,7 +330,8 @@ const GutterCell = memo(function GutterCell({
   if (row.hunk) return <View style={[styles.hunk, styles.hunkGutter]} />;
   const tone = row.tone;
   return (
-    <View
+    <Line
+      row={row}
       style={[
         styles.line,
         styles.gutter,
@@ -309,14 +341,19 @@ const GutterCell = memo(function GutterCell({
       <Text style={[styles.number, tone && { color: tone.fg }]}>
         {row.number ?? ""}
       </Text>
-      {signs ? (
-        <Text style={[styles.sign, tone && { color: tone.fg }]}>
-          {row.sign}
-        </Text>
-      ) : null}
-    </View>
+      {signs ? <Sign row={row} /> : null}
+    </Line>
   );
 });
+
+/** A diff's +, − or space, or the dot of a line with something on it. */
+function Sign({ row }: { row: CodeRow }) {
+  const styles = useStyles();
+  if (row.marked) return <Text style={[styles.sign, styles.mark]}>●</Text>;
+  return (
+    <Text style={[styles.sign, row.tone && { color: row.tone.fg }]}>{row.sign}</Text>
+  );
+}
 
 const CodeCell = memo(function CodeCell({
   row,
@@ -336,11 +373,11 @@ const CodeCell = memo(function CodeCell({
     );
   }
   return (
-    <View style={[styles.line, row.tone && { backgroundColor: row.tone.row }]}>
+    <Line row={row} style={[styles.line, row.tone && { backgroundColor: row.tone.row }]}>
       <Text style={[styles.code, row.dim && styles.dim]} numberOfLines={1}>
         <Runs row={row} palette={palette} />
       </Text>
-    </View>
+    </Line>
   );
 });
 
@@ -365,21 +402,17 @@ const WrappedLine = memo(function WrappedLine({
   }
   const tone = row.tone;
   return (
-    <View style={[styles.wrappedLine, tone && { backgroundColor: tone.row }]}>
+    <Line row={row} style={[styles.wrappedLine, tone && { backgroundColor: tone.row }]}>
       <View style={[styles.gutter, tone && { backgroundColor: tone.gutter }]}>
         <Text style={[styles.number, tone && { color: tone.fg }]}>
           {row.number ?? ""}
         </Text>
-        {signs ? (
-          <Text style={[styles.sign, tone && { color: tone.fg }]}>
-            {row.sign}
-          </Text>
-        ) : null}
+        {signs ? <Sign row={row} /> : null}
       </View>
       <Text style={[styles.code, styles.wrappedCode, row.dim && styles.dim]}>
         <Runs row={row} palette={palette} />
       </Text>
-    </View>
+    </Line>
   );
 });
 
@@ -454,6 +487,9 @@ const useStyles = themedStyles((colors) => ({
     fontFamily: MONO,
     fontSize: 12,
     lineHeight: ROW_HEIGHT,
+  },
+  mark: {
+    color: colors.accent,
   },
   code: {
     paddingLeft: 4,

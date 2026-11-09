@@ -3,13 +3,15 @@ import { useSyncExternalStore } from "react";
 
 /**
  * What this phone is notified of: the desktop's agent categories
- * (NOTIFICATION_CATEGORIES in notificationPreferences.ts), and what Monos
- * say, each on until turned off.
+ * (NOTIFICATION_CATEGORIES in notificationPreferences.ts), what Monos say, and
+ * what needs the user in the Inbox, each on until turned off.
  */
 export const NOTIFICATION_CATEGORIES = [
   { id: "agentInput", label: "Approvals and questions" },
   { id: "agentFinished", label: "Agent finished" },
   { id: "monoMessages", label: "Messages from Monos" },
+  // Review requests, mentions, assignments and failing checks in the Inbox.
+  { id: "inbox", label: "Inbox" },
 ] as const;
 
 export type NotificationCategory =

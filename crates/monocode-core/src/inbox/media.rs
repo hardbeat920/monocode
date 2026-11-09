@@ -18,6 +18,9 @@ struct MediaUrl {
 
 pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut current = parse_allowed_media_url(url)?;
+    if let Some(raw) = github_file_as_raw(&current) {
+        current = raw;
+    }
     let token = if github_auth_host(&current.host) {
         github_auth_token()
     } else {
@@ -199,7 +202,7 @@ fn redirect_target(base: &str, location: &str) -> Result<MediaUrl, String> {
 
 fn is_allowed_media_target(url: &MediaUrl) -> bool {
     if is_github_site(&url.host) {
-        return is_github_attachment_path(&url.path);
+        return is_github_attachment_path(&url.path) || github_file_as_raw(url).is_some();
     }
     is_github_media_cdn(&url.host) || is_linear_uploads(&url.host) || is_github_asset_s3(&url.host)
 }
@@ -212,6 +215,25 @@ fn is_github_attachment_path(path: &str) -> bool {
     // /owner/repo/assets/<user-id>/<uuid>
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     parts.len() >= 4 && parts[2] == "assets" && parts[3].bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// `github.com/<owner>/<repo>/blob|raw/<ref>/<path>` as its raw.githubusercontent.com
+/// file. The github.com route ignores API tokens, so private repo files 404 there.
+fn github_file_as_raw(url: &MediaUrl) -> Option<MediaUrl> {
+    if !is_github_site(&url.host) {
+        return None;
+    }
+    let mut parts = url.path.splitn(5, '/').skip(1);
+    let (owner, repo, kind, rest) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    if owner.is_empty() || repo.is_empty() || !matches!(kind, "blob" | "raw") || rest.is_empty() {
+        return None;
+    }
+    let path = format!("/{owner}/{repo}/{rest}");
+    Some(MediaUrl {
+        host: "raw.githubusercontent.com".into(),
+        url: format!("https://raw.githubusercontent.com{path}"),
+        path,
+    })
 }
 
 fn is_github_site(host: &str) -> bool {
@@ -235,8 +257,9 @@ fn is_github_asset_s3(host: &str) -> bool {
 }
 
 fn github_auth_host(host: &str) -> bool {
-    // JWT-signed githubusercontent URLs reject an extra Authorization header.
-    is_github_site(host)
+    // JWT-signed githubusercontent URLs reject an extra Authorization header;
+    // raw.githubusercontent.com needs one for private repositories.
+    is_github_site(host) || host == "raw.githubusercontent.com"
 }
 
 fn is_redirect(status: u16) -> bool {
@@ -253,6 +276,99 @@ fn path_has_dotdot(path: &str) -> bool {
 fn github_auth_token() -> Option<String> {
     let home = crate::accounts::home()?;
     super::run_gh(&home, &["auth", "token"], false).ok()
+}
+
+const IMAGE_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+
+/// Whether `url` names an image file on a host `fetch` may read, so a click can
+/// preview it in the app. The query (a `?token=` on private raw files) is ignored.
+pub fn is_image_url(url: &str) -> bool {
+    let Ok(parsed) = parse_allowed_media_url(url) else {
+        return false;
+    };
+    let extension = parsed
+        .path
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    extension.is_some_and(|extension| IMAGE_EXTENSIONS.contains(&extension.as_str()))
+}
+
+/// The image at `url` at full resolution with its MIME type, for a zoomable
+/// preview. A stale `?token=` query is dropped on a second try, since the
+/// account's own credentials already cover private files.
+pub fn image_bytes(url: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let bytes = match fetch(url) {
+        Ok(bytes) => bytes,
+        Err(error) => match url.split_once('?') {
+            Some((bare, _)) => fetch(bare).map_err(|_| error)?,
+            None => return Err(error),
+        },
+    };
+    let mime = image_mime(&bytes).ok_or_else(|| "That URL is not an image".to_string())?;
+    Ok((bytes, mime))
+}
+
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png) => Some("image/png"),
+        Ok(image::ImageFormat::Jpeg) => Some("image/jpeg"),
+        Ok(image::ImageFormat::Gif) => Some("image/gif"),
+        Ok(image::ImageFormat::WebP) => Some("image/webp"),
+        Ok(image::ImageFormat::Bmp) => Some("image/bmp"),
+        _ => {
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_ascii_lowercase();
+            (head.contains("<svg") || head.trim_start().starts_with("<?xml"))
+                .then_some("image/svg+xml")
+        }
+    }
+}
+
+/// The longest side of an image sent to a phone, in pixels.
+const PHONE_IMAGE_SIDE: u32 = 1600;
+/// Images at or under this size and side are sent as they are.
+const PHONE_IMAGE_KEEP_BYTES: usize = 1_500_000;
+
+/// An image from an allowed host sized for a phone: sent as it is when small,
+/// else shrunk and re-encoded (JPEG stays JPEG, the rest becomes PNG). SVG is
+/// refused since a phone cannot draw it as an image.
+pub fn phone_image(url: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let bytes = fetch(url)?;
+    let mime = image_mime(&bytes).filter(|mime| *mime != "image/svg+xml");
+    let Some(mime) = mime else {
+        return Err("That URL is not an image this phone can show".into());
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .map_err(|_| "Unsupported image".to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|_| "Unsupported image".to_string())?;
+    if bytes.len() <= PHONE_IMAGE_KEEP_BYTES
+        && image.width().max(image.height()) <= PHONE_IMAGE_SIDE
+        && mime != "image/bmp"
+    {
+        return Ok((bytes, mime));
+    }
+    let image = image.thumbnail(PHONE_IMAGE_SIDE, PHONE_IMAGE_SIDE);
+    if mime == "image/jpeg" {
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
+            .encode_image(&image.to_rgb8())
+            .map_err(|e| e.to_string())?;
+        Ok((out, "image/jpeg"))
+    } else {
+        Ok((
+            crate::project_appearance::png_bytes(image.into_rgba8())?,
+            "image/png",
+        ))
+    }
 }
 
 /// Decode bounded image bytes before handing them to the native image cache.
@@ -309,6 +425,57 @@ mod tests {
         )
         .is_err());
         assert!(parse_allowed_media_url("https://127.0.0.1/shot.png").is_err());
+    }
+
+    #[test]
+    fn image_urls_need_an_allowed_host_and_an_image_extension() {
+        assert!(is_image_url(
+            "https://raw.githubusercontent.com/acme/web/issue-assets/img/pr-849/before.PNG?token=GHSAT0AAAA"
+        ));
+        assert!(is_image_url(
+            "https://github.com/acme/web/blob/main/a.webp?raw=true"
+        ));
+        assert!(is_image_url("https://uploads.linear.app/org/uuid/shot.jpg"));
+        assert!(!is_image_url(
+            "https://raw.githubusercontent.com/acme/web/main/README.md"
+        ));
+        assert!(!is_image_url("https://github.com/acme/web/pull/849"));
+        assert!(!is_image_url("https://evil.example/shot.png"));
+        assert!(!is_image_url(
+            "http://raw.githubusercontent.com/acme/web/main/a.png"
+        ));
+        assert!(!is_image_url(
+            "https://raw.githubusercontent.com/acme/web/main/png"
+        ));
+    }
+
+    #[test]
+    fn image_mime_is_sniffed_from_the_bytes() {
+        assert_eq!(image_mime(b"\x89PNG\r\n\x1a\n0000"), Some("image/png"));
+        assert_eq!(
+            image_mime(b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(image_mime(b"<html></html>"), None);
+    }
+
+    #[test]
+    fn github_file_links_fetch_from_the_raw_host() {
+        let raw = |url: &str| {
+            github_file_as_raw(&parse_allowed_media_url(url).unwrap())
+                .unwrap()
+                .url
+        };
+        assert_eq!(
+            raw("https://github.com/acme/web/blob/issue-assets/img/pr-7/a.png?raw=true"),
+            "https://raw.githubusercontent.com/acme/web/issue-assets/img/pr-7/a.png"
+        );
+        assert_eq!(
+            raw("https://github.com/acme/web/raw/main/a.png"),
+            "https://raw.githubusercontent.com/acme/web/main/a.png"
+        );
+        assert!(parse_allowed_media_url("https://github.com/acme/web/blob/").is_err());
+        assert!(parse_allowed_media_url("https://github.com/acme/web/tree/main/a.png").is_err());
     }
 
     #[test]

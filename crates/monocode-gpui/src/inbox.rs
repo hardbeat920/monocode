@@ -3,6 +3,7 @@
 mod avatar;
 mod diff;
 mod document;
+mod review;
 mod ui;
 pub(crate) use avatar::image as avatar_image;
 pub(crate) use ui::relative_time;
@@ -49,6 +50,9 @@ pub(crate) struct Inbox {
         std::collections::HashMap<String, monocode_core::project_appearance::ProjectAppearance>,
     state: ViewState,
     snapshot: Snapshot,
+    /// Authors offered by the filter menu, most active first. Kept from the
+    /// last fetch that wasn't narrowed to one author.
+    authors: Vec<model::Person>,
     sessions: Vec<Session>,
     focus: FocusHandle,
     search: Entity<Input>,
@@ -70,6 +74,9 @@ pub(crate) struct Inbox {
     diff_view: Entity<DiffView>,
     checks: Option<Checks>,
     tab: Tab,
+    /// A phone's pending review comments, by pull request.
+    review: std::collections::HashMap<String, Vec<model::review::PendingComment>>,
+    review_posting: bool,
     loading: bool,
     detail_loading: bool,
     extra_loading: bool,
@@ -110,7 +117,52 @@ pub(crate) struct Inbox {
     refresh_queued: bool,
     notifications: model::NotificationTracker,
     last_refresh: Instant,
+    /// When the snapshot was last replaced by a fetch, in ms; 0 before the first.
+    fetched_at: i64,
+    /// What a paired phone reads when the desktop's own filters or projects
+    /// would narrow it.
+    phone: PhoneSnapshot,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The phone's own fetch: default filters, over the desktop's projects and
+/// the Monos'. Used only while that differs from what the desktop fetches;
+/// otherwise the desktop's snapshot is the phone's too and nothing extra runs.
+#[derive(Default)]
+struct PhoneSnapshot {
+    /// Projects the phone knows that the desktop's Inbox does not list itself.
+    projects: Vec<PathBuf>,
+    snapshot: Option<Snapshot>,
+    /// ms, 0 before the first fetch ends.
+    fetched_at: i64,
+    last_refresh: Option<Instant>,
+    loading: bool,
+}
+
+/// How often the list refreshes in the background: sooner while the Inbox is
+/// on screen.
+fn poll_interval(active: bool) -> Duration {
+    Duration::from_secs(if active { 120 } else { 300 })
+}
+
+/// How old the snapshot may get before a watching phone starts a fetch. The
+/// catalog is published every few seconds, so this is the lag a new item can
+/// have.
+const PHONE_REFRESH: Duration = Duration::from_secs(30);
+
+/// What a paired phone reads from the Inbox: the cached snapshot and the state
+/// shared with the desktop, borrowed.
+pub(crate) struct PhoneView<'a> {
+    pub items: &'a [Item],
+    pub errors: &'a std::collections::BTreeMap<String, String>,
+    pub connections: &'a std::collections::BTreeMap<String, model::Status>,
+    pub viewers: &'a std::collections::BTreeMap<String, String>,
+    pub seen: &'a model::Seen,
+    pub triage: &'a model::Triage,
+    /// ms, None before the first fetch ends.
+    pub fetched_at: Option<i64>,
+    pub interval_ms: i64,
+    pub service: &'a Service,
 }
 
 /// The inbox opens scoped to the project it was opened from.
@@ -120,6 +172,23 @@ fn other_projects(projects: &[PathBuf], cwd: &PathBuf) -> Vec<String> {
         .filter(|project| *project != cwd)
         .map(|project| project.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Every author in `items`, most items first, then by login.
+fn authors(items: &[Item]) -> Vec<model::Person> {
+    let mut counts = std::collections::HashMap::<String, (usize, model::Person)>::new();
+    for item in items
+        .iter()
+        .filter(|item| model::has_authors(&item.provider) && !item.author.login.is_empty())
+    {
+        counts
+            .entry(item.author.login.to_lowercase())
+            .or_insert_with(|| (0, item.author.clone()))
+            .0 += 1;
+    }
+    let mut authors = counts.into_values().collect::<Vec<_>>();
+    authors.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.login.cmp(&y.login)));
+    authors.into_iter().map(|(_, person)| person).collect()
 }
 
 impl EventEmitter<Event> for Inbox {}
@@ -219,8 +288,7 @@ impl Inbox {
                         .await;
                     if this
                         .update(cx, |this, cx| {
-                            let interval = Duration::from_secs(if this.active { 120 } else { 300 });
-                            if this.last_refresh.elapsed() >= interval {
+                            if this.last_refresh.elapsed() >= poll_interval(this.active) {
                                 this.refresh(cx);
                             }
                             if this.active
@@ -248,12 +316,14 @@ impl Inbox {
             service: Service {
                 data_dir,
                 cwd: cwd.clone(),
+                github_viewer: Default::default(),
             },
             store,
             projects,
             appearances: Default::default(),
             state,
             snapshot: Snapshot::default(),
+            authors: vec![],
             sessions: vec![],
             focus: cx.focus_handle(),
             search,
@@ -274,6 +344,8 @@ impl Inbox {
             diff_view,
             checks: None,
             tab: Tab::Summary,
+            review: Default::default(),
+            review_posting: false,
             loading: false,
             detail_loading: false,
             extra_loading: false,
@@ -314,6 +386,8 @@ impl Inbox {
             refresh_queued: false,
             notifications: model::NotificationTracker::default(),
             last_refresh: Instant::now(),
+            fetched_at: 0,
+            phone: PhoneSnapshot::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -381,6 +455,294 @@ impl Inbox {
             } else if let Some(item) = self.visible_items(cx).first() {
                 self.select(item.key(), cx);
             }
+        }
+        cx.notify();
+    }
+
+    /// Whether the Inbox is the view on screen.
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// The projects a phone fetch covers: the desktop's and the Monos'.
+    fn phone_projects(&self) -> Vec<PathBuf> {
+        let key = |path: &PathBuf| monocode_core::files::path_key(&path.to_string_lossy());
+        let mut projects = self.projects.clone();
+        for path in &self.phone.projects {
+            if !projects.iter().any(|known| key(known) == key(path)) {
+                projects.push(path.clone());
+            }
+        }
+        projects
+    }
+
+    fn phone_scope(&self) -> String {
+        format!(
+            "{}:{}",
+            ViewState::default().fetch_scope(&self.phone_projects()),
+            monocode_core::files::path_key(&self.service.cwd.to_string_lossy())
+        )
+    }
+
+    /// Whether the desktop's fetch would hide something from the phone: its
+    /// filters narrow the providers' rows, or a Mono lists a project it doesn't.
+    fn phone_separate(&self) -> bool {
+        self.phone_scope() != self.fetch_scope()
+    }
+
+    /// The snapshot a phone reads and when it was fetched. Until the phone's own
+    /// first fetch ends it reads the desktop's, flagged as never fetched.
+    fn phone_source(&self) -> (&Snapshot, Option<i64>) {
+        if !self.phone_separate() {
+            return (
+                &self.snapshot,
+                (self.fetched_at > 0).then_some(self.fetched_at),
+            );
+        }
+        match &self.phone.snapshot {
+            Some(snapshot) => (
+                snapshot,
+                (self.phone.fetched_at > 0).then_some(self.phone.fetched_at),
+            ),
+            None => (&self.snapshot, None),
+        }
+    }
+
+    /// Tells the Inbox which projects the Monos add for the phone.
+    pub(crate) fn set_phone_projects(&mut self, projects: Vec<PathBuf>) {
+        if self.phone.projects != projects {
+            self.phone.projects = projects;
+            self.phone.last_refresh = None;
+        }
+    }
+
+    pub(crate) fn phone_view(&self) -> PhoneView<'_> {
+        let (snapshot, fetched_at) = self.phone_source();
+        PhoneView {
+            items: &snapshot.items,
+            errors: &snapshot.errors,
+            connections: &snapshot.connections,
+            viewers: &snapshot.viewers,
+            seen: &self.state.seen,
+            triage: &self.state.triage,
+            fetched_at,
+            interval_ms: poll_interval(self.active).as_millis() as i64,
+            service: &self.service,
+        }
+    }
+
+    /// Names what a phone would read, so it reads again only when this moves.
+    pub(crate) fn phone_rev(&self) -> String {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let view = self.phone_view();
+        let content = serde_json::to_value((view.items, view.errors, view.seen, view.triage))
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    /// A phone looked at the list: refresh in the background when the last
+    /// fetch is older than `PHONE_REFRESH`. The answer does not wait for it.
+    pub(crate) fn refresh_for_phone(&mut self, cx: &mut Context<Self>) {
+        if self.phone_separate() {
+            let due = self
+                .phone
+                .last_refresh
+                .is_none_or(|at| at.elapsed() >= PHONE_REFRESH);
+            if due {
+                self.refresh_phone(cx);
+            }
+            return;
+        }
+        self.phone.snapshot = None;
+        let due = self.last_refresh.elapsed() >= PHONE_REFRESH;
+        if due && !self.loading {
+            self.refresh(cx);
+        }
+    }
+
+    /// A phone asked for a fresh read: fetch now unless one is already running.
+    /// `fetching` tells when the answer is ready.
+    pub(crate) fn refresh_now_for_phone(&mut self, cx: &mut Context<Self>) {
+        if self.phone_separate() {
+            self.refresh_phone(cx);
+        } else if !self.loading {
+            self.refresh(cx);
+        }
+    }
+
+    /// Whether the fetch a phone waits for is running or queued.
+    pub(crate) fn fetching(&self) -> bool {
+        if self.phone_separate() {
+            self.phone.loading
+        } else {
+            self.loading || self.refresh_queued
+        }
+    }
+
+    fn refresh_phone(&mut self, cx: &mut Context<Self>) {
+        if self.phone.loading {
+            return;
+        }
+        self.phone.loading = true;
+        self.phone.last_refresh = Some(Instant::now());
+        let scope = self.phone_scope();
+        let service = self.service.clone();
+        let projects = self.phone_projects();
+        let task = cx
+            .background_executor()
+            .spawn(async move { service.list(&projects, &ViewState::default()) });
+        cx.spawn(async move |this, cx| {
+            let mut snapshot = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.phone.loading = false;
+                if scope != this.phone_scope() {
+                    // The projects or the checkout changed meanwhile: fetch again on the next look.
+                    this.phone.last_refresh = None;
+                    return;
+                }
+                // A temporary outage must not erase the last usable provider list.
+                if let Some(previous) = &this.phone.snapshot {
+                    for provider in snapshot.errors.keys() {
+                        snapshot.items.extend(
+                            previous
+                                .items
+                                .iter()
+                                .filter(|i| &i.provider == provider)
+                                .cloned(),
+                        );
+                    }
+                }
+                snapshot
+                    .items
+                    .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+                if this.phone.snapshot.is_none() && this.state.seen.seeded {
+                    // Rows only the phone lists start out read, as the desktop's start;
+                    // the ones the desktop lists keep their own state.
+                    let listed = this
+                        .snapshot
+                        .items
+                        .iter()
+                        .map(|item| item.key())
+                        .collect::<std::collections::HashSet<_>>();
+                    for item in &snapshot.items {
+                        if !listed.contains(&item.key())
+                            && !this.state.seen.items.contains_key(&item.key())
+                        {
+                            this.state.seen.mark(item);
+                        }
+                    }
+                    this.save();
+                }
+                this.phone.fetched_at = monocode_core::time::now_ms() as i64;
+                this.phone.snapshot = Some(snapshot);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A phone's triage action on a listed item, kept and saved with the
+    /// desktop's own read state. The item as it now stands.
+    pub(crate) fn phone_mark(
+        &mut self,
+        key: &str,
+        mark: monocode_core::mobile::inbox::Mark,
+        cx: &mut Context<Self>,
+    ) -> Result<Item, String> {
+        let item = self
+            .phone_source()
+            .0
+            .items
+            .iter()
+            .find(|item| item.key() == key)
+            .cloned()
+            .ok_or("That item is no longer in the Inbox")?;
+        let now = monocode_core::time::now_ms() as i64;
+        self.state.triage.prune(now);
+        mark.apply(&item, &mut self.state.seen, &mut self.state.triage, now);
+        self.save();
+        cx.notify();
+        Ok(item)
+    }
+
+    /// Marks read what a phone's list shows, and says how many that was.
+    pub(crate) fn phone_read_all(
+        &mut self,
+        params: &monocode_core::mobile::inbox::ListParams,
+        projects: &[monocode_core::mobile::inbox::ProjectRef],
+        cx: &mut Context<Self>,
+    ) -> usize {
+        use monocode_core::mobile::inbox::{View, visible};
+        let unread: Vec<Item> = {
+            let snapshot = self.phone_source().0;
+            let view = View {
+                seen: &self.state.seen,
+                triage: &self.state.triage,
+                projects,
+                viewers: &snapshot.viewers,
+                now: monocode_core::time::now_ms() as i64,
+            };
+            visible(&snapshot.items, params, &view)
+                .into_iter()
+                .filter(|item| self.state.seen.unseen(item))
+                .cloned()
+                .collect()
+        };
+        for item in &unread {
+            self.state.seen.mark(item);
+        }
+        if !unread.is_empty() {
+            self.save();
+            cx.notify();
+        }
+        unread.len()
+    }
+
+    /// A phone's action changed an item at its provider. `updated` is the
+    /// provider's copy, which has no attention reason until the next fetch. The
+    /// item as it now stands, read because the user just acted on it.
+    pub(crate) fn phone_acted(
+        &mut self,
+        key: &str,
+        mut updated: Item,
+        cx: &mut Context<Self>,
+    ) -> Item {
+        if let Some(listed) = self
+            .phone_source()
+            .0
+            .items
+            .iter()
+            .find(|item| item.key() == key)
+        {
+            updated.attention_reason = listed.attention_reason.clone();
+        }
+        for old in self
+            .snapshot
+            .items
+            .iter_mut()
+            .chain(self.phone.snapshot.iter_mut().flat_map(|s| &mut s.items))
+            .filter(|item| item.key() == key)
+        {
+            *old = updated.clone();
+        }
+        self.state.seen.mark(&updated);
+        self.save();
+        self.phone_discussed(key, cx);
+        updated
+    }
+
+    /// Something a phone did at the provider shows in the next read: the
+    /// desktop's detail if it has the item open, and both lists.
+    pub(crate) fn phone_discussed(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(key) {
+            self.load_detail(false, cx);
+        }
+        self.refresh(cx);
+        if self.phone_separate() {
+            self.refresh_phone(cx);
         }
         cx.notify();
     }
@@ -468,7 +830,17 @@ impl Inbox {
                 snapshot
                     .items
                     .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+                for (provider, login) in &this.snapshot.viewers {
+                    snapshot
+                        .viewers
+                        .entry(provider.clone())
+                        .or_insert_with(|| login.clone());
+                }
+                if this.state.filters.fetch_author().is_none() || this.authors.is_empty() {
+                    this.authors = authors(&snapshot.items);
+                }
                 this.state.seen.seed(&snapshot.items);
+                this.fetched_at = monocode_core::time::now_ms() as i64;
                 this.snapshot = snapshot;
                 this.sessions = sessions;
                 if this.active
@@ -529,12 +901,23 @@ impl Inbox {
             self.error = Some(error);
         }
     }
+    fn viewer(&self) -> &str {
+        self.snapshot
+            .viewers
+            .get(&self.state.source)
+            .map_or("", String::as_str)
+    }
     fn visible_items(&self, cx: &App) -> Vec<Item> {
         let search = self.search.read(cx).content.as_ref();
+        let viewer = self.viewer();
         self.snapshot
             .items
             .iter()
-            .filter(|item| self.state.filters.matches(item, &self.state.source, search))
+            .filter(|item| {
+                self.state
+                    .filters
+                    .matches(item, &self.state.source, search, viewer)
+            })
             .filter(|item| {
                 item.provider != "linear" || !self.state.hidden_linear_teams.contains(&item.team_id)
             })
