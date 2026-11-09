@@ -233,11 +233,31 @@ fn char_offsets_count_like_reports_and_say_when_they_overshoot() {
     let last = conversation_page(&blocks, &json!({"limit":1,"charOffset":12})).unwrap();
     assert_eq!(last["turns"][0]["assistant"]["text"], "e");
     assert!(last["turns"][0]["assistant"].get("pastEnd").is_none());
-    assert!(
-        conversation_page(&blocks, &json!({"charOffset":5})).is_err(),
-        "limit defaults to 3"
-    );
-    assert!(conversation_page(&blocks, &json!({"limit":2,"charOffset":5})).is_err());
+}
+
+/// Calls written to #1341's instructions repeat a page's nextCharOffset
+/// without a limit; that keeps working, and reads on in the latest message.
+#[test]
+fn char_offsets_without_a_limit_read_on_in_the_latest_message() {
+    let long = "x".repeat(300);
+    let blocks = vec![
+        json!({"id":"u1","role":"user","text":"First"}),
+        json!({"id":"a1","role":"assistant","text":"Earlier answer"}),
+        json!({"id":"u2","role":"user","text":"Second"}),
+        json!({"id":"a2","role":"assistant","text":format!("{long}THE END")}),
+    ];
+    let first = conversation_page(&blocks, &json!({"maxChars":300})).unwrap();
+    assert_eq!(first["turns"].as_array().unwrap().len(), 2);
+    let next = first["turns"][1]["assistant"]["nextCharOffset"].clone();
+    assert_eq!(next, 300);
+    let page = conversation_page(&blocks, &json!({"maxChars":300,"charOffset":next})).unwrap();
+    assert_eq!(page["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(page["turns"][0]["turnId"], "u2");
+    assert_eq!(page["turns"][0]["assistant"]["text"], "THE END");
+    // An explicit limit still pages several exchanges, as it did before.
+    let both = conversation_page(&blocks, &json!({"limit":2,"charOffset":5})).unwrap();
+    assert_eq!(both["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(both["turns"][0]["assistant"]["text"], "er answer");
 }
 
 /// The completion report's suggested `sessions.read` call, run the way the
@@ -280,7 +300,7 @@ fn completion_report_read_calls_reach_the_cut_text_in_both_stores() {
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
         let rows = store.load(session.id).unwrap().rows;
         let call = read_call(session.id, mono.session_project(&session.cwd).as_deref());
-        let report = completion_report(&rows, TurnEnd::Unknown, false, call.as_ref(), 12000);
+        let report = completion_report(&rows, TurnEnd::Unknown, call.as_ref(), 12000);
         assert!(report.chars().count() <= 12000);
         let (marker, tail) = report.split_once("\n\n").unwrap();
         assert!(expected.ends_with(tail) && tail.ends_with("THE CONCLUSION"));

@@ -105,29 +105,41 @@ pub fn limit_tail(text: &str, count: usize, marker: &str) -> String {
     let tail: String = text.chars().skip(total - keep).collect();
     format!("{marker}\n\n{tail}")
 }
-/// How the host saw a delegated session's latest turn end, beyond its rows.
+/// How a delegated session's latest turn ended, as its turn receipt records it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TurnEnd {
-    /// Nothing beyond the rows is known.
+    /// No receipt (Tauri, remote and legacy turns): only the rows can tell.
     #[default]
     Unknown,
-    /// The user or the Mono stopped it; native stops don't leave a row.
+    /// The receipt was closed without a stop: the turn ran to its end.
+    Settled,
+    /// The user or the Mono stopped it. Native stops leave no row.
     Stopped,
+    /// The receipt was opened but never closed: the app quit or restarted.
+    Interrupted,
 }
-/// Whether the latest turn's receipt was opened but never closed: the app quit
-/// or restarted while it ran. A steer's receipt defers to its root turn's.
-pub fn turn_interrupted(
+/// The latest turn's outcome from its receipt. A steer's receipt defers to
+/// its root turn's, which the runtime closes for the whole provider run.
+pub fn turn_end(
     rows: &[Row],
     turns: &std::collections::HashMap<usize, crate::agent::TurnInfo>,
-) -> bool {
+) -> TurnEnd {
     let turn = rows.iter().rposition(Row::is_prompt).map_or(0, |i| i + 1);
     let Some(mut info) = turns.get(&turn) else {
-        return false;
+        return TurnEnd::Unknown;
     };
     if let Some(root) = info.joined_turn.and_then(|root| turns.get(&root)) {
         info = root;
     }
-    info.started_at.is_some() && !info.has_duration()
+    if info.stopped {
+        TurnEnd::Stopped
+    } else if info.has_duration() {
+        TurnEnd::Settled
+    } else if info.started_at.is_some() {
+        TurnEnd::Interrupted
+    } else {
+        TurnEnd::Unknown
+    }
 }
 /// The `sessions.read` input that returns `session`'s latest final message.
 /// `project` is the Mono project the session belongs to, when `sessions.read`
@@ -147,7 +159,6 @@ pub fn read_call(session: i64, project: Option<&str>) -> Option<serde_json::Valu
 pub fn completion_report(
     rows: &[Row],
     end: TurnEnd,
-    interrupted: bool,
     read: Option<&serde_json::Value>,
     count: usize,
 ) -> String {
@@ -190,19 +201,27 @@ pub fn completion_report(
                 .take(300)
                 .collect::<String>()
         )),
-        None if end == TurnEnd::Stopped => Some("it was stopped".into()),
-        None if interrupted => Some("the app quit or restarted while it was running".into()),
-        // Settled turns mark leftover running tools Cancelled (stop) or Failed;
-        // one still Running means the app went away mid-turn.
-        None => after
-            .iter()
-            .filter(|r| r.role == "tool")
-            .filter_map(|r| serde_json::from_str::<ToolCall>(&r.text).ok())
-            .find_map(|tool| match tool.state {
-                ToolState::Cancelled => Some("it was stopped".into()),
-                ToolState::Running => Some("it was interrupted during a tool call".into()),
-                _ => None,
-            }),
+        None => match end {
+            TurnEnd::Stopped => Some("it was stopped".into()),
+            TurnEnd::Interrupted => Some("the app quit or restarted while it was running".into()),
+            // A closed receipt is authoritative: a tool the provider cancelled
+            // on its own, or one left Failed by an ACP background handoff, is
+            // part of a turn that still finished.
+            TurnEnd::Settled => None,
+            // Without a receipt, settled turns mark leftover running tools
+            // Cancelled (stop) or Failed. Tools update in place, so a stopped
+            // tool can sit before the last message: look at the whole turn.
+            // One still Running means the app went away mid-turn.
+            TurnEnd::Unknown => turn
+                .iter()
+                .filter(|r| r.role == "tool")
+                .filter_map(|r| serde_json::from_str::<ToolCall>(&r.text).ok())
+                .find_map(|tool| match tool.state {
+                    ToolState::Cancelled => Some("it was stopped".into()),
+                    ToolState::Running => Some("it was interrupted during a tool call".into()),
+                    _ => None,
+                }),
+        },
     };
     let Some((_, text)) = answer else {
         return match unfinished {
@@ -452,7 +471,7 @@ mod tests {
         serde_json::to_string(&call).unwrap()
     }
     fn report(rows: &[Row]) -> String {
-        completion_report(rows, TurnEnd::Unknown, false, None, 12000)
+        completion_report(rows, TurnEnd::Unknown, None, 12000)
     }
 
     #[test]
@@ -528,7 +547,6 @@ mod tests {
                     ("error", "Provider rate limited\nretry later"),
                 ],
                 TurnEnd::Unknown,
-                false,
                 "it failed with an error: Provider rate limited.",
             ),
             // Tauri records a stop through the shared store as a "Stopped" error notice.
@@ -539,7 +557,6 @@ mod tests {
                     ("error", "Stopped"),
                 ],
                 TurnEnd::Unknown,
-                false,
                 "it was stopped.",
             ),
             // Native stops leave no row; the live view knows, and tools are Cancelled.
@@ -550,7 +567,6 @@ mod tests {
                     ("tool", cancelled.as_str()),
                 ],
                 TurnEnd::Stopped,
-                false,
                 "it was stopped.",
             ),
             (
@@ -560,13 +576,11 @@ mod tests {
                     ("tool", cancelled.as_str()),
                 ],
                 TurnEnd::Unknown,
-                false,
                 "it was stopped.",
             ),
             (
                 vec![("user", "Go"), ("assistant", progress)],
                 TurnEnd::Stopped,
-                false,
                 "it was stopped.",
             ),
             // The app quit mid-turn: the receipt is open and a tool never settled.
@@ -576,8 +590,7 @@ mod tests {
                     ("assistant", progress),
                     ("tool", running.as_str()),
                 ],
-                TurnEnd::Unknown,
-                true,
+                TurnEnd::Interrupted,
                 "the app quit or restarted while it was running.",
             ),
             (
@@ -587,12 +600,11 @@ mod tests {
                     ("tool", running.as_str()),
                 ],
                 TurnEnd::Unknown,
-                false,
                 "it was interrupted during a tool call.",
             ),
         ];
-        for (steps, end, interrupted, how) in cases {
-            let report = completion_report(&rows(&steps), end, interrupted, None, 12000);
+        for (steps, end, how) in cases {
+            let report = completion_report(&rows(&steps), end, None, 12000);
             assert_eq!(
                 report,
                 format!("(its latest turn did not finish: {how} This is the last message it wrote, not a final answer:)\n\n{progress}"),
@@ -614,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn open_turn_receipts_mark_an_interrupted_turn() {
+    fn turn_receipts_record_how_the_latest_turn_ended() {
         use crate::agent::TurnInfo;
         let rows = rows(&[
             ("user", "Go"),
@@ -630,28 +642,81 @@ mod tests {
             duration_known: true,
             ..Default::default()
         };
+        let stopped = TurnInfo {
+            stopped: true,
+            ..settled.clone()
+        };
         let steer = TurnInfo {
             joined_turn: Some(1),
             ..Default::default()
         };
         let turns = |items: Vec<(usize, TurnInfo)>| items.into_iter().collect();
-        assert!(turn_interrupted(&rows, &turns(vec![(3, open.clone())])));
-        assert!(!turn_interrupted(&rows, &turns(vec![(3, settled.clone())])));
-        assert!(
-            !turn_interrupted(&rows, &turns(vec![(1, open.clone())])),
+        let end = |items| turn_end(&rows, &turns(items));
+        assert_eq!(end(vec![(3, open.clone())]), TurnEnd::Interrupted);
+        assert_eq!(end(vec![(3, settled.clone())]), TurnEnd::Settled);
+        assert_eq!(end(vec![(3, stopped.clone())]), TurnEnd::Stopped);
+        assert_eq!(
+            end(vec![(1, open.clone())]),
+            TurnEnd::Unknown,
             "an earlier turn's receipt"
         );
-        assert!(turn_interrupted(
-            &rows,
-            &turns(vec![(1, open), (3, steer.clone())])
-        ));
-        assert!(!turn_interrupted(
-            &rows,
-            &turns(vec![(1, settled), (3, steer)])
-        ));
-        assert!(
-            !turn_interrupted(&rows, &Default::default()),
+        assert_eq!(
+            end(vec![(1, open), (3, steer.clone())]),
+            TurnEnd::Interrupted
+        );
+        assert_eq!(
+            end(vec![(1, settled), (3, steer.clone())]),
+            TurnEnd::Settled
+        );
+        assert_eq!(end(vec![(1, stopped), (3, steer)]), TurnEnd::Stopped);
+        assert_eq!(
+            end(vec![]),
+            TurnEnd::Unknown,
             "legacy turns without receipts"
+        );
+        // The stop survives a round trip through saved settings; unstopped
+        // receipts serialize as before.
+        let saved = serde_json::to_value(TurnInfo {
+            stopped: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(saved["stopped"], true);
+        assert!(serde_json::from_value::<TurnInfo>(saved).unwrap().stopped);
+        assert!(serde_json::to_value(TurnInfo::default())
+            .unwrap()
+            .get("stopped")
+            .is_none());
+    }
+
+    /// Tools update their row in place, so a stopped tool can sit before the
+    /// turn's last message. Without a receipt the whole turn counts; a closed
+    /// receipt is authoritative.
+    #[test]
+    fn tool_outcomes_anywhere_in_the_turn_mark_it_unfinished() {
+        let cancelled = tool(ToolState::Cancelled);
+        let running = tool(ToolState::Running);
+        let failed = tool(ToolState::Failed);
+        let waiting = "Waiting for the delegated results";
+        let header = |how: &str| {
+            format!("(its latest turn did not finish: {how} This is the last message it wrote, not a final answer:)\n\n{waiting}")
+        };
+        let before = |state: &str| rows(&[("user", "Go"), ("tool", state), ("assistant", waiting)]);
+        assert_eq!(report(&before(&cancelled)), header("it was stopped."));
+        assert_eq!(
+            report(&before(&running)),
+            header("it was interrupted during a tool call.")
+        );
+        // An ACP background handoff that finished leaves its tool Failed.
+        assert_eq!(report(&before(&failed)), waiting);
+        assert_eq!(
+            completion_report(&before(&cancelled), TurnEnd::Settled, None, 12000),
+            waiting,
+            "a tool the provider cancelled on its own, in a turn that settled"
+        );
+        assert_eq!(
+            completion_report(&before(&failed), TurnEnd::Stopped, None, 12000),
+            header("it was stopped.")
         );
     }
 
@@ -660,7 +725,7 @@ mod tests {
         let answer = format!("{}THE CONCLUSION", "detail ".repeat(3000));
         let rows = rows(&[("user", "Go"), ("assistant", &answer)]);
         let call = read_call(42, Some("/repo")).unwrap();
-        let report = completion_report(&rows, TurnEnd::Unknown, false, Some(&call), 12000);
+        let report = completion_report(&rows, TurnEnd::Unknown, Some(&call), 12000);
         assert_eq!(report.chars().count(), 12000);
         assert!(report.ends_with("THE CONCLUSION"));
         let (marker, tail) = report.split_once("\n\n").unwrap();
@@ -680,14 +745,14 @@ mod tests {
             "of 21014 characters were cut. sessions.read {call} returns"
         )));
         // Unfinished turns keep their header within the same budget.
-        let unfinished = completion_report(&rows, TurnEnd::Stopped, false, Some(&call), 12000);
+        let unfinished = completion_report(&rows, TurnEnd::Stopped, Some(&call), 12000);
         assert_eq!(unfinished.chars().count(), 12000);
         assert!(unfinished.starts_with("(its latest turn did not finish: it was stopped."));
         assert!(unfinished.ends_with("THE CONCLUSION"));
         // Remote sessions can't be read through sessions.read, so no call is offered.
         assert_eq!(read_call(-5, Some("/repo")), None);
         assert_eq!(read_call(5, None), None);
-        let remote = completion_report(&rows, TurnEnd::Unknown, false, None, 12000);
+        let remote = completion_report(&rows, TurnEnd::Unknown, None, 12000);
         assert!(remote.starts_with(
             "[the start of this message was cut; open the session to read it in full]\n\n"
         ));

@@ -1,7 +1,6 @@
 //! Capability-checked app actions used by Mono provider subprocesses.
 use super::*;
 use monocode_core::mono::{Document, Launch, bridge::Call, files, memory};
-use monocode_core::response::TurnEnd;
 use monocode_core::{app_access as app, session_groups::Groups, time::now_ms};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -841,12 +840,11 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                             .iter()
                             .map(|l| {
                                 let project = mono.session_project(&l.cwd);
-                                let end = if views.iter().any(|v| v.id == l.session_id && v.stopped)
-                                {
-                                    TurnEnd::Stopped
-                                } else {
-                                    TurnEnd::Unknown
-                                };
+                                // Any turn started or settled since bumps updated_at.
+                                let generation = views
+                                    .iter()
+                                    .find(|v| v.id == l.session_id)
+                                    .map(|v| v.updated_at);
                                 (
                                     l.session_id,
                                     l.title.clone(),
@@ -854,7 +852,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                                         l.session_id,
                                         project.as_deref(),
                                     ),
-                                    end,
+                                    generation,
                                 )
                             })
                             .collect::<Vec<_>>(),
@@ -864,20 +862,20 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
         }
         for (id, group, children) in ready {
             self.completion_work.insert((id.clone(), group));
-            let sessions: Vec<i64> = children.iter().map(|c| c.0).collect();
+            let generations: Vec<(i64, Option<u64>)> =
+                children.iter().map(|c| (c.0, c.3)).collect();
             let store = self.store.clone();
             let work = cx.background_executor().spawn(async move {
                 children
                     .into_iter()
-                    .map(|(id, title, read, end)| {
+                    .map(|(id, title, read, _)| {
                         let report = locked(&store)
                             .and_then(|db| {
                                 let rows = db.load(id)?.rows;
                                 let turns = db.agent_settings(id)?.unwrap_or_default().turns;
                                 Ok(monocode_core::response::completion_report(
                                     &rows,
-                                    end,
-                                    monocode_core::response::turn_interrupted(&rows, &turns),
+                                    monocode_core::response::turn_end(&rows, &turns),
                                     read.as_ref(),
                                     12000,
                                 ))
@@ -892,10 +890,11 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                 let report=work.await;
                 let _=this.update(cx,|this,cx|{
                     this.completion_work.remove(&(id.clone(),group));
-                    // A turn started after the readiness check, before the rows were
-                    // read, may be what the report describes. Report once it settles.
+                    // The report describes the turns seen at the readiness check. If one
+                    // is running, or a newer turn ran meanwhile, drop it: the next
+                    // check rebuilds it from that turn once it settles.
                     let views=this.owner.upgrade().map(|o|o.read(cx).mono_session_views(cx)).unwrap_or_default();
-                    if sessions.iter().any(|s|views.iter().any(|v|v.id==*s&&v.busy)){return;}
+                    if generations.iter().any(|(s,seen)|views.iter().find(|v|v.id==*s).is_some_and(|v|v.busy||Some(v.updated_at)!=*seen)){return;}
                     if let Some(mono)=this.roster.get_mut(&id){for launch in &mut mono.launches{if launch.origin_turn==group{launch.completed=true;}}}
                     let message=format!("[Delegated work completed]\nAll sessions in this group have stopped. Inspect their results and give an integrated update.\n\n{report}");
                     let source=(group>>32) as i64;

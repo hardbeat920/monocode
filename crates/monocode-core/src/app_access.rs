@@ -344,14 +344,25 @@ fn capped(text: &str, max: usize, offset: usize) -> Value {
     }
     value
 }
+/// Blocks the desktop projection shows as assistant prose (see
+/// `store::shared::blocks`): plans, and task lists without a structured panel,
+/// as well as assistant text. Completion reports read those projected rows,
+/// so counting the same blocks here keeps their read-more call on their message.
+fn assistant_message(block: &Value) -> bool {
+    match block["role"].as_str() {
+        Some("assistant") => true,
+        Some("plan") => block["nativeRemotePlan"] != true,
+        Some("tasks") => crate::tool::tasks::from_desktop(block).is_none(),
+        _ => false,
+    }
+}
 /// Tauri's prose-only exchanges, with canonical source block IDs as cursors.
 pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, String> {
-    let limit = bounded(input, "limit", 3, 1, 3)?;
     let max = bounded(input, "maxChars", 1200, 200, 6000)?;
     let offset = bounded(input, "charOffset", 0, 0, usize::MAX)?;
-    if offset > 0 && limit != 1 {
-        return Err("charOffset pages through one message; pass limit 1".into());
-    }
+    // Reading on through a long message defaults to the latest exchange, which
+    // is the one completion reports cut; an explicit limit still pages several.
+    let limit = bounded(input, "limit", if offset > 0 { 1 } else { 3 }, 1, 3)?;
     let mut turns: Vec<(&Value, Vec<&Value>)> = Vec::new();
     for block in blocks {
         if block["role"] == "user"
@@ -359,7 +370,7 @@ pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, Strin
             && block["draft"] != true
         {
             turns.push((block, Vec::new()));
-        } else if block["role"] == "assistant"
+        } else if assistant_message(block)
             && block["internal"] != true
             && block["text"].as_str().is_some_and(|s| !s.trim().is_empty())
         {

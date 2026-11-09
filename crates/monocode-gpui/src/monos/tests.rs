@@ -2632,10 +2632,14 @@ fn completion_report_flags_an_interrupted_child_and_names_its_project(cx: &mut T
     });
 }
 
-/// A turn that starts after the readiness check, while the report is being
-/// read, holds the report back until that turn settles.
-#[gpui::test]
-fn completion_waits_for_a_turn_started_while_its_report_was_read(cx: &mut TestAppContext) {
+/// A report is read in the background after the readiness check. If the child
+/// changes in between, `disturb` (applied right after the check) must hold the
+/// report back, and `settle` lets the next check deliver a fresh one.
+fn completion_is_held_until_the_child_settles(
+    cx: &mut TestAppContext,
+    disturb: impl Fn(&mut crate::conversation::Conversation),
+    settle: impl Fn(&mut crate::conversation::Conversation),
+) {
     let s = setup(cx);
     let child = {
         let mut store = s.store.lock().unwrap();
@@ -2668,6 +2672,14 @@ fn completion_waits_for_a_turn_started_while_its_report_was_read(cx: &mut TestAp
             .iter()
             .any(|message| message.text.starts_with("[Delegated work completed]"))
     };
+    let completed = |m: &Monos| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .launches
+            .iter()
+            .all(|l| l.completed)
+    };
     s.manager.update(cx, |m, cx| {
         m.chats[&s.id].update(cx, |chat, _| {
             chat.settings.usage_limit = Some(Default::default())
@@ -2688,36 +2700,120 @@ fn completion_waits_for_a_turn_started_while_its_report_was_read(cx: &mut TestAp
                 dismissed: false,
             });
         m.check_completions(cx);
-        // The readiness check passed; a new turn begins before the rows are read.
-        view.update(cx, |chat, _| chat.busy = true);
+        view.update(cx, |chat, _| disturb(chat));
     });
     cx.run_until_parked();
     s.manager.read_with(cx, |m, _| {
         assert!(
             !delivered(m),
-            "the report must not describe a turn that is still running"
+            "the report must describe the child's latest turn"
         );
-        assert!(
-            m.roster
-                .get(&s.id)
-                .unwrap()
-                .launches
-                .iter()
-                .all(|l| !l.completed)
-        );
+        assert!(!completed(m));
     });
-    view.update(cx, |chat, _| chat.busy = false);
+    view.update(cx, |chat, _| settle(chat));
     s.manager.update(cx, |m, cx| m.check_completions(cx));
     cx.run_until_parked();
     s.manager.read_with(cx, |m, _| {
         assert!(delivered(m), "once the turn settles, the group reports");
+        assert!(completed(m));
+    });
+}
+
+/// A turn that starts after the readiness check, while the report is being
+/// read, holds the report back until that turn settles.
+#[gpui::test]
+fn completion_waits_for_a_turn_started_while_its_report_was_read(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(
+        cx,
+        |chat| chat.busy = true,
+        |chat| chat.busy = false,
+    );
+}
+
+/// A whole turn can start and finish between the readiness check and delivery,
+/// so busy is never seen. Its updated_at moved, so the held report is dropped
+/// and the next check reports the newer turn.
+#[gpui::test]
+fn completion_drops_a_report_when_a_newer_turn_ran_while_it_was_read(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(cx, |chat| chat.summary.updated_at += 1, |_| {});
+}
+
+/// A stop clears busy at once, but the runtime settles the rows and the
+/// receipt later; until then the child isn't ready to report.
+#[gpui::test]
+fn completion_waits_for_a_stop_to_settle(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(
+        cx,
+        |chat| chat.mono_set_stopping(true),
+        |chat| chat.mono_set_stopping(false),
+    );
+}
+
+/// A native stop leaves no row. Its closed receipt records the stop, so a
+/// child stopped before an app restart still reports its turn as unfinished.
+#[gpui::test]
+fn completion_report_flags_a_child_stopped_before_a_restart(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let progress = "I will investigate this now";
+    let child = {
+        let mut store = s.store.lock().unwrap();
+        let child = store.create("codex", &s.project).unwrap().id;
+        let mut transcript = monocode_core::transcript::Transcript::default();
+        for (role, text) in [("user", "Investigate"), ("assistant", progress)] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        store.write_rows(child, 0, &transcript.rows).unwrap();
+        let mut settings = store.agent_settings(child).unwrap().unwrap_or_default();
+        settings.turns.insert(
+            1,
+            monocode_core::agent::TurnInfo {
+                started_at: Some(1),
+                duration_known: true,
+                stopped: true,
+                ..Default::default()
+            },
+        );
+        store.save_agent_settings(child, &settings).unwrap();
+        child
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.settings.usage_limit = Some(Default::default())
+        });
+        m.roster
+            .get_mut(&s.id)
+            .unwrap()
+            .launches
+            .push(monocode_core::mono::Launch {
+                session_id: child,
+                cwd: s.project.clone(),
+                title: "Child".into(),
+                harness: "codex".into(),
+                model: None,
+                origin_turn: ((s.session as u64) << 32) | 1,
+                notify_on_complete: true,
+                completed: false,
+                dismissed: false,
+            });
+        m.check_completions(cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        let report = m
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .find(|message| message.text.starts_with("[Delegated work completed]"))
+            .map(|message| message.text.clone())
+            .expect("the completion report is queued for the Mono");
         assert!(
-            m.roster
-                .get(&s.id)
-                .unwrap()
-                .launches
-                .iter()
-                .all(|l| l.completed)
+            report.ends_with(&format!(
+                "Session {child}: Child\n(its latest turn did not finish: it was stopped. This is the last message it wrote, not a final answer:)\n\n{progress}"
+            )),
+            "{report}"
         );
     });
 }

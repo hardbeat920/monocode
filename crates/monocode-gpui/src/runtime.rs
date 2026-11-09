@@ -1051,6 +1051,7 @@ fn run_turn_using(
         info.duration_ms = info.started_at.map_or(0, |at| completed.saturating_sub(at));
         info.duration_known = true;
         info.completed_at = info.started_at.map(|_| completed);
+        info.stopped = cancelled;
         if let Err(error) = persistence::save_turn_receipt(&store, summary.id, turn, info) {
             status = format!("{status} · Saving turn metadata failed: {error}");
         }
