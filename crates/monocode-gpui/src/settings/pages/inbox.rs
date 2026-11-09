@@ -42,6 +42,13 @@ impl SettingsView {
                 "API key",
                 "Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.",
             ),
+            (
+                "sonar",
+                "Sonar",
+                "Findings, analyzed source and rule guidance from SonarQube Cloud or Server.",
+                "Connection",
+                "Connect with a personal token with Browse permission, then choose an organization and projects. Source access also requires See Source Code permission.",
+            ),
         ] {
             let (connected, connection_label) = self
                 .ctx
@@ -100,6 +107,7 @@ impl SettingsView {
                         .gap_2()
                         .child(icon(
                             match id {
+                                "sonar" => "inbox-sonar",
                                 "linear" => "inbox-linear",
                                 "jira" => "inbox-jira",
                                 "gitlab" => "inbox-gitlab",

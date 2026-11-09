@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sonar inbox connector with scanned branch filters, repository matching, issue source and rule guidance, and supported status changes with optional comments.
+
 ### Fixed
 
 - A Mono's completion report for a delegated session now carries that session's final answer from its latest turn, instead of every progress message and earlier report with the answer cut off. A long answer keeps its ending and says how to read the rest.

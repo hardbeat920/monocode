@@ -9,6 +9,8 @@ mod github;
 pub mod gitlab;
 pub mod jira;
 pub mod linear;
+pub mod sonar;
+mod sonar_native;
 
 use crate::{desktop_preferences::DesktopPreferences, session_groups::WorkItem, store::Store};
 use chrono::{Datelike, Local, TimeZone};
@@ -19,9 +21,10 @@ use std::{
     process::Command,
 };
 
-pub const PROVIDERS: [&str; 5] = ["github", "linear", "jira", "gitlab", "azuredevops"];
+pub const PROVIDERS: [&str; 6] = ["github", "linear", "jira", "gitlab", "azuredevops", "sonar"];
 pub fn provider_label(provider: &str) -> &'static str {
     match provider {
+        "sonar" => "Sonar",
         "linear" => "Linear",
         "jira" => "Jira",
         "gitlab" => "GitLab",
@@ -30,7 +33,7 @@ pub fn provider_label(provider: &str) -> &'static str {
     }
 }
 pub fn is_tracker(provider: &str) -> bool {
-    matches!(provider, "linear" | "jira")
+    matches!(provider, "linear" | "jira" | "sonar")
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,10 +73,15 @@ pub struct Item {
     pub project_name: String,
     pub project_path: String,
     pub attention_reason: String,
+    pub sonar_project: String,
+    pub sonar_branch: String,
 }
 impl Item {
     pub fn key(&self) -> String {
-        let identity = if self.provider == "linear" {
+        let identity = if self.provider == "sonar" {
+            serde_json::to_string(&(&self.sonar_project, &self.sonar_branch, &self.id))
+                .unwrap_or_default()
+        } else if self.provider == "linear" {
             let id = if self.identifier.trim().is_empty() {
                 self.id.trim()
             } else {
@@ -122,10 +130,16 @@ impl Item {
     pub fn status(&self) -> &'static str {
         if self.state.eq_ignore_ascii_case("merged") {
             "Merged"
-        } else if matches!(
-            self.state.to_lowercase().as_str(),
-            "closed" | "done" | "resolved" | "removed" | "completed"
-        ) || matches!(self.state_type.as_str(), "completed" | "canceled" | "done")
+        } else if (self.provider == "sonar"
+            && matches!(
+                self.state.to_lowercase().as_str(),
+                "accepted" | "falsepositive" | "false_positive" | "wontfix" | "fixed"
+            ))
+            || matches!(
+                self.state.to_lowercase().as_str(),
+                "closed" | "done" | "resolved" | "removed" | "completed"
+            )
+            || matches!(self.state_type.as_str(), "completed" | "canceled" | "done")
         {
             "Closed"
         } else if self.draft {
@@ -289,6 +303,7 @@ pub struct Filters {
     pub assigned_to_me: bool,
     pub hidden_projects: Vec<String>,
     pub hidden_linear_projects: Vec<String>,
+    pub hidden_sonar_branches: Vec<String>,
     pub hidden_kinds: Vec<String>,
     pub time: String,
     pub status: StatusFilter,
@@ -299,6 +314,7 @@ impl Default for Filters {
             assigned_to_me: false,
             hidden_projects: vec![],
             hidden_linear_projects: vec![],
+            hidden_sonar_branches: vec![],
             hidden_kinds: vec![],
             time: "all".into(),
             status: StatusFilter::default(),
@@ -318,6 +334,13 @@ impl Filters {
             return false;
         }
         let tracker = is_tracker(source);
+        if source == "sonar"
+            && self
+                .hidden_sonar_branches
+                .contains(&sonar::branch_key(&item.sonar_project, &item.sonar_branch))
+        {
+            return false;
+        }
         if !tracker
             && !((source == "gitlab" || source == "azuredevops") && self.assigned_to_me)
             && self.hidden_projects.contains(&item.project_path)
@@ -511,6 +534,9 @@ pub struct Snapshot {
     pub connections: BTreeMap<String, Status>,
     pub linear_teams: Vec<OptionRow>,
     pub jira_projects: Vec<OptionRow>,
+    pub sonar_projects: Vec<sonar::SonarProject>,
+    pub sonar_branches: Vec<sonar::SonarBranch>,
+    pub sonar_selected_project: String,
 }
 
 /// The Tauri InboxNotificationTracker: provider baselines and revisions are
@@ -610,8 +636,23 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
         .map_err(|e| e.to_string())
 }
 impl Service {
+    pub fn sonar_content(&self, item: &Item) -> Result<sonar::SonarIssueContent, String> {
+        sonar::sonar_issue_content(
+            self.data_dir.clone(),
+            item.sonar_project.clone(),
+            item.sonar_branch.clone(),
+            item.id.clone(),
+        )
+        .map(|mut content| {
+            // Issue search does not always echo its branch query in the issue object.
+            content.issue["branch"] = serde_json::Value::String(item.sonar_branch.clone());
+            content.issue["project"] = serde_json::Value::String(item.sonar_project.clone());
+            content
+        })
+    }
     pub fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
+            "sonar" => convert(sonar::sonar_status(self.data_dir.clone())?),
             "linear" => convert(linear::linear_status(self.data_dir.clone())?),
             "jira" => convert(jira::jira_status(self.data_dir.clone())?),
             "gitlab" => convert(gitlab::gitlab_status(self.data_dir.clone())?),
@@ -642,6 +683,11 @@ impl Service {
         token: String,
     ) -> Result<Status, String> {
         match provider {
+            "sonar" => convert(if token.is_empty() {
+                sonar::sonar_disconnect(self.data_dir.clone())?
+            } else {
+                sonar::sonar_connect(self.data_dir.clone(), url, token)?
+            }),
             "linear" => convert(linear::linear_set_token(self.data_dir.clone(), token)?),
             "jira" => convert(jira::jira_set_config(
                 self.data_dir.clone(),
@@ -663,6 +709,14 @@ impl Service {
         }
     }
     pub fn list(&self, projects: &[PathBuf], state: &ViewState) -> Snapshot {
+        self.list_with_project_names(projects, state, &HashMap::new())
+    }
+    pub fn list_with_project_names(
+        &self,
+        projects: &[PathBuf],
+        state: &ViewState,
+        appearances: &HashMap<String, crate::project_appearance::ProjectAppearance>,
+    ) -> Snapshot {
         let mut snapshot = Snapshot::default();
         let limit = if state.filters.fetch_state() == "all" {
             100
@@ -683,6 +737,41 @@ impl Service {
                 continue;
             }
             let result: Result<Vec<Item>, String> = (|| {
+                if provider == "sonar" {
+                    let status = sonar::sonar_status(self.data_dir.clone())?;
+                    snapshot.sonar_projects = status.projects;
+                    snapshot.sonar_selected_project = status.selected_project;
+                    let rows = sonar::sonar_list_issues(
+                        self.data_dir.clone(),
+                        state.filters.assigned_to_me,
+                        state.filters.fetch_state().into(),
+                    )?;
+                    snapshot.sonar_branches = rows.branches;
+                    if !rows.errors.is_empty() {
+                        snapshot
+                            .errors
+                            .insert("sonar".into(), rows.errors.join("\n"));
+                    }
+                    let mut checkouts = HashMap::new();
+                    return Ok(rows
+                        .issues
+                        .into_iter()
+                        .map(|issue| {
+                            let checkout = checkouts
+                                .entry(issue.repository_name.clone())
+                                .or_insert_with(|| {
+                                    sonar::project_with_names(
+                                        projects,
+                                        &self.cwd,
+                                        &issue.repository_name,
+                                        appearances,
+                                    )
+                                })
+                                .clone();
+                            sonar::item(issue, &[], &checkout)
+                        })
+                        .collect());
+                }
                 if provider == "linear" {
                     let teams = linear::linear_list_teams(self.data_dir.clone())?;
                     let visible = teams
@@ -824,6 +913,11 @@ impl Service {
     }
     pub fn details(&self, item: &Item) -> Result<Details, String> {
         match item.provider.as_str() {
+            "sonar" => self.sonar_content(item).map(|content| Details {
+                body: sonar::body(&content),
+                head_ref_name: item.sonar_branch.clone(),
+                ..Default::default()
+            }),
             "linear" => convert(linear::linear_issue_details(
                 self.data_dir.clone(),
                 item.id.clone(),
@@ -861,6 +955,7 @@ impl Service {
     }
     pub fn thread(&self, item: &Item) -> Result<Thread, String> {
         match item.provider.as_str() {
+            "sonar" => Ok(Thread::default()),
             "linear" => convert(linear::linear_issue_thread(
                 self.data_dir.clone(),
                 item.id.clone(),
@@ -891,6 +986,7 @@ impl Service {
     }
     pub fn comment(&self, item: &Item, body: String, reply_to: String) -> Result<String, String> {
         match item.provider.as_str() {
+            "sonar" => Err("Add an optional comment when changing the Sonar status".into()),
             "linear" => {
                 linear::linear_issue_comment(self.data_dir.clone(), item.id.clone(), body, reply_to)
             }
@@ -926,6 +1022,9 @@ impl Service {
     }
     pub fn diff_context(&self, item: &Item, full_context: bool) -> Result<Diff, String> {
         match item.provider.as_str() {
+            "sonar" => self
+                .sonar_content(item)
+                .map(|content| sonar::diff(&content)),
             "gitlab" => convert(gitlab::gitlab_mr_diff(
                 self.data_dir.clone(),
                 item.repo.clone(),

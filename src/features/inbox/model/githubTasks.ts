@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { clearKnownInboxItems } from "./inboxSeen";
+import { isTrackerSource, INBOX_PROVIDER_LABELS } from "./inboxProviders";
 import {
   linearConnected,
   linearTeamIdsForFetch,
@@ -8,6 +9,15 @@ import {
   loadHiddenLinearTeamIds,
   type LinearIssue,
 } from "./linear";
+import {
+  clearSonarContent,
+  sonarConnected,
+  listSonarIssues,
+  sonarIssueToInboxItem,
+  sonarIssueDetails,
+  type SonarBranch,
+  type SonarIssue,
+} from "./sonar";
 import {
   clearJiraCache,
   jiraConnected,
@@ -44,7 +54,7 @@ import { recordInboxSelfActivity } from "./inboxSelfActivity";
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
   "merge" | "squash" | "rebase" | "draft" | "ready" | "close" | "reopen";
-export type InboxKind = GithubTaskKind | "linear" | "jira";
+export type InboxKind = GithubTaskKind | "linear" | "jira" | "sonar";
 
 export type GithubLabel = {
   name: string;
@@ -73,7 +83,7 @@ export type GithubWorkItem = {
 };
 
 export type InboxProvider =
-  "github" | "linear" | "jira" | "gitlab" | "azuredevops";
+  "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "sonar";
 
 export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   kind: InboxKind;
@@ -89,6 +99,11 @@ export type InboxItem = Omit<GithubWorkItem, "kind"> & {
   stateType?: string;
   /** GitLab To-Do action that caused this item to need attention. */
   attentionReason?: string;
+  branch?: string;
+  sonarIssue?: Pick<
+    SonarIssue,
+    "severity" | "rule" | "issueType" | "status" | "file" | "line" | "assignee"
+  >;
 };
 
 export type GithubWorkItemDetails = {
@@ -172,6 +187,7 @@ export type GithubStarStatus = "starred" | "notStarred" | "unavailable";
 export type InboxListResult = {
   items: InboxItem[];
   errors: InboxProviderErrors;
+  sonarBranches?: SonarBranch[];
 };
 
 const INBOX_CACHE_FRESH_MS = 2 * 60_000;
@@ -212,6 +228,7 @@ function freshEnough(key: string, maxAgeMs: number | undefined): boolean {
 export function clearInboxCache() {
   inboxCacheGeneration += 1;
   clearJiraCache();
+  clearSonarContent();
   clearKnownInboxItems();
   inboxListCache = null;
   inboxListInflight.clear();
@@ -249,7 +266,13 @@ export function peekInboxList(
 ): InboxListResult | null {
   const key = inboxListCacheKey(projects, query);
   if (inboxListCache?.key !== key) return null;
-  return { items: inboxListCache.items, errors: inboxListCache.errors };
+  return {
+    items: inboxListCache.items,
+    errors: inboxListCache.errors,
+    ...(inboxListCache.sonarBranches
+      ? { sonarBranches: inboxListCache.sonarBranches }
+      : {}),
+  };
 }
 
 export function peekInboxItems(
@@ -781,6 +804,19 @@ async function fetchInboxItems(
     }
   }
 
+  let sonarItems: InboxItem[] = [];
+  let sonarBranches: SonarBranch[] | undefined;
+  try {
+    if ((await sonarConnected()).connected) {
+      const snapshot = await listSonarIssues(query);
+      sonarItems = snapshot.issues.map(sonarIssueToInboxItem);
+      sonarBranches = snapshot.branches;
+      if (snapshot.errors.length) errors.sonar = snapshot.errors.join("\n");
+    }
+  } catch (error) {
+    errors.sonar = inboxErrorMessage(error);
+  }
+
   let jiraItems: InboxItem[] = [];
   try {
     if ((await jiraConnected()).connected) {
@@ -820,12 +856,14 @@ async function fetchInboxItems(
         ...github.items,
         ...linearItems,
         ...jiraItems,
+        ...sonarItems,
         ...gitlabItems,
         ...azureDevOpsItems,
       ],
       preferredPaths,
     ),
     errors,
+    ...(sonarBranches ? { sonarBranches } : {}),
   };
 }
 
@@ -1081,7 +1119,11 @@ export function inboxIdentityKey(item: {
   url: string;
   identifier?: string;
   id?: string;
+  branch?: string;
 }): string {
+  if (item.provider === "sonar") {
+    return JSON.stringify([item.repo, item.branch, item.id || item.url]);
+  }
   if (item.provider === "linear") {
     const identity = item.identifier?.trim() || item.id?.trim();
     if (identity) return identity.toLowerCase();
@@ -1146,6 +1188,19 @@ export function sortInboxItems(items: InboxItem[]): InboxItem[] {
   });
 }
 
+export function updateCachedInboxItem(item: InboxItem): void {
+  if (!inboxListCache) return;
+  // Prevent a pending list response from overwriting this successful mutation.
+  inboxCacheGeneration += 1;
+  const key = inboxItemKey(item);
+  inboxListCache = {
+    ...inboxListCache,
+    items: inboxListCache.items.map((entry) =>
+      inboxItemKey(entry) === key ? item : entry,
+    ),
+  };
+}
+
 export function inboxItemKey(item: InboxItem): string {
   return `${item.provider}:${inboxIdentityKey(item)}`;
 }
@@ -1165,7 +1220,7 @@ export function inboxItemStatus(item: {
     if (type === "completed" || type === "canceled") return "Closed";
     return "Open";
   }
-  if (item.kind === "jira") {
+  if (item.kind === "jira" || item.kind === "sonar") {
     return item.stateType?.trim().toLowerCase() === "done" ? "Closed" : "Open";
   }
   if (item.draft) return "Draft";
@@ -1195,9 +1250,16 @@ export function matchesInboxQuery(item: InboxItem, query: string): boolean {
     item.teamName,
     item.projectName,
     item.attentionReason,
+    item.branch,
+    item.sonarIssue?.file,
+    item.sonarIssue?.rule,
+    item.sonarIssue?.issueType,
+    item.sonarIssue?.severity,
+    item.sonarIssue?.status,
     kind,
-    `#${item.number}`,
-    String(item.number),
+    ...(item.provider === "sonar"
+      ? []
+      : [`#${item.number}`, String(item.number)]),
     ...item.labels.map((label) => label.name),
     ...item.assignees.map((person) => person.login),
   ]
@@ -1217,22 +1279,31 @@ export function inboxItemRef(item: {
   provider?: InboxProvider;
   number: number;
   identifier?: string;
+  id?: string;
 }): string {
-  if (item.provider === "linear" || item.provider === "jira") {
+  if (item.provider === "sonar")
+    return item.identifier?.trim() || item.id || "Sonar issue";
+  if (isTrackerSource(item.provider)) {
     return item.identifier?.trim() || `#${item.number}`;
   }
   return `#${item.number}`;
 }
 
 export function inboxStartDraft(item: InboxItem, body?: string): string {
-  if (item.provider === "linear" || item.provider === "jira") {
-    const provider = item.provider === "jira" ? "Jira" : "Linear";
-    const id = item.identifier?.trim() || `${provider} #${item.number}`;
+  if (isTrackerSource(item.provider)) {
+    const provider = INBOX_PROVIDER_LABELS[item.provider];
+    const id =
+      item.provider === "sonar"
+        ? inboxItemRef(item)
+        : item.identifier?.trim() || `${provider} #${item.number}`;
     const title = item.title.trim() || id;
     const lines = [`Work on this ${provider} issue:`, "", `${id} ${title}`];
     const url = item.url.trim();
     if (url) lines.push(url);
-    const description = body?.trim();
+    const description = (
+      body ??
+      (item.provider === "sonar" ? sonarIssueDetails(item).body : undefined)
+    )?.trim();
     if (description) {
       lines.push("", description);
     }
@@ -1275,7 +1346,7 @@ export function inboxComposerCard(
   item: InboxItem,
   body?: string,
 ): InboxComposerCard {
-  const tracker = item.provider === "linear" || item.provider === "jira";
+  const tracker = isTrackerSource(item.provider);
   return {
     provider: item.provider,
     kind: item.kind,

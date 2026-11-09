@@ -5,6 +5,8 @@ import {
   type InboxKind,
   type InboxProvider,
 } from "./githubTasks";
+import { sonarBranchKey } from "./sonar";
+import { isTrackerSource } from "./inboxProviders";
 import { normalizeProjectPath } from "../../projects/model/recents";
 import { timeFilterStart, type SessionTimeFilter } from "../../sessions/model/sessionFilters";
 
@@ -22,6 +24,7 @@ export type InboxFilters = {
   hiddenProjects: string[];
   /** Linear project ids to hide. `LINEAR_NO_PROJECT` stands for issues outside every project. */
   hiddenLinearProjects: string[];
+  hiddenSonarBranches: string[];
   hiddenKinds: InboxKind[];
   time: InboxTimeFilter;
   status: InboxStatusFilter;
@@ -49,6 +52,7 @@ export const DEFAULT_INBOX_FILTERS: InboxFilters = {
   assignedToMe: false,
   hiddenProjects: [],
   hiddenLinearProjects: [],
+  hiddenSonarBranches: [],
   hiddenKinds: [],
   time: "all",
   status: DEFAULT_INBOX_STATUS_FILTER,
@@ -64,14 +68,6 @@ export type InboxSourceConnections = Record<
   boolean | null
 >;
 
-export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
-  github: "GitHub",
-  linear: "Linear",
-  jira: "Jira",
-  gitlab: "GitLab",
-  azuredevops: "ADO",
-};
-
 export function visibleInboxSources(
   connections: InboxSourceConnections,
 ): InboxSource[] {
@@ -81,6 +77,7 @@ export function visibleInboxSources(
   if (connections.jira !== false) sources.push("jira");
   if (connections.gitlab !== false) sources.push("gitlab");
   if (connections.azuredevops !== false) sources.push("azuredevops");
+  if (connections.sonar !== false) sources.push("sonar");
   return sources;
 }
 
@@ -93,12 +90,8 @@ export function connectableInboxSources(
   if (connections.jira === false) sources.push("jira");
   if (connections.gitlab === false) sources.push("gitlab");
   if (connections.azuredevops === false) sources.push("azuredevops");
+  if (connections.sonar === false) sources.push("sonar");
   return sources;
-}
-
-/** Account-wide issue trackers: no local repos, no PRs, no draft/merged states. */
-export function isTrackerSource(source?: InboxSource): boolean {
-  return source === "linear" || source === "jira";
 }
 
 export function resolveInboxSource(
@@ -117,6 +110,7 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
   github: null,
   linear: null,
   jira: null,
+  sonar: null,
   gitlab: null,
   azuredevops: null,
 };
@@ -124,7 +118,8 @@ const UNKNOWN_CONNECTIONS: InboxSourceConnections = {
 export function loadInboxSource(): InboxSource {
   try {
     const raw = localStorage.getItem(SOURCE_KEY);
-    return raw === "linear" ||
+    return raw === "sonar" ||
+      raw === "linear" ||
       raw === "jira" ||
       raw === "gitlab" ||
       raw === "azuredevops"
@@ -161,6 +156,7 @@ export function loadInboxConnections(): InboxSourceConnections {
       github: connectFlag(record.github),
       linear: connectFlag(record.linear),
       jira: connectFlag(record.jira),
+      sonar: connectFlag(record.sonar),
       gitlab: connectFlag(record.gitlab),
       azuredevops: connectFlag(record.azuredevops),
     };
@@ -192,6 +188,11 @@ export function loadInboxFilters(): InboxFilters {
         : [],
       hiddenLinearProjects: Array.isArray(parsed.hiddenLinearProjects)
         ? parsed.hiddenLinearProjects.filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          )
+        : [],
+      hiddenSonarBranches: Array.isArray(parsed.hiddenSonarBranches)
+        ? parsed.hiddenSonarBranches.filter(
             (id): id is string => typeof id === "string" && id.length > 0,
           )
         : [],
@@ -249,11 +250,12 @@ export function hasActiveInboxFilters(
       filters.status.merged;
   return (
     filters.assignedToMe ||
+    (source === "sonar" && filters.hiddenSonarBranches.length > 0) ||
     (source === "linear" && hiddenLinearTeamIds.length > 0) ||
     (source === "jira" && hiddenJiraProjectIds.length > 0) ||
     (source === "linear"
       ? filters.hiddenLinearProjects.length > 0
-      : source !== "jira" && filters.hiddenProjects.length > 0) ||
+      : !isTrackerSource(source) && filters.hiddenProjects.length > 0) ||
     (isTrackerSource(source) ? false : filters.hiddenKinds.length > 0) ||
     filters.time !== "all" ||
     statusActive
@@ -373,7 +375,14 @@ export function applyInboxFilters(
   now = Date.now(),
   source?: InboxSource,
 ): InboxItem[] {
-  const scoped = source ? filterInboxByProvider(items, source) : [...items];
+  const hiddenBranches = new Set(filters.hiddenSonarBranches);
+  const scoped = (
+    source ? filterInboxByProvider(items, source) : [...items]
+  ).filter(
+    (item) =>
+      item.provider !== "sonar" ||
+      !hiddenBranches.has(sonarBranchKey(item.repo, item.branch ?? "")),
+  );
   const hiddenProjects =
     isTrackerSource(source) ||
     ((source === "gitlab" || source === "azuredevops") && filters.assignedToMe)

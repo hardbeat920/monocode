@@ -73,6 +73,7 @@ describe("GitHub fork repositories", () => {
         ) as never;
       }
       if (
+        command === "sonar_status" ||
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||
@@ -112,6 +113,7 @@ describe("GitHub fork repositories", () => {
         throw new Error("not a GitHub repository");
       }
       if (
+        command === "sonar_status" ||
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||
