@@ -297,21 +297,288 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             })
             .unwrap();
         visual.run_until_parked();
-        assert!(
-            visual.debug_bounds(page).is_none(),
-            "returning to a Mono must not replay an old page's exit"
-        );
+        let tab = if kind == "session" {
+            OverviewTab::Sessions
+        } else {
+            OverviewTab::Documents
+        };
         assert_eq!(
-            visual.debug_bounds("mono-detail-base").unwrap().left(),
-            stack.left()
+            visual.debug_bounds(page).unwrap().left(),
+            stack.left(),
+            "returning to a Mono shows its remembered page in place, without sliding"
         );
+        assert_eq!(s.manager.read_with(visual, |m, _| m.overview_tab), tab);
     }
 }
+#[gpui::test]
+fn each_mono_remembers_its_details_tab_and_open_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let session = s
+        .window
+        .update(cx, |shell, _, _| shell.workspace.active.unwrap())
+        .unwrap();
+    let action = json!({"type":"session", "sessionId":session});
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &action, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+    let view = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            (m.active.clone().unwrap(), m.overview_tab, m.route.clone())
+        })
+    };
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Overview, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.select_overview(OverviewTab::Habits, cx);
+                m.open(&s.id, w, cx);
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view(cx),
+        (
+            s.id.clone(),
+            OverviewTab::Sessions,
+            Some(Route::Session(session))
+        )
+    );
+    // An archived session falls back to the list; the other Mono keeps its tab.
+    s.window
+        .update(cx, |shell, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&other, w, cx));
+            shell.mono_remove(session, false, w, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+    // A card from another Mono's chat switches to that Mono's own view and
+    // leaves the one it came from intact.
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+}
+
+#[gpui::test]
+fn a_card_switching_monos_shows_the_target_monos_habits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut h = Habit::new(
+        "Daily review".into(),
+        "Review changes.".into(),
+        habits::Schedule::default(),
+        monocode_core::time::now_ms(),
+    )
+    .unwrap();
+    h.id = "target-habit".into();
+    habits::update(&s.root, &s.id, |all| {
+        all.push(h.clone());
+        Ok(())
+    })
+    .unwrap();
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.open(&s.id, w, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(s.manager.read_with(cx, |m, _| m.habits.is_empty()));
+    let ids = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.habits.iter().map(|h| h.id.clone()).collect::<Vec<_>>()
+        })
+    };
+    // Back on the first Mono, then a card from the second's chat switches over.
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(ids(cx), vec!["target-habit".to_string()]);
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert!(
+        ids(cx).is_empty(),
+        "the previous Mono's habits must not linger"
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        s.manager.read_with(cx, |m, _| m.active.clone()),
+        Some(other)
+    );
+    assert!(ids(cx).is_empty());
+}
+
+#[gpui::test]
+fn a_document_deleted_by_the_desktop_while_its_mono_is_inactive_returns_to_documents(
+    cx: &mut TestAppContext,
+) {
+    let s = setup_shared(cx);
+    let doc = "saved-document";
+    // The desktop app writes the same SQLite file through its own connection.
+    let desktop =
+        rusqlite::Connection::open(std::path::Path::new(&s.project).join("native.sqlite")).unwrap();
+    let original = locked(&s.store)
+        .unwrap()
+        .persisted_session_id(s.session)
+        .unwrap();
+    desktop
+        .execute(
+            "INSERT INTO notes(id,slug,title,body,tags_json,created_at,updated_at,content_kind,artifact_kind)
+             VALUES(?1,?1,'Saved document','# Saved\n\nBody.','[]',10,20,'artifact','document')",
+            [doc],
+        )
+        .unwrap();
+    let blocks = json!([{"id":"reply","role":"assistant","text":"Saved it.",
+        "artifactCards":[{"id":doc,"kind":"document","title":"Saved document","summary":""}]}]);
+    desktop
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            rusqlite::params![original, blocks.to_string()],
+        )
+        .unwrap();
+    s.manager.update(cx, |m, cx| m.refresh_work(&s.id, cx));
+    cx.run_until_parked();
+    let listed = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.roster
+                .get(&s.id)
+                .unwrap()
+                .documents
+                .iter()
+                .any(|d| d.id == doc)
+        })
+    };
+    assert!(listed(cx), "the chat's card lists the saved document");
+
+    // Open it on this Mono, then switch to another.
+    let action = json!({"type":"document", "documentId":doc});
+    s.manager
+        .update(cx, |m, cx| m.card_action(&s.id, &action, cx));
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.route, Some(Route::Document(doc.into())));
+        assert!(m.work.documents.contains_key(doc));
+    });
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+
+    // The desktop deletes the artifact (src-tauri/src/artifacts.rs). Its card
+    // stays in the transcript, so the Mono keeps a placeholder entry.
+    desktop
+        .execute(
+            "DELETE FROM notes WHERE id = ?1 AND content_kind = 'artifact'",
+            [doc],
+        )
+        .unwrap();
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(listed(cx), "the placeholder entry survives the deletion");
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.active.as_deref(), Some(s.id.as_str()));
+        assert_eq!(m.overview_tab, OverviewTab::Documents);
+        assert_eq!(m.route, None, "the deleted document's page is not restored");
+        assert!(!m.work.documents.contains_key(doc));
+        assert!(!m.documents.contains_key(doc));
+        assert!(
+            m.panel_views
+                .values()
+                .all(|v| v.route != Some(Route::Document(doc.into())))
+        );
+    });
+}
+
+#[gpui::test]
+fn an_unavailable_document_page_keeps_its_back_control(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        m.overview_tab = OverviewTab::Documents;
+        m.route = Some(Route::Document("never-loaded".into()));
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let back = visual
+        .debug_bounds("mono-page-back")
+        .expect("an unavailable document still offers Back");
+    visual.simulate_click(back.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(s.manager.read_with(visual, |m, _| m.route.clone()), None);
+}
+
+#[test]
+fn restored_panel_views_keep_only_pages_whose_subject_exists() {
+    let view = |route| PanelView {
+        tab: OverviewTab::Habits,
+        previous: OverviewTab::Overview,
+        route: Some(route),
+    };
+    let missing = view(Route::Session(7)).restored(|_| false);
+    assert_eq!((missing.tab, missing.route), (OverviewTab::Habits, None));
+    let kept = view(Route::Document("d".into())).restored(|_| true);
+    assert_eq!(kept.route, Some(Route::Document("d".into())));
+    assert_eq!(
+        view(Route::Habit("h".into())).restored(|_| true).route,
+        None
+    );
+}
+
 fn setup(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open(path).unwrap())
+}
+/// `setup` over the desktop's shared database, at `<project>/native.sqlite`.
+fn setup_shared(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open_monocode(path).unwrap())
+}
+fn setup_with(cx: &mut TestAppContext, open: impl FnOnce(&std::path::Path) -> Store) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-monos-{}", mono::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
-    let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
+    let store = Arc::new(Mutex::new(open(&dir.join("native.sqlite"))));
     let db = store.clone();
     let cwd = project.clone();
     let window = cx.update(|cx| {
