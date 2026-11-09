@@ -54,6 +54,10 @@ impl Conversation {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_test_status(&mut self, status: &str) {
+        self.status = status.into();
+    }
+    #[cfg(test)]
     pub(crate) fn queue_test_list_focus(&self) -> gpui::FocusHandle {
         self.mono_ui.queue_list_focus.as_ref().unwrap().clone()
     }

@@ -1062,7 +1062,10 @@ impl Monos {
         }
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
-                let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
+                // The reply is already in this chat's transcript; the queue
+                // card only needs the reason the turn failed.
+                let (ok, status) = self.chats[id].read(cx).external_status();
+                let status = crate::conversation::mono_short_error(&status);
                 if !ok && !status.starts_with("Stopped") {
                     if let Some(mono) = self.roster.get_mut(id) {
                         if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {

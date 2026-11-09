@@ -1313,6 +1313,41 @@ fn an_unsaved_message_still_holds_back_the_messages_behind_it(cx: &mut TestAppCo
         );
     });
 }
+#[gpui::test]
+fn a_turn_that_failed_to_save_keeps_its_reply_out_of_the_error(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let reply = "The whole reply. ".repeat(400);
+    s.manager.update(cx, |m, cx| {
+        let chat = m.chats[&s.id].clone();
+        chat.update(cx, |chat, cx| {
+            chat.mono_post("assistant", reply.clone(), cx).unwrap();
+            chat.busy = false;
+            chat.set_test_status(
+                "database or disk is full · Saving failed: database or disk is full",
+            );
+        });
+        m.inflight
+            .insert(s.id.clone(), queued("completion", true, None));
+        m.chat_changed(&s.id, cx);
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(
+            outbox.len(),
+            1,
+            "the failed turn waits for Retry or Discard"
+        );
+        assert_eq!(
+            outbox[0].error.as_deref(),
+            Some("database or disk is full · Saving failed: database or disk is full")
+        );
+        assert!(
+            chat.read(cx)
+                .mono_rows(cx)
+                .iter()
+                .any(|row| row.role == "assistant" && row.text.contains("The whole reply.")),
+            "the reply stays in the transcript"
+        );
+    });
+}
 #[test]
 fn queue_errors_keep_the_first_line_and_fit_the_card() {
     use crate::conversation::{MONO_QUEUE_ERROR_LIMIT, mono_short_error};
