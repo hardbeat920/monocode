@@ -23,9 +23,7 @@ impl Monos {
     /// list. The chat's reference to it can outlive the record.
     pub(super) fn forget_document(&mut self, id: &str, cx: &mut Context<Self>) {
         self.work.documents.remove(id);
-        self.documents.remove(id);
-        self.html_documents.remove(id);
-        self.visual_documents.remove(id);
+        self.forget_document_readers(id);
         let route = Some(Route::Document(id.into()));
         if self.route == route {
             self.route = None;
@@ -63,6 +61,9 @@ impl Monos {
                         this.work.documents.insert(id.clone(), document);
                     }
                     Ok(None) => {
+                        // Deleted: its readers go too (forget_document), so a
+                        // document created again under this id starts without
+                        // the old selection.
                         this.forget_document(&id, cx);
                         this.error = Some("Document unavailable. It may have been deleted.".into());
                     }
@@ -74,6 +75,19 @@ impl Monos {
             });
         })
         .detach();
+    }
+    /// Drop every cached reader of document `id`.
+    pub(super) fn forget_document_readers(&mut self, id: &str) {
+        self.documents.remove(id);
+        self.html_documents.remove(id);
+        self.visual_documents.remove(id);
+    }
+    /// Drop every cached reader, as when the panel moves to another Mono.
+    pub(super) fn forget_readers(&mut self) {
+        self.documents.clear();
+        self.html_documents.clear();
+        self.visual_documents.clear();
+        self.activity = None;
     }
     /// Let the next `refresh_work` read the store without waiting out its
     /// once-a-second throttle.
@@ -151,20 +165,20 @@ impl Monos {
                             _ => None,
                         })
                         .flatten();
-                    for gone in old_documents
+                    let gone: Vec<String> = old_documents
                         .iter()
                         .filter(|old| !mono.documents.iter().any(|d| &d.id == *old))
-                    {
-                        this.documents.remove(gone);
-                        this.html_documents.remove(gone);
-                        this.visual_documents.remove(gone);
-                    }
+                        .cloned()
+                        .collect();
                     for loaded in old_documents
                         .iter()
                         .chain(mono.documents.iter().map(|d| &d.id))
                         .filter(|loaded| open.as_ref() != Some(*loaded))
                     {
                         this.work.documents.remove(loaded);
+                    }
+                    for gone in &gone {
+                        this.forget_document_readers(gone);
                     }
                     if let Some(document) = open {
                         this.open_document(&document, cx);

@@ -228,7 +228,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         advance(visual, 1000);
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         let reader = s.manager.read_with(visual, |m, cx| match kind {
-            "html" => m.html_documents["slide-document"].1.entity_id(),
+            "html" => m.html_documents["slide-document"].view.entity_id(),
             "session" => m
                 .owner
                 .upgrade()
@@ -237,7 +237,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
                 .mono_session_entity(session)
                 .unwrap()
                 .entity_id(),
-            _ => m.documents["slide-document"].1.entity_id(),
+            _ => m.documents["slide-document"].view.entity_id(),
         });
         assert_eq!(
             s.manager
@@ -274,7 +274,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
         assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
         s.manager.read_with(visual, |m, cx| {
             let reopened = match kind {
-                "html" => m.html_documents["slide-document"].1.entity_id(),
+                "html" => m.html_documents["slide-document"].view.entity_id(),
                 "session" => m
                     .owner
                     .upgrade()
@@ -283,7 +283,7 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
                     .mono_session_entity(session)
                     .unwrap()
                     .entity_id(),
-                _ => m.documents["slide-document"].1.entity_id(),
+                _ => m.documents["slide-document"].view.entity_id(),
             };
             assert_eq!(reader, reopened);
         });
@@ -2647,7 +2647,7 @@ fn document_text_drag_selects_and_copies_from_the_menu_and_cmd_c(cx: &mut TestAp
     visual.refresh().unwrap();
     let reader = s
         .manager
-        .read_with(visual, |m, _| m.documents["qa-note"].1.clone());
+        .read_with(visual, |m, _| m.documents["qa-note"].view.clone());
     drag_select(visual, &reader, "Select this text.");
     assert_copy_menu_and_cmd_c(visual, "Select this text.");
 
@@ -2771,7 +2771,7 @@ fn document_selection_survives_unrelated_shared_store_writes(cx: &mut TestAppCon
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
     visual.refresh().unwrap();
-    let reader = manager.read_with(visual, |m, _| m.documents["desk-note"].1.clone());
+    let reader = manager.read_with(visual, |m, _| m.documents["desk-note"].view.clone());
     drag_select(visual, &reader, "Select this text.");
     assert_copy_menu_and_cmd_c(visual, "Select this text.");
 
@@ -2795,7 +2795,7 @@ fn document_selection_survives_unrelated_shared_store_writes(cx: &mut TestAppCon
     assert_copy_menu_and_cmd_c(visual, "Select this text.");
     manager.read_with(visual, |m, _| {
         assert_eq!(
-            m.documents["desk-note"].1.entity_id(),
+            m.documents["desk-note"].view.entity_id(),
             reader.entity_id(),
             "an unrelated refresh keeps the open reader"
         );
@@ -2810,11 +2810,181 @@ fn document_selection_survives_unrelated_shared_store_writes(cx: &mut TestAppCon
     note("desk-note", "# QA note\n\nEdited elsewhere.", 60);
     cards(&["desk-note", "other-note"], 300);
     refresh(visual);
-    let edited = manager.read_with(visual, |m, _| m.documents["desk-note"].1.clone());
+    let edited = manager.read_with(visual, |m, _| m.documents["desk-note"].view.clone());
     assert_ne!(edited.entity_id(), reader.entity_id());
     assert!(
         edited
             .read_with(visual, |view, _| view.prose_key("Edited elsewhere."))
             .is_some()
     );
+
+    // Deleted on the desktop: its reader, selection and menu go with it...
+    drag_select(visual, &edited, "Edited elsewhere.");
+    assert_copy_menu_and_cmd_c(visual, "Edited elsewhere.");
+    tauri
+        .execute("DELETE FROM notes WHERE id='desk-note'", [])
+        .unwrap();
+    refresh(visual);
+    manager.read_with(visual, |m, _| {
+        assert!(!m.work.documents.contains_key("desk-note"));
+        assert!(
+            !m.documents.contains_key("desk-note"),
+            "the reader is dropped"
+        );
+        // Its page goes back to the Documents list (forget_document).
+        assert_eq!(m.route, None);
+    });
+    // ...so a note created again under the same id and body starts fresh.
+    let create = |created: i64| {
+        tauri
+            .execute(
+                "INSERT INTO notes(id,slug,title,body,tags_json,created_at,updated_at,content_kind,artifact_kind)
+                 VALUES('desk-note','desk-note','desk-note',?1,'[]',?2,?2,'artifact','document')",
+                rusqlite::params!["# QA note\n\nEdited elsewhere.", created],
+            )
+            .unwrap();
+    };
+    create(77);
+    refresh(visual);
+    manager.update(visual, |m, cx| {
+        m.card_action(
+            "desk-mono",
+            &json!({"type":"document", "documentId":"desk-note"}),
+            cx,
+        )
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let recreated = manager.read_with(visual, |m, _| m.documents["desk-note"].view.clone());
+    assert_ne!(recreated.entity_id(), edited.entity_id());
+    assert!(
+        visual.debug_bounds("selection-copy").is_none(),
+        "the old selection's menu is not revived"
+    );
+
+    // Deleted and created again between two polls: its creation time alone
+    // tells the new note from the old one.
+    drag_select(visual, &recreated, "Edited elsewhere.");
+    assert_copy_menu_and_cmd_c(visual, "Edited elsewhere.");
+    tauri
+        .execute("DELETE FROM notes WHERE id='desk-note'", [])
+        .unwrap();
+    create(88);
+    refresh(visual);
+    let again = manager.read_with(visual, |m, _| m.documents["desk-note"].view.clone());
+    assert_ne!(again.entity_id(), recreated.entity_id());
+    assert!(visual.debug_bounds("selection-copy").is_none());
+}
+
+#[gpui::test]
+fn the_activity_reader_belongs_to_its_mono(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let s = setup(cx);
+    // Show the current Mono's first turn as its activity, after giving that
+    // turn `reasoning`, and return the reader and the text it shows.
+    let show = |cx: &mut TestAppContext, reasoning: Option<&str>| {
+        s.window
+            .update(cx, |_, window, cx| {
+                s.manager.update(cx, |m, cx| {
+                    m.settings = None;
+                    if let Some(text) = reasoning {
+                        let transcript = m.chat().unwrap().read(cx).transcript.clone();
+                        transcript.update(cx, |t, cx| {
+                            t.patch(
+                                0,
+                                vec![monocode_core::transcript::Row {
+                                    role: "reasoning".into(),
+                                    text: text.into(),
+                                    first: true,
+                                    sent_at: None,
+                                }],
+                                cx,
+                            )
+                        });
+                    }
+                    m.activity_turn = Some(0);
+                    m.overview_tab = OverviewTab::Activity;
+                    let mono = m.current().unwrap().clone();
+                    let _ = m.overview_panel(&mono, window, cx);
+                    let activity = m.activity.as_ref().unwrap();
+                    (activity.view.entity_id(), activity.rows[0].text.clone())
+                })
+            })
+            .unwrap()
+    };
+    let (alpha, _) = show(cx, Some("Alpha reasoning."));
+    assert_eq!(show(cx, None).0, alpha, "the same turn keeps its reader");
+
+    // Another Mono's turn at the same position is a different turn.
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |m, cx| m.create(vec![s.project.clone()], window, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (beta, text) = show(cx, Some("Beta reasoning."));
+    assert_ne!(beta, alpha, "Mono B does not inherit Mono A's reader");
+    assert_eq!(text, "Beta reasoning.");
+
+    // Back on Mono A, its turn gets a reader of its own again.
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, window, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (back, text) = show(cx, None);
+    assert_ne!(back, beta, "Mono A does not inherit Mono B's reader");
+    assert_eq!(text, "Alpha reasoning.");
+}
+
+#[gpui::test]
+fn document_readers_are_bounded_and_dropped_with_their_mono(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let s = setup(cx);
+    let count = super::MAX_READERS + 3;
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    for i in 0..count {
+        let id = format!("doc-{i}");
+        s.manager.update(visual, |m, cx| {
+            m.settings = None;
+            m.roster
+                .get_mut(&s.id)
+                .unwrap()
+                .documents
+                .push(mono::Document {
+                    id: id.clone(),
+                    kind: "markdown".into(),
+                    title: id.clone(),
+                    summary: String::new(),
+                    body: format!("Document {i}."),
+                    created_at: 1,
+                    updated_at: 1,
+                });
+            m.card_action(&s.id, &json!({"type":"document", "documentId": id}), cx);
+        });
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        s.manager.read_with(visual, |m, _| {
+            assert!(
+                m.documents.contains_key(&id),
+                "the open document has a reader"
+            );
+            assert!(m.documents.len() <= super::MAX_READERS);
+        });
+    }
+    // Moving to another Mono lets its readers go.
+    s.manager.update(visual, |m, _| {
+        m.settings = None;
+        m.route = None;
+    });
+    visual.update(|window, cx| {
+        s.manager
+            .update(cx, |m, cx| m.create(vec![s.project.clone()], window, cx))
+    });
+    visual.run_until_parked();
+    s.manager.read_with(visual, |m, _| {
+        assert!(m.documents.is_empty() && m.activity.is_none())
+    });
 }

@@ -73,6 +73,24 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
+/// How many readers of each kind stay cached; only one is on screen at a time.
+const MAX_READERS: usize = 8;
+/// An open reader with the document incarnation and body it was built from.
+struct Reader<T> {
+    created_at: u64,
+    body: String,
+    view: Entity<T>,
+}
+type Readers<T> = HashMap<String, Reader<T>>;
+/// The activity reader and the turn it shows: which Mono, whose chat, which
+/// turn in that chat, and the rows it was last given.
+struct Activity {
+    mono: String,
+    chat: gpui::EntityId,
+    turn: usize,
+    rows: Vec<monocode_core::transcript::Row>,
+    view: Entity<crate::transcript::TranscriptView>,
+}
 pub(crate) struct Monos {
     #[cfg(all(target_os = "macos", not(test)))]
     status: Option<status::Status>,
@@ -135,19 +153,16 @@ pub(crate) struct Monos {
     /// Open readers, each with the body it was built from. A reader is only
     /// rebuilt when its own body changes, so background refreshes of a Mono's
     /// work keep its selection, scroll position and focus.
-    documents: HashMap<String, (String, Entity<crate::transcript::TranscriptView>)>,
-    html_documents: HashMap<String, (String, Entity<html::Html>)>,
+    documents: Readers<crate::transcript::TranscriptView>,
+    html_documents: Readers<html::Html>,
     /// Native visuals the Mono published in its chat, opened as documents.
-    visual_documents: HashMap<String, (String, Entity<crate::visuals::VisualView>)>,
+    visual_documents: Readers<crate::visuals::VisualView>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
-    /// The activity reader, its turn and the rows it shows. New rows of the
-    /// same turn are patched in, so a live turn keeps the reader's selection.
-    activity: Option<(
-        usize,
-        Vec<monocode_core::transcript::Row>,
-        Entity<crate::transcript::TranscriptView>,
-    )>,
+    /// The activity reader, whose turn it shows and the rows it shows. New
+    /// rows of the same turn are patched in, so a live turn keeps the
+    /// reader's selection.
+    activity: Option<Activity>,
     activity_turn: Option<usize>,
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
@@ -259,8 +274,8 @@ impl Monos {
         }
     }
     pub(crate) fn hide_html(&self, cx: &App) {
-        for (_, view) in self.html_documents.values() {
-            view.read(cx).hide();
+        for reader in self.html_documents.values() {
+            reader.view.read(cx).hide();
         }
     }
     pub(crate) fn sidebar_preferences(
@@ -1116,6 +1131,8 @@ impl Monos {
             self.files = None;
             self.habits.clear();
             self.activity_turn = None;
+            // Readers belong to the Mono they were opened in.
+            self.forget_readers();
             self.memory_adding = false;
             self.memory_edit = None;
             self.settings = None;

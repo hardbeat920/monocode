@@ -33,7 +33,8 @@ struct State {
     drag: Option<Drag>,
     menu: Option<Point<Pixels>>,
     /// The selected text, read once when the menu opens rather than on every
-    /// frame it stays open. Dropped when the rows change underneath it.
+    /// frame it stays open. A rebuild that changes this text clears the
+    /// whole selection, so the cached text never goes stale.
     menu_text: Option<SharedString>,
     layouts: HashMap<((usize, usize), usize, usize), Fragment>,
 }
@@ -83,8 +84,10 @@ impl Selection {
         state.menu_text = None;
         state.layouts.clear();
     }
-    pub(super) fn forget_text(&self) {
-        self.0.borrow_mut().menu_text = None;
+    /// Whether the anchor and head enclose some text.
+    pub(super) fn has_range(&self) -> bool {
+        let state = self.0.borrow();
+        state.anchor.is_some() && state.anchor != state.head
     }
     pub(super) fn begin_frame(&self) {
         self.0.borrow_mut().layouts.clear();
@@ -688,6 +691,56 @@ impl TranscriptView {
     }
 }
 
+/// Drag across the rendered prose row reading `text` in a document view, with
+/// real mouse events, and wait out the selection menu's delay.
+#[cfg(test)]
+pub(crate) fn drag_across_prose(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<TranscriptView>,
+    text: &str,
+) {
+    let key = view
+        .read_with(cx, |view, _| view.prose_key(text))
+        .expect("the paragraph is rendered");
+    let selector: &'static str =
+        Box::leak(format!("document-prose-{}-{}", key.0, key.1).into_boxed_str());
+    assert!(
+        cx.debug_bounds(selector).is_some(),
+        "the paragraph is on screen"
+    );
+    // The text itself, inside any indent its row draws around it.
+    let row = view.read_with(cx, |view, _| {
+        let state = view.selection.0.borrow();
+        state
+            .layouts
+            .values()
+            .find(|fragment| fragment.row == key)
+            .expect("the paragraph is selectable")
+            .layout
+            .bounds()
+    });
+    let y = row.center().y;
+    let (start, end) = (
+        gpui::point(row.left() + px(1.), y),
+        gpui::point(row.right() - px(1.), y),
+    );
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.executor().advance_clock(MENU_DELAY * 2);
+    cx.run_until_parked();
+}
+#[cfg(test)]
+impl TranscriptView {
+    /// Whether the selection menu is open.
+    pub(crate) fn selection_menu_open(&self) -> bool {
+        self.selection.0.borrow().menu.is_some()
+    }
+    pub(crate) fn selection_text_for_test(&self) -> Option<String> {
+        self.selected_text()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,38 +787,6 @@ mod tests {
         assert_eq!(snap("e\u{301}🙂", 4), 3);
         assert_eq!(word("hello café", 7), 6..11);
     }
-    /// Drag across the rendered prose row reading `text`.
-    fn drag(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<TranscriptView>, text: &str) {
-        let key = view
-            .read_with(cx, |view, _| view.prose_key(text))
-            .expect("the paragraph is rendered");
-        let selector: &'static str =
-            Box::leak(format!("document-prose-{}-{}", key.0, key.1).into_boxed_str());
-        assert!(
-            cx.debug_bounds(selector).is_some(),
-            "the paragraph is on screen"
-        );
-        // The text itself, inside any indent its row draws around it.
-        let row = view.read_with(cx, |view, _| {
-            let state = view.selection.0.borrow();
-            state
-                .layouts
-                .values()
-                .find(|fragment| fragment.row == key)
-                .expect("the paragraph is selectable")
-                .layout
-                .bounds()
-        });
-        let y = row.center().y;
-        let (start, end) = (
-            gpui::point(row.left() + px(1.), y),
-            gpui::point(row.right() - px(1.), y),
-        );
-        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
-        cx.simulate_mouse_move(end, MouseButton::Left, Default::default());
-        cx.simulate_mouse_up(end, MouseButton::Left, Default::default());
-        cx.run_until_parked();
-    }
     fn row(role: &str, text: &str) -> Row {
         Row {
             role: role.into(),
@@ -782,7 +803,7 @@ mod tests {
             TranscriptView::document("# QA note\n\nSelect **this** text.".into(), cx)
         });
         cx.run_until_parked();
-        drag(cx, &view, "Select this text.");
+        drag_across_prose(cx, &view, "Select this text.");
         view.read_with(cx, |view, _| {
             assert_eq!(view.selected_text().as_deref(), Some("Select this text."));
             assert!(
@@ -798,6 +819,60 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.selected_text().as_deref(), Some("Select this text."))
         });
+    }
+    #[gpui::test]
+    fn replacing_the_selected_text_clears_the_selection_and_its_menu(cx: &mut TestAppContext) {
+        let (view, cx) =
+            cx.add_window_view(|_, cx| TranscriptView::document("Select this text.".into(), cx));
+        cx.run_until_parked();
+        drag_across_prose(cx, &view, "Select this text.");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected_text().as_deref(), Some("Select this text."));
+            assert!(view.selection_menu_open());
+        });
+        // The same coordinates now hold words the reader never selected.
+        view.update(cx, |view, cx| {
+            view.set_document_text("Different words!".into(), cx)
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected_text(), None, "no silent retarget");
+            assert!(!view.selection_menu_open(), "the Copy menu goes with it");
+        });
+    }
+    #[gpui::test]
+    fn a_streamed_delta_that_reparses_the_selection_clears_it(cx: &mut TestAppContext) {
+        let (view, cx) =
+            cx.add_window_view(|_, cx| TranscriptView::document("Read [secret".into(), cx));
+        cx.run_until_parked();
+        // Drag across "sec" alone.
+        let (a, b) = view.read_with(cx, |view, _| {
+            let state = view.selection.0.borrow();
+            let fragment = state
+                .layouts
+                .values()
+                .find(|fragment| fragment.text.as_ref() == "Read [secret")
+                .expect("the paragraph is selectable");
+            let at = |index| {
+                let point = fragment.layout.position_for_index(index).unwrap();
+                gpui::point(point.x + px(1.), point.y + px(8.))
+            };
+            (at(6), at(9))
+        });
+        cx.simulate_mouse_down(a, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(b, MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(b, MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected_text().as_deref(), Some("sec"))
+        });
+        // The next delta closes the link, so "[" leaves the rendered text and
+        // the old offsets would read "ecr".
+        view.update(cx, |view, cx| {
+            view.set_document_text("Read [secret](https://example.com)".into(), cx)
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert_eq!(view.selected_text(), None));
     }
     fn tool(id: &str, state: ToolState) -> Row {
         let call = ToolCall {
@@ -826,7 +901,7 @@ mod tests {
             view.toggle(0, cx);
         });
         cx.run_until_parked();
-        drag(cx, &view, "Checking the plan first.");
+        drag_across_prose(cx, &view, "Checking the plan first.");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.selected_text().as_deref(),

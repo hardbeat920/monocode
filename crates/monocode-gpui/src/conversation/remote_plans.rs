@@ -90,6 +90,14 @@ pub(super) struct State {
 }
 
 impl Conversation {
+    /// The open plan reader's view.
+    #[cfg(test)]
+    pub(super) fn remote_plan_view(&self) -> Option<Entity<TranscriptView>> {
+        self.remote_plans
+            .reader
+            .as_ref()
+            .map(|reader| reader.view.clone())
+    }
     pub(super) fn close_remote_plan(&mut self, cx: &mut Context<Self>) -> bool {
         if self.remote_plans.reader.take().is_some() {
             cx.notify();

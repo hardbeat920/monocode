@@ -3080,12 +3080,28 @@ impl TranscriptView {
     }
     /// `rebuild` for a caller that notifies itself.
     fn rebuild_rows(&mut self, start: usize, cx: &mut Context<Self>) {
+        // A selection is row keys and byte offsets. Rebuilt rows can put
+        // different text at those coordinates (an edited body, or a stream
+        // whose next delta reparses the paragraph), so keep the selection,
+        // and its open menu, only while it still reads the same text.
+        let selected = self
+            .selection
+            .has_range()
+            .then(|| self.selected_text())
+            .flatten();
+        self.rebuild_rows_unchecked(start, cx);
+        if let Some(selected) = selected
+            && self.selected_text().as_deref() != Some(selected.as_str())
+        {
+            self.selection.clear();
+        }
+    }
+    fn rebuild_rows_unchecked(&mut self, start: usize, cx: &mut Context<Self>) {
         #[cfg(test)]
         {
             self.rebuild_passes += 1;
         }
         self.phase_layouts.clear();
-        self.selection.forget_text();
         let now = Instant::now();
         let following = self.list.is_following_tail();
         let offset = self.list.logical_scroll_top();

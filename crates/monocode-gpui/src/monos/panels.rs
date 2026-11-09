@@ -1545,27 +1545,24 @@ impl Monos {
                 {
                     div().into_any_element()
                 } else if document.kind == "html" {
-                    let html = reader(&mut self.html_documents, &id, &document.body, || {
-                        cx.new(|_| super::html::Html::new(document.body.clone()))
-                    });
+                    let html = reader(&mut self.html_documents, &document, || {
+                        Some(cx.new(|_| super::html::Html::new(document.body.clone())))
+                    })
+                    .expect("an HTML reader always builds");
                     html.update(cx, |html, _| html.set_interactive(interactive));
                     html.into_any_element()
                 } else if document.kind == "visual" {
                     // The same native dither visual the chat shows, on its own page.
-                    let visual = match self.visual_documents.get(&id) {
-                        Some((body, view)) if *body == document.body => Some(view.clone()),
-                        _ => serde_json::from_str(&document.body).ok().map(|visual| {
+                    let visual = reader(&mut self.visual_documents, &document, || {
+                        serde_json::from_str(&document.body).ok().map(|visual| {
                             // The page header already titles it.
-                            let view = cx.new(|cx| {
+                            cx.new(|cx| {
                                 let mut view = crate::visuals::VisualView::new(visual, cx);
                                 view.set_inline(Some(String::new()), cx);
                                 view
-                            });
-                            self.visual_documents
-                                .insert(id.clone(), (document.body.clone(), view.clone()));
-                            view
-                        }),
-                    };
+                            })
+                        })
+                    });
                     match visual {
                         Some(view) => div()
                             .id("mono-visual-document")
@@ -1578,11 +1575,12 @@ impl Monos {
                         None => empty("Visual unavailable"),
                     }
                 } else {
-                    reader(&mut self.documents, &id, &document.body, || {
-                        cx.new(|cx| {
+                    reader(&mut self.documents, &document, || {
+                        Some(cx.new(|cx| {
                             crate::transcript::TranscriptView::document(document.body.clone(), cx)
-                        })
+                        }))
                     })
+                    .expect("a document reader always builds")
                     .into_any_element()
                 };
                 div()
@@ -1642,19 +1640,35 @@ impl Monos {
         // A live turn only grows or updates its newest rows. Patch them into
         // the open reader rather than replacing it, which would drop the
         // reader's selection, scroll position and focus with every tool row.
+        // The reader belongs to this Mono's chat and this turn. Anything else
+        // (another Mono, a reloaded chat, another turn) gets a fresh reader.
+        let chat = chat.entity_id();
         let view = match self.activity.as_mut() {
-            Some((turn, shown, view)) if *turn == start && rows.len() >= shown.len() => {
-                if let Some(changed) = (0..rows.len()).find(|&i| shown.get(i) != Some(&rows[i])) {
+            Some(open)
+                if open.mono == mono.id
+                    && open.chat == chat
+                    && open.turn == start
+                    && rows.len() >= open.rows.len() =>
+            {
+                if let Some(changed) = (0..rows.len()).find(|&i| open.rows.get(i) != Some(&rows[i]))
+                {
                     let tail = rows[changed..].to_vec();
-                    view.update(cx, |view, cx| view.patch(changed, tail, cx));
-                    *shown = rows;
+                    open.view
+                        .update(cx, |view, cx| view.patch(changed, tail, cx));
+                    open.rows = rows;
                 }
-                view.clone()
+                open.view.clone()
             }
             _ => {
                 let view =
                     cx.new(|cx| crate::transcript::TranscriptView::activity(rows.clone(), cx));
-                self.activity = Some((start, rows, view.clone()));
+                self.activity = Some(super::Activity {
+                    mono: mono.id.clone(),
+                    chat,
+                    turn: start,
+                    rows,
+                    view: view.clone(),
+                });
                 view
             }
         };
@@ -2648,20 +2662,35 @@ struct SubsessionChoice {
     effort_label: SharedString,
 }
 
-/// The open reader for `id`, rebuilt only when its `body` changed since it was
-/// built, so unrelated refreshes keep the reader's selection and scroll.
+/// The open reader for `document`, rebuilt only when its body changed since it
+/// was built or the document was deleted and created again under the same id,
+/// so unrelated refreshes keep the reader's selection and scroll. `None` when
+/// the reader can't be built, which also drops any stale one.
 fn reader<T: 'static>(
-    cache: &mut HashMap<String, (String, Entity<T>)>,
-    id: &str,
-    body: &str,
-    build: impl FnOnce() -> Entity<T>,
-) -> Entity<T> {
-    match cache.get(id) {
-        Some((built, view)) if built == body => view.clone(),
-        _ => {
-            let view = build();
-            cache.insert(id.to_owned(), (body.to_owned(), view.clone()));
-            view
-        }
+    cache: &mut super::Readers<T>,
+    document: &mono::Document,
+    build: impl FnOnce() -> Option<Entity<T>>,
+) -> Option<Entity<T>> {
+    if let Some(reader) = cache.get(&document.id)
+        && reader.created_at == document.created_at
+        && reader.body == document.body
+    {
+        return Some(reader.view.clone());
     }
+    cache.remove(&document.id);
+    let view = build()?;
+    // Only one document is on screen at a time. Past the cap, let the others
+    // go rather than hold every body (and any HTML webview) for the session.
+    if cache.len() >= super::MAX_READERS {
+        cache.clear();
+    }
+    cache.insert(
+        document.id.clone(),
+        super::Reader {
+            created_at: document.created_at,
+            body: document.body.clone(),
+            view: view.clone(),
+        },
+    );
+    Some(view)
 }
