@@ -423,6 +423,7 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    use monocode_core::search::Scope;
     #[gpui::test]
     fn app_search_restores_draft_and_opens_cross_project_result(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -574,6 +575,29 @@ mod tests {
                 assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(active)));
             })
             .unwrap();
+        visual.simulate_input("scope query");
+        for (keystroke, expected_scope) in [
+            ("tab", Scope::Conversations),
+            ("tab", Scope::Files),
+            ("tab", Scope::Projects),
+            ("tab", Scope::All),
+            ("shift-tab", Scope::Projects),
+            ("shift-tab", Scope::Files),
+            ("shift-tab", Scope::Conversations),
+            ("shift-tab", Scope::All),
+        ] {
+            visual.simulate_keystrokes(keystroke);
+            window
+                .update(visual, |shell, window, cx| {
+                    let search = &shell.app_search.as_ref().unwrap().view;
+                    assert_eq!(
+                        search.read(cx).draft(cx),
+                        ("scope query".into(), expected_scope)
+                    );
+                    assert!(search.focus_handle(cx).is_focused(window));
+                })
+                .unwrap();
+        }
         visual.simulate_keystrokes("escape");
         visual.run_until_parked();
         window

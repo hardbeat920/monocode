@@ -1064,12 +1064,13 @@ impl SearchView {
                 this.pick(this.active, cx);
                 cx.stop_propagation();
             }))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                let k = &event.keystroke;
-                if k.key == "tab" && !k.modifiers.platform && !k.modifiers.control {
-                    this.cycle_scope(if k.modifiers.shift { -1 } else { 1 }, cx);
-                    cx.stop_propagation();
-                }
+            .capture_action(cx.listener(|this, _: &crate::shell::FocusNext, _, cx| {
+                this.cycle_scope(1, cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &crate::shell::FocusPrevious, _, cx| {
+                this.cycle_scope(-1, cx);
+                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &crate::shell::DismissMenu, _, cx| {
                 if !this.input.read(cx).is_composing() {
