@@ -106,7 +106,7 @@ export default function MonoSubsessionsScreen() {
               ))}
             </View>
             <Text style={styles.note}>
-              For project sessions this Mono launches. Copy-on-write requires APFS on a Mac.
+              For project sessions this Mono launches. Copy-on-write requires APFS on a Mac or Btrfs on Linux.
             </Text>
           </>
         ) : null}

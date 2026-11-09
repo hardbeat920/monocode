@@ -1,10 +1,10 @@
 # Native work isolation
 
-The GPUI preview supports Local, Git worktree, and APFS copy-on-write sessions.
+The GPUI preview supports Local, Git worktree, and native copy-on-write sessions.
 Choose **New copy-on-write** in the composer's **Isolation** menu, or select a
 default in **Settings → Work Isolation → Start new session on**. CoW requires
-macOS and APFS; unsupported filesystems fail explicitly rather than copying
-normally or running in the source checkout. BTRFS is not implemented.
+APFS on macOS or Btrfs on Linux. Unsupported filesystems and Windows fail
+explicitly rather than copying normally or running in the source checkout.
 
 The project menu uses **Switch working copy** and **Search working copies…**.
 Existing copies carry a copy icon and open their owning conversation. A new tab,
@@ -46,12 +46,36 @@ selecting CoW there creates a fresh copy for each delegated project session.
 The coordination session itself does not clone the home directory.
 Phone changes require an updated companion app as well as this desktop build.
 
+## Filesystem behavior
+
+| Host and filesystem | Clone operation | Behavior |
+| --- | --- | --- |
+| macOS / APFS | `fclonefileat` | Existing APFS behavior. |
+| Linux / Btrfs | `FICLONE` reflink | Private file metadata with shared data extents; writes remain private. |
+| Other filesystems / Windows | None | Explicit refusal; no ordinary-copy or hard-link fallback. |
+
+The repository and its sibling copy directory must use a supported filesystem.
+Source files and destinations must belong to the same filesystem for reflinking;
+external links or Git object stores on another volume are refused when they cannot
+be cloned. Repositories that are Btrfs subvolumes can create sibling copies on
+Linux 5.18 or newer. Nested filesystem/subvolume boundaries inside a captured tree
+remain unsupported.
+
+The Btrfs backend creates each destination exclusively, through an owned directory
+handle, and matches the source's NOCOW/checksum policy before reflinking. It never
+changes source attributes. A failed reflink removes its new destination and creation
+recovery retains its existing ownership checks. Neither backend clones a whole disk
+or a home directory.
+Normal Btrfs copies use the current user's file descriptors and need neither
+`sudo` nor `btrfs-progs`; those tools and mount permissions are needed only for
+the disposable filesystem integration test setup.
+
 ## Shared execution and review
 
 ```mermaid
 flowchart LR
     A[Native session settings] --> B[Background workspace preparation]
-    B --> C[Existing APFS isolation engine]
+    B --> C[Shared native isolation engine]
     C --> D[Persist owned execution directory]
     D --> E[Validate ownership and acquire run lease]
     E --> F[Shared provider, Git and checkpoint flows]
@@ -146,7 +170,7 @@ Errors retain the copy and are reported; no automatic force-delete is used.
 
 Work Isolation settings list and reveal both workspace types. Before removing a
 copy, the app checks terminals, file panes and running sessions, then rechecks UI
-blockers after background preflight. The APFS engine validates registered directory
+blockers after background preflight. The native engine validates registered directory
 identity, refuses uncommitted changes, and preserves committed branches/history
 before removing files. Public branches retain only publishable history; original
 private history that cannot be separated is kept under `refs/monocode/private/` in
@@ -158,7 +182,7 @@ its original owner. Kept conversations are detached and must select a valid
 working copy before they can run again. Idle provider processes are discarded
 before removing their checkout.
 Terminal blockers include dock tabs, live and restored terminal panes, and saved
-dock tabs. On macOS, cleanup also checks the live shell and foreground process
+dock tabs. On macOS and Linux, cleanup also checks the live shell and foreground process
 directories, including hidden terminals that changed directory into the copy.
 Unavailable live process information retains the copy.
 
@@ -168,16 +192,23 @@ Remote CoW execution is not supported by this native port. Both UI and remote-ru
 boundaries refuse a saved/pending remote CoW request; they never silently create a
 current-checkout session. Ordinary remote worktrees retain their existing path.
 
-Run the native checks and the reused engine's APFS suite:
+Run the native checks and the engine's filesystem integration suite:
 
 ```sh
 RUST_TEST_THREADS=1 MONOCODE_REQUIRE_COW=1 npm run native:check
 MONOCODE_REQUIRE_COW=1 cargo test -p monocode-isolation
+# Linux: requires btrfs-progs, sudo/mount permissions, and loopback support.
+bash scripts/test-isolation-btrfs.sh
 ```
 
 `native:check` includes the engine suite. The native macOS CI job requires APFS
-support, so copy tests cannot silently skip there.
+support. A Linux CI job creates a disposable Btrfs loopback image and runs the
+engine, publication, and core isolation tests with `MONOCODE_REQUIRE_COW=1`, so
+unsupported filesystem coverage cannot silently skip. The Btrfs script unmounts
+and removes only its temporary image; a failed unmount retains it for inspection.
 
+Linux fixtures also cover NOCOW inheritance, exclusive destination creation,
+failed-reflink cleanup, subvolume repositories, and refusal on tmpfs.
 Integration fixtures use disposable databases and repositories. They cover
 original desktop ownership IDs, private forks, source write isolation, active-run
 cleanup refusal, committed-history retention, schema-preserving persistence, and

@@ -147,7 +147,7 @@ impl Section {
             }
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => {
-                "git branch worktree copy-on-write cow APFS isolation default local working copy project create delete"
+                "git branch worktree copy-on-write cow APFS Btrfs isolation default local working copy project create delete"
             }
         }
     }
@@ -218,7 +218,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "default-isolation",
         Section::Worktrees,
         "Start new session on",
-        "local new worktree copy-on-write cow APFS default isolation",
+        "local new worktree copy-on-write cow APFS Btrfs default isolation",
     ),
     (
         "project-worktrees",

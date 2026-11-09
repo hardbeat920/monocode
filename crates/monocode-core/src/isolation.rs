@@ -1,7 +1,7 @@
-//! APFS isolation uses the same private registry as the desktop app. All calls
+//! Native CoW isolation uses the same private registry as the desktop app. All calls
 //! do filesystem/Git I/O and belong on a background executor, outside DB locks.
 use crate::{agent::Settings, store::Store};
-pub use monocode_isolation::{publication_hook, set_publication_helper};
+pub use monocode_isolation::{publication_hook, set_publication_helper, PLATFORM_SUPPORTED};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -152,7 +152,7 @@ impl Isolation {
             .map_err(|e| e.to_string())
     }
     pub fn owner(&self, cwd: &Path, path: &Path) -> Result<Option<Workspace>, String> {
-        if !cfg!(target_os = "macos") {
+        if !PLATFORM_SUPPORTED {
             return Ok(None);
         }
         let cwd = repository_root(cwd).unwrap_or_else(|_| cwd.to_path_buf());
@@ -408,7 +408,7 @@ impl Settings {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn native_git_publishes_only_new_edits_and_discard_keeps_the_inherited_checkout() {
         use crate::{git::git, scm};
@@ -458,7 +458,7 @@ mod tests {
         if !isolation.supported(&project) {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             return;
         }
@@ -608,7 +608,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn native_copies_use_persisted_ownership_fork_privately_and_guard_cleanup() {
         let dir = tempfile::tempdir().unwrap();
@@ -631,7 +631,7 @@ mod tests {
         if !isolation.supported(&project) {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             return;
         }

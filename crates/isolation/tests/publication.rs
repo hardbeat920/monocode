@@ -1,4 +1,4 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -92,7 +92,7 @@ impl Fixture {
         if supported["supported"] != true {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             fs::remove_dir_all(root).unwrap();
             return None;

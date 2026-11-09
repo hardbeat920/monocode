@@ -606,7 +606,7 @@ impl Shell {
                 // and its phones hide them. `push`: it notifies phones through
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "subsessionIsolation": true, "cowIsolation": cfg!(target_os = "macos")}),
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "subsessionIsolation": true, "cowIsolation": monocode_core::isolation::PLATFORM_SUPPORTED}),
                 ids,
                 previews,
             ))

@@ -101,7 +101,7 @@ verification.
 
 ## Data and configuration
 
-APFS copy-on-write sessions are available alongside Local and Git worktrees.
+Copy-on-write sessions on macOS APFS and Linux Btrfs are available alongside Local and Git worktrees.
 See [native work isolation](isolation.md) for selection, ownership, cleanup and
 preview limits.
 

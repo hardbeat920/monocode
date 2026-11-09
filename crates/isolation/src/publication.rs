@@ -467,13 +467,26 @@ impl<'a> Projection<'a> {
                 )
                 .map_err(err)?;
             }
-            let output = Command::new("git")
-                .args(["merge-file", "-p", "--diff-algorithm=histogram"])
-                .arg(temp.0.join("ours"))
-                .arg(temp.0.join("base"))
-                .arg(temp.0.join("theirs"))
-                .output()
-                .map_err(err)?;
+            let merge = |histogram: bool| {
+                let mut command = Command::new("git");
+                command.env("LC_ALL", "C").args(["merge-file", "-p"]);
+                if histogram {
+                    command.arg("--diff-algorithm=histogram");
+                }
+                command
+                    .arg(temp.0.join("ours"))
+                    .arg(temp.0.join("base"))
+                    .arg(temp.0.join("theirs"))
+                    .output()
+                    .map_err(err)
+            };
+            let mut output = merge(true)?;
+            // Older Git lacks this option. Never retry an actual merge conflict.
+            if output.status.code() == Some(129)
+                && String::from_utf8_lossy(&output.stderr).contains("diff-algorithm")
+            {
+                output = merge(false)?;
+            }
             if !output.status.success() {
                 return Err(fail());
             }

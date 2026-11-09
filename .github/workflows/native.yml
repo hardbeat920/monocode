@@ -12,6 +12,7 @@ on:
       - 'crates/mobile-link/**'
       - 'vendor/gpui-pre*/**'
       - 'scripts/*native*'
+      - 'scripts/test-isolation-btrfs.sh'
       - 'scripts/native-editor/**'
       - 'scripts/native-settings/**'
       - 'package.json'
@@ -26,6 +27,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  btrfs:
+    name: Btrfs isolation (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y btrfs-progs libdbus-1-dev pkg-config
+      - run: bash scripts/test-isolation-btrfs.sh
+
   core:
     name: Core (${{ matrix.os }})
     strategy:

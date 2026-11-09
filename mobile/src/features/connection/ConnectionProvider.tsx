@@ -46,7 +46,7 @@ export type Catalog = {
   monoFiles?: boolean;
   /** The desktop accepts isolation defaults for a Mono’s launched project sessions. */
   subsessionIsolation?: boolean;
-  /** The desktop platform supports CoW; individual projects still require APFS. */
+  /** The desktop platform supports CoW; individual projects still require APFS or Btrfs. */
   cowIsolation?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };

@@ -259,7 +259,7 @@ impl Terminal {
         if inside(std::path::Path::new(&self.cwd)) {
             return true;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if !self.exited && self.master_fd >= 0 && self.shell_pid > 1 {
             // Query the kernel even for hidden terminals; their title poll stops.
             let foreground = unsafe { libc::tcgetpgrp(self.master_fd) };
@@ -1447,6 +1447,10 @@ fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
         .to_bytes();
     (!path.is_empty()).then(|| std::ffi::OsString::from_vec(path.into()).into())
 }
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
 /// pty.rs's foreground_label: the command holding the terminal, unless it
 /// is the shell itself.
 #[cfg(unix)]
@@ -1770,7 +1774,7 @@ mod tests {
         assert!(exited);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[gpui::test]
     fn hidden_terminals_block_cleanup_after_shell_or_foreground_changes_directory(
         cx: &mut gpui::TestAppContext,

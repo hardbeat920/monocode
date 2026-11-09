@@ -22,7 +22,7 @@ models.list {}
 sessions.list {project?}
 sessions.read {sessionId,project?,before?,limit?,maxChars?}
 sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,placement?,besideSessionId?,notifyOnComplete?}
-workspaceMode: current (or checkout), worktree, cow (macOS APFS). Omit to inherit isolation. worktreeBase applies to new worktrees and copies.
+workspaceMode: current (or checkout), worktree, cow (macOS APFS or Linux Btrfs). Omit to inherit isolation. worktreeBase applies to new worktrees and copies.
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
@@ -30,7 +30,7 @@ worktrees.list {project?}
 worktrees.create {branch,base?,existing?,project?}
 cow.list {project?}
 cow.create {prompt,base?,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,placement?,besideSessionId?,notifyOnComplete?}
-cow.create creates a copy and its owning session immediately (macOS APFS only). Set draft:true to leave the prompt unsent. Returns sessionId, cowId and path. Copies cannot be shared through worktreeCwd.
+cow.create creates a copy and its owning session immediately (macOS APFS or Linux Btrfs). Set draft:true to leave the prompt unsent. Returns sessionId, cowId and path. Copies cannot be shared through worktreeCwd.
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
 notes.list {limit?,offset?}; notes.read {id}; notes.write {id?,title?,body?,tags?}

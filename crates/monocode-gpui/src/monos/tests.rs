@@ -155,7 +155,7 @@ fn subsession_isolation_picker_persists_and_explicit_launch_choices_win(cx: &mut
         cx.set_reduce_motion(true);
         crate::popover::bind(cx);
     });
-    let selected = if cfg!(target_os = "macos") {
+    let selected = if monocode_core::isolation::PLATFORM_SUPPORTED {
         "cow"
     } else {
         "current"

@@ -869,7 +869,7 @@ mod tests {
         }
         None
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn registered_copies_are_visible_in_assigned_project_changes() {
         struct Temp(PathBuf);
@@ -912,7 +912,7 @@ mod tests {
         if !isolation.supported(&project) {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             return;
         }

@@ -460,7 +460,7 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[gpui::test]
     fn new_tabs_fork_the_active_copy_under_all_checkouts(cx: &mut TestAppContext) {
         let root = std::env::temp_dir().join(format!(
@@ -501,7 +501,7 @@ mod tests {
         if !isolation.supported(&project) {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             std::fs::remove_dir_all(root).unwrap();
             return;

@@ -13,7 +13,8 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 type Result<T> = std::result::Result<T, String>;
-const UNSUPPORTED_FILESYSTEM: &str = "Copy-on-write requires APFS on macOS";
+pub const PLATFORM_SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "linux"));
+const UNSUPPORTED_FILESYSTEM: &str = "Copy-on-write requires APFS on macOS or Btrfs on Linux";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
@@ -461,7 +462,59 @@ fn clone_file(source: &File, parent: &File, name: &std::ffi::CStr) -> Result<()>
     }
     Ok(())
 }
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn clone_file(source: &File, parent: &File, name: &std::ffi::CStr) -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(err(std::io::Error::last_os_error()));
+    }
+    let target = unsafe { File::from_raw_fd(fd) };
+    let result = (|| {
+        // Btrfs requires matching NOCOW/checksum policy, including inherited +C.
+        const NOCOW: u32 = 0x00800000;
+        let mut source_flags: u32 = 0;
+        let mut target_flags: u32 = 0;
+        if unsafe { libc::ioctl(source.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut source_flags) } != 0
+            || unsafe { libc::ioctl(fd, libc::FS_IOC_GETFLAGS, &mut target_flags) } != 0
+        {
+            return Err(err(std::io::Error::last_os_error()));
+        }
+        if source_flags & NOCOW != target_flags & NOCOW {
+            target_flags = (target_flags & !NOCOW) | (source_flags & NOCOW);
+            if unsafe { libc::ioctl(fd, libc::FS_IOC_SETFLAGS, &target_flags) } != 0 {
+                return Err(err(std::io::Error::last_os_error()));
+            }
+        }
+        if unsafe { libc::ioctl(fd, libc::FICLONE, source.as_raw_fd()) } != 0 {
+            return Err(err(std::io::Error::last_os_error()));
+        }
+        let metadata = source.metadata().map_err(err)?;
+        target
+            .set_times(
+                fs::FileTimes::new()
+                    .set_accessed(metadata.accessed().map_err(err)?)
+                    .set_modified(metadata.modified().map_err(err)?),
+            )
+            .map_err(err)?;
+        Ok(())
+    })();
+    drop(target);
+    if result.is_err() {
+        unsafe {
+            libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0);
+        }
+    }
+    result.map_err(|error: String| format!("Native Btrfs reflink failed: {error}"))
+}
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 fn clone_file(_: &File, _: &File, _: &std::ffi::CStr) -> Result<()> {
     Err(UNSUPPORTED_FILESYSTEM.into())
 }
@@ -804,7 +857,20 @@ fn check_filesystem(root: &Path) -> Result<()> {
     }
     Ok(())
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn check_filesystem(root: &Path) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(root.as_os_str().as_bytes()).map_err(err)?;
+    let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    if unsafe { libc::statfs(path.as_ptr(), info.as_mut_ptr()) } != 0 {
+        return Err(err(std::io::Error::last_os_error()));
+    }
+    if unsafe { info.assume_init() }.f_type as u32 != libc::BTRFS_SUPER_MAGIC as u32 {
+        return Err(UNSUPPORTED_FILESYSTEM.into());
+    }
+    Ok(())
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn check_filesystem(_: &Path) -> Result<()> {
     Err(UNSUPPORTED_FILESYSTEM.into())
 }
@@ -813,6 +879,10 @@ fn capability(cwd: &Path) -> Value {
         let root = repo(cwd)?;
         validate_repo(&root)?;
         check_filesystem(&root)?;
+        check_filesystem(
+            root.parent()
+                .ok_or("No sibling directory for isolation copies")?,
+        )?;
         Ok(())
     })();
     match result {
@@ -1589,6 +1659,12 @@ fn create_in_folder(
     }
     let source = repo(cwd)?;
     let project = repo(project.unwrap_or(&source))?;
+    check_filesystem(&project)?;
+    check_filesystem(
+        project
+            .parent()
+            .ok_or("No sibling directory for isolation copies")?,
+    )?;
     for entry in fs::read_dir(store).map_err(err)? {
         let entry = entry.map_err(err)?;
         if let Ok(w) = read_json::<Workspace>(&entry.path().join("workspace.json")) {
@@ -2525,7 +2601,7 @@ pub fn dispatch(store: &Path, request: Value) -> Result<Value> {
     let a = &request["args"];
     let string = |key: &str| a[key].as_str().ok_or_else(|| format!("Missing {key}"));
     let cwd = Path::new(string("cwd")?);
-    if !cfg!(target_os = "macos") {
+    if !PLATFORM_SUPPORTED {
         return match command {
             "cow_capability" => Ok(json!({"supported":false,"reason":UNSUPPORTED_FILESYSTEM})),
             "cow_list" | "cow_roots" => Ok(json!([])),
@@ -2692,13 +2768,138 @@ mod tests {
             true
         } else {
             assert!(std::env::var_os("MONOCODE_REQUIRE_COW").is_none(), "{cap}");
-            eprintln!("SKIP native APFS coverage: {cap}");
+            eprintln!("SKIP native CoW coverage: {cap}");
             false
         }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn btrfs_reflinks_keep_writes_private_and_match_nocow_policy() {
+        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+        let t = Temp::new();
+        let source = t.repo();
+        if !native_supported(&source) {
+            return;
+        }
+        for source_nocow in [false, true] {
+            for inherited_nocow in [false, true] {
+                let name = format!("reflink-{source_nocow}-{inherited_nocow}");
+                let file = File::options()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(source.join(&name))
+                    .unwrap();
+                let parent = t.0.join(format!("target-{name}"));
+                private_dir(&parent).unwrap();
+                let parent_fd = open_dir(&parent).unwrap();
+                let set_nocow = |fd: i32| {
+                    let mut flags: u32 = 0;
+                    assert_eq!(
+                        unsafe { libc::ioctl(fd, libc::FS_IOC_GETFLAGS, &mut flags) },
+                        0
+                    );
+                    flags |= 0x00800000;
+                    assert_eq!(unsafe { libc::ioctl(fd, libc::FS_IOC_SETFLAGS, &flags) }, 0);
+                };
+                if source_nocow {
+                    set_nocow(file.as_raw_fd());
+                }
+                if inherited_nocow {
+                    set_nocow(parent_fd.as_raw_fd());
+                }
+                (&file).write_all(&vec![42; 65536]).unwrap();
+                file.sync_all().unwrap();
+                let target_name = std::ffi::CString::new("copy").unwrap();
+                clone_file(&file, &parent_fd, &target_name).unwrap();
+                let target = parent.join("copy");
+                assert_ne!(
+                    file.metadata().unwrap().ino(),
+                    fs::metadata(&target).unwrap().ino()
+                );
+                assert_eq!(fs::read(&target).unwrap(), vec![42; 65536]);
+                assert_eq!(
+                    file.metadata().unwrap().modified().unwrap(),
+                    fs::metadata(&target).unwrap().modified().unwrap()
+                );
+                assert!(
+                    clone_file(&file, &parent_fd, &target_name).is_err(),
+                    "never replace an existing destination"
+                );
+                fs::write(&target, b"private copy write").unwrap();
+                assert_eq!(fs::read(source.join(&name)).unwrap(), vec![42; 65536]);
+                fs::write(source.join(&name), b"source write").unwrap();
+                assert_eq!(fs::read(&target).unwrap(), b"private copy write");
+            }
+        }
+        let outside = Temp(
+            PathBuf::from("/dev/shm").join(format!("monocode-clone-{}", uuid::Uuid::new_v4())),
+        );
+        private_dir(&outside.0).unwrap();
+        let name = std::ffi::CString::new("must-not-copy").unwrap();
+        let original = File::open(source.join("app.txt")).unwrap();
+        assert!(clone_file(&original, &open_dir(&outside.0).unwrap(), &name).is_err());
+        assert!(
+            !outside.0.join("must-not-copy").exists(),
+            "failed reflinks leave no ordinary copy"
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn btrfs_subvolume_repositories_clone_to_sibling_copies() {
+        let t = Temp::new();
+        if check_filesystem(&t.0).is_err() {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "Btrfs required"
+            );
+            return;
+        }
+        struct Subvolume(PathBuf);
+        impl Drop for Subvolume {
+            fn drop(&mut self) {
+                let _ = Command::new("btrfs")
+                    .args(["subvolume", "delete"])
+                    .arg(&self.0)
+                    .output();
+            }
+        }
+        let subvolume = Subvolume(t.0.join("project"));
+        let output = Command::new("btrfs")
+            .args(["subvolume", "create"])
+            .arg(&subvolume.0)
+            .output()
+            .expect("install btrfs-progs for Linux isolation tests");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let source = t.repo();
+        let registry = t.0.join("registry");
+        private_dir(&registry).unwrap();
+        let copy = create(&registry, &source, "subvolume-owner", None, None).unwrap();
+        fs::write(Path::new(&copy.path).join("app.txt"), b"private edit").unwrap();
+        assert_eq!(
+            fs::read(source.join("app.txt")).unwrap(),
+            b"first\nsecond\nthird\n"
+        );
+        assert!(check_remove(&registry, &copy, false).is_err());
+        remove(&registry, &copy, true).unwrap();
+        assert!(!Path::new(&copy.path).exists());
+        assert!(source.exists());
     }
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn unsupported_platform_refuses_cow_without_affecting_local_repository() {
+        #[cfg(target_os = "linux")]
+        let t = {
+            let path =
+                PathBuf::from("/dev/shm").join(format!("monocode-cow-{}", uuid::Uuid::new_v4()));
+            private_dir(&path).unwrap();
+            Temp(path)
+        };
+        #[cfg(not(target_os = "linux"))]
         let t = Temp::new();
         let source = t.repo();
         let store = t.0.join("registry");
@@ -2728,7 +2929,12 @@ mod tests {
             atomic::{AtomicBool, Ordering},
             Arc,
         };
-        let t = Temp(PathBuf::from("/tmp").join(format!("cow-{}", uuid::Uuid::new_v4())));
+        let socket_root = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let t = Temp(socket_root.join(format!("cow-{}", uuid::Uuid::new_v4())));
         private_dir(&t.0).unwrap();
         let source = t.repo();
         if !native_supported(&source) {
@@ -2995,7 +3201,12 @@ mod tests {
     #[test]
     fn ignored_runtime_sockets_do_not_block_isolation() {
         use std::os::unix::net::UnixListener;
-        let t = Temp(PathBuf::from("/tmp").join(format!("cow-{}", uuid::Uuid::new_v4())));
+        let socket_root = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let t = Temp(socket_root.join(format!("cow-{}", uuid::Uuid::new_v4())));
         private_dir(&t.0).unwrap();
         let source = t.repo();
         if !native_supported(&source) {
@@ -3643,7 +3854,7 @@ mod tests {
                 "Native CoW coverage is required: {}",
                 capability(&source)
             );
-            eprintln!("SKIP native APFS coverage: {}", capability(&source));
+            eprintln!("SKIP native CoW coverage: {}", capability(&source));
             return;
         }
         fs::write(source.join("app.txt"), "first\ninherited\nthird\n").unwrap();
@@ -3803,7 +4014,7 @@ mod tests {
                 "Native CoW coverage is required: {}",
                 capability(&source)
             );
-            eprintln!("SKIP native APFS coverage: {}", capability(&source));
+            eprintln!("SKIP native CoW coverage: {}", capability(&source));
             return;
         }
         let linked = t.0.join("linked");
@@ -3851,7 +4062,7 @@ mod tests {
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
                 "Native CoW coverage required"
             );
-            eprintln!("SKIP native APFS");
+            eprintln!("SKIP native CoW");
             return;
         }
         private_dir(&source.join("deps")).unwrap();
@@ -3890,7 +4101,7 @@ mod tests {
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
                 "Native CoW coverage required"
             );
-            eprintln!("SKIP native APFS");
+            eprintln!("SKIP native CoW");
             return;
         }
         fs::write(source.join(".gitattributes"), "app.txt filter=hostile\n").unwrap();

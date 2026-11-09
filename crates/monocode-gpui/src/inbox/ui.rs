@@ -2580,7 +2580,7 @@ impl Inbox {
                 .into_iter()
                 .map(|(mode, label)| {
                     let disabled = mode == "cow"
-                        && (!cfg!(target_os = "macos")
+                        && (!monocode_core::isolation::PLATFORM_SUPPORTED
                             || self
                                 .document_cwd()
                                 .to_string_lossy()

@@ -1663,7 +1663,7 @@ impl QuickComposer {
                         })),
                     ),
             )
-            .when(cfg!(target_os = "macos"), |d| {
+            .when(monocode_core::isolation::PLATFORM_SUPPORTED, |d| {
                 d.child(
                     row(
                         "quick-workspace-cow",

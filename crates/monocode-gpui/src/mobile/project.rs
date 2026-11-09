@@ -922,7 +922,7 @@ mod tests {
         assert!(resolve_root(root, linked.to_str()).is_err());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn paired_devices_use_only_registered_same_project_copies() {
         let dir = Temp::new("owned-copies");
@@ -937,7 +937,7 @@ mod tests {
         if !isolation.supported(&project) {
             assert!(
                 std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
-                "APFS required"
+                "Native CoW filesystem required"
             );
             return;
         }

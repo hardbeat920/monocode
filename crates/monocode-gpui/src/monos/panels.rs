@@ -2368,7 +2368,7 @@ impl Monos {
             .map(|(value, label)| {
                 MenuAction::new(format!("subsession-isolation:{value}"), label)
                     .checked(mode.unwrap_or("") == value)
-                    .disabled(value == "cow" && !cfg!(target_os = "macos"))
+                    .disabled(value == "cow" && !monocode_core::isolation::PLATFORM_SUPPORTED)
                     .icon(match value {
                         "cow" => "copy",
                         "worktree" => "folder-tree",

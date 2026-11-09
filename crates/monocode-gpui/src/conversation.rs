@@ -663,7 +663,7 @@ impl Conversation {
             controls: None,
             branch: git.as_ref().and_then(|s| s.current.clone()),
             git,
-            cow_supported: cfg!(target_os = "macos"),
+            cow_supported: monocode_core::isolation::PLATFORM_SUPPORTED,
             git_picker: None,
             git_events: None,
             preparing_worktree: false,
