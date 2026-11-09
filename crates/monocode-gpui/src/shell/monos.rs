@@ -5,6 +5,8 @@ pub(crate) struct MonoSession {
     pub title: String,
     pub cwd: String,
     pub busy: bool,
+    /// The latest turn was stopped; known only while the chat is loaded.
+    pub stopped: bool,
     pub has_messages: bool,
     pub archived: bool,
     pub updated_at: u64,
@@ -70,6 +72,7 @@ impl Shell {
                     title: metadata.summary.title.clone(),
                     cwd: metadata.summary.cwd.clone(),
                     busy: metadata.busy || live.is_some_and(|v| v.mono_external_pending()),
+                    stopped: live.is_some_and(|v| v.mono_turn_stopped()),
                     has_messages: metadata.summary.has_messages,
                     archived: metadata.summary.archived,
                     updated_at: metadata.summary.updated_at,

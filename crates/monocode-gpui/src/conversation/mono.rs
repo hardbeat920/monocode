@@ -91,6 +91,11 @@ impl Conversation {
         });
         window.focus(&self.input.focus_handle(cx), cx);
     }
+    /// The latest turn was stopped (by the user or a Mono). Native stops leave
+    /// no row, so completion reports ask the view; a new turn clears it.
+    pub(crate) fn mono_turn_stopped(&self) -> bool {
+        self.notification_cancelled
+    }
     pub(crate) fn mono_external_pending(&self) -> bool {
         self.mono_ui.external.is_some()
     }

@@ -1,6 +1,9 @@
 //! Response actions use the same prose and recap rules as transcriptActivity.ts,
 //! secondOpinion.ts and handoff.ts. Tool chrome and private reasoning aren't copied.
-use crate::{tool::ToolCall, transcript::Row};
+use crate::{
+    tool::{ToolCall, ToolState},
+    transcript::Row,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,31 +85,164 @@ pub fn final_prose(rows: &[Row]) -> String {
         .unwrap_or(rows.len());
     prose(&rows[start..])
 }
+/// One message's text as reports and `sessions.read` both count it: trimmed,
+/// with `\r\n` and `\r` as `\n`, so character offsets agree between them.
+pub fn normalized(text: &str) -> String {
+    text.trim().replace("\r\n", "\n").replace('\r', "\n")
+}
 /// Keeps the end of `text`, where a session's answer is, within `count` chars.
+/// `marker` leads the kept part only when it fits; the result never exceeds `count`.
 pub fn limit_tail(text: &str, count: usize, marker: &str) -> String {
     let total = text.chars().count();
     if total <= count {
         return text.into();
     }
-    let keep = count.saturating_sub(marker.chars().count() + 2);
+    let room = marker.chars().count() + 2;
+    if room >= count {
+        return text.chars().skip(total - count).collect();
+    }
+    let keep = count - room;
     let tail: String = text.chars().skip(total - keep).collect();
     format!("{marker}\n\n{tail}")
 }
-/// A delegated session's completion report: the final assistant message of its
-/// latest turn only. Interim progress messages and earlier turns' reports, which
-/// the Mono has already received, are left out. Over budget, the end is kept.
-pub fn completion_report(session: i64, rows: &[Row], count: usize) -> String {
+/// How the host saw a delegated session's latest turn end, beyond its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TurnEnd {
+    /// Nothing beyond the rows is known.
+    #[default]
+    Unknown,
+    /// The user or the Mono stopped it; native stops don't leave a row.
+    Stopped,
+}
+/// Whether the latest turn's receipt was opened but never closed: the app quit
+/// or restarted while it ran. A steer's receipt defers to its root turn's.
+pub fn turn_interrupted(
+    rows: &[Row],
+    turns: &std::collections::HashMap<usize, crate::agent::TurnInfo>,
+) -> bool {
     let turn = rows.iter().rposition(Row::is_prompt).map_or(0, |i| i + 1);
-    let text = final_prose(&rows[turn..]);
-    if text.is_empty() {
-        return "(no written reply on its latest turn)".into();
+    let Some(mut info) = turns.get(&turn) else {
+        return false;
+    };
+    if let Some(root) = info.joined_turn.and_then(|root| turns.get(&root)) {
+        info = root;
     }
-    limit_tail(
-        &text,
-        count,
-        &format!(
-            "[earlier text truncated; read the full message with sessions.read {{\"sessionId\":{session},\"limit\":1,\"maxChars\":6000}} and pass nextCharOffset as charOffset for the rest]"
+    info.started_at.is_some() && !info.has_duration()
+}
+/// The `sessions.read` input that returns `session`'s latest final message.
+/// `project` is the Mono project the session belongs to, when `sessions.read`
+/// can resolve it. Remote sessions (negative IDs) can't be read that way.
+pub fn read_call(session: i64, project: Option<&str>) -> Option<serde_json::Value> {
+    let project = project?;
+    (session > 0).then(
+        || serde_json::json!({"sessionId":session,"project":project,"limit":1,"maxChars":6000}),
+    )
+}
+/// A delegated session's completion report: the last non-blank assistant
+/// message of its latest turn. Interim progress messages and earlier turns'
+/// reports, which the Mono has already received, are left out. Over budget,
+/// the end is kept, and `read` (from [`read_call`]) says how to read the start.
+/// A turn that failed, was stopped or was interrupted is reported as
+/// unfinished, so a progress line isn't passed off as the answer.
+pub fn completion_report(
+    rows: &[Row],
+    end: TurnEnd,
+    interrupted: bool,
+    read: Option<&serde_json::Value>,
+    count: usize,
+) -> String {
+    let turn = &rows[rows.iter().rposition(Row::is_prompt).map_or(0, |i| i + 1)..];
+    // Assistant messages as (start, end) row ranges; continuation rows join theirs.
+    let mut messages: Vec<(usize, usize)> = Vec::new();
+    for (i, row) in turn.iter().enumerate() {
+        if row.role != "assistant" {
+            continue;
+        }
+        match messages.last_mut() {
+            Some(last) if last.1 == i && !row.first => last.1 = i + 1,
+            _ => messages.push((i, i + 1)),
+        }
+    }
+    let answer = messages.iter().rev().find_map(|&(from, to)| {
+        let text = normalized(
+            &turn[from..to]
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<String>(),
+        );
+        (!text.is_empty()).then_some((to, text))
+    });
+    let after = &turn[answer.as_ref().map_or(0, |(to, _)| *to)..];
+    let error = after
+        .iter()
+        .rev()
+        .find(|r| r.role == "error")
+        .map(|r| normalized(&r.text));
+    let unfinished = match error.as_deref() {
+        Some("Stopped") => Some("it was stopped".to_string()),
+        Some(error) => Some(format!(
+            "it failed with an error: {}",
+            error
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(300)
+                .collect::<String>()
+        )),
+        None if end == TurnEnd::Stopped => Some("it was stopped".into()),
+        None if interrupted => Some("the app quit or restarted while it was running".into()),
+        // Settled turns mark leftover running tools Cancelled (stop) or Failed;
+        // one still Running means the app went away mid-turn.
+        None => after
+            .iter()
+            .filter(|r| r.role == "tool")
+            .filter_map(|r| serde_json::from_str::<ToolCall>(&r.text).ok())
+            .find_map(|tool| match tool.state {
+                ToolState::Cancelled => Some("it was stopped".into()),
+                ToolState::Running => Some("it was interrupted during a tool call".into()),
+                _ => None,
+            }),
+    };
+    let Some((_, text)) = answer else {
+        return match unfinished {
+            Some(how) => format!("(its latest turn did not finish: {how}. It wrote no message.)"),
+            None => "(no written reply on its latest turn)".into(),
+        };
+    };
+    let header = unfinished.map(|how| {
+        format!(
+            "(its latest turn did not finish: {how}. This is the last message it wrote, not a final answer:)\n\n"
+        )
+    });
+    let header_len = header.as_deref().map_or(0, |h| h.chars().count());
+    let budget = count.saturating_sub(header_len);
+    let total = text.chars().count();
+    let marker = |omitted: usize| {
+        match read {
+        Some(call) => format!(
+            "[the first {omitted} of {total} characters were cut. sessions.read {call} returns them from the start; repeat it with charOffset set to the nextCharOffset it returns, stopping at character {omitted}]"
         ),
+        None => "[the start of this message was cut; open the session to read it in full]".into(),
+    }
+    };
+    // The cut's length is written in the marker, so settle it against the
+    // marker's own length; the digit count changes at most a couple of times.
+    let mut text_marker = marker(0);
+    for _ in 0..4 {
+        let room = text_marker.chars().count() + 2;
+        let omitted = total.saturating_sub(budget.saturating_sub(room));
+        let next = marker(omitted);
+        if next == text_marker {
+            break;
+        }
+        text_marker = next;
+    }
+    let marker = text_marker;
+    format!(
+        "{}{}",
+        header.unwrap_or_default(),
+        limit_tail(&text, budget, &marker)
     )
 }
 pub fn request(rows: &[Row]) -> String {
@@ -300,57 +436,274 @@ mod tests {
         assert_eq!(final_prose(&transcript.rows), "");
     }
 
-    fn row(role: &str, text: &str) -> Row {
-        Row {
-            role: role.into(),
-            text: text.into(),
-            first: true,
-            sent_at: None,
+    /// Rows as the runtime writes them: `begin` opens a message, `append`
+    /// splits long text into continuation rows.
+    fn rows(steps: &[(&str, &str)]) -> Vec<Row> {
+        let mut transcript = crate::transcript::Transcript::default();
+        for (role, text) in steps {
+            transcript.begin(role);
+            transcript.append(text);
         }
+        transcript.rows
+    }
+    fn tool(state: ToolState) -> String {
+        let mut call = ToolCall::new("t1", "Read");
+        call.state = state;
+        serde_json::to_string(&call).unwrap()
+    }
+    fn report(rows: &[Row]) -> String {
+        completion_report(rows, TurnEnd::Unknown, false, None, 12000)
     }
 
     #[test]
     fn completion_report_is_the_latest_turns_final_message() {
-        let mut rows = vec![
-            row("user", "Investigate the crash"),
-            row("assistant", "Now reading main.rs..."),
-            row("tool", "{}"),
-            row("assistant", "Now checking the logs..."),
-            row("assistant", "First answer: the crash is a null deref."),
+        let done = tool(ToolState::Completed);
+        let mut steps = vec![
+            ("user", "Investigate the crash"),
+            ("assistant", "Now reading main.rs..."),
+            ("tool", done.as_str()),
+            ("assistant", "Now checking the logs..."),
+            ("assistant", "First answer: the crash is a null deref."),
         ];
         assert_eq!(
-            completion_report(7, &rows, 12000),
+            report(&rows(&steps)),
             "First answer: the crash is a null deref."
         );
-        rows.push(row("user", "Now fix it"));
-        rows.push(row("assistant", "Editing main.rs..."));
-        rows.push(row("assistant", "Fixed: added a guard."));
-        let report = completion_report(7, &rows, 12000);
-        assert_eq!(report, "Fixed: added a guard.");
-        assert!(
-            !report.contains("First answer"),
-            "follow-up must not repeat the first turn"
-        );
-        rows.push(row("user", "Anything else?"));
-        rows.push(row("tool", "{}"));
+        steps.extend([
+            ("user", "Now fix it"),
+            ("assistant", "Editing main.rs..."),
+            ("assistant", "Fixed: added a guard."),
+        ]);
+        assert_eq!(report(&rows(&steps)), "Fixed: added a guard.");
+        steps.extend([("user", "Anything else?"), ("tool", done.as_str())]);
         assert_eq!(
-            completion_report(7, &rows, 12000),
+            report(&rows(&steps)),
             "(no written reply on its latest turn)",
             "an earlier turn's answer must not stand in for a silent turn"
         );
     }
 
     #[test]
+    fn completion_report_skips_blank_messages_after_the_answer() {
+        let done = tool(ToolState::Completed);
+        // ACP's background handoff opens an empty message; a "\n\n" delta
+        // between tool calls opens a whitespace-only one.
+        for steps in [
+            vec![
+                ("user", "Go"),
+                ("assistant", "THE ANSWER"),
+                ("assistant", ""),
+                ("tool", done.as_str()),
+            ],
+            vec![
+                ("user", "Go"),
+                ("assistant", "THE ANSWER"),
+                ("tool", done.as_str()),
+                ("assistant", "\n\n"),
+            ],
+            vec![
+                ("user", "Go"),
+                ("assistant", "THE ANSWER"),
+                ("assistant", " \r\n\t"),
+                ("reasoning", "done"),
+            ],
+        ] {
+            assert_eq!(report(&rows(&steps)), "THE ANSWER", "{steps:?}");
+        }
+    }
+
+    #[test]
+    fn completion_report_says_when_the_turn_did_not_finish() {
+        let failed = tool(ToolState::Failed);
+        let cancelled = tool(ToolState::Cancelled);
+        let running = tool(ToolState::Running);
+        let progress = "Now reading main.rs...";
+        let cases = [
+            // Native: a provider error settles running tools Failed and appends an error row.
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("tool", failed.as_str()),
+                    ("error", "Provider rate limited\nretry later"),
+                ],
+                TurnEnd::Unknown,
+                false,
+                "it failed with an error: Provider rate limited.",
+            ),
+            // Tauri records a stop through the shared store as a "Stopped" error notice.
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("error", "Stopped"),
+                ],
+                TurnEnd::Unknown,
+                false,
+                "it was stopped.",
+            ),
+            // Native stops leave no row; the live view knows, and tools are Cancelled.
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("tool", cancelled.as_str()),
+                ],
+                TurnEnd::Stopped,
+                false,
+                "it was stopped.",
+            ),
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("tool", cancelled.as_str()),
+                ],
+                TurnEnd::Unknown,
+                false,
+                "it was stopped.",
+            ),
+            (
+                vec![("user", "Go"), ("assistant", progress)],
+                TurnEnd::Stopped,
+                false,
+                "it was stopped.",
+            ),
+            // The app quit mid-turn: the receipt is open and a tool never settled.
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("tool", running.as_str()),
+                ],
+                TurnEnd::Unknown,
+                true,
+                "the app quit or restarted while it was running.",
+            ),
+            (
+                vec![
+                    ("user", "Go"),
+                    ("assistant", progress),
+                    ("tool", running.as_str()),
+                ],
+                TurnEnd::Unknown,
+                false,
+                "it was interrupted during a tool call.",
+            ),
+        ];
+        for (steps, end, interrupted, how) in cases {
+            let report = completion_report(&rows(&steps), end, interrupted, None, 12000);
+            assert_eq!(
+                report,
+                format!("(its latest turn did not finish: {how} This is the last message it wrote, not a final answer:)\n\n{progress}"),
+            );
+        }
+        assert_eq!(
+            report(&rows(&[("user", "Go"), ("error", "boom")])),
+            "(its latest turn did not finish: it failed with an error: boom. It wrote no message.)"
+        );
+        // An earlier turn's failure, or an error the turn recovered from, isn't this answer's.
+        let steps = [
+            ("user", "Go"),
+            ("error", "boom"),
+            ("user", "Retry"),
+            ("error", "transient"),
+            ("assistant", "Done."),
+        ];
+        assert_eq!(report(&rows(&steps)), "Done.");
+    }
+
+    #[test]
+    fn open_turn_receipts_mark_an_interrupted_turn() {
+        use crate::agent::TurnInfo;
+        let rows = rows(&[
+            ("user", "Go"),
+            ("assistant", "Working"),
+            ("user", "Also this"),
+        ]);
+        let open = TurnInfo {
+            started_at: Some(1),
+            ..Default::default()
+        };
+        let settled = TurnInfo {
+            started_at: Some(1),
+            duration_known: true,
+            ..Default::default()
+        };
+        let steer = TurnInfo {
+            joined_turn: Some(1),
+            ..Default::default()
+        };
+        let turns = |items: Vec<(usize, TurnInfo)>| items.into_iter().collect();
+        assert!(turn_interrupted(&rows, &turns(vec![(3, open.clone())])));
+        assert!(!turn_interrupted(&rows, &turns(vec![(3, settled.clone())])));
+        assert!(
+            !turn_interrupted(&rows, &turns(vec![(1, open.clone())])),
+            "an earlier turn's receipt"
+        );
+        assert!(turn_interrupted(
+            &rows,
+            &turns(vec![(1, open), (3, steer.clone())])
+        ));
+        assert!(!turn_interrupted(
+            &rows,
+            &turns(vec![(1, settled), (3, steer)])
+        ));
+        assert!(
+            !turn_interrupted(&rows, &Default::default()),
+            "legacy turns without receipts"
+        );
+    }
+
+    #[test]
     fn completion_report_keeps_the_end_when_over_budget() {
         let answer = format!("{}THE CONCLUSION", "detail ".repeat(3000));
-        let rows = vec![row("user", "Go"), row("assistant", &answer)];
-        let report = completion_report(42, &rows, 12000);
-        assert!(report.chars().count() <= 12000);
+        let rows = rows(&[("user", "Go"), ("assistant", &answer)]);
+        let call = read_call(42, Some("/repo")).unwrap();
+        let report = completion_report(&rows, TurnEnd::Unknown, false, Some(&call), 12000);
+        assert_eq!(report.chars().count(), 12000);
         assert!(report.ends_with("THE CONCLUSION"));
-        assert!(report.starts_with(
-            "[earlier text truncated; read the full message with sessions.read {\"sessionId\":42,"
+        let (marker, tail) = report.split_once("\n\n").unwrap();
+        let omitted: usize = marker["[the first ".len()..]
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            omitted + tail.chars().count(),
+            21014,
+            "the marker names exactly the cut part"
+        );
+        assert!(marker.ends_with(&format!("stopping at character {omitted}]")));
+        assert!(marker.contains(&format!(
+            "of 21014 characters were cut. sessions.read {call} returns"
+        )));
+        // Unfinished turns keep their header within the same budget.
+        let unfinished = completion_report(&rows, TurnEnd::Stopped, false, Some(&call), 12000);
+        assert_eq!(unfinished.chars().count(), 12000);
+        assert!(unfinished.starts_with("(its latest turn did not finish: it was stopped."));
+        assert!(unfinished.ends_with("THE CONCLUSION"));
+        // Remote sessions can't be read through sessions.read, so no call is offered.
+        assert_eq!(read_call(-5, Some("/repo")), None);
+        assert_eq!(read_call(5, None), None);
+        let remote = completion_report(&rows, TurnEnd::Unknown, false, None, 12000);
+        assert!(remote.starts_with(
+            "[the start of this message was cut; open the session to read it in full]\n\n"
         ));
-        assert!(report.contains("nextCharOffset"));
+        assert!(!remote.contains("sessions.read"));
+    }
+
+    #[test]
+    fn limit_tail_never_exceeds_its_budget() {
+        let marker = "[earlier text truncated....]";
+        assert_eq!(limit_tail(&"y".repeat(50), 10, marker), "y".repeat(10));
+        assert_eq!(limit_tail(&"y".repeat(50), 29, marker).chars().count(), 29);
+        assert_eq!(
+            limit_tail(&"y".repeat(50), 31, marker),
+            format!("{marker}\n\ny")
+        );
+        assert_eq!(limit_tail("short", 10, marker), "short");
     }
 
     #[test]
