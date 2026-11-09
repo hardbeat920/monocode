@@ -1401,6 +1401,7 @@ impl Shell {
             // Events may arrive before the first asynchronous agent load. Seed
             // the indexed working directory so those events cannot erase it.
             view.restore_worktree(worktree, None, cx);
+            view.use_remote_connections(self.remote.clone());
             view.draft_hint = self.draft_sessions.contains(&id);
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));

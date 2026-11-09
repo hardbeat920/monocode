@@ -72,6 +72,34 @@ impl Store {
         }
         Ok(pending)
     }
+    /// Gives up on a remote app launch the host never confirmed: its prompt
+    /// and unconfirmed commands are dropped, so nothing sends it later.
+    /// Returns false, changing nothing, once the host has the session.
+    pub fn abandon_remote_app_launch(&self, id: i64) -> Result<bool, String> {
+        let Some(mut remote) = self.remote_session(id)? else {
+            return Ok(false);
+        };
+        if remote.session_id.is_some() {
+            return Ok(false);
+        }
+        let mut state = self.follow_ups(id)?;
+        if state
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.id.starts_with(APP_PROMPT))
+        {
+            state.revision += 1;
+            state.draft = None;
+            self.save_follow_ups(id, &state)?;
+        }
+        self.delete_settings(&[format!("{APP_LAUNCH_DRAFT}{id}")], None)?;
+        if !remote.outbox.is_empty() || !remote.uploads.is_empty() {
+            remote.outbox.clear();
+            remote.uploads.clear();
+            self.save_remote_session(&remote)?;
+        }
+        Ok(true)
+    }
     /// Drops a remote app launch's local prompt once `text`, its first turn,
     /// is journaled in the session's remote outbox.
     pub fn finish_remote_app_launch(&self, id: i64, text: &str) -> Result<(), String> {

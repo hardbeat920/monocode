@@ -214,6 +214,10 @@ pub struct Launch {
     pub completed: bool,
     #[serde(default)]
     pub dismissed: bool,
+    /// When `sessions.start` answered (ms). 0 for launches recorded before
+    /// this was kept; those are never timed out.
+    #[serde(default)]
+    pub launched_at: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -25,8 +25,15 @@ pub struct RemoteCatalog {
 }
 
 pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
+    remote_catalog_with(&*crate::remote::default_connections()?, cwd)
+}
+
+/// [`remote_catalog`] through the caller's own connections.
+pub fn remote_catalog_with(
+    connections: &crate::remote::Connections,
+    cwd: &str,
+) -> Result<RemoteCatalog, String> {
     let remote = crate::remote::parse_remote_path(cwd).ok_or("Invalid remote project")?;
-    let connections = crate::remote::default_connections()?;
     let machine = connections.machine_for_environment(&remote.environment_id)?;
     let descriptor = connections.request(&machine.id, "environment.describe", json!({"supportedProviders":Kind::ALL.into_iter().map(|kind|kind.id()).collect::<Vec<_>>()}))?;
     let providers: Vec<Kind> = descriptor["providers"]
@@ -80,8 +87,17 @@ pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
 }
 
 pub fn remote_models(cwd: &str, provider: &str) -> Result<Vec<Model>, String> {
+    remote_models_with(&*crate::remote::default_connections()?, cwd, provider)
+}
+
+/// [`remote_models`] through the caller's own connections.
+pub fn remote_models_with(
+    connections: &crate::remote::Connections,
+    cwd: &str,
+    provider: &str,
+) -> Result<Vec<Model>, String> {
     let kind = Kind::parse(provider).ok_or("Unknown remote provider")?;
-    let mut catalog = remote_catalog(cwd)?;
+    let mut catalog = remote_catalog_with(connections, cwd)?;
     if !catalog.providers.contains(&kind) {
         return Err(format!(
             "{} CLI is not installed on this machine",

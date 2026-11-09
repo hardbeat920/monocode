@@ -236,6 +236,199 @@ fn dispatch_outbox(
     }
     Ok(())
 }
+/// Records a new turn's commands in the session's durable outbox, creating
+/// its host session first if it has none. Nothing is sent yet.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The turn's identity, settings and transport, as the worker holds them"
+)]
+fn journal_turn(
+    client: &monocode_core::remote::Connections,
+    machine: &str,
+    store: &Database,
+    binding: &mut RemoteSession,
+    summary: &Session,
+    settings: &mut Settings,
+    prompt: &str,
+    action: &Value,
+) -> Result<(), String> {
+    if !binding.outbox.is_empty() {
+        return Err(
+            "A remote command needs confirmation. Choose Retry before sending another message."
+                .into(),
+        );
+    }
+    if settings.operator || settings.orchestrator {
+        return Err("Operator and orchestration are not available on remote projects".into());
+    }
+    if settings
+        .model
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        let models =
+            monocode_core::catalog::remote_models_with(client, &summary.cwd, &summary.provider)?;
+        if let Some(model) = models
+            .iter()
+            .find(|model| model.default)
+            .or_else(|| models.first())
+        {
+            settings.model = Some(model.id.clone());
+            if settings.effort.is_none() {
+                settings.effort = model.default_effort.clone();
+            }
+            for control in &model.controls {
+                settings
+                    .model_settings
+                    .entry(control.id.clone())
+                    .or_insert_with(|| control.current.clone());
+            }
+        }
+    }
+    if binding.session_id.is_none() {
+        let mut create = command("create", None);
+        create["projectId"] = json!(binding.project.project_id);
+        create["harness"] = json!(summary.provider);
+        create["model"] = json!(host_model(&summary.provider, settings.model.as_deref())?);
+        create["modelSettings"] = json!(model_settings(&summary.provider, settings));
+        create["runtimeMode"] = json!(settings.access.id());
+        if let Some(path) = &settings.worktree_cwd {
+            let remote =
+                monocode_core::remote::parse_remote_path(path).ok_or("Invalid remote worktree")?;
+            if remote.environment_id != binding.project.environment_id {
+                return Err("Worktree belongs to another machine".into());
+            }
+            create["worktreeCwd"] = json!(remote.host_path);
+        }
+        binding.outbox.push(create);
+    } else {
+        let mut configure = command("configure", binding.session_id.as_deref());
+        configure["model"] = json!(host_model(&summary.provider, settings.model.as_deref())?);
+        configure["modelSettings"] = json!(model_settings(&summary.provider, settings));
+        configure["runtimeMode"] = json!(settings.access.id());
+        binding.outbox.push(configure);
+    }
+    let operation = action["type"].as_str().unwrap_or("send");
+    let operation = if prompt.trim() == "/compact" {
+        "compact"
+    } else {
+        operation
+    };
+    let mut send = command(operation, binding.session_id.as_deref());
+    if matches!(operation, "send" | "draft") {
+        send["text"] = json!(prompt);
+        let (references, uploads) = prepare_for_session(
+            client,
+            machine,
+            &binding.project.environment_id,
+            &settings.attachments,
+            send["commandId"]
+                .as_str()
+                .ok_or("Remote command identity is missing")?,
+        )?;
+        send["attachments"] = json!(references);
+        binding.uploads.extend(uploads);
+        if settings.plan {
+            send["intent"] = json!("plan");
+        }
+        for key in ["draftBlockId", "planBlockId", "intent"] {
+            if let Some(value) = action.get(key) {
+                send[key] = value.clone();
+            }
+        }
+    } else if operation == "removeDraft" {
+        send["draftBlockId"] = action["draftBlockId"].clone();
+    }
+    binding.outbox.push(send);
+    binding.rejected = None;
+    binding.summary.has_messages = true;
+    binding.summary.updated_at = monocode_core::time::now_ms();
+    journal(store, binding)?;
+    if binding.session_id.is_none() {
+        // An app launch's local prompt was its only record until now.
+        // If this fails, the next load drops it, as the outbox has it.
+        let _ = locked(store).and_then(|store| store.finish_remote_app_launch(summary.id, prompt));
+    }
+    offers_provider(client, machine, &summary.provider)
+}
+
+/// How often a launch's first turn is offered to its machine before the
+/// launch gives up. The host keeps one receipt per command ID, so offering the
+/// same journaled commands again cannot run the turn twice.
+const LAUNCH_ATTEMPTS: usize = 3;
+
+/// Sends an app launch's first turn to its machine without any conversation
+/// view: a Mono's children are hidden, and nothing may ever open them.
+///
+/// Journals the commands before any I/O and drops the local prompt, so a
+/// failure here leaves them in the outbox rather than losing them. A launch
+/// journaled earlier whose host session was never confirmed is offered again:
+/// its commands keep their IDs, so the host answers a repeat from its receipt.
+/// Returns `Ok(false)` when there is nothing to send.
+pub(crate) fn send_app_launch(
+    client: &monocode_core::remote::Connections,
+    store: &Database,
+    id: i64,
+) -> Result<bool, String> {
+    let operation = operation_lock(store, id);
+    let _guard = operation
+        .lock()
+        .map_err(|_| "Remote session is unavailable")?;
+    let (mut binding, mut settings, pending) = {
+        let db = locked(store)?;
+        (
+            db.remote_session(id)?
+                .ok_or("Remote session no longer exists")?,
+            db.agent_settings(id)?.unwrap_or_default(),
+            db.pending_remote_app_launch(id)?,
+        )
+    };
+    let Some((prompt, send)) = pending else {
+        if binding.session_id.is_some() || binding.outbox.is_empty() || binding.rejected.is_some() {
+            return Ok(false);
+        }
+        let machine = binding.machine(client)?;
+        return offer_outbox(client, &machine.id, store, &mut binding).map(|()| true);
+    };
+    let machine = binding.machine(client)?;
+    let summary = binding.summary.clone();
+    let action = json!({"type": if send { "send" } else { "draft" }});
+    journal_turn(
+        client,
+        &machine.id,
+        store,
+        &mut binding,
+        &summary,
+        &mut settings,
+        &prompt,
+        &action,
+    )?;
+    offer_outbox(client, &machine.id, store, &mut binding).map(|()| true)
+}
+
+/// Sends a launch's journaled commands, a few times if the result is unknown.
+fn offer_outbox(
+    client: &monocode_core::remote::Connections,
+    machine: &str,
+    store: &Database,
+    binding: &mut RemoteSession,
+) -> Result<(), String> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let sent = upload_pending(client, machine, store, binding)
+            .and_then(|()| dispatch_outbox(client, machine, store, binding));
+        match sent {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt < LAUNCH_ATTEMPTS && !error.starts_with("Host rejected request:") =>
+            {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 const ATTACHMENT_CHUNK_BYTES: usize = 512 * 1024;
 
@@ -562,105 +755,16 @@ pub(crate) fn run_with_client(
         }
         let machine = binding.machine(&client)?;
         if !attaching && !retrying {
-            if !binding.outbox.is_empty() {
-                return Err("A remote command needs confirmation. Choose Retry before sending another message.".into());
-            }
-            if settings.operator || settings.orchestrator {
-                return Err(
-                    "Operator and orchestration are not available on remote projects".into(),
-                );
-            }
-            if settings
-                .model
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                let models =
-                    monocode_core::catalog::remote_models(&summary.cwd, &summary.provider)?;
-                if let Some(model) = models
-                    .iter()
-                    .find(|model| model.default)
-                    .or_else(|| models.first())
-                {
-                    settings.model = Some(model.id.clone());
-                    if settings.effort.is_none() {
-                        settings.effort = model.default_effort.clone();
-                    }
-                    for control in &model.controls {
-                        settings
-                            .model_settings
-                            .entry(control.id.clone())
-                            .or_insert_with(|| control.current.clone());
-                    }
-                }
-            }
-            if binding.session_id.is_none() {
-                let mut create = command("create", None);
-                create["projectId"] = json!(binding.project.project_id);
-                create["harness"] = json!(summary.provider);
-                create["model"] = json!(host_model(&summary.provider, settings.model.as_deref())?);
-                create["modelSettings"] = json!(model_settings(&summary.provider, &settings));
-                create["runtimeMode"] = json!(settings.access.id());
-                if let Some(path) = &settings.worktree_cwd {
-                    let remote = monocode_core::remote::parse_remote_path(path)
-                        .ok_or("Invalid remote worktree")?;
-                    if remote.environment_id != binding.project.environment_id {
-                        return Err("Worktree belongs to another machine".into());
-                    }
-                    create["worktreeCwd"] = json!(remote.host_path);
-                }
-                binding.outbox.push(create);
-            } else {
-                let mut configure = command("configure", binding.session_id.as_deref());
-                configure["model"] =
-                    json!(host_model(&summary.provider, settings.model.as_deref())?);
-                configure["modelSettings"] = json!(model_settings(&summary.provider, &settings));
-                configure["runtimeMode"] = json!(settings.access.id());
-                binding.outbox.push(configure);
-            }
-            let operation = action["type"].as_str().unwrap_or("send");
-            let operation = if prompt.trim() == "/compact" {
-                "compact"
-            } else {
-                operation
-            };
-            let mut send = command(operation, binding.session_id.as_deref());
-            if matches!(operation, "send" | "draft") {
-                send["text"] = json!(prompt);
-                let (references, uploads) = prepare_for_session(
-                    &client,
-                    &machine.id,
-                    &binding.project.environment_id,
-                    &settings.attachments,
-                    send["commandId"]
-                        .as_str()
-                        .ok_or("Remote command identity is missing")?,
-                )?;
-                send["attachments"] = json!(references);
-                binding.uploads.extend(uploads);
-                if settings.plan {
-                    send["intent"] = json!("plan");
-                }
-                for key in ["draftBlockId", "planBlockId", "intent"] {
-                    if let Some(value) = action.get(key) {
-                        send[key] = value.clone();
-                    }
-                }
-            } else if operation == "removeDraft" {
-                send["draftBlockId"] = action["draftBlockId"].clone();
-            }
-            binding.outbox.push(send);
-            binding.rejected = None;
-            binding.summary.has_messages = true;
-            binding.summary.updated_at = monocode_core::time::now_ms();
-            journal(&store, &binding)?;
-            if binding.session_id.is_none() {
-                // An app launch's local prompt was its only record until now.
-                // If this fails, the next load drops it, as the outbox has it.
-                let _ = locked(&store)
-                    .and_then(|store| store.finish_remote_app_launch(summary.id, &prompt));
-            }
-            offers_provider(&client, &machine.id, &summary.provider)?;
+            journal_turn(
+                &client,
+                &machine.id,
+                &store,
+                &mut binding,
+                &summary,
+                &mut settings,
+                &prompt,
+                &action,
+            )?;
         }
         if !attaching {
             upload_pending(&client, &machine.id, &store, &mut binding)?;

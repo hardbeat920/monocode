@@ -1,5 +1,6 @@
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
+use monocode_core::mono::Launch;
 use monocode_core::store::Store;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
@@ -2224,4 +2225,218 @@ fn a_hidden_remote_launch_left_unsent_is_sent_when_the_window_starts(cx: &mut Te
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(host.commands.lock().unwrap().len(), 2);
+}
+
+/// `s`'s Mono's record of its launch of `child`.
+fn launch_of(s: &Setup, child: i64, cx: &mut TestAppContext) -> Launch {
+    cx.update(|cx| {
+        s.manager
+            .read(cx)
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .launches
+            .iter()
+            .find(|l| l.session_id == child)
+            .unwrap()
+            .clone()
+    })
+}
+
+/// A remote project for `s`'s Mono on a fresh environment.
+fn remote_project(s: &Setup, cx: &mut TestAppContext) -> (String, String) {
+    let environment = format!("mono-launch-{}", mono::new_id());
+    let project = locked(&s.store)
+        .unwrap()
+        .remember_remote_project(
+            &environment,
+            &json!({"id": "project", "cwd": "/home/me/project", "name": "project"}),
+        )
+        .unwrap()
+        .key;
+    s.manager.update(cx, |m, _| {
+        m.roster.get_mut(&s.id).unwrap().projects = vec![project.clone()];
+    });
+    (environment, project)
+}
+
+/// Field report, 8 Nov: with the host up, `sessions.start` answered
+/// `accepted: true` and nothing reached the host, because only a conversation
+/// view sent the prompt. The answer here comes from the background work,
+/// before any view for the child exists, and already reports the host's
+/// receipts. The process-wide connections know no machine, as when another
+/// window's are the default, so the send must use the Mono's window's own.
+#[gpui::test]
+fn a_mono_remote_launch_reaches_its_machine_without_any_view(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let (environment, project) = remote_project(&s, cx);
+    let host = DescribingHost::new(&environment);
+    let connections = s
+        .window
+        .read_with(cx, |shell, _| shell.remote_connections())
+        .unwrap();
+    connections
+        .connect(String::new(), host.url.clone(), "a".repeat(43))
+        .unwrap();
+    let elsewhere = std::env::temp_dir().join(format!("no-machines-{environment}"));
+    monocode_core::remote::set_default_connections(Arc::new(
+        monocode_core::remote::Connections::new(&elsewhere),
+    ));
+    let started = call(
+        &s,
+        "field",
+        "sessions.start",
+        json!({"project": project, "harness": "codex", "prompt": "Run hostname", "notifyOnComplete": true}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    monocode_core::remote::set_default_connections(connections.clone());
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    assert_eq!(started["accepted"], true);
+    assert_eq!(started["started"], true, "{started}");
+    let commands = host.commands.lock().unwrap().clone();
+    let kinds: Vec<_> = commands.iter().map(|c| c["type"].clone()).collect();
+    assert_eq!(kinds, [json!("create"), json!("send")], "{commands:?}");
+    assert_eq!(commands[1]["text"], "Run hostname");
+    let child = started["sessionId"].as_i64().unwrap();
+    let store = locked(&s.store).unwrap();
+    let remote = store.remote_session(child).unwrap().unwrap();
+    assert_eq!(remote.session_id.as_deref(), Some("host-session"));
+    assert!(remote.outbox.is_empty());
+    assert!(store.follow_ups(child).unwrap().draft.is_none());
+}
+
+/// A launch its machine never confirms is offered again while the machine is
+/// away, sent once it answers, and otherwise abandoned after the deadline
+/// with a message to the Mono instead of silence.
+#[gpui::test]
+fn an_unconfirmed_remote_launch_is_offered_again_then_reported_if_it_never_starts(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let (environment, project) = remote_project(&s, cx);
+    // As `sessions.start` leaves a launch whose machine stopped answering.
+    let launch = |s: &Setup, request: &str, age_minutes: u64, cx: &mut TestAppContext| {
+        let child = {
+            let store = locked(&s.store).unwrap();
+            let child = store.create("codex", &project).unwrap().id;
+            store
+                .configure_agent(
+                    child,
+                    "codex",
+                    &monocode_core::agent::Settings {
+                        model: Some("gpt-test".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            store
+                .prepare_app_prompt(child, request, "Run hostname", false)
+                .unwrap();
+            child
+        };
+        s.manager.update(cx, |m, _| {
+            m.roster.get_mut(&s.id).unwrap().launches.push(Launch {
+                session_id: child,
+                cwd: project.clone(),
+                title: format!("Launch {request}"),
+                harness: "codex".into(),
+                model: None,
+                origin_turn: (s.session as u64) << 32,
+                notify_on_complete: true,
+                completed: false,
+                dismissed: false,
+                launched_at: monocode_core::time::now_ms() - age_minutes * 60_000,
+            });
+        });
+        child
+    };
+    let watch = |s: &Setup, cx: &mut TestAppContext| {
+        s.manager.update(cx, |m, cx| {
+            m.launch_watched = None;
+            m.watch_remote_launches(cx);
+        });
+        for _ in 0..2000 {
+            cx.run_until_parked();
+            if !cx.update(|cx| s.manager.read(cx).launch_watching) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the launch watch did not finish");
+    };
+    // Hold the Mono's queue so its report stays readable here instead of
+    // starting a provider turn: dispatch stops at a failed message.
+    s.manager.update(cx, |m, _| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "held".into(),
+            text: "held".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("held".into()),
+            attachments: Vec::new(),
+        });
+    });
+    let recent = launch(&s, "recent", 0, cx);
+    let stale = launch(&s, "stale", LAUNCH_START_MINUTES + 1, cx);
+    // The machine is away: the recent launch waits, the stale one ends.
+    watch(&s, cx);
+    assert!(!launch_of(&s, recent, cx).completed);
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .pending_remote_app_launch(recent)
+            .unwrap()
+            .is_some(),
+        "an unconfirmed launch keeps its prompt"
+    );
+    assert!(launch_of(&s, stale, cx).completed);
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .pending_remote_app_launches()
+            .unwrap()
+            == vec![recent]
+    );
+    let heard = cx.update(|cx| {
+        let manager = s.manager.read(cx);
+        manager
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .map(|m| m.text.clone())
+            .chain(manager.running.values().flat_map(|r| r.mailbox.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        heard
+            .iter()
+            .any(|text| text.starts_with("[Delegated session did not start]")
+                && text.contains(&format!("Session {stale}"))
+                && text.contains(&format!("within {LAUNCH_START_MINUTES} minutes"))),
+        "{heard:?}"
+    );
+    assert!(
+        !heard
+            .iter()
+            .any(|text| text.contains(&format!("Session {recent}")))
+    );
+    // The machine answers: the next watch sends the waiting launch, once.
+    let host = DescribingHost::new(&environment);
+    s.window
+        .read_with(cx, |shell, _| shell.remote_connections())
+        .unwrap()
+        .connect(String::new(), host.url.clone(), "a".repeat(43))
+        .unwrap();
+    watch(&s, cx);
+    let commands = host.commands.lock().unwrap().clone();
+    let kinds: Vec<_> = commands.iter().map(|c| c["type"].clone()).collect();
+    assert_eq!(kinds, [json!("create"), json!("send")], "{commands:?}");
+    watch(&s, cx);
+    assert_eq!(host.commands.lock().unwrap().len(), 2, "sent again");
+    assert!(!launch_of(&s, recent, cx).completed);
 }

@@ -73,6 +73,10 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
+/// How long a remote launch may go unconfirmed by its machine before it is
+/// abandoned and its Mono told.
+pub(crate) const LAUNCH_START_MINUTES: u64 = 5;
+
 pub(crate) struct Monos {
     #[cfg(all(target_os = "macos", not(test)))]
     status: Option<status::Status>,
@@ -138,6 +142,11 @@ pub(crate) struct Monos {
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,
     completion_work: HashSet<(String, u64)>,
+    /// Remote launch watch: whether a pass is running, when the last began,
+    /// and each unconfirmed launch's latest error.
+    launch_watching: bool,
+    launch_watched: Option<std::time::Instant>,
+    launch_errors: HashMap<i64, String>,
     /// The open background dialog, centred in the window it opened in.
     background: Option<(
         Entity<crate::project_settings::BackgroundDialog>,
@@ -371,6 +380,9 @@ impl Monos {
             running: HashMap::new(),
             active_run: None,
             completion_work: HashSet::new(),
+            launch_watching: false,
+            launch_watched: None,
+            launch_errors: HashMap::new(),
             background: None,
             backgrounds: HashMap::new(),
             drag: None,

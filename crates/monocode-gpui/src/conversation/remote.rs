@@ -32,6 +32,17 @@ impl Conversation {
             cx.notify();
         }
     }
+    /// Reach this conversation's machine through its window's connections,
+    /// as that window's launch check and launch send do, rather than the
+    /// process-wide default, which belongs to whichever window opened last.
+    pub(crate) fn use_remote_connections(
+        &mut self,
+        client: Arc<monocode_core::remote::Connections>,
+    ) {
+        if self.is_remote() {
+            self.remote_state.client = Some(client);
+        }
+    }
     pub(super) fn load_remote(&mut self, cx: &mut Context<Self>) {
         if self.remote_state.clock.is_none() && !cfg!(test) {
             self.remote_state.clock = Some(cx.spawn(async move |this, cx| {

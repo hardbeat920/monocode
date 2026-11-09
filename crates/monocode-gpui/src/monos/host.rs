@@ -178,6 +178,7 @@ impl Monos {
                                     ),
                                     completed: false,
                                     dismissed: false,
+                                    launched_at: monocode_core::time::now_ms(),
                                 });
                             }
                             let _ = this.owner.update(cx, |owner, cx| {
@@ -474,9 +475,52 @@ impl Monos {
                                 },
                             );
                         }
+                        let mut value =
+                            json!({"sessionId":summary.id,"accepted":true,"project":project});
+                        if project.starts_with("remote://") {
+                            // Send the first turn now, from here: a Mono's
+                            // children are hidden, and no view may ever load.
+                            match crate::runtime::remote::send_app_launch(
+                                &remote, &store, summary.id,
+                            ) {
+                                Ok(_) => value["started"] = json!(true),
+                                Err(error) => {
+                                    let journaled = locked(&store)
+                                        .and_then(|db| db.remote_session(summary.id))
+                                        .ok()
+                                        .flatten()
+                                        .is_none_or(|r| {
+                                            r.session_id.is_some() || !r.outbox.is_empty()
+                                        });
+                                    if !journaled {
+                                        // Nothing reached the host, as when
+                                        // the start check fails.
+                                        return Err(
+                                            match locked(&store)
+                                                .and_then(|mut db| db.delete(summary.id))
+                                            {
+                                                Ok(()) => Failure::uncommitted(format!(
+                                                    "Cannot start a session on its machine: {error}"
+                                                )),
+                                                Err(cleanup) => Failure::committed(format!(
+                                                    "Cannot start a session on its machine: {error} Session {} was left behind and could not be removed: {cleanup}",
+                                                    summary.id
+                                                )),
+                                            },
+                                        );
+                                    }
+                                    // Journaled, so the host may have it.
+                                    value["started"] = json!(false);
+                                    value["status"] = json!(format!(
+                                        "The machine has not confirmed the first turn yet ({error}). It is offered again for {} minutes; if it never starts, you are told.",
+                                        crate::monos::LAUNCH_START_MINUTES
+                                    ));
+                                }
+                            }
+                        }
                         summary.has_messages = true;
                         Ok((
-                            json!({"sessionId":summary.id,"accepted":true,"project":project}),
+                            value,
                             Effect::Start(summary, Box::new(settings), prompt, draft, placement),
                         ))
                     },
@@ -586,6 +630,7 @@ impl Monos {
                                             notify_on_complete: true,
                                             completed: false,
                                             dismissed: false,
+                                            launched_at: monocode_core::time::now_ms(),
                                         });
                                     }
                                 }
@@ -892,7 +937,140 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             })
             .detach();
     }
+    /// Offers remote launches their machine has not confirmed again, and
+    /// abandons one after `LAUNCH_START_MINUTES` (or once its machine refused
+    /// it), telling its Mono, so a launch never ends in silence. A started
+    /// launch's conversation is loaded so its completion can be seen.
+    pub(super) fn watch_remote_launches(&mut self, cx: &mut Context<Self>) {
+        if self.launch_watching
+            || self
+                .launch_watched
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(15))
+        {
+            return;
+        }
+        let candidates: Vec<(i64, u64)> = self
+            .roster
+            .monos
+            .iter()
+            .flat_map(|mono| &mono.launches)
+            .filter(|l| !l.completed && !l.dismissed && l.session_id < 0 && l.launched_at > 0)
+            .map(|l| (l.session_id, l.launched_at))
+            .collect();
+        let Some(remote) = self
+            .owner
+            .upgrade()
+            .map(|owner| owner.read(cx).remote_connections())
+        else {
+            return;
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        self.launch_watching = true;
+        self.launch_watched = Some(std::time::Instant::now());
+        let store = self.store.clone();
+        let errors: HashMap<i64, String> = self.launch_errors.clone();
+        let work = cx.background_executor().spawn(async move {
+            let deadline = LAUNCH_START_MINUTES * 60_000;
+            let (mut started, mut failed, mut latest) = (Vec::new(), Vec::new(), Vec::new());
+            for (id, launched_at) in candidates {
+                let Some(remote_session) = locked(&store)
+                    .and_then(|db| db.remote_session(id))
+                    .ok()
+                    .flatten()
+                else {
+                    continue;
+                };
+                if remote_session.session_id.is_some() {
+                    continue;
+                }
+                if let Some(rejected) = &remote_session.rejected {
+                    let error = rejected["error"].as_str().unwrap_or("Its machine refused it");
+                    let _ = locked(&store).and_then(|db| db.abandon_remote_app_launch(id));
+                    failed.push((id, format!("its machine refused it: {error}")));
+                    continue;
+                }
+                if now_ms().saturating_sub(launched_at) >= deadline {
+                    if locked(&store)
+                        .and_then(|db| db.abandon_remote_app_launch(id))
+                        .unwrap_or(false)
+                    {
+                        let last = errors
+                            .get(&id)
+                            .map(|error| format!(" Last error: {error}"))
+                            .unwrap_or_default();
+                        failed.push((
+                            id,
+                            format!(
+                                "its machine did not confirm it within {LAUNCH_START_MINUTES} minutes.{last}"
+                            ),
+                        ));
+                    }
+                    continue;
+                }
+                match crate::runtime::remote::send_app_launch(&remote, &store, id) {
+                    Ok(true) => started.push(id),
+                    Ok(false) => {}
+                    Err(error) => latest.push((id, error)),
+                }
+            }
+            (started, failed, latest)
+        });
+        cx.spawn(async move |this, cx| {
+            let (started, failed, latest) = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.launch_watching = false;
+                this.launch_errors.extend(latest);
+                for id in started {
+                    this.launch_errors.remove(&id);
+                    if let Some(owner) = this.owner.upgrade() {
+                        owner.update(cx, |owner, cx| owner.mono_load_session(id, cx));
+                    }
+                }
+                for (id, reason) in failed {
+                    this.launch_errors.remove(&id);
+                    this.report_unstarted(id, &reason, cx);
+                }
+            });
+        })
+        .detach();
+    }
+    /// Ends a launch that never started, telling its Mono if it asked to hear
+    /// when the launch finished.
+    fn report_unstarted(&mut self, session: i64, reason: &str, cx: &mut Context<Self>) {
+        let mut report = None;
+        for mono in &mut self.roster.monos {
+            for launch in &mut mono.launches {
+                if launch.session_id == session && !launch.completed {
+                    launch.completed = true;
+                    if launch.notify_on_complete && !launch.dismissed {
+                        report = Some((
+                            mono.id.clone(),
+                            (launch.origin_turn >> 32) as i64,
+                            format!(
+                                "[Delegated session did not start]\nSession {session}: {} never started: {reason} Nothing ran there, and it will not be sent again. Start it again once its machine answers.",
+                                launch.title
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some((id, source, message)) = report {
+            if let Some(run) = self.running.get_mut(&source) {
+                run.mailbox.push(message);
+                self.habit_changed(source, cx);
+            } else {
+                self.enqueue(&id, message, Vec::new(), true, cx);
+                self.ensure_chat(&id, cx);
+            }
+        }
+        self.save(cx);
+        self.changed(cx);
+    }
     pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
+        self.watch_remote_launches(cx);
         let views = self
             .owner
             .upgrade()

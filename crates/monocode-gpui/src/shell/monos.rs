@@ -51,37 +51,49 @@ impl Shell {
             .as_ref()
             .is_some_and(|m| m.read(cx).active.is_some())
     }
-    /// Loads the conversations of remote app launches the host does not have
-    /// yet, so each sends its prompt (`Conversation::resume_remote_app_launch`).
-    /// A Mono's children are hidden, so after a restart no window opens them.
+    /// Sends remote app launches the host does not have yet, such as a
+    /// hidden Mono child the app quit before sending, from the background
+    /// through this window's connections; no view has to load. Each one's
+    /// conversation is then loaded so its progress and completion are seen.
     pub(crate) fn resume_remote_launches(&mut self, cx: &mut Context<Self>) {
         let store = self.store.clone();
-        let pending = cx
-            .background_executor()
-            .spawn(async move { locked(&store)?.pending_remote_app_launches() });
+        let remote = self.remote.clone();
+        let sent = cx.background_executor().spawn(async move {
+            let ids = locked(&store)?.pending_remote_app_launches()?;
+            for &id in &ids {
+                // A failure stays in the outbox, or the prompt stays local;
+                // the Mono's launch watch offers it again.
+                let _ = crate::runtime::remote::send_app_launch(&remote, &store, id);
+            }
+            Ok::<_, String>(ids)
+        });
         cx.spawn(async move |this, cx| {
-            let Ok(ids) = pending.await else {
+            let Ok(ids) = sent.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
                 for id in ids {
-                    let view = this.ensure_session(id, cx).or_else(|| {
-                        let summary = locked(&this.store)
-                            .ok()?
-                            .sessions()
-                            .ok()?
-                            .into_iter()
-                            .find(|s| s.id == id)?;
-                        this.add_loaded(summary, cx);
-                        this.sessions.get(&id).cloned()
-                    });
-                    if let Some(view) = view {
-                        view.update(cx, |view, cx| view.load(cx));
-                    }
+                    this.mono_load_session(id, cx);
                 }
             });
         })
         .detach();
+    }
+    /// Materializes a (possibly hidden) conversation and loads it.
+    pub(crate) fn mono_load_session(&mut self, id: i64, cx: &mut Context<Self>) {
+        let view = self.ensure_session(id, cx).or_else(|| {
+            let summary = locked(&self.store)
+                .ok()?
+                .sessions()
+                .ok()?
+                .into_iter()
+                .find(|s| s.id == id)?;
+            self.add_loaded(summary, cx);
+            self.sessions.get(&id).cloned()
+        });
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.load(cx));
+        }
     }
     /// This window's machine connections, for a Mono's remote launch check.
     pub(crate) fn remote_connections(&self) -> Arc<monocode_core::remote::Connections> {
