@@ -60,6 +60,29 @@ function setup(harness: "codex" | "claude" = "codex") {
   };
 }
 
+describe("command log", () => {
+  it("logs each command's type and ID, never its text, so the journal shows what arrived", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    cleanups.push(() => log.mockRestore());
+    const { engine, turns, id } = setup();
+    engine.command({ type: "send", commandId: "launch-send", sessionId: id, text: "Secret prompt" });
+    engine.command({ type: "send", commandId: "launch-send", sessionId: id, text: "Secret prompt" });
+    expect(() =>
+      engine.command({ type: "send", commandId: "bad\nline", sessionId: "missing", text: "x" }),
+    ).toThrow();
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    expect(lines).toContainEqual(expect.stringMatching(/^Command create create: session /));
+    expect(lines).toContainEqual(
+      expect.stringMatching(new RegExp(`^Command send launch-send: session ${id}, revision \\d+$`)),
+    );
+    expect(lines).toContainEqual(expect.stringMatching(/^Command send launch-send replayed: /));
+    expect(lines).toContainEqual(expect.stringMatching(/^Command send bad line refused: /));
+    expect(lines.join("\n")).not.toContain("Secret prompt");
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].finish();
+  });
+});
+
 describe("headless session ownership", () => {
   it.each(["send", "compact"] as const)("clears the old draft when a normal %s starts", async (type) => {
     const { engine, store, turns, provider, id } = setup();

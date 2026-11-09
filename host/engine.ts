@@ -74,6 +74,11 @@ function modelSettings(value: unknown): Record<string, string> {
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
+/** One line of client-supplied text, bounded, safe to write to a log. */
+function logField(value: unknown, max = 80): string {
+  return String(value ?? "?").replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
+}
+
 export function parseCommand(input: unknown): HostCommand {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Invalid command");
@@ -411,14 +416,37 @@ export class HostEngine {
     this.retryTimers.set(id, timer);
   }
 
+  /** Applies a desktop command, logging one line per command (never its
+   * text) so the journal shows what reached the host. */
   command(raw: unknown): CommandReceipt {
+    const fields =
+      raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const label = `${logField(fields.type)} ${logField(fields.commandId)}`;
+    try {
+      const { receipt, replayed } = this.applyCommand(raw);
+      console.log(
+        `Command ${label}${replayed ? " replayed" : ""}: session ${receipt.sessionId}, revision ${receipt.revision}`,
+      );
+      return receipt;
+    } catch (error) {
+      console.log(
+        `Command ${label} refused: ${logField(error instanceof Error ? error.message : error, 200)}`,
+      );
+      throw error;
+    }
+  }
+
+  private applyCommand(raw: unknown): {
+    receipt: CommandReceipt;
+    replayed: boolean;
+  } {
     if (this.closing) throw new Error("Host is stopping");
     const command = parseCommand(raw);
     const signature = createHash("sha256")
       .update(JSON.stringify(command))
       .digest("hex");
     const previous = this.store.receipt(command.commandId, signature);
-    if (previous) return previous;
+    if (previous) return { receipt: previous, replayed: true };
     // Commands apply to the latest state, including batched stream output.
     if (command.type !== "create") this.flush(command.sessionId);
     let effect: ((saved: HostSession) => void) | undefined;
@@ -708,7 +736,7 @@ export class HostEngine {
     if (live) live.value = saved;
     // A receipt means durable host acceptance, not provider completion.
     effect?.(saved);
-    return receipt;
+    return { receipt, replayed: false };
   }
 
   private generateFirstTurnNames(
