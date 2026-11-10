@@ -35,6 +35,7 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
 }));
 
 import { Composer, ComposerAction } from "./Composer";
+import * as composerResize from "../model/composerResize";
 import {
   clearMcpSettingsCache,
   loadMcpSettings,
@@ -748,6 +749,24 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe(initialDraft);
     expect(textarea.selectionStart).toBe(initialDraft.length);
     expect(textarea.selectionEnd).toBe(initialDraft.length);
+  });
+
+  it("does not measure an echoed draft again, but still sizes a restored draft", async () => {
+    const resize = vi.spyOn(composerResize, "resizeComposer");
+    await renderComposer(undefined, vi.fn(), false, 0, "original");
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      textarea.value = "typed text";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(resize).toHaveBeenCalled();
+    resize.mockClear();
+    await renderComposer(undefined, vi.fn(), false, 0, "typed text");
+    expect(resize).not.toHaveBeenCalled();
+    await renderComposer(undefined, vi.fn(), false, 0, "restored text");
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(textarea.value).toBe("restored text");
+    resize.mockRestore();
   });
 
   it("offers /operator in the slash picker and submits it as a local command", async () => {

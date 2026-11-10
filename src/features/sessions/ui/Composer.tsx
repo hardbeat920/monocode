@@ -902,13 +902,17 @@ export function Composer({
   useEffect(() => {
     const el = ref.current;
     if (!el || !initialDraft) return;
-    if (el.value !== initialDraft) el.value = initialDraft;
+    const changed = el.value !== initialDraft;
+    const needsPosition = !positionedInitialDraft.current;
+    if (changed) el.value = initialDraft;
     if (!positionedInitialDraft.current) {
       const end = el.value.length;
       el.setSelectionRange(end, end);
       positionedInitialDraft.current = true;
     }
-    resizeComposer(el);
+    // The parent echoes typed drafts back during streaming. onInput already
+    // sized that value; only measure a restored or first-positioned draft.
+    if (changed || needsPosition) resizeComposer(el);
   }, [initialDraft]);
 
   // Measure once the browser has laid out the activated pane. A synchronous
