@@ -874,6 +874,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {Object.keys(session.extensionStatuses ?? {}).length > 0 && (
+            <div className="max-h-20 overflow-y-auto px-3 py-1 text-xs text-content/60">
+              {Object.entries(session.extensionStatuses ?? {}).map(([key, status]) => (
+                <div key={key}>{status}</div>
+              ))}
+            </div>
+          )}
           <div
             ref={transcriptScope}
             className={`relative min-h-0 flex-1${

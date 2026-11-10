@@ -66,6 +66,17 @@ describe("Pi live session", () => {
     );
   });
 
+  it("clears extension statuses before initialization and on stop", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "status-lifecycle", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: (event) => events.push(event),
+    });
+    expect(events[0]).toEqual({ type: "status.clear" });
+    await stopPiSession("status-lifecycle");
+    expect(events.at(-1)).toEqual({ type: "status.clear" });
+  });
+
   it("publishes the resolved Pi default model for provider usage", async () => {
     mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
       if (command.type === "get_state") return { data: {

@@ -146,6 +146,18 @@ function field() {
   )!;
 }
 
+it("displays and clears current extension statuses", () => {
+  const pane = props();
+  pane.session.extensionStatuses = { tps: "10 TPS" };
+  render(pane);
+  expect(container.textContent).toContain("10 TPS");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: { tps: "20 TPS" } } });
+  expect(container.textContent).toContain("20 TPS");
+  expect(container.textContent).not.toContain("10 TPS");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: {} } });
+  expect(container.textContent).not.toContain("20 TPS");
+});
+
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");
   const pane = props();

@@ -5,10 +5,6 @@ import {
 } from "../../../features/sessions/model/session";
 import { planTurnKey } from "../../../features/sessions/model/plan";
 import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
-import {
-  acknowledgeMonoMessage,
-  enqueueMonoMessage,
-} from "../../../features/monos/model/monoMessaging";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
@@ -676,158 +672,21 @@ describe("status blocks", () => {
     expect(session.blocks.some((block) => block.role === "system")).toBe(false);
   });
 
-  it("updates a keyed status in place for the rest of the turn", () => {
+  it("updates and clears keyed statuses across turns without adding history", () => {
     let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "⠋ caveman level: ULTRA",
-    });
-    const id = session.blocks[1]?.id;
-    session = applyHarnessEvent(session, {
-      type: "message.delta",
-      text: "Working.",
-    });
-    for (const frame of ["⠙", "⠹", "⠸"]) {
-      session = applyHarnessEvent(session, {
-        type: "status",
-        key: "caveman",
-        text: `${frame} caveman level: ULTRA`,
-      });
-    }
-    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
-      ["user", "go"],
-      ["system", "⠸ caveman level: ULTRA"],
-      ["assistant", "Working."],
-    ]);
-    expect(session.blocks[1]).toMatchObject({ id, statusKey: "caveman" });
-    expect(session.blocks[2]?.streaming).toBe(true);
-  });
-
-  it("removes a keyed status when its text is cleared", () => {
-    let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "caveman level: ULTRA",
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: " ",
-    });
-    expect(session.blocks.map((block) => block.role)).toEqual(["user"]);
-  });
-
-  it("keeps the same keyed status across pending and accepted Mono follow-ups", () => {
-    let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "Working",
-    });
-    const id = session.blocks[1].id;
-    session = enqueueMonoMessage(session, {
-      id: "follow-up",
-      text: "Check the fallback too",
-      attachments: [],
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "Still working",
-    });
-    expect(session.blocks.filter((block) => block.statusKey === "caveman"))
-      .toEqual([expect.objectContaining({ id, text: "Still working" })]);
-
-    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
-      mode: "follow-up",
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "Checking the fallback",
-    });
-    expect(session.blocks.filter((block) => block.statusKey === "caveman"))
-      .toEqual([expect.objectContaining({ id, text: "Checking the fallback" })]);
-
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "",
-    });
-    expect(session.blocks.some((block) => block.statusKey === "caveman"))
-      .toBe(false);
-  });
-
-  it("starts a new keyed status after a queued Mono message starts a new turn", () => {
-    let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "First turn",
-    });
-    session = enqueueMonoMessage(stopStreaming(session), {
-      id: "next-turn",
-      text: "again",
-      attachments: [],
-    });
-    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
-      mode: "new-turn",
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "Next turn",
-    });
-    expect(session.blocks.filter((block) => block.statusKey === "caveman")
-      .map((block) => block.text)).toEqual(["First turn", "Next turn"]);
-  });
-
-  it("keeps one row per status key", () => {
-    let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "caveman level: ULTRA",
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "ponytail",
-      text: "ponytail: FULL",
-    });
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "caveman level: LITE",
-    });
-    expect(
-      session.blocks
-        .filter((block) => block.role === "system")
-        .map((block) => block.text),
-    ).toEqual(["caveman level: LITE", "ponytail: FULL"]);
-  });
-
-  it("starts a new keyed status row in the next turn", () => {
-    let session = appendUser(newSession("pi", "/tmp"), "go");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "caveman level: ULTRA",
-    });
+    session = applyHarnessEvent(session, { type: "status", key: "tps", text: "10 TPS" });
+    session = applyHarnessEvent(session, { type: "status", key: "mode", text: "coding" });
     session = appendUser(session, "again");
-    session = applyHarnessEvent(session, {
-      type: "status",
-      key: "caveman",
-      text: "caveman level: LITE",
-    });
-    expect(session.blocks.map((block) => block.text)).toEqual([
-      "go",
-      "caveman level: ULTRA",
-      "again",
-      "caveman level: LITE",
-    ]);
+    session = applyHarnessEvent(session, { type: "status", key: "tps", text: "20 TPS" });
+    session = applyHarnessEvent(session, { type: "status", text: "Plugin ready" });
+    expect(session.extensionStatuses).toEqual({ tps: "20 TPS", mode: "coding" });
+    expect(session.blocks.map((block) => block.text)).toEqual(["go", "again", "Plugin ready"]);
+    session = applyHarnessEvent(session, { type: "status", key: "tps", text: "" });
+    expect(session.extensionStatuses).toEqual({ mode: "coding" });
+    session = applyHarnessEvent(session, { type: "session.ended" });
+    expect(session.extensionStatuses).toBeUndefined();
   });
+
 });
 
 describe("interjection blocks", () => {

@@ -711,6 +711,7 @@ describe("headless session ownership", () => {
           session: {
             ...value.session,
             busy: true,
+            extensionStatuses: { tps: "20 TPS" },
             providerSessionId: "retained",
             blocks: [
               {
@@ -728,6 +729,7 @@ describe("headless session ownership", () => {
     const recovered = new HostEngine(store, { codex: provider });
     expect(store.session(id).status).toBe("interrupted");
     expect(store.session(id).session.busy).toBe(false);
+    expect(store.session(id).session.extensionStatuses).toBeUndefined();
     expect(store.session(id).session.blocks[0].durationMs).toBe(2_000);
     expect(provider.send).not.toHaveBeenCalled();
     expect(provider.bind).toHaveBeenCalledWith(

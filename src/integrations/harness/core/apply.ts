@@ -58,6 +58,9 @@ export function applyHarnessEvent(
   event: HarnessEvent,
 ): Session {
   switch (event.type) {
+    case "session.ended":
+    case "status.clear":
+      return session.extensionStatuses ? { ...session, extensionStatuses: undefined } : session;
     case "message.delta":
       return patchStreaming(session, "assistant", event.text, true);
     case "message.completed":
@@ -745,38 +748,13 @@ function appendStatus(session: Session, text: string): Session {
   });
 }
 
-function upsertKeyedStatus(
-  session: Session,
-  key: string,
-  text: string,
-): Session {
+function upsertKeyedStatus(session: Session, key: string, text: string): Session {
   const trimmed = text.trim();
-  const turnStart = lastMatchingBlock(
-    session.blocks,
-    // Mono outbox bubbles and mid-turn follow-ups do not start a new turn.
-    (block) =>
-      block.role === "user" &&
-      (block.sentAt == null || block.startedAt != null) &&
-      !session.queuedMessages?.some((message) => message.blockId === block.id),
-  );
-  const index = lastMatchingBlock(
-    session.blocks,
-    (block, at) => at > turnStart && block.statusKey === key,
-  );
-  if (index < 0) {
-    if (!trimmed) return session;
-    return appendBlock(session, {
-      id: crypto.randomUUID(),
-      role: "system",
-      text: trimmed,
-      statusKey: key,
-    });
-  }
-  if (session.blocks[index].text === trimmed) return session;
-  const blocks = session.blocks.slice();
-  if (trimmed) blocks[index] = { ...blocks[index], text: trimmed };
-  else blocks.splice(index, 1);
-  return { ...session, blocks };
+  if ((Object.prototype.hasOwnProperty.call(session.extensionStatuses ?? {}, key) ? session.extensionStatuses![key] : "") === trimmed) return session;
+  const extensionStatuses = Object.assign(Object.create(null), session.extensionStatuses);
+  if (trimmed) extensionStatuses[key] = trimmed;
+  else delete extensionStatuses[key];
+  return { ...session, extensionStatuses };
 }
 
 function appendImage(

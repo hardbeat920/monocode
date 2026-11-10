@@ -267,7 +267,10 @@ export class HostEngine {
   ) {
     // Provider dispatch is not transactional with SQLite. Never replay a send
     // automatically after a crash; its external effects may already exist.
-    for (const value of store.sessions()) {
+    for (const stored of store.sessions()) {
+      const value = stored.session.extensionStatuses
+        ? { ...stored, session: { ...stored.session, extensionStatuses: undefined } }
+        : stored;
       if (value.status === "running") {
         this.save(
           this.settled(
@@ -278,6 +281,8 @@ export class HostEngine {
           ),
           { type: "interrupted" },
         );
+      } else if (value !== stored) {
+        this.save(value, { type: "session.extensionStatusesCleared" });
       }
       if (value.session.providerSessionId)
         this.provider(value.session.harness).bind(

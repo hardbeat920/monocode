@@ -348,9 +348,12 @@ function AgentTranscriptComponent({
   const isMonoChat = !!agentMascot;
   const blocks = useMemo(() => {
     // A Mono's reaction sits on the message it answers, not in a bubble.
-    const chatBlocks = isMonoChat
-      ? monoReactionBlocks(sourceBlocks)
+    const transcriptBlocks = sourceBlocks.some((block) => block.statusKey)
+      ? sourceBlocks.filter((block) => !block.statusKey)
       : sourceBlocks;
+    const chatBlocks = isMonoChat
+      ? monoReactionBlocks(transcriptBlocks)
+      : transcriptBlocks;
     if (!harness || !supportsHarnessLogin(harness)) return chatBlocks;
     const visibleBlocks = chatBlocks.filter(
       (block) =>
