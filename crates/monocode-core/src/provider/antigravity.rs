@@ -7,7 +7,10 @@ pub(super) fn is_cli(binary: &Path) -> bool {
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
             name.eq_ignore_ascii_case("agy")
-                || (cfg!(windows) && name.eq_ignore_ascii_case("agy.exe"))
+                || (cfg!(windows)
+                    && ["agy.exe", "agy.cmd", "agy.bat", "agy.com"]
+                        .iter()
+                        .any(|launcher| name.eq_ignore_ascii_case(launcher)))
         })
 }
 
@@ -106,11 +109,17 @@ mod tests {
             assert_eq!(launch_args(&cli), &["acp"]);
             assert_eq!(spawn_cwd(&cli, cwd), cwd);
         }
-        assert_eq!(is_cli(&Path::new("tools").join("AGY.EXE")), cfg!(windows));
-        let cli = Path::new("tools").join(if cfg!(windows) { "AGY.EXE" } else { "agy" });
+        for name in [
+            "agy.exe", "AGY.EXE", "agy.cmd", "AGY.CMD", "agy.bat", "AGY.BAT", "agy.com", "AGY.COM",
+        ] {
+            let cli = Path::new("tools").join(name);
+            assert_eq!(is_cli(&cli), cfg!(windows), "{name}");
+            if cfg!(windows) {
+                assert_eq!(launch_args(&cli), &["acp"], "{name}");
+                assert_eq!(spawn_cwd(&cli, cwd), cwd, "{name}");
+            }
+        }
         let server = Path::new("tools").join(Kind::Antigravity.binary_name());
-        assert_eq!(launch_args(&cli), &["acp"]);
-        assert_eq!(spawn_cwd(&cli, cwd), cwd);
         assert_eq!(spawn_cwd(&server, cwd), Path::new("tools"));
         assert_eq!(
             launch_args(&server),
