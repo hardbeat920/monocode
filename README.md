@@ -1,16 +1,15 @@
-<p align="center">
-  <img src="public/monocode.png" alt="MonoCode" width="88" />
-</p>
-
-<h1 align="center">MonoCode</h1>
+<h1 align="center">Monocode</h1>
 
 <p align="center">
   <strong>A GUI for your coding agents.</strong>
 </p>
 
 <p align="center">
-  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
+  <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
 </p>
+
+> [!NOTE]
+> **Try the new [Monocode Native preview](https://github.com/hardbeat920/monocode/releases)**, our experimental Rust + GPUI app for macOS, Linux and Windows. Read the [preview details](#monocode-native-preview) before installing.
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Devin. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
 
@@ -18,12 +17,12 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 
 Install and sign in to at least one supported agent first. See [provider setup](docs/providers.md) for instructions.
 
-| Platform | Download |
-| --- | --- |
-| macOS, Apple Silicon | [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg) |
-| macOS, Intel | [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg) |
-| Linux, x86_64 | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
-| Windows, x86_64 | [Installer](https://github.com/hardbeat920/monocode/releases/latest) |
+| Platform | Native | Tauri |
+| --- | --- | --- |
+| macOS, Apple Silicon | [MonocodeNative_aarch64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_aarch64.dmg) | [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg) |
+| macOS, Intel | [MonocodeNative_x64.dmg](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_x64.dmg) | [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg) |
+| Linux, x86_64 | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/tag/native-v0.16.0-preview.14) | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
+| Windows, x86_64 | [Installer](https://github.com/hardbeat920/monocode/releases/download/native-v0.16.0-preview.14/MonocodeNative_0.16.0-preview.14_x64-setup.exe) | [Installer](https://github.com/hardbeat920/monocode/releases/latest) |
 
 On macOS, open the DMG and drag MonoCode to Applications. On Windows, run the installer. See [Linux setup](docs/install.md) for dependencies and package instructions.
 
@@ -51,12 +50,40 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 
 You’ll need Node.js 20+ and a stable Rust toolchain. See [build setup](docs/building.md) for platform dependencies and packaging.
 
+The mobile app is a separate Expo project in [`mobile/`](mobile/README.md). Run it with `cd mobile && npm install && npm start`.
+
 ```bash
 npm install
 npm run tauri dev
 ```
 
 Small, focused contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## Monocode Native preview
+
+The Rust + GPUI app is an experimental preview. React/Tauri remains the
+production app.
+
+Download a packaged preview for macOS, Linux or Windows from the
+[releases page](https://github.com/hardbeat920/monocode/releases). See
+[known limitations](docs/native/parity.md) before testing.
+
+You can install it alongside MonoCode, but **the preview uses your existing
+MonoCode database and saves changes there**. Back up your data with the app
+closed before testing, and avoid editing the same conversations in both apps
+at once.
+
+To try GPUI from this checkout with Node.js 22+, Rust and Xcode on macOS:
+
+```sh
+npm run native:dev     # launch with a separate development database
+npm run native:build   # create an optimized app using installed MonoCode data
+```
+
+Type `r` then Enter in the development terminal to rebuild and restart; there is
+no hot reload. The release app saves changes to your installed MonoCode data.
+See the [native guide](docs/native/README.md) for prerequisites, build output,
+checks and preview limitations.
 
 ## Contributors
 

@@ -62,8 +62,10 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "connections",
     group: "app",
     label: "Connections",
-    description: "Connect your machines and run agents remotely through SSH.",
-    keywords: "ssh remote host machine server environment always on",
+    description:
+      "Run agents on your other machines, and pair your phone with this desktop.",
+    keywords:
+      "ssh remote host machine server environment always on mobile phone iphone qr pair router",
   },
   {
     id: "appearance",
@@ -173,6 +175,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "mobile-access",
+    section: "connections",
+    label: "Your phones",
+    keywords: "mobile phone iphone qr pair code router device",
+  },
   {
     id: "remote-machines",
     section: "connections",
@@ -343,9 +351,9 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   {
     id: "inset-layout",
     section: "appearance",
-    label: "New layout",
+    label: "Layout",
     keywords:
-      "classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
+      "classic focused new preview sidebar navigation tabs inset workspace card rounded floating linear frame",
   },
   {
     id: "interface-scale",

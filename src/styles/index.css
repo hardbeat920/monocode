@@ -1909,6 +1909,15 @@ html.layout-inset [data-composer-box] {
   backdrop-filter: blur(var(--composer-blur));
 }
 
+/* WebView2 on Windows ignores the rounded clip-path on a backdrop-filter, so
+   the bleed shows as square corners past the border. Clip to the box with
+   border-radius instead, which it does honor, and give up the edge bleed. */
+html:not(.is-mac) [data-composer-box]::before {
+  inset: 0;
+  clip-path: none;
+  border-radius: inherit;
+}
+
 /* The queue ledge tucks behind the inset composer: inset by its corner
    radius, a quieter edge than the box itself, and the same frost. */
 html.layout-inset [data-message-queue] {

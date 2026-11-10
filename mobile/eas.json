@@ -1,0 +1,40 @@
+{
+  "cli": {
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "development",
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
+    },
+    "development-simulator": {
+      "extends": "development",
+      "ios": {
+        "simulator": true
+      },
+      "channel": "development-simulator"
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "node": "22.23.3"
+    },
+    "production": {
+      "distribution": "store",
+      "channel": "beta",
+      "environment": "production",
+      "node": "22.23.3",
+      "autoIncrement": true,
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

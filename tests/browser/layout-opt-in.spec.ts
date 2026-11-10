@@ -10,6 +10,83 @@ async function openAppearance(page: Page) {
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
 }
 
+test("keeps projects and Settings reachable when opting in without projects", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/tests/browser/workspace-performance.html?empty");
+  const notice = page.getByRole("status", { name: "Try the Focused layout" });
+  await notice.getByRole("button", { name: "Try it", exact: true }).click();
+
+  const sidebar = page.locator(".inset-sidebar");
+  const toggle = page.getByRole("button", { name: /^Toggle Sidebar/ });
+  await expect(sidebar).toBeVisible();
+  await expect(
+    sidebar.getByText("No project folder", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: "Open project", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("new-layout-no-projects.png"),
+  });
+
+  await toggle.click();
+  await page.mouse.move(700, 400);
+  await expect(sidebar).toHaveCount(0);
+  await toggle.click();
+  await expect(sidebar).toBeVisible();
+
+  await page.reload();
+  await expect(sidebar).toBeVisible();
+  await sidebar.getByRole("button", { name: /^Settings/ }).click();
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  const layout = layoutOption(page, "Focused");
+  await expect(layout).toBeChecked();
+  await layoutOption(page, "Classic").click();
+  await expect(page.locator(".inset-shell")).toHaveCount(0);
+  await expect(layout).not.toBeChecked();
+});
+
+test("opens the first project from a collapsed projectless sidebar", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("monocode.insetLayout", "1");
+    localStorage.setItem("monocode.sessionSidebarOpen", "0");
+  });
+  await page.goto("/tests/browser/workspace-performance.html?empty");
+  const sidebar = page.locator(".inset-sidebar");
+  await page.getByRole("button", { name: /^Toggle Sidebar/ }).click();
+  await expect(sidebar).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = window as unknown as {
+      __TAURI_INTERNALS__: {
+        invoke: (
+          command: string,
+          args?: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
+    const base = fixture.__TAURI_INTERNALS__.invoke;
+    fixture.__TAURI_INTERNALS__.invoke = (command, args) => {
+      if (command === "plugin:dialog|open")
+        return Promise.resolve(["/fixture/first-project"]);
+      if (command === "session_list_by_project") return Promise.resolve([]);
+      return base(command, args);
+    };
+  });
+  await sidebar
+    .getByRole("button", { name: "Open project", exact: true })
+    .click();
+  await expect(
+    sidebar.getByText("No project folder", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    sidebar.getByRole("button", { name: "first-project menu", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".inset-shell")).toBeVisible();
+});
+
 test("opts in from the invitation and switches back without changing glass", async ({
   page,
 }, testInfo) => {
@@ -17,7 +94,7 @@ test("opts in from the invitation and switches back without changing glass", asy
     localStorage.setItem("monocode.insetGlass", "0");
   });
   await page.goto("/tests/browser/workspace-performance.html");
-  const notice = page.getByRole("status", { name: "Try the new layout" });
+  const notice = page.getByRole("status", { name: "Try the Focused layout" });
   await expect(notice).toBeVisible();
   await expect(page.locator(".inset-shell")).toHaveCount(0);
   await page.screenshot({
@@ -60,9 +137,9 @@ test("opts in from the invitation and switches back without changing glass", asy
   await expect(
     page.getByRole("switch", { name: "Transparent window", exact: true }),
   ).not.toBeChecked();
-  const layout = page.getByRole("switch", { name: "New layout", exact: true });
+  const layout = layoutOption(page, "Focused");
   await expect(layout).toBeChecked();
-  await layout.click();
+  await layoutOption(page, "Classic").click();
   await expect(layout).not.toBeChecked();
   await expect(page.locator(".inset-shell")).toHaveCount(0);
   await resizer.hover();
@@ -83,7 +160,7 @@ test("remembers Not now and still allows opting in from Settings", async ({
   page,
 }) => {
   await page.goto("/tests/browser/workspace-performance.html");
-  const notice = page.getByRole("status", { name: "Try the new layout" });
+  const notice = page.getByRole("status", { name: "Try the Focused layout" });
   await notice.getByRole("button", { name: "Not now", exact: true }).click();
   await expect(notice).toHaveCount(0);
   await expect(page.locator(".inset-shell")).toHaveCount(0);
@@ -93,7 +170,7 @@ test("remembers Not now and still allows opting in from Settings", async ({
   ).toBeVisible();
   await expect(notice).toHaveCount(0);
   await openAppearance(page);
-  const layout = page.getByRole("switch", { name: "New layout", exact: true });
+  const layout = layoutOption(page, "Focused");
   await expect(layout).not.toBeChecked();
   await layout.click();
   await expect(layout).toBeChecked();
@@ -101,7 +178,7 @@ test("remembers Not now and still allows opting in from Settings", async ({
   await expect(notice).toHaveCount(0);
 });
 
-test("keeps the classic workspace after turning off the new layout and leaving Settings", async ({
+test("keeps the classic workspace after switching to the Classic layout and leaving Settings", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -111,8 +188,8 @@ test("keeps the classic workspace after turning off the new layout and leaving S
   await expect(page.locator(".inset-shell")).toBeVisible({ timeout: 15_000 });
 
   await openAppearance(page);
-  const layout = page.getByRole("switch", { name: "New layout", exact: true });
-  await layout.click();
+  const layout = layoutOption(page, "Focused");
+  await layoutOption(page, "Classic").click();
   await expect(layout).not.toBeChecked();
   await page.keyboard.press("Escape");
 
@@ -127,3 +204,9 @@ test("keeps the classic workspace after turning off the new layout and leaving S
   await openAppearance(page);
   await expect(layout).not.toBeChecked();
 });
+
+function layoutOption(page: Page, name: "Classic" | "Focused") {
+  return page
+    .getByRole("radiogroup", { name: "Layout", exact: true })
+    .getByRole("radio", { name, exact: true });
+}

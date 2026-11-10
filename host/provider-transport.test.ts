@@ -15,7 +15,10 @@ import { HostEngine } from "./engine";
 import { hostProviders } from "./providers";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
-import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
+import {
+  discoverPiModels,
+  discoverOmpModels,
+} from "../src/integrations/harness/providers/pi/piCatalog";
 import {
   acquireHarnessBridge,
   configureChildBackend,
@@ -36,6 +39,8 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // applied between turns reach the provider.
 const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify(value) + '\\n');
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
+// Isolated Claude text helpers announce readiness without a control request.
+if (process.argv.includes('--no-session-persistence') && !process.argv.includes('--session-id')) send({type: 'system', subtype: 'init', session_id: 'fixture-claude'});
 // Devin reports where \`devin auth login\` saved its key.
 if (process.argv.slice(2).join(' ') === 'auth status') {
   process.stdout.write('Logged in.\\n  Credentials path: ' + require('node:path').join(__dirname, 'credentials.toml') + '\\n');
@@ -59,7 +64,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
-    record({codexEffort: request.params.effort ?? null});
+    record({codexEffort: request.params.effort ?? null, codexInput: request.params.input});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
@@ -71,10 +76,13 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id}});
   }
   if (request.type === 'control_request' && request.request.subtype === 'list_models') send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id, response: {models: [{value: 'claude-fixture-model', resolvedModel: 'claude-fixture-model', displayName: 'Fixture Claude'}]}}});
-  if (request.type === 'user') setTimeout(() => {
-    send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
-    send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
-  }, 30);
+  if (request.type === 'user') {
+    record({claudeTurn: {args: process.argv.slice(2), content: request.message.content}});
+    setTimeout(() => {
+      send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
+      send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
+    }, 30);
+  }
   if (request.type === 'get_state') send({type: 'response', id: request.id, command: 'get_state', success: true, data: {sessionId: 'fixture_pi', model: {provider: 'openai', id: 'fixture-model', contextWindow: 100000}}});
   if (request.type === 'get_session_stats') send({type: 'response', id: request.id, command: 'get_session_stats', success: true, data: {contextWindow: 100000}});
   if (request.type === 'get_available_models') send({type: 'response', id: request.id, command: 'get_available_models', success: true, data: {models: [{provider: 'openai', id: 'fixture-model', name: 'Fixture model'}]}});
@@ -88,12 +96,29 @@ readline.createInterface({input: process.stdin}).on('line', line => {
 });
 `;
 
+type FixtureCall = {
+  claudeArgs?: string[];
+  codexEffort?: string | null;
+  codexInput?: Array<{ type: string; text?: string }>;
+  claudeTurn?: {
+    args: string[];
+    content: Array<{ type: string; text?: string }>;
+  };
+};
+
 describe("existing providers over headless process I/O", () => {
   let directory: string;
   let backend: HostChildBackend;
   let release: () => void;
   let store: HostStore;
   let engine: HostEngine;
+  function readCalls(): FixtureCall[] {
+    return readFileSync(join(directory, "calls.log"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+
   beforeAll(async () => {
     directory = realpathSync(
       mkdtempSync(join(tmpdir(), "monocode-provider-test-")),
@@ -116,6 +141,7 @@ describe("existing providers over headless process I/O", () => {
       }`,
     );
     const binary = join(directory, "provider.cjs");
+    writeFileSync(join(directory, "calls.log"), "");
     writeFileSync(binary, fixture, { mode: 0o700 });
     writeFileSync(
       join(directory, "credentials.toml"),
@@ -149,16 +175,17 @@ describe("existing providers over headless process I/O", () => {
   });
 
   it("discovers host models in parallel without probe process collisions", async () => {
-    const [codexA, codexB, claudeA, claudeB, piA, piB, ompA, ompB] = await Promise.all([
-      discoverCodexModels(directory),
-      discoverCodexModels(directory),
-      discoverClaudeModels(directory),
-      discoverClaudeModels(directory),
-      discoverPiModels(directory),
-      discoverPiModels(directory),
-      discoverOmpModels(directory),
-      discoverOmpModels(directory),
-    ]);
+    const [codexA, codexB, claudeA, claudeB, piA, piB, ompA, ompB] =
+      await Promise.all([
+        discoverCodexModels(directory),
+        discoverCodexModels(directory),
+        discoverClaudeModels(directory),
+        discoverClaudeModels(directory),
+        discoverPiModels(directory),
+        discoverPiModels(directory),
+        discoverOmpModels(directory),
+        discoverOmpModels(directory),
+      ]);
     expect(codexA).toEqual(codexB);
     expect(codexA[0]).toMatchObject({ id: "codex:fixture-model" });
     expect(claudeA).toEqual(claudeB);
@@ -294,61 +321,114 @@ describe("existing providers over headless process I/O", () => {
   );
 
   it.each([
-    ["codex", "reasoningEffort"],
-    ["claude", "effort"],
+    ["codex", "codex", "reasoningEffort", false],
+    ["claude", "claude", "effort", false],
+    ["claude with a delayed title", "claude", "effort", true],
   ] as const)(
     "uses %s reasoning effort applied between turns on the next turn",
-    async (harness, setting) => {
-      const log = join(directory, "calls.log");
-      const project = await engine.openProject(directory);
-      const { sessionId } = engine.command({
-        type: "create",
-        commandId: `effort-create-${harness}`,
-        projectId: project.id,
-        harness,
-        model: `${harness}:test`,
-        modelSettings: { [setting]: "low" },
-        runtimeMode: "supervised",
-      });
-      const efforts: Array<string | null> = [];
-      for (const [turn, effort] of ["low", "high"].entries()) {
-        if (turn)
-          engine.command({
-            type: "configure",
-            commandId: `effort-configure-${harness}`,
-            sessionId,
-            model: `${harness}:test`,
-            modelSettings: { [setting]: effort },
-            runtimeMode: "supervised",
-          });
-        writeFileSync(log, "");
-        engine.command({
-          type: "send",
-          commandId: `effort-${harness}-${turn}`,
-          sessionId,
-          text: "hello",
+    async (scenario, harness, setting, delayTitle) => {
+      // Hold the real first-turn title request until the foreground low turn
+      // settles, then launch it before the high turn. No timing sleeps needed.
+      const titleGate = Promise.withResolvers<void>();
+      const generateTitle = hostProviders.claude.generateTitle!;
+      let titleTask: ReturnType<typeof generateTitle> | undefined;
+      const titleSpy = delayTitle
+        ? vi
+            .spyOn(hostProviders.claude, "generateTitle")
+            .mockImplementation((input) => {
+              titleTask = titleGate.promise.then(() => generateTitle(input));
+              return titleTask;
+            })
+        : undefined;
+      try {
+        const commandPrefix = `effort-${scenario}`;
+        const project = await engine.openProject(directory);
+        const { sessionId } = engine.command({
+          type: "create",
+          commandId: `${commandPrefix}-create`,
+          projectId: project.id,
+          harness,
+          model: `${harness}:test`,
+          modelSettings: { [setting]: "low" },
+          runtimeMode: "supervised",
         });
-        await vi.waitFor(
-          () => expect(store.session(sessionId).status).toBe("idle"),
-          { timeout: 4_000 },
-        );
-        const calls = readFileSync(log, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        if (harness === "codex")
-          efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
-        else {
-          const args: string[] = calls.find(
-            (call) => call.claudeArgs,
-          ).claudeArgs;
-          efforts.push(args[args.indexOf("--effort") + 1] ?? null);
+        const efforts: Array<string | null> = [];
+        for (const [turn, effort] of ["low", "high"].entries()) {
+          if (turn)
+            engine.command({
+              type: "configure",
+              commandId: `${commandPrefix}-configure`,
+              sessionId,
+              model: `${harness}:test`,
+              modelSettings: { [setting]: effort },
+              runtimeMode: "supervised",
+            });
+          // Keep the shared log append-only: unrelated helper processes can
+          // still write after a foreground turn has settled.
+          const callOffset = readCalls().length;
+          if (delayTitle && turn) {
+            expect(titleTask).toBeDefined();
+            titleGate.resolve();
+            await titleTask;
+            const titleArgs = readCalls()
+              .slice(callOffset)
+              .find((call) => call.claudeArgs)?.claudeArgs;
+            expect(titleArgs).toBeDefined();
+            expect(titleArgs?.[0]).toBe("--output-format");
+            expect(titleArgs).toContain("--no-session-persistence");
+            expect(titleArgs).not.toContain("--session-id");
+            expect(titleArgs).not.toContain("--effort");
+          }
+          const text = `${commandPrefix}-${turn}`;
+          engine.command({
+            type: "send",
+            commandId: `${commandPrefix}-${turn}`,
+            sessionId,
+            text,
+          });
+          await vi.waitFor(
+            () => expect(store.session(sessionId).status).toBe("idle"),
+            { timeout: 4_000 },
+          );
+          const state = store.session(sessionId).session;
+          expect(
+            state.blocks.filter((block) => block.role === "assistant"),
+          ).toHaveLength(turn + 1);
+          expect(state.blocks.at(-1)?.text).toContain("completed");
+          const calls = readCalls().slice(callOffset);
+          if (harness === "codex") {
+            const foreground = calls.filter((call) =>
+              call.codexInput?.some(
+                (block) => block.type === "text" && block.text === text,
+              ),
+            );
+            expect(foreground).toHaveLength(1);
+            efforts.push(foreground[0].codexEffort ?? null);
+          } else {
+            // Correlate by the actual prompt received, never by the presence of
+            // --effort: dropping that flag on a foreground turn must still fail.
+            const foreground = calls.filter((call) =>
+              call.claudeTurn?.content.some(
+                (block) => block.type === "text" && block.text === text,
+              ),
+            );
+            expect(foreground).toHaveLength(1);
+            const args = foreground[0].claudeTurn!.args;
+            expect(args).toContain("--permission-prompt-tool");
+            expect(args).not.toContain("--no-session-persistence");
+            expect(args.indexOf("--effort")).toBeGreaterThanOrEqual(0);
+            efforts.push(args[args.indexOf("--effort") + 1] ?? null);
+          }
         }
+        expect(efforts).toEqual(["low", "high"]);
+        expect(store.session(sessionId).session.modelSettings).toEqual({
+          [setting]: "high",
+        });
+      } finally {
+        titleGate.resolve();
+        await titleTask;
+        titleSpy?.mockRestore();
       }
-      expect(efforts).toEqual(["low", "high"]);
-      expect(store.session(sessionId).session.modelSettings).toEqual({
-        [setting]: "high",
-      });
     },
   );
 });
