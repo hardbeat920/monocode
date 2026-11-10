@@ -5081,15 +5081,60 @@ fn git_ahead_behind(root: &Path, base: &str) -> (i64, i64) {
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let output = git_cmd().arg("-C").arg(root).args(args).output().ok()?;
-    if !output.status.success() {
+    let (status, stdout) = metadata_stdout(
+        git_cmd().arg("-C").arg(root).args(args),
+        Duration::from_secs(5),
+    )?;
+    if !status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = String::from_utf8_lossy(&stdout).trim().to_string();
     if text.is_empty() {
         None
     } else {
         Some(text)
+    }
+}
+
+/// Read-only metadata must release its worker when Git waits on folder access
+/// or a stalled filesystem. Drain stdout concurrently so a full pipe cannot
+/// deadlock the child. Mutating Git operations retain their existing lifetime.
+fn metadata_stdout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Option<(std::process::ExitStatus, Vec<u8>)> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = stdout.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(read);
+    });
+    let bytes = match receiver.recv_timeout(timeout) {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some((status, bytes)),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(1)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 
@@ -6356,6 +6401,33 @@ pub async fn open_path_with_default_app(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_stdout_drains_output_larger_than_a_pipe() {
+        let (status, bytes) = metadata_stdout(
+            Command::new("/bin/sh").args([
+                "-c",
+                "i=0; while [ $i -lt 12000 ]; do printf 'metadata line\\n'; i=$((i+1)); done",
+            ]),
+            Duration::from_secs(5),
+        )
+        .expect("metadata output should not block on a full pipe");
+        assert!(status.success());
+        assert_eq!(bytes.len(), 12000 * "metadata line\n".len());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_stdout_kills_and_reaps_a_stalled_child() {
+        let started = Instant::now();
+        let output = metadata_stdout(
+            Command::new("/bin/sh").args(["-c", "printf started; exec sleep 10"]),
+            Duration::from_millis(50),
+        );
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn only_video_containers_can_join_the_stream_scope() {
