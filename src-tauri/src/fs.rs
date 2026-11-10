@@ -2884,7 +2884,7 @@ fn git_head_message_for(root: &Path) -> Result<String, String> {
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
-    if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
+    if git_has_upstream(root)? {
         return git_checked(root, &["push"]);
     }
     let remote = git_remote_name(root).ok_or_else(|| "No git remote to push to".to_string())?;
@@ -2892,7 +2892,7 @@ fn git_push_for(root: &Path) -> Result<(), String> {
 }
 
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
-    if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
+    if git_has_upstream(root)? {
         git_checked(root, &["pull", "--no-edit", "--ff"]).map_err(with_signing_hint)?;
         return git_checked(root, &["push"]);
     }
@@ -5096,6 +5096,28 @@ fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
     }
 }
 
+/// Whether the current branch tracks an upstream. Push and sync choose between
+/// a plain push and `push -u` on this answer, so a lookup that timed out or
+/// could not run is an error here, never "no upstream": guessing would rewrite
+/// the branch's tracking and skip its pull.
+fn git_has_upstream(root: &Path) -> Result<bool, String> {
+    upstream_from_lookup(metadata_stdout(
+        git_cmd()
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        Duration::from_secs(5),
+    ))
+}
+
+fn upstream_from_lookup(
+    lookup: Option<(std::process::ExitStatus, Vec<u8>)>,
+) -> Result<bool, String> {
+    let (status, stdout) =
+        lookup.ok_or_else(|| "Git did not answer in time. Try again.".to_string())?;
+    Ok(status.success() && !String::from_utf8_lossy(&stdout).trim().is_empty())
+}
+
 /// Read-only metadata must release its worker when Git waits on folder access
 /// or a stalled filesystem. Drain stdout concurrently so a full pipe cannot
 /// deadlock the child. Mutating Git operations retain their existing lifetime.
@@ -6427,6 +6449,22 @@ mod tests {
         );
         assert!(output.is_none());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upstream_lookup_keeps_a_timeout_apart_from_a_missing_upstream() {
+        let lookup = |script: &str, timeout: Duration| {
+            upstream_from_lookup(metadata_stdout(
+                Command::new("/bin/sh").args(["-c", script]),
+                timeout,
+            ))
+        };
+        let limit = Duration::from_secs(5);
+        assert_eq!(lookup("printf 'origin/main\\n'", limit), Ok(true));
+        // What git prints nothing and exits 128 for: no upstream configured.
+        assert_eq!(lookup("exit 128", limit), Ok(false));
+        assert!(lookup("exec sleep 10", Duration::from_millis(50)).is_err());
     }
 
     #[test]
