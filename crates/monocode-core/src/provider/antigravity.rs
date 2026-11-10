@@ -6,7 +6,8 @@ pub(super) fn is_cli(binary: &Path) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
-            name == "agy" || (cfg!(windows) && name.eq_ignore_ascii_case("agy.exe"))
+            name.eq_ignore_ascii_case("agy")
+                || (cfg!(windows) && name.eq_ignore_ascii_case("agy.exe"))
         })
 }
 
@@ -100,6 +101,12 @@ mod tests {
     #[test]
     fn launch_uses_workspace_for_cli_and_sibling_resources_for_standalone() {
         let cwd = Path::new("workspace");
+        for name in ["agy", "AGY", "aGy"] {
+            let cli = Path::new("tools").join(name);
+            assert_eq!(launch_args(&cli), &["acp"]);
+            assert_eq!(spawn_cwd(&cli, cwd), cwd);
+        }
+        assert_eq!(is_cli(&Path::new("tools").join("AGY.EXE")), cfg!(windows));
         let cli = Path::new("tools").join(if cfg!(windows) { "AGY.EXE" } else { "agy" });
         let server = Path::new("tools").join(Kind::Antigravity.binary_name());
         assert_eq!(launch_args(&cli), &["acp"]);
