@@ -9,6 +9,22 @@ const providers = [
     modes: ["default", "auto_edit", "default", "yolo"], plan: "default" },
 ] as const;
 
+it("uses the workspace cwd for agy acp and sibling resources for standalone servers", () => {
+  expect(antigravity.antigravitySpawnCwd("C:\\tools\\agy.exe", "C:\\repo")).toBe("C:\\repo");
+  expect(antigravity.antigravitySpawnCwd("/usr/local/bin/agy", "/repo")).toBe("/repo");
+  expect(antigravity.antigravitySpawnCwd("C:\\tools\\agy_acp_server.exe", "C:\\repo")).toBe("C:\\tools\\");
+  expect(antigravity.antigravitySpawnCwd("/tools/agy_acp_server.par", "/repo")).toBe("/tools/");
+});
+
+it("uses the current CLI's advertised modes and keeps full-access approvals on the client", () => {
+  const modes = ["default", "accept-edits", "plan"];
+  expect(antigravity.antigravityModeId("auto-accept-edits", false, modes)).toBe("accept-edits");
+  expect(antigravity.antigravityModeId("full-access", false, modes)).toBe("default");
+  expect(antigravity.antigravityModeId("full-access", true, modes)).toBe("plan");
+  expect(antigravity.antigravityModeId("supervised", false, modes)).toBe("default");
+  expect(antigravity.antigravityModeId("auto-accept-edits", false, ["default"])).toBe("default");
+});
+
 describe.each(providers)("$id ACP protocol", ({ id, protocol, mode, blocks, modes, plan }) => {
   it("maps every runtime mode and overrides full access for planning", () => {
     expect(RUNTIME_MODES.map((runtimeMode) => mode(runtimeMode))).toEqual(modes);

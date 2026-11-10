@@ -20,7 +20,10 @@ const binaryNames: Record<RemoteProvider, string[]> = {
   omp: ["omp"],
   fx: ["fx"],
   hermes: ["hermes"],
-  antigravity: ["agy_acp_server.par"],
+  antigravity:
+    process.platform === "win32"
+      ? ["agy_acp_server", "agy"]
+      : ["agy_acp_server.par", "agy"],
   devin: ["devin"],
 };
 
@@ -38,7 +41,22 @@ const providerDirectories = (provider: RemoteProvider): string[] => {
       join(home, ".hermes", "hermes-agent", "venv", "bin"),
       join(home, ".hermes", "hermes-agent", ".venv", "bin"),
     ],
-    antigravity: [join(home, ".local", "share", "agy-acp")],
+    antigravity: [
+      join(home, ".local", "share", "agy-acp"),
+      ...(process.platform === "win32"
+        ? [
+            join(
+              process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"),
+              "agy-acp",
+            ),
+            join(
+              process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"),
+              "agy",
+              "bin",
+            ),
+          ]
+        : []),
+    ],
     devin: [
       process.platform === "win32"
         ? join(
@@ -171,33 +189,45 @@ export async function resolveProvider(
   provider: RemoteProvider,
 ): Promise<string> {
   const windows = process.platform === "win32";
-  if (windows && provider === "antigravity")
-    throw new Error("Antigravity ACP is not available on Windows");
-  for (const directory of providerDirectories(provider)) {
-    if (!directory) continue;
-    for (const name of binaryNames[provider]) {
-      for (const extension of windows
-        ? [".exe", ".cmd", ".bat", ".com"]
-        : [""]) {
-        const candidate = join(
-          directory.replace(/^"|"$/g, ""),
-          name + extension,
+  const directories = providerDirectories(provider).filter(Boolean);
+  // Keep the standalone runtime's existing configuration when both are installed.
+  const candidates =
+    provider === "antigravity"
+      ? binaryNames[provider].flatMap((name) =>
+          directories.map((directory) => ({ directory, name })),
+        )
+      : directories.flatMap((directory) =>
+          binaryNames[provider].map((name) => ({ directory, name })),
         );
-        try {
-          await access(candidate, windows ? constants.F_OK : constants.X_OK);
-          if (!(await stat(candidate)).isFile()) continue;
-          await providerLaunch(candidate, []);
-          if (!(await matchesProvider(candidate, provider, name))) continue;
-          return candidate;
-        } catch {
-          /* try the next installed launcher */
-        }
+  for (const { directory, name } of candidates) {
+    for (const extension of windows ? [".exe", ".cmd", ".bat", ".com"] : [""]) {
+      const candidate = join(directory.replace(/^"|"$/g, ""), name + extension);
+      try {
+        await access(candidate, windows ? constants.F_OK : constants.X_OK);
+        if (!(await stat(candidate)).isFile()) continue;
+        await providerLaunch(candidate, []);
+        if (!(await matchesProvider(candidate, provider, name))) continue;
+        return candidate;
+      } catch {
+        /* try the next installed launcher */
       }
     }
   }
   throw new Error(
     `${provider} is not installed on this host or is missing from its PATH. Install its native CLI or standard npm package.`,
   );
+}
+
+/** The CLI embeds ACP; only the standalone Linux runtime needs --uid=. */
+export function antigravityArgs(
+  command: string,
+  platform = process.platform,
+): string[] {
+  return /^agy(?:\.exe)?$/i.test(basename(command))
+    ? ["acp"]
+    : platform === "linux"
+      ? ["--uid="]
+      : [];
 }
 
 /** npm's Windows .cmd wrappers cannot be spawned directly. Run their known

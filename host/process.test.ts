@@ -10,7 +10,45 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveProvider } from "./process";
+import { antigravityArgs, resolveProvider } from "./process";
+
+it.each(["standalone", "cli"])(
+  "resolves the Antigravity %s on Windows and Unix without executing it",
+  async (kind) => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-agy-acp-"));
+    const name =
+      kind === "cli"
+        ? "agy"
+        : process.platform === "win32"
+          ? "agy_acp_server"
+          : "agy_acp_server.par";
+    const candidate = join(
+      directory,
+      name + (process.platform === "win32" ? ".exe" : ""),
+    );
+    writeFileSync(candidate, "standalone ACP fixture");
+    chmodSync(candidate, 0o755);
+    vi.stubEnv("PATH", directory);
+    try {
+      expect(await resolveProvider("antigravity")).toBe(candidate);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+it.each(["win32", "linux", "darwin"] as const)(
+  "launches the CLI's ACP subcommand on %s",
+  (platform) => {
+    expect(antigravityArgs("/tools/agy", platform)).toEqual(["acp"]);
+    expect(antigravityArgs("/tools/agy.exe", platform)).toEqual(["acp"]);
+    expect(antigravityArgs("/tools/agy_acp_server.par", platform)).toEqual(
+      platform === "linux" ? ["--uid="] : [],
+    );
+    expect(antigravityArgs("/tools/agy_acp_server.exe", "win32")).toEqual([]);
+  },
+);
 
 it.each(["cursor", "pi", "fx"] as const)(
   "does not execute an unrelated ambiguous %s binary while resolving providers",

@@ -144,8 +144,10 @@ pub struct AntigravityBinary {
     pub args: Vec<String>,
 }
 
-fn antigravity_args() -> Vec<String> {
-    if cfg!(target_os = "linux") {
+fn antigravity_args(path: &Path) -> Vec<String> {
+    if configured_binary_name_eq(path, "agy") {
+        vec!["acp".into()]
+    } else if cfg!(target_os = "linux") {
         vec!["--uid=".into()]
     } else {
         Vec::new()
@@ -403,7 +405,7 @@ pub fn harness_resolve_configured(
 ) -> Result<ConfiguredBinary, String> {
     resolve_harness_binary_override(&provider, &binary_path).map(|path| ConfiguredBinary {
         path: path.to_string_lossy().into_owned(),
-        args: (provider == "antigravity").then(antigravity_args),
+        args: (provider == "antigravity").then(|| antigravity_args(&path)),
     })
 }
 
@@ -877,16 +879,16 @@ pub fn harness_resolve_devin() -> Result<CursorBinary, String> {
         })
 }
 
-/// Antigravity's ACP server is separate from the interactive agy CLI.
+/// Resolve the standalone ACP server or the CLI's built-in `agy acp` server.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
     resolve_antigravity()
         .map(|path| AntigravityBinary {
             path: path.to_string_lossy().into_owned(),
-            args: antigravity_args(),
+            args: antigravity_args(&path),
         })
         .ok_or_else(|| {
-            "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
+            "Antigravity not found. Install a current Antigravity CLI with `agy acp` support, or the standalone ACP server (agy_acp_server.exe on Windows, agy_acp_server.par on macOS/Linux).".into()
         })
 }
 
@@ -1816,6 +1818,13 @@ fn is_legacy_orphaned_cursor_acp(args: &str) -> bool {
 /// decides what actually dies.
 #[cfg(any(unix, test))]
 fn looks_like_harness_argv(args: &str) -> bool {
+    if args.split_whitespace().any(|part| part == "acp")
+        && args
+            .split_whitespace()
+            .any(|part| Path::new(part).file_name().and_then(|name| name.to_str()) == Some("agy"))
+    {
+        return true;
+    }
     if is_legacy_orphaned_cursor_acp(args) {
         return true;
     }
@@ -2112,9 +2121,6 @@ fn configured_binary_fingerprint(path: &Path) -> Option<String> {
 }
 
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
-    if provider == "antigravity" && cfg!(windows) {
-        return Err("Antigravity ACP server overrides are not supported on Windows.".into());
-    }
     let names: &[&str] = match provider {
         "claude" => &["claude"],
         "codex" => &["codex"],
@@ -2125,7 +2131,8 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
-        "antigravity" => &["agy_acp_server.par"],
+        "antigravity" if cfg!(windows) => &["agy_acp_server", "agy"],
+        "antigravity" => &["agy_acp_server.par", "agy"],
         "devin" => &["devin"],
         _ => {
             return Err(format!(
@@ -2520,22 +2527,43 @@ fn resolve_devin() -> Option<PathBuf> {
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
-    // The .par wrapper is a POSIX self-extracting archive — Antigravity ships
-    // no Windows ACP binary, so report the provider unavailable there instead
-    // of probing paths that can never be executable.
-    if cfg!(windows) {
-        return None;
-    }
+    // Preserve existing standalone installs and their separate configuration.
+    let server = if cfg!(windows) {
+        "agy_acp_server.exe"
+    } else {
+        "agy_acp_server.par"
+    };
     let mut candidates = Vec::new();
     if let Some(home) = dirs_home().map(PathBuf::from) {
         // Prefer the wrapper: it sets the server's required resource directory.
-        candidates.push(home.join(".local/bin/agy_acp_server.par"));
-        candidates.push(home.join(".local/share/agy-acp/agy_acp_server.par"));
+        candidates.push(home.join(".local/bin").join(server));
+        candidates.push(home.join(".local/share/agy-acp").join(server));
     }
-    if let Some(from_shell) = which_via_login_shell("agy_acp_server.par") {
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            candidates.push(local.join("agy-acp").join(server));
+            candidates.push(local.join("agy/bin").join(server));
+        }
+    }
+    if let Some(from_shell) = which_via_login_shell(server) {
         candidates.push(from_shell);
     }
-    first_binary(candidates)
+    if let Some(path) = first_binary(candidates) {
+        return Some(path);
+    }
+    let mut cli_candidates = Vec::new();
+    if let Some(from_shell) = which_via_login_shell("agy") {
+        cli_candidates.push(from_shell);
+    }
+    if let Some(home) = dirs_home().map(PathBuf::from) {
+        cli_candidates.push(home.join(".local/bin/agy"));
+    }
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            cli_candidates.push(local.join("agy/bin/agy.exe"));
+        }
+    }
+    first_binary(cli_candidates)
 }
 
 fn is_pi_coding_agent(path: &Path) -> bool {
@@ -3145,6 +3173,50 @@ fn load_unix_login_shell_env() -> HashMap<String, String> {
         }
     }
     map
+}
+
+#[cfg(test)]
+mod antigravity_launch_tests {
+    use super::*;
+
+    #[test]
+    fn cli_uses_acp_and_standalone_retains_platform_args() {
+        assert_eq!(antigravity_args(Path::new("agy")), vec!["acp"]);
+        #[cfg(windows)]
+        assert_eq!(antigravity_args(Path::new("agy.exe")), vec!["acp"]);
+        let standalone = if cfg!(windows) {
+            "agy_acp_server.exe"
+        } else {
+            "agy_acp_server.par"
+        };
+        assert_eq!(
+            antigravity_args(Path::new(standalone)),
+            if cfg!(target_os = "linux") {
+                vec!["--uid="]
+            } else {
+                vec![]
+            }
+        );
+        assert!(looks_like_harness_argv("/tools/agy acp"));
+        assert!(!looks_like_harness_argv("/tools/agy --help"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn accepts_windows_cli_and_standalone_overrides() {
+        let dir =
+            std::env::temp_dir().join(format!("monocode-agy-overrides-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["agy.exe", "agy_acp_server.exe"] {
+            let path = dir.join(name);
+            std::fs::write(&path, b"fixture").unwrap();
+            assert_eq!(
+                resolve_harness_binary_override("antigravity", &path.to_string_lossy()),
+                Ok(path)
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 fn command_basename(command: &str) -> &str {
@@ -3991,9 +4063,12 @@ mod tests {
     #[test]
     fn antigravity_launch_args_match_the_platform_registry() {
         if cfg!(target_os = "linux") {
-            assert_eq!(antigravity_args(), vec!["--uid="]);
+            assert_eq!(
+                antigravity_args(Path::new("agy_acp_server.par")),
+                vec!["--uid="]
+            );
         } else {
-            assert!(antigravity_args().is_empty());
+            assert!(antigravity_args(Path::new("agy_acp_server.par")).is_empty());
         }
     }
 

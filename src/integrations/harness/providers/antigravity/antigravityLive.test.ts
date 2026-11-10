@@ -176,6 +176,23 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     expect(events).toContainEqual({ type: "message.completed" });
   });
 
+  it.each([
+    ["auto-accept-edits", undefined, "accept-edits", "edit", "yes"],
+    ["full-access", undefined, "default", "execute", "yes"],
+    ["full-access", "plan", "plan", "edit", "no"],
+  ] as const)("uses advertised CLI modes for %s / %s and preserves permissions", async (runtimeMode, intent, modeId, kind, optionId) => {
+    mock.setupConfigOptions = [{ id: "mode", category: "mode", type: "select", options: [
+      { value: "default" }, { value: "accept-edits" }, { value: "plan" },
+    ] }];
+    const turn = provider.send({ ...input, runtimeMode, intent });
+    await waitPrompt();
+    expect(mock.sent.find((m) => m.method === "session/set_mode")?.params?.modeId).toBe(modeId);
+    permission(kind);
+    await vi.waitFor(() => expect(response()).toEqual({ outcome: { outcome: "selected", optionId } }));
+    finishPrompt();
+    await turn;
+  });
+
   it("denies edits in plan intent even with full access selected", async () => {
     const turn = provider.send({ ...input, runtimeMode: "full-access", intent: "plan" });
     await waitPrompt();

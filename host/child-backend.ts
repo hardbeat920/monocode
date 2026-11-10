@@ -17,7 +17,7 @@ import {
   isRemoteProvider,
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
-import { providerLaunch, resolveProvider } from "./process";
+import { antigravityArgs, providerLaunch, resolveProvider } from "./process";
 
 const exec = promisify(execFile);
 const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
@@ -139,10 +139,11 @@ export class HostChildBackend implements ChildBackend {
       const provider = command.slice("harness_resolve_".length);
       if (!isRemoteProvider(provider))
         throw new Error(`Unsupported provider: ${provider}`);
+      const path = await this.resolve(provider);
       return {
-        path: await this.resolve(provider),
+        path,
         ...(provider === "antigravity"
-          ? { args: process.platform === "linux" ? ["--uid="] : [] }
+          ? { args: antigravityArgs(path) }
           : {}),
       } as T;
     }

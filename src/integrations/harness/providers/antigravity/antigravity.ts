@@ -130,7 +130,7 @@ const pendingSetupByThread = new Map<
 const turnsByThread = new Map<string, Promise<void>>();
 let childSeq = 0;
 
-/** Live Antigravity adapter. Spawns `agy_acp_server.par`, not `agy acp`. */
+/** Live Antigravity adapter for the standalone runtime and `agy acp`. */
 export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
   const epoch = cancelEpoch.get(input.sessionId) ?? 0;
   const cancelled = () => (cancelEpoch.get(input.sessionId) ?? 0) !== epoch;
@@ -633,7 +633,13 @@ async function applyRuntimeMode(
       "session/set_mode",
       {
         sessionId: live.acpSessionId,
-        modeId: antigravityModeId(runtimeMode, planning),
+        modeId: antigravityModeId(
+          runtimeMode,
+          planning,
+          live.configOptions.find(
+            (option) => option.category === "mode" || option.id === "mode",
+          )?.choices,
+        ),
       },
       CONTROL_TIMEOUT_MS,
     );
