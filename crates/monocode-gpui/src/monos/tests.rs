@@ -1348,6 +1348,113 @@ fn a_turn_that_failed_to_save_keeps_its_reply_out_of_the_error(cx: &mut TestAppC
         );
     });
 }
+#[gpui::test]
+fn a_turn_whose_reply_waits_for_room_to_save_is_not_queued_to_run_again(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.summary.provider = "fixture".into();
+            chat.busy = false;
+            chat.reply_kept_unsaved = true;
+            chat.set_test_status(
+                "Saving failed: database or disk is full · The reply is kept and saves once there's room",
+            );
+        });
+        m.inflight
+            .insert(s.id.clone(), queued("completion", true, None));
+        m.chat_changed(&s.id, cx);
+        assert!(
+            m.roster.get(&s.id).unwrap().outbox.is_empty(),
+            "the turn ran; Retry would run its prompt again"
+        );
+    });
+}
+#[gpui::test]
+fn a_retried_message_waits_for_the_running_turn_instead_of_steering_into_it(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let (send, receive) = std::sync::mpsc::channel();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| chat.set_test_steerable(send));
+        m.roster.get_mut(&s.id).unwrap().outbox.push(queued(
+            "older",
+            false,
+            Some("Delivery failed"),
+        ));
+        m.persisted_messages.insert("older".into());
+        m.queue_changed(&s.id, "older", false, cx);
+        assert!(
+            receive.try_recv().is_err(),
+            "a retried message is not merged into the newer turn"
+        );
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert!(outbox[0].id == "older" && outbox[0].error.is_none());
+        // A new message still steers the running turn.
+        m.roster
+            .get_mut(&s.id)
+            .unwrap()
+            .outbox
+            .push(queued("newer", false, None));
+        m.persisted_messages.insert("newer".into());
+        m.dispatch(&s.id, cx);
+        let control = receive.try_recv().unwrap();
+        let monocode_core::agent::Decision::Steer(steer) = control.decision else {
+            panic!("expected a steer");
+        };
+        assert_eq!(steer.id, "newer");
+    });
+}
+#[gpui::test]
+fn steering_failures_and_saved_errors_are_cut_to_fit_the_card(cx: &mut TestAppContext) {
+    use crate::conversation::MONO_QUEUE_ERROR_LIMIT;
+    let s = setup(cx);
+    let huge = "x".repeat(1_500_000);
+    s.manager.update(cx, |m, cx| {
+        let mono = m.roster.get_mut(&s.id).unwrap();
+        mono.outbox.push(queued("steered", false, None));
+        // An older build saved whole errors.
+        mono.outbox.push(queued("saved", false, Some(&huge)));
+        m.save(cx);
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.mono_message_failed("steered".into(), huge.clone())
+        });
+        m.dispatch(&s.id, cx);
+        let error = m.roster.get(&s.id).unwrap().outbox[0]
+            .error
+            .clone()
+            .unwrap();
+        assert_eq!(error.chars().count(), MONO_QUEUE_ERROR_LIMIT);
+    });
+    cx.run_until_parked();
+    let store = s.store.clone();
+    let cwd = s.project.clone();
+    let reopened = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, Vec::new(), cwd, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let manager = reopened
+        .update(cx, |shell, _, _| shell.mono_manager())
+        .unwrap();
+    manager.read_with(cx, |m, _| {
+        let saved = m
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .find(|q| q.id == "saved");
+        assert_eq!(
+            saved
+                .and_then(|q| q.error.as_ref())
+                .map(|e| e.chars().count()),
+            Some(MONO_QUEUE_ERROR_LIMIT)
+        );
+    });
+}
 #[test]
 fn queue_errors_keep_the_first_line_and_fit_the_card() {
     use crate::conversation::{MONO_QUEUE_ERROR_LIMIT, mono_short_error};

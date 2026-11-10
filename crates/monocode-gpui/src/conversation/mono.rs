@@ -57,6 +57,14 @@ impl Conversation {
     pub(crate) fn set_test_status(&mut self, status: &str) {
         self.status = status.into();
     }
+    /// A running turn that takes steered messages on `controls`.
+    #[cfg(test)]
+    pub(crate) fn set_test_steerable(&mut self, controls: std::sync::mpsc::Sender<Control>) {
+        self.summary.provider = "codex".into();
+        self.busy = true;
+        self.controls = Some(controls);
+        self.follow_ups.ready = true;
+    }
     #[cfg(test)]
     pub(crate) fn queue_test_list_focus(&self) -> gpui::FocusHandle {
         self.mono_ui.queue_list_focus.as_ref().unwrap().clone()
@@ -193,7 +201,7 @@ impl Conversation {
             .map(|m| crate::transcript::PendingMessage {
                 id: m.id.clone(),
                 text: m.text.clone().into(),
-                error: m.error.clone(),
+                error: m.error.as_deref().map(short_error),
                 sent_at: m.sent_at,
                 attachments: m.attachments.iter().map(PathBuf::from).collect(),
             })
@@ -413,11 +421,11 @@ impl Conversation {
         self.mono_ui.delivered.insert(id);
         self.sync_mono_pending(cx);
     }
-    pub(super) fn mono_message_failed(&mut self, id: String, error: String) {
+    pub(crate) fn mono_message_failed(&mut self, id: String, error: String) {
         if self.mono_ui.sending.as_ref() == Some(&id) {
             self.mono_ui.sending = None;
         }
-        self.mono_ui.failed.push((id, error));
+        self.mono_ui.failed.push((id, short_error(&error)));
     }
     pub(crate) fn mono_take_failures(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.mono_ui.failed)

@@ -119,7 +119,7 @@ impl Conversation {
         let store = self.store.clone();
         let mono = self.settings.mono.is_some();
         let work = cx.background_executor().spawn(async move {
-            let (history, turns, before) = {
+            let (mut history, turns, before) = {
                 let store = locked(&store)?;
                 (
                     store.load(id)?,
@@ -127,6 +127,7 @@ impl Conversation {
                     store.history_before(id)?,
                 )
             };
+            crate::runtime::show_kept(&store, id, &mut history.rows);
             Ok::<_, String>((
                 crate::transcript::PreparedHistory::new(history.rows, mono),
                 turns,

@@ -413,6 +413,8 @@ fn main() {
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
+    // Save the replies an earlier run couldn't, before any turn starts.
+    runtime::recover_kept(&db);
     app_log::init();
     let platform = gpui_platform::current_platform(false);
     let title_raster = particle_text::GlyphRaster(platform.text_system());

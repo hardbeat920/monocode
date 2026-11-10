@@ -157,6 +157,9 @@ pub(crate) struct Monos {
     floating: Vec<gpui::AnyWindowHandle>,
     scheduling: bool,
     persisted_messages: HashSet<String>,
+    /// Failed messages the user retried: each waits for the running turn to
+    /// finish and goes out as its own turn, never steered into a newer one.
+    retried: HashSet<String>,
     failed_reports: HashSet<String>,
     inflight: HashMap<String, Message>,
     card_refresh: HashMap<String, u64>,
@@ -284,7 +287,7 @@ impl Monos {
         notice_region: AnchorSlot,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (roster, root, roster_error) = match locked(&store) {
+        let (mut roster, root, roster_error) = match locked(&store) {
             Ok(db) => match Roster::load(&db) {
                 Ok(roster) => (roster, mono::root(&db), None),
                 Err(error) => (Roster::default(), mono::root(&db), Some(error)),
@@ -303,6 +306,12 @@ impl Monos {
                 Err(_) => (None, None),
             }
         };
+        // An older build saved whole replies and provider errors here.
+        for message in roster.monos.iter_mut().flat_map(|m| m.outbox.iter_mut()) {
+            if let Some(error) = &mut message.error {
+                *error = crate::conversation::mono_short_error(error);
+            }
+        }
         let persisted_messages = roster
             .monos
             .iter()
@@ -387,6 +396,7 @@ impl Monos {
             floating: Vec::new(),
             scheduling: false,
             persisted_messages,
+            retried: HashSet::new(),
             failed_reports: HashSet::new(),
             inflight: HashMap::new(),
             card_refresh: HashMap::new(),
@@ -889,8 +899,10 @@ impl Monos {
         if let Some(mono) = self.roster.get_mut(source) {
             if remove {
                 mono.outbox.retain(|m| m.id != id);
+                self.retried.remove(id);
             } else if let Some(message) = mono.outbox.iter_mut().find(|m| m.id == id) {
                 message.error = None;
+                self.retried.insert(id.into());
             }
         }
         self.save(cx);
@@ -1024,9 +1036,10 @@ impl Monos {
             .roster
             .get(id)
             .and_then(|m| {
-                m.outbox
-                    .iter()
-                    .find(|message| message.error.is_none() && (!busy || !message.internal))
+                m.outbox.iter().find(|message| {
+                    message.error.is_none()
+                        && (!busy || !(message.internal || self.retried.contains(&message.id)))
+                })
             })
             .cloned()
             .filter(|m| self.persisted_messages.contains(&m.id))
@@ -1034,6 +1047,7 @@ impl Monos {
             return;
         };
         if view.update(cx, |v, cx| v.mono_dispatch(&message, cx)) && !busy {
+            self.retried.remove(&message.id);
             self.inflight.insert(id.into(), message);
         }
     }
@@ -1064,9 +1078,12 @@ impl Monos {
             if let Some(mut sent) = self.inflight.remove(id) {
                 // The reply is already in this chat's transcript; the queue
                 // card only needs the reason the turn failed.
-                let (ok, status) = self.chats[id].read(cx).external_status();
+                let chat = self.chats[id].read(cx);
+                let (ok, status) = chat.external_status();
                 let status = crate::conversation::mono_short_error(&status);
-                if !ok && !status.starts_with("Stopped") {
+                // A turn that ran and only waits for room to save is done:
+                // Retry would run its prompt again.
+                if !ok && !chat.reply_kept_unsaved && !status.starts_with("Stopped") {
                     if let Some(mono) = self.roster.get_mut(id) {
                         if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(status);

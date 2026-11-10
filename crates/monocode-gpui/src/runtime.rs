@@ -22,6 +22,7 @@ mod visual_discovery;
 mod visual_tests;
 use persistence::PendingSave;
 pub(crate) type Database = Arc<Mutex<Store>>;
+pub(crate) use persistence::{recover_kept, show_kept};
 struct TurnInput {
     summary: Session,
     prompt: String,
@@ -54,6 +55,9 @@ pub(crate) struct Update {
     pub(crate) questions_resolved: Vec<String>,
     pub(crate) handoff: Option<Option<monocode_core::agent::Handoff>>,
     pub(crate) status: String,
+    /// The turn succeeded, but its rows wait for a later save (see
+    /// `persistence::Unsaved`); a retry must not run it again.
+    pub(crate) kept_unsaved: bool,
     pub(crate) finished: bool,
 }
 fn publish(
@@ -166,6 +170,13 @@ fn run_turn_using(
                 "This provider account was removed. Choose another account to continue.".into(),
             );
         }
+        // A turn that couldn't be saved must land before this one starts from
+        // the history without it, and writes over its rows.
+        persistence::save_kept(&store, summary.id).map_err(|error| {
+            format!(
+                "This conversation's last reply isn't saved yet: {error}. Free some disk space, then try again."
+            )
+        })?;
         transcript = locked(&store)?.load(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
@@ -262,6 +273,7 @@ fn run_turn_using(
                     "Connecting…"
                 }
                 .into(),
+                kept_unsaved: false,
                 finished: false,
             },
         )?;
@@ -310,6 +322,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: None,
                     status: "Connecting…".into(),
+                    kept_unsaved: false,
                     finished: false,
                 },
             )?;
@@ -358,6 +371,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: None,
                     status: "Preparing handoff…".into(),
+                    kept_unsaved: false,
                     finished: false,
                 },
             )?;
@@ -418,6 +432,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
+                    kept_unsaved: false,
                     finished: false,
                 },
             )?;
@@ -895,6 +910,7 @@ fn run_turn_using(
                             questions_resolved,
                             handoff,
                             status,
+                            kept_unsaved: false,
                             finished: false,
                         },
                     )
@@ -997,6 +1013,21 @@ fn run_turn_using(
             store.finish_turn(&session, cwd, id)
         });
     }
+    // Rows the store refused stay in memory and in a journal until a later
+    // save succeeds; the UI already shows them.
+    let keep_turn = |transcript: &Transcript| {
+        let unsaved = persistence::Unsaved {
+            session: summary.id,
+            start: turn_start,
+            rows: transcript.rows[turn_start..].to_vec(),
+        };
+        if persistence::keep(&store, unsaved) {
+            "The reply is kept and saves once there's room"
+        } else {
+            "The reply is kept until Monocode quits and saves once there's room"
+        }
+    };
+    let mut kept_unsaved = false;
     let (start, rows, mut status) = if !history_loaded {
         // A rejected preflight has no row baseline. Writing an error at row 0
         // would replace a real conversation's first saved message.
@@ -1025,7 +1056,10 @@ fn run_turn_using(
             std::time::Instant::now(),
         ) {
             Ok(()) => error,
-            Err(storage) => format!("{error} · Saving failed: {storage}"),
+            Err(storage) => format!(
+                "{error} · Saving failed: {storage} · {}",
+                keep_turn(&transcript)
+            ),
         };
         (start, transcript.rows[start..].to_vec(), error)
     } else {
@@ -1041,7 +1075,10 @@ fn run_turn_using(
                 std::time::Instant::now(),
             )
             .map(|_| "Ready".into())
-            .unwrap_or_else(|error| format!("Saving failed: {error}"));
+            .unwrap_or_else(|error| {
+                kept_unsaved = true;
+                format!("Saving failed: {error} · {}", keep_turn(&transcript))
+            });
         (final_start, transcript.rows[final_start..].to_vec(), status)
     };
     // Settle provenance in storage before notifying the view, including when
@@ -1087,6 +1124,7 @@ fn run_turn_using(
         questions_resolved: Vec::new(),
         handoff,
         status,
+        kept_unsaved,
         finished: true,
     });
 }
