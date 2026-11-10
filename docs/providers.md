@@ -20,4 +20,6 @@ One provider is enough. MonoCode probes for each CLI at startup and disables the
 
 Once a provider is installed and signed in, open a project folder in MonoCode, choose that agent, and send a message. For sessions on another machine, install and authenticate the providers on the host as described in [remote access](remote-access.md).
 
+Both the production desktop app and the GPUI native preview support Antigravity's built-in `agy acp` server, including Windows auto-detection from `%LOCALAPPDATA%\agy\bin`. In either app, an explicit CLI path can select `agy` / `agy.exe` when a standalone ACP server is also installed. The CLI reuses its cached sign-in; standalone servers keep their own authentication configuration.
+
 To run MonoCode from a checkout, see [building from source](building.md). Return to the [README](../README.md) for desktop downloads.

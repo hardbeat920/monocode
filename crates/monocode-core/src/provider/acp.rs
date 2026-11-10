@@ -52,9 +52,7 @@ pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), 
     let settings = &request.settings;
     match request.kind {
         Kind::Antigravity => {
-            if cfg!(target_os = "linux") {
-                command.arg("--uid=");
-            }
+            command.args(super::antigravity::launch_args(&request.binary));
         }
         Kind::Grok => {
             command.arg("--no-auto-update");
@@ -331,17 +329,7 @@ impl Protocol {
         let settings = &self.request.settings;
         let planning = settings.plan || settings.access == AccessMode::ReadOnly;
         let mode = match kind {
-            Kind::Antigravity => {
-                if planning {
-                    "default"
-                } else {
-                    match settings.access {
-                        AccessMode::FullAccess => "yolo",
-                        AccessMode::AutoAcceptEdits => "auto_edit",
-                        _ => "default",
-                    }
-                }
-            }
+            Kind::Antigravity => antigravity_mode(settings, setup),
             Kind::Hermes => {
                 if planning {
                     "default"
@@ -1139,6 +1127,42 @@ impl Protocol {
     }
 }
 
+fn antigravity_mode(settings: &Settings, setup: &Value) -> &'static str {
+    let modes = setup["modes"]["availableModes"]
+        .as_array()
+        .map(|modes| {
+            modes
+                .iter()
+                .filter_map(|mode| mode["id"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            setup["configOptions"]
+                .as_array()?
+                .iter()
+                .find(|option| config_id(option) == "mode" || option["category"] == "mode")
+                .map(|option| {
+                    let mut choices = Vec::new();
+                    config_choices(&option["options"], &mut choices);
+                    choices
+                })
+        });
+    let supports = |mode: &str| {
+        modes
+            .as_ref()
+            .is_some_and(|modes| modes.iter().any(|id| id == mode))
+    };
+    if settings.plan || settings.access == AccessMode::ReadOnly {
+        return if supports("plan") { "plan" } else { "default" };
+    }
+    match settings.access {
+        AccessMode::FullAccess if modes.is_none() || supports("yolo") => "yolo",
+        AccessMode::AutoAcceptEdits if supports("accept-edits") => "accept-edits",
+        AccessMode::AutoAcceptEdits if modes.is_none() || supports("auto_edit") => "auto_edit",
+        _ => "default",
+    }
+}
+
 fn config_id(option: &Value) -> &str {
     option["id"]
         .as_str()
@@ -1431,6 +1455,85 @@ mod tests {
         let text = String::from_utf8(std::mem::take(out)).unwrap();
         serde_json::from_str(text.lines().last().unwrap()).unwrap()
     }
+    #[test]
+    fn antigravity_configure_uses_the_selected_launcher() {
+        let mut p = protocol(Kind::Antigravity);
+        for name in [
+            if cfg!(windows) { "agy.exe" } else { "agy" },
+            Kind::Antigravity.binary_name(),
+        ] {
+            p.request.binary = PathBuf::from(name);
+            let mut command = Command::new(name);
+            configure(&mut command, &p.request).unwrap();
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                super::super::antigravity::launch_args(&p.request.binary)
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_advertised_modes_preserve_native_permission_decisions() {
+        for (access, plan, mode, kind, selected) in [
+            (
+                AccessMode::AutoAcceptEdits,
+                false,
+                "accept-edits",
+                "edit",
+                "yes",
+            ),
+            (AccessMode::FullAccess, false, "default", "execute", "yes"),
+            (AccessMode::FullAccess, true, "plan", "edit", "no"),
+            (AccessMode::ReadOnly, false, "plan", "execute", "no"),
+        ] {
+            let mut p = protocol(Kind::Antigravity);
+            p.request.settings.access = access;
+            p.request.settings.plan = plan;
+            let mut out = Vec::new();
+            p.acp_session(&mut out).unwrap();
+            let new = last(&mut out);
+            p.frame(json!({"id":new["id"],"result":{"sessionId":"s","modes":{"availableModes":[{"id":"default"},{"id":"accept-edits"},{"id":"plan"}]}}}), &mut out).unwrap();
+            let set_mode = last(&mut out);
+            assert_eq!(set_mode["method"], "session/set_mode");
+            assert_eq!(set_mode["params"]["modeId"], mode);
+            p.frame(json!({"id":set_mode["id"],"result":{}}), &mut out)
+                .unwrap();
+            assert_eq!(last(&mut out)["method"], "session/prompt");
+            let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":kind},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+            assert!(events.is_empty());
+            assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], selected);
+        }
+    }
+
+    #[test]
+    fn antigravity_modes_accept_config_choices_and_legacy_servers() {
+        let mut settings = Settings {
+            access: AccessMode::AutoAcceptEdits,
+            ..Default::default()
+        };
+        let config = json!({"configOptions":[{"id":"permissions","category":"mode","options":[{"options":[{"value":"default"},{"value":"accept-edits"},{"value":"plan"}]}]}]});
+        assert_eq!(antigravity_mode(&settings, &config), "accept-edits");
+        assert_eq!(antigravity_mode(&settings, &json!({})), "auto_edit");
+        settings.access = AccessMode::FullAccess;
+        assert_eq!(antigravity_mode(&settings, &config), "default");
+        assert_eq!(antigravity_mode(&settings, &json!({})), "yolo");
+        assert_eq!(
+            antigravity_mode(
+                &settings,
+                &json!({"modes":{"availableModes":[{"id":"default"},{"id":"yolo"}]}})
+            ),
+            "yolo"
+        );
+        settings.plan = true;
+        assert_eq!(antigravity_mode(&settings, &config), "plan");
+        assert_eq!(antigravity_mode(&settings, &json!({})), "default");
+        settings.plan = false;
+        assert_eq!(
+            antigravity_mode(&settings, &json!({"modes":{"availableModes":[]}})),
+            "default"
+        );
+    }
+
     #[test]
     fn every_acp_provider_runs_its_native_session_lifecycle() {
         for kind in Kind::ALL.into_iter().filter(|k| k.is_acp()) {

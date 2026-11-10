@@ -66,6 +66,7 @@ impl Kind {
     pub fn binary_name(self) -> &'static str {
         match self {
             Self::Cursor => "cursor-agent",
+            Self::Antigravity if cfg!(windows) => "agy_acp_server.exe",
             Self::Antigravity => "agy_acp_server.par",
             _ => self.id(),
         }
@@ -100,7 +101,7 @@ impl Kind {
             Self::Cursor => "Cursor CLI",
             Self::Grok => "Grok Build CLI",
             Self::OpenCode => "OpenCode CLI",
-            Self::Antigravity => "Antigravity ACP server (agy_acp_server.par)",
+            Self::Antigravity => "Antigravity CLI (agy acp) or standalone ACP server",
             Self::Pi => "Pi CLI",
             Self::Omp => "omp CLI",
             Self::Fx => "fx CLI",
@@ -157,7 +158,7 @@ mod tests {
     fn unavailable_hint_matches_the_react_copy() {
         assert_eq!(
             Kind::Antigravity.unavailable_hint(),
-            "Antigravity ACP server (agy_acp_server.par) not found. Install it, or restart MonoCode if it is already installed."
+            "Antigravity CLI (agy acp) or standalone ACP server not found. Install it, or restart MonoCode if it is already installed."
         );
         assert_eq!(
             Kind::Pi.unavailable_hint(),
