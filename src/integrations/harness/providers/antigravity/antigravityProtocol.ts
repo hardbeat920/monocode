@@ -39,13 +39,14 @@ export function antigravityPromptBlocks(
   return promptBlocks(text, attachments);
 }
 
-/** Standalone servers locate sibling resources from their process directory. */
+/** Use the workspace for CLI launchers and the binary directory for standalone resources. */
 export function antigravitySpawnCwd(binary: string, fallback: string): string {
   const separator = Math.max(binary.lastIndexOf("/"), binary.lastIndexOf("\\"));
-  if (/^agy(?:\.exe)?$/i.test(binary.slice(separator + 1))) return fallback;
+  if (/^agy(?:\.(?:exe|cmd|bat|com))?$/i.test(binary.slice(separator + 1))) return fallback;
   return separator >= 0 ? binary.slice(0, separator + 1) : fallback;
 }
 
+/** Map permissions to advertised ACP modes, falling back to the legacy server contract. */
 export function antigravityModeId(
   runtimeMode: RuntimeMode,
   planning = false,

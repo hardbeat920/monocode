@@ -22,4 +22,6 @@ Once a provider is installed and signed in, open a project folder in MonoCode, c
 
 Both the production desktop app and the GPUI native preview support Antigravity's built-in `agy acp` server, including Windows auto-detection from `%LOCALAPPDATA%\agy\bin`. In either app, an explicit CLI path can select `agy` / `agy.exe` when a standalone ACP server is also installed. The CLI reuses its cached sign-in; standalone servers keep their own authentication configuration.
 
+Windows headless hosts also accept `agy.cmd` / `agy.bat` wrappers that only forward `%*` to a native `agy.exe` / `agy.com`, using an absolute path or a path relative to `%~dp0`. Additional batch logic is rejected; select the native executable directly for those installations.
+
 To run MonoCode from a checkout, see [building from source](building.md). Return to the [README](../README.md) for desktop downloads.

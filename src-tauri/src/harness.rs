@@ -144,6 +144,7 @@ pub struct AntigravityBinary {
     pub args: Vec<String>,
 }
 
+/// Select the CLI's ACP subcommand or the standalone server's platform arguments.
 fn antigravity_args(path: &Path) -> Vec<String> {
     if configured_binary_name_eq(path, "agy") {
         vec!["acp".into()]
@@ -398,6 +399,7 @@ pub fn harness_resolve_opencode() -> Result<CursorBinary, String> {
         })
 }
 
+/// Validate a configured provider executable and return its required launch arguments.
 #[tauri::command(async)]
 pub fn harness_resolve_configured(
     provider: String,
@@ -2120,6 +2122,7 @@ fn configured_binary_fingerprint(path: &Path) -> Option<String> {
     }
 }
 
+/// Validate a configured executable's provider identity and cache unchanged-file checks.
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
     let names: &[&str] = match provider {
         "claude" => &["claude"],
@@ -2526,6 +2529,7 @@ fn resolve_devin() -> Option<PathBuf> {
     first_binary(candidates)
 }
 
+/// Prefer existing standalone ACP installs, then discover the CLI's embedded server.
 fn resolve_antigravity() -> Option<PathBuf> {
     // Preserve existing standalone installs and their separate configuration.
     let server = if cfg!(windows) {
@@ -3179,6 +3183,7 @@ fn load_unix_login_shell_env() -> HashMap<String, String> {
 mod antigravity_launch_tests {
     use super::*;
 
+    /// Check CLI arguments, standalone platform flags, and managed ACP process recognition.
     #[test]
     fn cli_uses_acp_and_standalone_retains_platform_args() {
         assert_eq!(antigravity_args(Path::new("agy")), vec!["acp"]);
@@ -3201,6 +3206,7 @@ mod antigravity_launch_tests {
         assert!(!looks_like_harness_argv("/tools/agy --help"));
     }
 
+    /// Accept configured Windows paths to both CLI and standalone Antigravity executables.
     #[test]
     #[cfg(windows)]
     fn accepts_windows_cli_and_standalone_overrides() {
@@ -4060,6 +4066,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Keep standalone launch arguments consistent with the official platform registry.
     #[test]
     fn antigravity_launch_args_match_the_platform_registry() {
         if cfg!(target_os = "linux") {

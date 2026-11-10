@@ -2,7 +2,14 @@ import { createReadStream } from "node:fs";
 import { access, readFile, realpath, readlink, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, extname, join, basename } from "node:path";
+import {
+  delimiter,
+  dirname,
+  extname,
+  join,
+  basename,
+  isAbsolute,
+} from "node:path";
 import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
 const npmEntries: Record<string, string> = {
@@ -27,6 +34,7 @@ const binaryNames: Record<RemoteProvider, string[]> = {
   devin: ["devin"],
 };
 
+/** Collect PATH and standard provider installation directories for discovery. */
 const providerDirectories = (provider: RemoteProvider): string[] => {
   const home = homedir();
   const extra: Partial<Record<RemoteProvider, string[]>> = {
@@ -223,16 +231,45 @@ export function antigravityArgs(
   command: string,
   platform = process.platform,
 ): string[] {
-  return /^agy(?:\.exe)?$/i.test(basename(command))
+  return /^agy(?:\.(?:exe|cmd|bat|com))?$/i.test(basename(command))
     ? ["acp"]
     : platform === "linux"
       ? ["--uid="]
       : [];
 }
 
-/** npm's Windows .cmd wrappers cannot be spawned directly. Run their known
- * package entry point with the bundled Node, preserving argv without a shell.
- * Custom .cmd/.bat wrappers are deliberately not interpreted as shell text. */
+/** Resolve a one-command agy batch forwarder without evaluating shell text.
+ * Only a quoted/literal absolute target or %~dp0-relative agy.exe/agy.com plus
+ * %* is accepted, optionally preceded by echo off. Other batch logic is rejected. */
+async function antigravityWrapperTarget(command: string): Promise<string> {
+  if ((await stat(command)).size > 16 * 1024)
+    throw new Error("Unsupported Antigravity Windows wrapper");
+  const lines = (await readFile(command, "utf8"))
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^@?echo\s+off$/i.test(line));
+  const forward =
+    lines.length === 1
+      ? /^@?(?:"([^"\r\n]+)"|([^\s"\r\n]+))\s+%\*$/.exec(lines[0])
+      : null;
+  const target = forward?.[1] ?? forward?.[2];
+  if (!target) throw new Error("Unsupported Antigravity Windows wrapper");
+  const relative = /^%~dp0(.*)$/i.exec(target);
+  const native = relative ? join(dirname(command), relative[1]) : target;
+  if (
+    native.includes("%") ||
+    !isAbsolute(native) ||
+    !/^agy\.(exe|com)$/i.test(basename(native))
+  )
+    throw new Error("Unsupported Antigravity Windows wrapper target");
+  if (!(await stat(native)).isFile())
+    throw new Error("Missing Antigravity Windows wrapper target");
+  return native;
+}
+
+/** Spawn known npm entry points or constrained agy native forwarders directly.
+ * Custom .cmd/.bat files are never interpreted as shell text; arguments stay literal. */
 export async function providerLaunch(
   command: string,
   args: string[],
@@ -240,6 +277,8 @@ export async function providerLaunch(
 ): Promise<{ command: string; args: string[] }> {
   if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
     const provider = basename(command, extname(command)).toLowerCase();
+    if (provider === "agy")
+      return { command: await antigravityWrapperTarget(command), args };
     const relative = npmEntries[provider];
     if (!relative) throw new Error("Unsupported Windows provider launcher");
     const entry = join(dirname(command), relative);

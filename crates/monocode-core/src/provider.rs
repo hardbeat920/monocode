@@ -143,6 +143,7 @@ pub fn resolve(kind: Kind) -> Option<PathBuf> {
     }
     resolve_auto(kind)
 }
+/// Discover a provider from its environment override, GUI PATH, or standard install locations.
 pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
     let key = format!("MONOCODE_{}_BINARY", kind.id().to_uppercase());
     if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
@@ -220,6 +221,7 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
     resolve_candidates(kind, candidates)
 }
 
+/// Choose the first executable matching the provider, including Windows launcher extensions.
 fn resolve_candidates(kind: Kind, candidates: Vec<PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find_map(|p| {
         #[cfg(windows)]
@@ -1388,6 +1390,7 @@ fn run_process(
     run_operation(request, cancel, controls, probe, false, false, emit)
 }
 
+/// Drive a provider operation with isolated process I/O, cancellation, and streamed events.
 fn run_operation(
     request: Request,
     cancel: Arc<AtomicBool>,

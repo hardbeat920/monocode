@@ -48,6 +48,7 @@ pub(super) struct State {
     mode: Option<&'static str>,
 }
 
+/// Configure provider-specific ACP launch arguments before spawning the transport.
 pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), String> {
     let settings = &request.settings;
     match request.kind {
@@ -324,6 +325,7 @@ impl Protocol {
             )
         }
     }
+    /// Queue model and mode choices supported by the session's advertised configuration.
     fn acp_options(&mut self, setup: &Value) -> Result<(), String> {
         let kind = self.request.kind;
         let settings = &self.request.settings;
@@ -1127,6 +1129,7 @@ impl Protocol {
     }
 }
 
+/// Choose an advertised Antigravity permission mode, retaining legacy IDs when none are listed.
 fn antigravity_mode(settings: &Settings, setup: &Value) -> &'static str {
     let modes = setup["modes"]["availableModes"]
         .as_array()
@@ -1455,6 +1458,7 @@ mod tests {
         let text = String::from_utf8(std::mem::take(out)).unwrap();
         serde_json::from_str(text.lines().last().unwrap()).unwrap()
     }
+    /// Pass the ACP subcommand only when the selected Antigravity launcher is the CLI.
     #[test]
     fn antigravity_configure_uses_the_selected_launcher() {
         let mut p = protocol(Kind::Antigravity);
@@ -1472,6 +1476,7 @@ mod tests {
         }
     }
 
+    /// Exercise advertised modes through the session lifecycle and client permission decisions.
     #[test]
     fn antigravity_advertised_modes_preserve_native_permission_decisions() {
         for (access, plan, mode, kind, selected) in [
@@ -1505,6 +1510,7 @@ mod tests {
         }
     }
 
+    /// Preserve legacy modes and accept grouped choices from current CLI configuration.
     #[test]
     fn antigravity_modes_accept_config_choices_and_legacy_servers() {
         let mut settings = Settings {

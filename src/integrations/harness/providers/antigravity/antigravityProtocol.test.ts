@@ -11,6 +11,10 @@ const providers = [
 
 it("uses the workspace cwd for agy acp and sibling resources for standalone servers", () => {
   expect(antigravity.antigravitySpawnCwd("C:\\tools\\agy.exe", "C:\\repo")).toBe("C:\\repo");
+  for (const extension of ["cmd", "bat", "com"]) {
+    expect(antigravity.antigravitySpawnCwd(`C:\\tools\\AGY.${extension.toUpperCase()}`, "C:\\repo")).toBe("C:\\repo");
+  }
+  expect(antigravity.antigravitySpawnCwd("C:\\tools\\other.cmd", "C:\\repo")).toBe("C:\\tools\\");
   expect(antigravity.antigravitySpawnCwd("/usr/local/bin/agy", "/repo")).toBe("/repo");
   expect(antigravity.antigravitySpawnCwd("C:\\tools\\agy_acp_server.exe", "C:\\repo")).toBe("C:\\tools\\");
   expect(antigravity.antigravitySpawnCwd("/tools/agy_acp_server.par", "/repo")).toBe("/tools/");

@@ -622,6 +622,7 @@ async function applyModelSelection(
   }
 }
 
+/** Apply the requested permission mode before sending a prompt; reject failed mode changes. */
 async function applyRuntimeMode(
   live: Live,
   runtimeMode: RuntimeMode,

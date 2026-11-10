@@ -63,6 +63,7 @@ impl Kind {
     pub fn from_id(id: &str) -> Self {
         Self::parse(id).unwrap_or(Self::Codex)
     }
+    /// Return the provider's primary executable name for the current platform.
     pub fn binary_name(self) -> &'static str {
         match self {
             Self::Cursor => "cursor-agent",
@@ -154,6 +155,7 @@ mod tests {
         assert_eq!(Kind::parse("unknown"), None);
         assert_eq!(Kind::Cursor.binary_name(), "cursor-agent");
     }
+    /// Keep native missing-provider guidance consistent with the production app.
     #[test]
     fn unavailable_hint_matches_the_react_copy() {
         assert_eq!(

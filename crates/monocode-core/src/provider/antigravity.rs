@@ -1,6 +1,7 @@
 //! Launch contracts for the standalone runtime and the CLI's built-in ACP server.
 use super::*;
 
+/// Recognize CLI names and Windows wrappers that require the ACP subcommand.
 pub(super) fn is_cli(binary: &Path) -> bool {
     binary
         .file_name()
@@ -14,6 +15,7 @@ pub(super) fn is_cli(binary: &Path) -> bool {
         })
 }
 
+/// Select CLI arguments or the standalone Linux runtime's required uid flag.
 pub(super) fn launch_args(binary: &Path) -> &'static [&'static str] {
     if is_cli(binary) {
         &["acp"]
@@ -24,6 +26,7 @@ pub(super) fn launch_args(binary: &Path) -> &'static [&'static str] {
     }
 }
 
+/// Keep CLI sessions in their workspace and standalone servers beside their resources.
 pub(super) fn spawn_cwd<'a>(binary: &'a Path, cwd: &'a Path) -> &'a Path {
     if is_cli(binary) {
         cwd
@@ -32,6 +35,7 @@ pub(super) fn spawn_cwd<'a>(binary: &'a Path, cwd: &'a Path) -> &'a Path {
     }
 }
 
+/// Append standard Windows server paths, then CLI fallbacks after every standalone candidate.
 pub(super) fn extend_candidates(candidates: &mut Vec<PathBuf>, local: Option<&Path>) {
     if let Some(local) = local {
         candidates.push(local.join("agy-acp/agy_acp_server.exe"));
@@ -52,6 +56,7 @@ pub(super) fn extend_candidates(candidates: &mut Vec<PathBuf>, local: Option<&Pa
 mod tests {
     use super::*;
 
+    /// Create an executable discovery fixture without invoking any provider.
     fn fixture(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "ACP fixture; discovery must not execute it").unwrap();
@@ -62,6 +67,7 @@ mod tests {
         }
     }
 
+    /// Prefer an existing standalone runtime and use the CLI when it is removed.
     #[test]
     fn discovery_preserves_standalone_then_falls_back_to_cli() {
         let dir = tempfile::tempdir().unwrap();
@@ -81,6 +87,7 @@ mod tests {
         assert_eq!(resolve_candidates(Kind::Antigravity, candidates), Some(cli));
     }
 
+    /// Find the Windows CLI and standalone runtime even when neither is on PATH.
     #[test]
     #[cfg(windows)]
     fn discovery_finds_official_windows_install_without_path() {
@@ -101,6 +108,7 @@ mod tests {
         );
     }
 
+    /// Verify CLI argv/workspace selection and standalone resource-directory behavior.
     #[test]
     fn launch_uses_workspace_for_cli_and_sibling_resources_for_standalone() {
         let cwd = Path::new("workspace");
@@ -131,6 +139,7 @@ mod tests {
         );
     }
 
+    /// Opt in to authenticated catalog discovery without sending a model prompt.
     #[test]
     #[ignore = "requires an installed, signed-in Antigravity CLI; no model prompt is sent"]
     fn installed_cli_discovers_authenticated_catalog() {

@@ -130,6 +130,7 @@ export class HostChildBackend implements ChildBackend {
     this.events.emit(event, { payload });
   }
 
+  /** Dispatch process, catalog, and filesystem operations for the headless harness bridge. */
   async invoke<T>(
     command: string,
     args: Record<string, unknown> = {},

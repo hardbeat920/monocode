@@ -43,6 +43,11 @@ it.each(["win32", "linux", "darwin"] as const)(
   (platform) => {
     expect(antigravityArgs("/tools/agy", platform)).toEqual(["acp"]);
     expect(antigravityArgs("/tools/agy.exe", platform)).toEqual(["acp"]);
+    for (const extension of ["cmd", "bat", "com"]) {
+      expect(
+        antigravityArgs(`/tools/AGY.${extension.toUpperCase()}`, platform),
+      ).toEqual(["acp"]);
+    }
     expect(antigravityArgs("/tools/agy_acp_server.par", platform)).toEqual(
       platform === "linux" ? ["--uid="] : [],
     );
