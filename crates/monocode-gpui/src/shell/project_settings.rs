@@ -221,10 +221,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let view = self.background_dialog.as_ref()?.view.clone();
+        let centered = matches!(&view, ProjectDialog::Folders(_));
         let viewport = window.viewport_size();
         let width = 420f32.min(viewport.width.as_f32() - 24.);
         let (measured, popup_region, view): (_, _, gpui::AnyView) = match view {
-            ProjectDialog::Folders(view) => (440., Default::default(), view.into()),
+            ProjectDialog::Folders(view) => (0., Default::default(), view.into()),
             ProjectDialog::Background(view) => (
                 view.read(cx).measured_height().unwrap_or(622.),
                 view.read(cx).popup_region(),
@@ -237,10 +238,14 @@ impl Shell {
             ),
         };
         let height = (measured + 2.).min(viewport.height.as_f32() - 32.);
-        let anchor = Anchor::Point(gpui::point(
-            px((viewport.width.as_f32() - width) / 2.),
-            px((viewport.height.as_f32() - height) / 2.),
-        ));
+        let anchor = if centered {
+            Anchor::Center
+        } else {
+            Anchor::Point(gpui::point(
+                px((viewport.width.as_f32() - width) / 2.),
+                px((viewport.height.as_f32() - height) / 2.),
+            ))
+        };
         let weak = cx.weak_entity();
         Some(
             div()
