@@ -3595,13 +3595,17 @@ mod composer_motion_tests {
                 cx.notify();
             })
             .unwrap();
+        let mut initial_position = None;
         for _ in 0..8 {
             cx.refresh().unwrap();
             let geometry = window
                 .update(cx, |c, _, cx| c.input.read(cx).diagnostic_geometry())
                 .unwrap();
-            assert!(geometry.0.unwrap().size.height < px(22.));
+            let bounds = geometry.0.unwrap();
+            assert!(bounds.size.height < px(22.));
             assert_eq!(geometry.1, px(0.));
+            let position = bounds.top() - geometry.1;
+            assert_eq!(*initial_position.get_or_insert(position), position);
         }
     }
     #[gpui::test]
