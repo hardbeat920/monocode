@@ -477,6 +477,14 @@ pub(crate) fn run(
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
+    let validation = locked(&store).and_then(|store| store.project_folders(&summary.cwd)).and_then(|folders| {
+        if settings.additional_folders.as_ref().is_none_or(Vec::is_empty) && folders.additional.is_empty() { Ok(()) }
+        else { Err("Additional folders are not supported for remote projects. Remove them in Project settings before sending.".into()) }
+    });
+    if let Err(error) = validation {
+        let _ = tx.send_blocking(update(error, true));
+        return;
+    }
     match monocode_core::remote::default_connections() {
         Ok(client) => run_with_client(
             client, summary, prompt, settings, controls, store, cancel, tx,
@@ -504,6 +512,15 @@ pub(crate) fn run_with_client(
     let result = (|| -> Result<(), String> {
         if tx.is_closed() {
             return Ok(());
+        }
+        let folders = locked(&store)?.project_folders(&summary.cwd)?;
+        if !settings
+            .additional_folders
+            .as_ref()
+            .is_none_or(Vec::is_empty)
+            || !folders.additional.is_empty()
+        {
+            return Err("Additional folders are not supported for remote projects. Remove them in Project settings before sending.".into());
         }
         let operation = operation_lock(&store, summary.id);
         let guard = operation

@@ -11,6 +11,8 @@ use std::sync::{
 use std::time::Duration;
 pub(crate) mod contributions;
 #[cfg(all(test, unix))]
+mod folders_tests;
+#[cfg(all(test, unix))]
 mod follow_up_tests;
 mod handoff;
 #[cfg(all(test, unix))]
@@ -151,6 +153,11 @@ fn run_turn_using(
         .unwrap_or_default();
     let mut usage_limit = None;
     let result = (|| {
+        if !settings.text_only {
+            locked(&store)?
+                .project_folders(&summary.cwd)?
+                .validate_support(Kind::from_id(&summary.provider), &summary.cwd)?;
+        }
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
             return Err(reason);
         }
@@ -580,6 +587,16 @@ fn run_turn_using(
             if let Some(discovery) = &visual_introduction {
                 prompt = discovery.prepend(prompt);
             }
+        }
+        settings.additional_folders = None;
+        if !settings.text_only
+            && let Some(folders) = locked(&store)?.project_folder_snapshot(&summary.cwd)?
+        {
+            folders.validate_support(kind, &summary.cwd)?;
+            if !folders.additional.is_empty() {
+                folders.validate(std::path::Path::new(&summary.cwd))?;
+            }
+            settings.additional_folders = Some(folders.additional);
         }
         let request = Request {
             kind,

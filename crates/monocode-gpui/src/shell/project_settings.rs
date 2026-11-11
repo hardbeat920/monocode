@@ -15,8 +15,40 @@ pub(super) struct OpenBackground {
 enum ProjectDialog {
     Background(Entity<BackgroundDialog>),
     Theme(Entity<ThemeDialog>),
+    Folders(Entity<crate::project_folders::FoldersDialog>),
 }
 impl Shell {
+    pub(super) fn open_project_folders(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu(cx);
+        self.close_preview(cx);
+        let provider = self
+            .workspace
+            .active
+            .and_then(|id| self.sessions.get(&id))
+            .filter(|session| session.read(cx).summary.cwd == path)
+            .map(|session| Kind::from_id(&session.read(cx).summary.provider))
+            .unwrap_or(Kind::Codex);
+        let view = cx.new(|cx| {
+            crate::project_folders::FoldersDialog::new(
+                path.clone(),
+                provider,
+                self.store.clone(),
+                cx,
+            )
+        });
+        let events = self.project_dialog_events(&view, path, window, cx);
+        window.focus(&view.focus_handle(cx), cx);
+        self.background_dialog = Some(OpenBackground {
+            view: ProjectDialog::Folders(view),
+            _events: events,
+        });
+        cx.notify();
+    }
     pub(super) fn appearance(&self, path: &str) -> ProjectAppearance {
         self.workspace
             .project_appearance
@@ -192,6 +224,7 @@ impl Shell {
         let viewport = window.viewport_size();
         let width = 420f32.min(viewport.width.as_f32() - 24.);
         let (measured, popup_region, view): (_, _, gpui::AnyView) = match view {
+            ProjectDialog::Folders(view) => (440., Default::default(), view.into()),
             ProjectDialog::Background(view) => (
                 view.read(cx).measured_height().unwrap_or(622.),
                 view.read(cx).popup_region(),
