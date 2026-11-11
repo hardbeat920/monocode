@@ -681,7 +681,7 @@ impl Changes {
                 this.generate_cancel = None;
                 this.busy = None;
                 match result {
-                    Ok(message) => this.message.update(cx, |m, cx| m.set_text(message, cx)),
+                    Ok(message) => this.message.update(cx, |m, cx| m.replace_all(message, cx)),
                     Err(error) => Self::fail(error, window, cx),
                 }
                 cx.notify();
@@ -703,7 +703,7 @@ impl Changes {
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(head) => {
                     if this.message.read(cx).content.trim().is_empty() {
-                        this.message.update(cx, |m, cx| m.set_text(head, cx));
+                        this.message.update(cx, |m, cx| m.replace_all(head, cx));
                     }
                     let index = this.index(cx);
                     this.amend = Some((
