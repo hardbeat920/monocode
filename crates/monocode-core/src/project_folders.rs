@@ -18,7 +18,24 @@ impl ProjectFolders {
         Ok(())
     }
     pub fn validate(&self, primary: &Path) -> Result<(), String> {
-        let mut seen = vec![directory(primary)?];
+        let primary = directory(primary)?;
+        for path in self.validated_additional()? {
+            if path == primary {
+                return Err(format!("Folder is already included: {}", path.display()));
+            }
+        }
+        Ok(())
+    }
+    pub fn for_execution(&self, cwd: &Path) -> Result<Vec<PathBuf>, String> {
+        let additional = self.validated_additional()?;
+        if additional.is_empty() {
+            return Ok(additional);
+        }
+        let cwd = directory(cwd)?;
+        Ok(additional.into_iter().filter(|path| path != &cwd).collect())
+    }
+    fn validated_additional(&self) -> Result<Vec<PathBuf>, String> {
+        let mut seen = Vec::new();
         for path in &self.additional {
             let normalized = directory(path)?;
             if &normalized != path {
@@ -32,7 +49,7 @@ impl ProjectFolders {
             }
             seen.push(normalized);
         }
-        Ok(())
+        Ok(seen)
     }
 }
 fn directory(path: &Path) -> Result<PathBuf, String> {
@@ -154,11 +171,49 @@ mod tests {
             .validate(&primary)
             .unwrap_err()
             .contains("target changed"));
+        assert!(folders
+            .for_execution(&replacement)
+            .unwrap_err()
+            .contains("target changed"));
+        assert!(folders
+            .for_execution(&extra)
+            .unwrap_err()
+            .contains("target changed"));
         assert!(store
             .remove_project_folder(primary.to_str().unwrap(), &extra)
             .unwrap()
             .additional
             .is_empty());
+    }
+    #[test]
+    fn execution_excludes_cwd_only_after_validating_all_additional_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().canonicalize().unwrap();
+        let extra = cwd.join("extra");
+        std::fs::create_dir(&extra).unwrap();
+        let folders = ProjectFolders {
+            additional: vec![cwd.clone(), extra.clone()],
+        };
+        assert!(folders
+            .validate(&cwd)
+            .unwrap_err()
+            .contains("already included"));
+        assert_eq!(folders.for_execution(dir.path()).unwrap(), vec![extra]);
+        let duplicate_cwd = ProjectFolders {
+            additional: vec![cwd.clone(), cwd.clone()],
+        };
+        assert!(duplicate_cwd
+            .for_execution(&cwd)
+            .unwrap_err()
+            .contains("already included"));
+    }
+    #[test]
+    fn empty_execution_folders_do_not_require_an_existing_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let folders = ProjectFolders::default();
+        assert!(folders.for_execution(&missing).unwrap().is_empty());
+        assert!(folders.validate(&missing).is_err());
     }
     #[test]
     fn unsupported_requests_and_persisted_execution_snapshots_are_rejected() {

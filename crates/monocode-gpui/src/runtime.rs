@@ -153,10 +153,13 @@ fn run_turn_using(
         .unwrap_or_default();
     let mut usage_limit = None;
     let result = (|| {
-        if !settings.text_only {
-            locked(&store)?
-                .project_folders(&summary.cwd)?
-                .validate_support(Kind::from_id(&summary.provider), &summary.cwd)?;
+        let folder_snapshot = if settings.text_only {
+            None
+        } else {
+            locked(&store)?.project_folder_snapshot(&summary.cwd)?
+        };
+        if let Some(folders) = &folder_snapshot {
+            folders.validate_support(Kind::from_id(&summary.provider), &summary.cwd)?;
         }
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
             return Err(reason);
@@ -589,9 +592,7 @@ fn run_turn_using(
             }
         }
         settings.additional_folders = None;
-        if !settings.text_only
-            && let Some(folders) = locked(&store)?.project_folder_snapshot(&summary.cwd)?
-        {
+        if let Some(folders) = folder_snapshot {
             folders.validate_support(kind, &summary.cwd)?;
             if !folders.additional.is_empty() {
                 folders.validate(std::path::Path::new(&summary.cwd))?;

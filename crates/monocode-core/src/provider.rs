@@ -1432,16 +1432,10 @@ fn run_operation(
     if request.settings.text_only {
         request.settings.additional_folders = None;
     }
-    let folders = crate::project_folders::ProjectFolders {
-        additional: request
-            .settings
-            .additional_folders
-            .clone()
-            .unwrap_or_default(),
-    };
-    folders.validate_support(request.kind, &request.cwd.to_string_lossy())?;
-    if !folders.additional.is_empty() {
-        folders.validate(&request.cwd)?;
+    if let Some(additional) = request.settings.additional_folders.take() {
+        let folders = crate::project_folders::ProjectFolders { additional };
+        folders.validate_support(request.kind, &request.cwd.to_string_lossy())?;
+        request.settings.additional_folders = Some(folders.for_execution(&request.cwd)?);
     }
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
