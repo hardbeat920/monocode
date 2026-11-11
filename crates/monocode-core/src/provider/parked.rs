@@ -305,6 +305,7 @@ pub(super) fn key(request: &Request) -> String {
         request.model,
         settings,
         request.settings.environment,
+        request.settings.additional_folders,
         request
             .settings
             .mono
@@ -628,7 +629,7 @@ with open({:?},'a') as f: f.write(str(os.getpid())+'\n')
 def send(v): print(json.dumps(v),flush=True)
 for line in sys.stdin:
  v=json.loads(line)
- if v.get('id')==1: send({{'id':1,'result':{{}}}})
+ if v.get('id')==1: send({{'id':1,'result':{{'userAgent':'Monocode/0.167.1'}}}})
  elif v.get('id')==2: send({{'id':2,'result':{{'thread':{{'id':'settings-thread'}}}}}})
  elif v.get('id')==3:
   send({{'method':'item/agentMessage/delta','params':{{'itemId':'answer','delta':'ok'}}}})
@@ -647,8 +648,12 @@ for line in sys.stdin:
             prompt: "hello".into(),
             provider_id: None,
             model: None,
-            settings: Settings::default(),
+            settings: Settings {
+                additional_folders: Some(vec![dir.path().canonicalize().unwrap().join("extra")]),
+                ..Default::default()
+            },
         };
+        std::fs::create_dir(dir.path().join("extra")).unwrap();
         run(
             request.clone(),
             Arc::new(AtomicBool::new(false)),

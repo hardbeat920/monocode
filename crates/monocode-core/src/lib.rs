@@ -21,6 +21,7 @@ pub mod mono;
 pub mod notes;
 pub mod process;
 pub mod project_appearance;
+pub mod project_folders;
 pub mod provider;
 pub mod remote;
 pub mod resources;

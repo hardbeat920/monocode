@@ -88,6 +88,9 @@ impl AccessMode {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// None은 미설정, Some([])는 연결 폴더를 모두 제거한 관리 상태다.
+    #[serde(skip)]
+    pub additional_folders: Option<Vec<std::path::PathBuf>>,
     /// Native remote control invocation, never saved as provider configuration.
     #[serde(skip)]
     pub remote_action: Option<serde_json::Value>,
