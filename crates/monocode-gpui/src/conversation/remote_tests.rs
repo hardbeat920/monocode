@@ -500,3 +500,63 @@ fn ambiguous_legacy_requests_block_send_retry_and_restore_without_consuming_draf
         })
     });
 }
+
+/// Renders the remote-plan reader the conversation already holds.
+struct PlanReader(Entity<TranscriptView>);
+impl gpui::Render for PlanReader {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.0.clone())
+    }
+}
+
+#[gpui::test]
+fn plan_snapshots_keep_a_selection_only_while_its_text_is_unchanged(cx: &mut TestAppContext) {
+    let view = conversation(cx);
+    let snapshot = |text: &str| {
+        json!({"session": {"blocks": [
+            {"id": "plan-1", "role": "plan", "text": text, "streaming": true}
+        ]}})
+    };
+    let first = "# Plan\n\nKeep this step.";
+    let reader = cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.install_remote_plans(&snapshot(first), cx);
+            view.remote_plan_request("plan-1", first, false, cx);
+            view.remote_plan_view().unwrap()
+        })
+    });
+    let window = cx.add_window(|_, _| PlanReader(reader.clone()));
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let selected = |visual: &mut gpui::VisualTestContext| {
+        reader.read_with(visual, |reader, _| reader.selection_text_for_test())
+    };
+    crate::transcript::selection::drag_across_prose(visual, &reader, "Keep this step.");
+    assert_eq!(selected(visual).as_deref(), Some("Keep this step."));
+
+    // The stream appends a step: the selected one reads the same, so it stays.
+    let longer = "# Plan\n\nKeep this step.\n\nThen another.";
+    view.update(visual, |view, cx| {
+        view.install_remote_plans(&snapshot(longer), cx)
+    });
+    visual.run_until_parked();
+    assert_eq!(selected(visual).as_deref(), Some("Keep this step."));
+    assert!(reader.read_with(visual, |reader, _| reader.selection_menu_open()));
+
+    // The host rewrites the step: the selection must not read the new words.
+    let rewritten = "# Plan\n\nSkip that idea.\n\nThen another.";
+    view.update(visual, |view, cx| {
+        view.install_remote_plans(&snapshot(rewritten), cx)
+    });
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(visual, |view, _| view
+            .remote_plan_view()
+            .unwrap()
+            .entity_id()),
+        reader.entity_id(),
+        "the plan is patched in place"
+    );
+    assert_eq!(selected(visual), None);
+    assert!(!reader.read_with(visual, |reader, _| reader.selection_menu_open()));
+}

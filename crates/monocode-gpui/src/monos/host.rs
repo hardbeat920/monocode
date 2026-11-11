@@ -706,8 +706,6 @@ impl Monos {
                                     m.documents.push(document.clone());
                                 }
                             }
-                            self.documents.remove(&id);
-                            self.html_documents.remove(&id);
                             self.hold_card(call.session,&mono.id,json!({"id":mono::new_id(),"type":"document","documentId":id,"title":document.title,"summary":document.summary}));
                             self.save(cx);
                             Ok(json!(document))

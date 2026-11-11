@@ -906,7 +906,17 @@ impl TranscriptView {
         // A document reads from its top. Chat's tail-follow would open it
         // scrolled to the end and keep it pinned there on every rebuild.
         view.list.set_follow_mode(FollowMode::Normal);
-        view.patch(
+        view.set_document_text(text, cx);
+        view.list.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        view
+    }
+    /// Replace a document's text in place, keeping its scroll position, focus
+    /// and any selection, as a streaming plan does on every delta.
+    pub(crate) fn set_document_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.patch(
             0,
             vec![Row {
                 role: "assistant".into(),
@@ -916,11 +926,6 @@ impl TranscriptView {
             }],
             cx,
         );
-        view.list.scroll_to(ListOffset {
-            item_ix: 0,
-            offset_in_item: px(0.),
-        });
-        view
     }
     /// liveAgents.ts's toLiveAgent: the last turn's latest tool, as "Read
     /// src/app.rs", when that turn was sent, and how long it ran once done.
@@ -3075,6 +3080,23 @@ impl TranscriptView {
     }
     /// `rebuild` for a caller that notifies itself.
     fn rebuild_rows(&mut self, start: usize, cx: &mut Context<Self>) {
+        // A selection is row keys and byte offsets. Rebuilt rows can put
+        // different text at those coordinates (an edited body, or a stream
+        // whose next delta reparses the paragraph), so keep the selection,
+        // and its open menu, only while it still reads the same text.
+        let selected = self
+            .selection
+            .has_range()
+            .then(|| self.selected_text())
+            .flatten();
+        self.rebuild_rows_unchecked(start, cx);
+        if let Some(selected) = selected
+            && self.selected_text().as_deref() != Some(selected.as_str())
+        {
+            self.selection.clear();
+        }
+    }
+    fn rebuild_rows_unchecked(&mut self, start: usize, cx: &mut Context<Self>) {
         #[cfg(test)]
         {
             self.rebuild_passes += 1;
@@ -5201,7 +5223,10 @@ impl TranscriptView {
                         },
                         self.reveals.get(&message_start).map(|r| &r.fades),
                         self.frame_now,
-                        if reasoning {
+                        // Chat keeps thinking out of selections; a document
+                        // (the activity view) is all reading, so its
+                        // reasoning selects like its code blocks do.
+                        if reasoning && !self.document {
                             None
                         } else {
                             self.text_selection(row.key, message_start, !user && !error, cx)
@@ -5214,6 +5239,10 @@ impl TranscriptView {
                     .when(self.mono, |d| {
                         let key = row.key;
                         d.debug_selector(move || format!("mono-prose-{}-{}", key.0, key.1))
+                    })
+                    .when(self.document, |d| {
+                        let key = row.key;
+                        d.debug_selector(move || format!("document-prose-{}-{}", key.0, key.1))
                     })
                     .w_full()
                     .flex()
