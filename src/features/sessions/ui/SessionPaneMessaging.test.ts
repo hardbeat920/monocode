@@ -155,8 +155,9 @@ it("displays and clears current extension statuses", () => {
   expect(announcements.textContent).not.toContain("TPS");
   render({ ...pane, session: { ...pane.session, extensionStatuses: { mode: "Coding mode" } } });
   expect(announcements.textContent).toContain("Coding mode");
-  render({ ...pane, session: { ...pane.session, extensionStatuses: { tps: "20 TPS" } } });
+  render({ ...pane, session: { ...pane.session, extensionStatuses: { tps: "20 TPS model mode" } } });
   expect(container.textContent).toContain("20 TPS");
+  expect(announcements.textContent).not.toContain("20 TPS");
   expect(container.textContent).not.toContain("10 TPS");
   render({ ...pane, session: { ...pane.session, extensionStatuses: {} } });
   expect(container.textContent).not.toContain("20 TPS");
