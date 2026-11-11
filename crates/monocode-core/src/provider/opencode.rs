@@ -273,6 +273,22 @@ fn shared_service(request: &Request, v2: bool) -> bool {
         .environment
         .contains_key("MONOCODE_APP_ENDPOINT")
 }
+fn serve_command(
+    request: &Request,
+    port: u16,
+    v2: bool,
+) -> Result<(Command, Option<String>), String> {
+    let mut command = command(request)?;
+    // v2 `serve` requires Basic auth; choose the password instead of parsing it.
+    // OpenCode prefers OPENCODE_PASSWORD over OPENCODE_SERVER_PASSWORD, so set
+    // the former to override any inherited value the client would not know.
+    let password = v2.then(|| uuid::Uuid::new_v4().simple().to_string());
+    if let Some(password) = &password {
+        command.env("OPENCODE_PASSWORD", password);
+    }
+    command.args(["serve", "--hostname=127.0.0.1", &format!("--port={port}")]);
+    Ok((command, password))
+}
 fn connect(
     request: &Request,
     cancel: &AtomicBool,
@@ -326,16 +342,8 @@ fn connect(
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     drop(listener);
-    // v2 `serve` requires Basic auth; choose the password instead of parsing it.
-    let password = v2.then(|| uuid::Uuid::new_v4().simple().to_string());
-    let mut command = command(request)?;
-    if let Some(password) = &password {
-        command.env("OPENCODE_SERVER_PASSWORD", password);
-    }
-    let mut child = command
-        .args(["serve", "--hostname=127.0.0.1", &format!("--port={port}")])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let (mut command, password) = serve_command(request, port, v2)?;
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
     let registration = process::register(child.id());
     let account = crate::accounts::track(child.id(), request.kind, &request.settings.account);
     let stdout = child.stdout.take().unwrap();
@@ -796,5 +804,38 @@ mod tests {
             .environment
             .insert("MONOCODE_APP_ENDPOINT".into(), "127.0.0.1:1".into());
         assert!(!shared_service(&request, true));
+    }
+
+    #[test]
+    fn serve_password_overrides_an_inherited_opencode_password() {
+        let mut request = Request {
+            kind: Kind::OpenCode,
+            binary: PathBuf::from("opencode"),
+            cwd: PathBuf::from("/project"),
+            prompt: "hello".into(),
+            provider_id: None,
+            model: None,
+            settings: Settings::default(),
+        };
+        request
+            .settings
+            .environment
+            .insert("OPENCODE_PASSWORD".into(), "inherited".into());
+        let (command, password) = serve_command(&request, 4096, true).unwrap();
+        let password = password.expect("v2 serve needs a password");
+        assert_ne!(password, "inherited");
+        let sent = command
+            .get_envs()
+            .find(|(key, _)| *key == "OPENCODE_PASSWORD")
+            .and_then(|(_, value)| value);
+        assert_eq!(sent, Some(std::ffi::OsStr::new(&password)));
+
+        let (command, password) = serve_command(&request, 4096, false).unwrap();
+        assert_eq!(password, None);
+        let sent = command
+            .get_envs()
+            .find(|(key, _)| *key == "OPENCODE_PASSWORD")
+            .and_then(|(_, value)| value);
+        assert_eq!(sent, Some(std::ffi::OsStr::new("inherited")));
     }
 }
