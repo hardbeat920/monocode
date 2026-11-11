@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cmd/Ctrl+Z undoes and Cmd/Ctrl+Shift+Z (Ctrl+Y on Windows and Linux) redoes in the composer and every other text field, not only the code editor. A run of typing or of Backspace/Delete is one step, and text the app writes into a field you are editing, such as a generated commit message, can be undone too.
+
 ### Fixed
 
 - A Mono's completion report for a delegated session now carries that session's final answer from its latest turn, instead of every progress message and earlier report with the answer cut off. A long answer keeps its ending and says how to read the rest.

@@ -36,8 +36,6 @@ pub(super) struct Code {
     visible: Vec<(usize, WrappedLine)>,
     reveal: bool,
     max_width: Pixels,
-    undo: Vec<(SharedString, Range<usize>)>,
-    redo: Vec<(SharedString, Range<usize>)>,
     wrap: bool,
     layout_width: Option<Pixels>,
     tops: Vec<f32>,
@@ -70,8 +68,6 @@ impl Code {
             visible: Vec::new(),
             reveal: true,
             max_width: px(0.),
-            undo: Vec::new(),
-            redo: Vec::new(),
             wrap: true,
             layout_width: None,
             tops: vec![TOP_PADDING, TOP_PADDING + 20.],
@@ -198,7 +194,8 @@ impl Input {
         if self.read_only || self.is_composing() || !self.accept_code_edit(&range, text, cx) {
             return;
         }
-        self.record_undo();
+        let caret = range.start + cursor.min(text.len());
+        self.record_undo(EditKind::Other, &range, caret, cx);
         self.map_code_folds(&range, text.len());
         self.content = format!(
             "{}{}{}",
@@ -640,10 +637,7 @@ impl Input {
         }
     }
     pub(crate) fn reset_editor_history(&mut self) {
-        if let Some(code) = &mut self.code {
-            code.undo.clear();
-            code.redo.clear();
-        }
+        self.history.clear();
     }
     pub(super) fn accept_code_edit(
         &self,
@@ -733,62 +727,6 @@ impl Input {
         if let Some(code) = &mut self.code {
             code.reveal = true;
         }
-    }
-    pub(super) fn record_undo(&mut self) {
-        if let Some(code) = &mut self.code
-            && self.marked.is_none()
-        {
-            code.undo
-                .push((self.content.clone(), self.selection.clone()));
-            let mut bytes = 0;
-            let mut keep = 0;
-            for (text, _) in code.undo.iter().rev().take(100) {
-                bytes += text.len();
-                if bytes > 8 * 1024 * 1024 {
-                    break;
-                }
-                keep += 1;
-            }
-            let discard = code.undo.len().saturating_sub(keep.max(1));
-            code.undo.drain(..discard);
-            code.redo.clear();
-        }
-    }
-    pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        self.history(false, cx);
-    }
-    pub(super) fn history_available(&self, redo: bool) -> bool {
-        !self.read_only
-            && self.marked.is_none()
-            && self
-                .code
-                .as_ref()
-                .is_some_and(|code| !(if redo { &code.redo } else { &code.undo }).is_empty())
-    }
-    pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        self.history(true, cx);
-    }
-    fn history(&mut self, redo: bool, cx: &mut Context<Self>) {
-        let Some(code) = &mut self.code else {
-            cx.propagate();
-            return;
-        };
-        if self.marked.is_some() {
-            return;
-        }
-        let source = if redo { &mut code.redo } else { &mut code.undo };
-        let Some((text, selection)) = source.pop() else {
-            return;
-        };
-        let target = if redo { &mut code.undo } else { &mut code.redo };
-        target.push((self.content.clone(), self.selection.clone()));
-        self.clear_folds();
-        self.content = text;
-        self.selection = selection;
-        self.reversed = false;
-        self.code_changed();
-        cx.emit(Changed);
-        cx.notify();
     }
     pub(super) fn indent(&mut self, _: &Indent, w: &mut Window, cx: &mut Context<Self>) {
         if self.code.is_none() {

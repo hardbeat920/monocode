@@ -24,7 +24,7 @@ impl Input {
                 .into()
         };
         let mut items = Vec::new();
-        if self.code.is_some() {
+        if !self.read_only && !self.secret {
             items.extend([
                 action("undo", "Undo", "Z", self.history_available(false)),
                 action(

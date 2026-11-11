@@ -2262,7 +2262,7 @@ impl Shell {
             } else {
                 "\n\n"
             };
-            input.set_text(format!("{draft}{separator}{}\n\n", text.trim()), cx);
+            input.replace_all(format!("{draft}{separator}{}\n\n", text.trim()), cx);
         });
         self.chat_hidden_off(id, cx);
         self.pending_composer_focus = Some(id);
