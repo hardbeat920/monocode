@@ -874,6 +874,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="sr-only" aria-live="polite" aria-atomic="true">
+            {Object.entries(session.extensionStatuses ?? {})
+              .filter(([key, status]) => /permission|mode/i.test(`${key} ${status}`))
+              .map(([, status]) => status).join(". ")}
+          </div>
           {Object.keys(session.extensionStatuses ?? {}).length > 0 && (
             <div className="max-h-20 overflow-y-auto px-3 py-1 text-xs text-content/60">
               {Object.entries(session.extensionStatuses ?? {}).map(([key, status]) => (

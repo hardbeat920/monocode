@@ -740,6 +740,19 @@ describe("headless session ownership", () => {
     await recovered.close();
   });
 
+  it("clears persisted extension statuses for an idle session on restart", async () => {
+    const { store, provider, id } = setup();
+    const value = store.session(id);
+    store.transaction(() => store.save(
+      { ...value, revision: value.revision + 1, session: { ...value.session, extensionStatuses: { mode: "coding" } } },
+      { type: "accepted" },
+    ));
+    const recovered = new HostEngine(store, { codex: provider });
+    expect(store.session(id).session.extensionStatuses).toBeUndefined();
+    expect(store.session(id).revision).toBe(value.revision + 2);
+    await recovered.close();
+  });
+
   it("retries a failed event write and settles the stopped turn", async () => {
     const { engine, store, turns, id } = setup();
     engine.command({

@@ -683,6 +683,9 @@ describe("status blocks", () => {
     expect(session.blocks.map((block) => block.text)).toEqual(["go", "again", "Plugin ready"]);
     session = applyHarnessEvent(session, { type: "status", key: "tps", text: "" });
     expect(session.extensionStatuses).toEqual({ mode: "coding" });
+    session = applyHarnessEvent(session, { type: "status.clear" });
+    expect(session.extensionStatuses).toBeUndefined();
+    session = applyHarnessEvent(session, { type: "status", key: "mode", text: "coding" });
     session = applyHarnessEvent(session, { type: "session.ended" });
     expect(session.extensionStatuses).toBeUndefined();
   });

@@ -151,6 +151,10 @@ it("displays and clears current extension statuses", () => {
   pane.session.extensionStatuses = { tps: "10 TPS" };
   render(pane);
   expect(container.textContent).toContain("10 TPS");
+  const announcements = container.querySelector('[aria-live="polite"][aria-atomic="true"]')!;
+  expect(announcements.textContent).not.toContain("TPS");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: { mode: "Coding mode" } } });
+  expect(announcements.textContent).toContain("Coding mode");
   render({ ...pane, session: { ...pane.session, extensionStatuses: { tps: "20 TPS" } } });
   expect(container.textContent).toContain("20 TPS");
   expect(container.textContent).not.toContain("10 TPS");
