@@ -209,7 +209,7 @@ pub struct Input {
     history: history::History,
     /// Set by Backspace/Delete so the edit they make joins a deleting run,
     /// with the caret undo puts back.
-    edit_kind: Option<(EditKind, usize)>,
+    edit_kind: Option<(EditKind, Option<usize>)>,
     focus: FocusHandle,
     height: f32,
     single_line: bool,
@@ -260,6 +260,9 @@ impl Input {
     /// Keep authentication text out of drawing, accessibility and clipboard.
     pub(crate) fn set_secret(&mut self, secret: bool) {
         self.secret = secret;
+        if secret {
+            self.history.clear();
+        }
     }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
@@ -689,6 +692,8 @@ impl Input {
         let offset = self.clip_offset(offset);
         self.selection = offset..offset;
         self.reversed = false;
+        // Typing after a move is a new step, even back at the same offset.
+        self.history.break_run();
         cx.notify();
     }
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -1015,14 +1020,14 @@ impl Input {
             return;
         }
         if self.selection.is_empty() {
-            self.edit_kind = Some((EditKind::Deleting, self.cursor()));
+            self.edit_kind = Some((EditKind::Deleting, Some(self.cursor())));
             self.select_to(self.prev(self.cursor()), cx);
         }
         self.replace_text_in_range(None, "", w, cx);
     }
     fn delete(&mut self, _: &Delete, w: &mut Window, cx: &mut Context<Self>) {
         if self.selection.is_empty() {
-            self.edit_kind = Some((EditKind::Deleting, self.cursor()));
+            self.edit_kind = Some((EditKind::Deleting, Some(self.cursor())));
             self.select_to(self.next(self.cursor()), cx);
         }
         self.replace_text_in_range(None, "", w, cx);
@@ -1067,6 +1072,8 @@ impl Input {
     }
     fn paste(&mut self, _: &Paste, w: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+            // A pasted character is not part of a typing run.
+            self.edit_kind = Some((EditKind::Other, None));
             self.replace_text_in_range(None, &text.replace("\r\n", "\n"), w, cx);
         }
     }
@@ -1359,7 +1366,9 @@ impl EntityInputHandler for Input {
                 Some((kind, caret)) => {
                     // Undo puts the caret back, not the one-character
                     // selection Backspace/Delete makes to remove it.
-                    self.selection = caret..caret;
+                    if let Some(caret) = caret {
+                        self.selection = caret..caret;
+                    }
                     kind
                 }
                 None if corrected.is_none()

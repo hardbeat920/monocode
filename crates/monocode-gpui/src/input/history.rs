@@ -114,11 +114,14 @@ impl Input {
         caret: usize,
         cx: &App,
     ) {
-        if self.secret || self.read_only {
-            return;
-        }
         if self.marked.is_some() {
             self.history.break_run();
+            return;
+        }
+        self.push_history(kind, range, caret, cx);
+    }
+    fn push_history(&mut self, kind: EditKind, range: &Range<usize>, caret: usize, cx: &App) {
+        if self.secret || self.read_only {
             return;
         }
         let now = cx.background_executor().now();
@@ -149,7 +152,12 @@ impl Input {
             return;
         }
         let range = 0..self.content.len();
-        self.record_undo(EditKind::Other, &range, text.len(), cx);
+        // Text the app writes over a composition ends it, so keep what was
+        // composed as a step undo can return to.
+        if self.marked.is_some() {
+            self.history.break_run();
+        }
+        self.push_history(EditKind::Other, &range, text.len(), cx);
         self.load_text(text, cx);
     }
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
@@ -310,6 +318,57 @@ mod tests {
             .unwrap();
         cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
         assert_eq!(content(window, cx), "another note");
+    }
+
+    #[gpui::test]
+    fn a_one_character_paste_and_a_caret_move_each_end_a_typing_run(cx: &mut TestAppContext) {
+        let window = field(cx);
+        let m = modifier();
+        cx.write_to_clipboard(ClipboardItem::new_string("b".into()));
+        cx.simulate_keystrokes(window.into(), &format!("a {m}-v c"));
+        assert_eq!(content(window, cx), "abc");
+        cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
+        assert_eq!(content(window, cx), "ab");
+        cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
+        assert_eq!(content(window, cx), "a");
+        cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
+        assert_eq!(content(window, cx), "");
+        // Back at the same offset, the caret still moved.
+        cx.simulate_keystrokes(window.into(), "a b left right c");
+        assert_eq!(content(window, cx), "abc");
+        cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
+        assert_eq!(content(window, cx), "ab");
+        cx.simulate_keystrokes(window.into(), &format!("{m}-z"));
+        assert_eq!(content(window, cx), "");
+    }
+
+    #[gpui::test]
+    fn an_app_write_over_a_composition_keeps_the_composed_text_undoable(cx: &mut TestAppContext) {
+        let window = field(cx);
+        window
+            .update(cx, |input, window, cx| {
+                input.replace_text_in_range(None, "a", window, cx);
+                input.replace_and_mark_text_in_range(None, "k", None, window, cx);
+                input.replace_all("from the app".into(), cx);
+                assert_eq!(input.content.as_ref(), "from the app");
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.content.as_ref(), "ak");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn turning_secret_on_forgets_what_was_typed(cx: &mut TestAppContext) {
+        let window = field(cx);
+        cx.simulate_keystrokes(window.into(), "h i");
+        window
+            .update(cx, |input, _, _| {
+                assert!(input.history_available(false));
+                input.set_secret(true);
+                input.set_secret(false);
+                assert!(!input.history_available(false));
+            })
+            .unwrap();
     }
 
     #[gpui::test]

@@ -513,7 +513,7 @@ impl Conversation {
                 && !input.read(cx).is_composing()
             {
                 input.update(cx, |input, cx| {
-                    input.replace_all(content.trim_end().into(), cx)
+                    input.set_text(content.trim_end().into(), cx)
                 });
                 this.request_folder(cx);
             }
