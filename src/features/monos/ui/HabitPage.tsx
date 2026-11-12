@@ -5,7 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Pause, Play, Trash2, Zap } from "../../../shared/ui/icons";
+import { Pause, Pencil, Play, Trash2, Zap } from "../../../shared/ui/icons";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { PageHeader } from "./monoPanelParts";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
@@ -61,6 +61,7 @@ export function HabitPage({
   cwd,
   onBack,
   onRunNow,
+  onEdit,
   onToggle,
   onRemove,
 }: {
@@ -70,6 +71,7 @@ export function HabitPage({
   cwd: string;
   onBack: () => void;
   onRunNow: () => void;
+  onEdit: () => void;
   onToggle: () => void;
   onRemove: () => void;
 }) {
@@ -95,6 +97,9 @@ export function HabitPage({
           onClick={onRunNow}
         >
           <Zap className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+        <IconButton label="Edit" onClick={onEdit}>
+          <Pencil className="size-3.5" strokeWidth={1.75} />
         </IconButton>
         <IconButton
           label={habit.enabled ? "Pause" : "Resume"}

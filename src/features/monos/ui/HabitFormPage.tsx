@@ -4,7 +4,10 @@ import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { AUTOMATION_WEEKDAYS } from "../../automations/model/automations";
 import {
   addHabit,
+  editedHabit,
+  editHabit,
   nextHabitRunAt,
+  type Habit,
   type HabitSchedule,
 } from "../model/monoHabits";
 import { when } from "./HabitPage";
@@ -28,26 +31,32 @@ const MINUTES = [0, 15, 30, 45].map((value) => ({
 }));
 
 /**
- * A habit written by hand rather than set up in the chat, laid out like the
- * habit's own page: its name, when it runs, and what it does.
+ * A habit written by hand rather than set up in the chat, or one being
+ * edited, laid out like the habit's own page: its name, when it runs, and
+ * what it does.
  */
-export function NewHabitPage({
+export function HabitFormPage({
   monoId,
+  habit,
   onBack,
-  onCreated,
+  onSaved,
 }: {
   monoId: string;
+  /** The habit to edit; a new one when left out. */
+  habit?: Habit;
   onBack: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [instructions, setInstructions] = useState("");
-  const [schedule, setSchedule] = useState<HabitSchedule>({
-    scheduleKind: "daily",
-    time: "09:00",
-    minute: 0,
-    dayOfWeek: 1,
-  });
+  const [name, setName] = useState(habit?.name ?? "");
+  const [instructions, setInstructions] = useState(habit?.instructions ?? "");
+  const [schedule, setSchedule] = useState<HabitSchedule>(
+    habit?.schedule ?? {
+      scheduleKind: "daily",
+      time: "09:00",
+      minute: 0,
+      dayOfWeek: 1,
+    },
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -56,35 +65,43 @@ export function NewHabitPage({
   useEffect(() => nameRef.current?.focus({ preventScroll: true }), []);
   const ready = !!name.trim() && !!instructions.trim() && !saving;
 
-  const create = () => {
+  const save = () => {
     if (!ready) return;
     setSaving(true);
     setError(undefined);
-    addHabit(monoId, {
+    const draft = {
       name: name.trim().slice(0, 80),
       instructions: instructions.trim().slice(0, 4_000),
       schedule,
-    })
-      .then(onCreated)
+    };
+    (habit ? editHabit(monoId, habit.id, draft) : addHabit(monoId, draft))
+      .then(onSaved)
       .catch((reason: unknown) => {
         setSaving(false);
         setError(
-          reason instanceof Error ? reason.message : "Could not add the habit.",
+          reason instanceof Error
+            ? reason.message
+            : habit
+              ? "Could not save the habit."
+              : "Could not add the habit.",
         );
       });
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-new-habit>
-      <PageHeader title="New habit" onBack={onBack}>
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      {...(habit ? { "data-edit-habit": habit.id } : { "data-new-habit": "" })}
+    >
+      <PageHeader title={habit ? "Edit habit" : "New habit"} onBack={onBack}>
         <button
           type="button"
           disabled={!ready}
-          onClick={create}
+          onClick={save}
           data-tauri-drag-region="false"
           className="h-6 rounded-md bg-content/10 px-2 text-[12px] text-content enabled:hover:bg-content/[0.14] disabled:opacity-40"
         >
-          Create
+          {habit ? "Save" : "Create"}
         </button>
       </PageHeader>
 
@@ -102,7 +119,7 @@ export function NewHabitPage({
                 event.key === "Enter" &&
                 !isImeComposition(event.nativeEvent)
               ) {
-                create();
+                save();
               }
             }}
             className="h-8 w-full rounded-md bg-transparent px-2 text-[13px] font-medium text-content outline-none placeholder:text-content/35 hover:bg-content/5 focus:bg-content/5"
@@ -114,7 +131,17 @@ export function NewHabitPage({
             <ScheduleFields schedule={schedule} onChange={setSchedule} />
           </Property>
           <Property label="Next">
-            {when(nextHabitRunAt(schedule, Date.now()))}
+            {habit && !habit.enabled
+              ? "Paused"
+              : when(
+                  habit
+                    ? editedHabit(
+                        habit,
+                        { name, instructions, schedule },
+                        Date.now(),
+                      ).nextRunAt
+                    : nextHabitRunAt(schedule, Date.now()),
+                )}
           </Property>
         </dl>
 
@@ -122,7 +149,7 @@ export function NewHabitPage({
           <Instructions
             value={instructions}
             onChange={setInstructions}
-            onSubmit={create}
+            onSubmit={save}
           />
           {error ? (
             <p className="px-2 pt-2 text-[12px] text-red-500/80">{error}</p>
@@ -198,7 +225,7 @@ function ScheduleFields({
   );
 }
 
-/** The habit's instructions, growing with what is typed. ⌘↵ creates it. */
+/** The habit's instructions, growing with what is typed. ⌘↵ saves it. */
 function Instructions({
   value,
   onChange,

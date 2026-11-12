@@ -234,6 +234,50 @@ export function addHabit(monoId: string, draft: HabitDraft): Promise<Habit> {
   });
 }
 
+function sameSchedule(a: HabitSchedule, b: HabitSchedule): boolean {
+  return (
+    a.scheduleKind === b.scheduleKind &&
+    a.time === b.time &&
+    a.minute === b.minute &&
+    a.dayOfWeek === b.dayOfWeek
+  );
+}
+
+/**
+ * The habit with a new name, instructions and schedule. A new schedule counts
+ * from `now`; the rest of it, runs and all, stays as it was.
+ */
+export function editedHabit(
+  habit: Habit,
+  draft: HabitDraft,
+  now: number,
+): Habit {
+  return {
+    ...habit,
+    ...draft,
+    ...(sameSchedule(habit.schedule, draft.schedule)
+      ? {}
+      : { nextRunAt: nextHabitRunAt(draft.schedule, now) }),
+  };
+}
+
+/** Saves an edit over the habit as it stands now. */
+export function editHabit(
+  monoId: string,
+  habitId: string,
+  draft: HabitDraft,
+): Promise<Habit> {
+  return updateHabits(monoId, (list) => {
+    const current = list.find((habit) => habit.id === habitId);
+    if (!current) throw new Error("This habit was removed.");
+    const edited = editedHabit(current, draft, Date.now());
+    return {
+      habits: list.map((habit) => (habit.id === habitId ? edited : habit)),
+      result: edited,
+    };
+  });
+}
+
 /**
  * Habits to run now. One that came due while the app was closed or the
  * computer asleep runs once if it is recent; older ones just move on to
