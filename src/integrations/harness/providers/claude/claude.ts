@@ -1616,20 +1616,27 @@ function showBackgroundRows(live: Live): void {
       ? live.toolsById.get(task.toolUseId)
       : undefined;
     if (source && isAgentToolName(source.name)) continue;
-    const callId = `background:${taskId}`;
-    live.backgroundRows.set(taskId, callId);
-    live.onEvent({
-      type: "tool.started",
-      callId,
-      title: source ? toolTitle(source.name, source.input) : task.description,
-      kind: source ? toolKindFromName(source.name) : "execute",
-      status: "in_progress",
-      background: true,
-      ...(source
-        ? { preview: previewFromTool(source.name, source.input) }
-        : {}),
-    });
+    showBackgroundRow(live, taskId, source, task.description);
   }
+}
+
+function showBackgroundRow(
+  live: Live,
+  taskId: string,
+  source: InFlightTool | null | undefined,
+  description: string,
+): void {
+  const callId = `background:${taskId}`;
+  live.backgroundRows.set(taskId, callId);
+  live.onEvent({
+    type: "tool.started",
+    callId,
+    title: source ? toolTitle(source.name, source.input) : description,
+    kind: source ? toolKindFromName(source.name) : "execute",
+    status: "in_progress",
+    background: true,
+    ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+  });
 }
 
 function settleBackgroundRow(
@@ -1651,13 +1658,18 @@ function settleBackgroundRow(
 /**
  * What Claude was told when a task finished. A command's row takes the
  * summary; a subagent's is kept for the trail until Claude picks back up.
+ *
+ * A task with no row, left running in a turn that has since ended, wakes
+ * Claude after its answer. It gets a finished row under that answer, as if
+ * the turn had waited for it, so the work it wakes Claude to do doesn't fold
+ * the answer away.
  */
 function noteTaskNotification(
   live: Live,
   notice: ClaudeAgentTaskNotification,
 ): void {
-  if (!live.activeTurn) return;
   if (live.backgroundRows.has(notice.taskId)) {
+    if (!live.activeTurn) return;
     settleBackgroundRow(
       live,
       notice.taskId,
@@ -1666,11 +1678,29 @@ function noteTaskNotification(
     );
     return;
   }
+  // Before Claude yields, a notification is one it reads mid-turn or one the
+  // CLI replays on resume, not one that wakes it.
+  if (!live.turnResultSeen) return;
   const tool = notice.toolUseId ? live.toolsById.get(notice.toolUseId) : null;
   const agent =
     (tool && isAgentToolName(tool.name)) || live.agentTasks.has(notice.taskId);
-  if (!agent || !live.turnResultSeen) return;
-  live.taskNotes.push(notice.summary || "Subagent finished.");
+  if (agent && live.activeTurn) {
+    live.taskNotes.push(notice.summary || "Subagent finished.");
+    return;
+  }
+  const source = agent ? null : tool;
+  showBackgroundRow(
+    live,
+    notice.taskId,
+    source,
+    notice.summary || notice.taskId,
+  );
+  settleBackgroundRow(
+    live,
+    notice.taskId,
+    notice.status,
+    source ? notice.summary || undefined : undefined,
+  );
 }
 
 function clearAwaitingResume(live: Live): void {
