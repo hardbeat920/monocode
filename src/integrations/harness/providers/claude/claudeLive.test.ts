@@ -15,11 +15,17 @@ let onExit: ((code?: number | null) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
 });
+const transfers: Record<string, unknown>[] = [];
+let transferResult = true;
 
 vi.mock("../../core/child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
   spawnChild: async (_id: string, _path: string, args: string[]) => {
     spawned.push(args);
+  },
+  transferClaudeTranscript: async (input: Record<string, unknown>) => {
+    transfers.push(input);
+    return transferResult;
   },
   killChild: async () => undefined,
   unwatchChild: () => undefined,
@@ -258,6 +264,8 @@ function backgroundUpdates(events: HarnessEvent[]): string[][] {
 beforeEach(() => {
   sent.length = 0;
   spawned.length = 0;
+  transfers.length = 0;
+  transferResult = true;
   onLine = undefined;
   onExit = undefined;
   writeChild.mockClear();
@@ -796,7 +804,7 @@ describe("claude task tools", () => {
     );
   });
 
-  it("drops the task map when the conversation cannot resume", async () => {
+  it("keeps the task map when another account continues the conversation", async () => {
     const first = await startTurn("s1", { providerAccountId: "work" });
     emitTaskTool(
       "toolu_c1",
@@ -809,7 +817,12 @@ describe("claude task tools", () => {
 
     const events: HarnessEvent[] = [];
     const { turn: second } = await restartedTurn(events, { providerAccountId: "home" });
-    expect(spawned.at(-1)).not.toContain("--resume");
+    expect(transfers).toEqual([
+      { sessionId: "sess_1", fromAccountId: "work", toAccountId: "home" },
+    ]);
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "sess_1"]),
+    );
     emitTaskTool(
       "toolu_u1",
       "TaskUpdate",
@@ -819,7 +832,21 @@ describe("claude task tools", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await second;
 
-    expect(events.some((event) => event.type === "tasks.updated")).toBe(false);
+    expect(events.some((event) => event.type === "tasks.updated")).toBe(true);
+  });
+
+  it("starts a fresh conversation when the previous account has no transcript", async () => {
+    const first = await startTurn("s1", { providerAccountId: "work" });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    transferResult = false;
+    const { turn: second } = await restartedTurn([], {
+      providerAccountId: "home",
+    });
+    expect(spawned.at(-1)).not.toContain("--resume");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
   });
 });
 
@@ -922,11 +949,19 @@ describe("claude legacy account resume", () => {
     await turn;
   });
 
-  it("does not resume a legacy default thread under a named account", async () => {
+  it("does not resume a legacy default thread under a named account without its transcript", async () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
+    transferResult = false;
     const { turn } = await startTurn("s1", {
       providerAccountId: "account-work",
     });
+    expect(transfers).toEqual([
+      {
+        sessionId: "legacy-session",
+        fromAccountId: undefined,
+        toAccountId: "account-work",
+      },
+    ]);
     expect(spawned[0]).not.toContain("--resume");
     expect(spawned[0]).toContain("--session-id");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });

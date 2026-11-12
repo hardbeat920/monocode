@@ -11,6 +11,7 @@ import {
   killChild,
   resolveClaudeBinary,
   spawnChild,
+  transferClaudeTranscript,
   unwatchChild,
   watchChild,
   writeChild,
@@ -445,17 +446,21 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canResume =
-    resume != null &&
-    resume.cwd === input.cwd &&
-    sameProviderAccountId(resume.providerAccountId, input.providerAccountId);
+  let canResume = resume != null && resume.cwd === input.cwd;
   if (
+    canResume &&
     resume &&
-    (resume.cwd !== input.cwd ||
-      !sameProviderAccountId(resume.providerAccountId, input.providerAccountId))
+    !sameProviderAccountId(resume.providerAccountId, input.providerAccountId)
   ) {
-    resumeByThread.delete(input.sessionId);
+    // Another account continues the same conversation: its transcript moves
+    // along unchanged, and only the account the next request uses changes.
+    canResume = await transferClaudeTranscript({
+      sessionId: resume.sessionId,
+      fromAccountId: resume.providerAccountId,
+      toAccountId: input.providerAccountId,
+    });
   }
+  if (!canResume) resumeByThread.delete(input.sessionId);
   const { path } = await resolveClaudeBinaryImpl();
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =

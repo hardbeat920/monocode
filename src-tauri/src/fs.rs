@@ -204,15 +204,7 @@ pub fn claude_shell_commands(
     if tool_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let config_dir = match provider_account_id.as_deref() {
-        Some(id) if id != "default" => crate::harness::provider_account_path(&app, "claude", id)?,
-        _ => match std::env::var_os("CLAUDE_CONFIG_DIR") {
-            Some(path) => PathBuf::from(path),
-            None => {
-                PathBuf::from(dirs_home().ok_or("Home directory is unavailable")?).join(".claude")
-            }
-        },
-    };
+    let config_dir = crate::harness::claude_config_dir(&app, provider_account_id.as_deref())?;
     let transcript_name = format!("{provider_session_id}.jsonl");
     let root = config_dir.join("projects");
     let Some(path) = std::fs::read_dir(root).ok().and_then(|projects| {
