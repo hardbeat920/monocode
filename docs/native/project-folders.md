@@ -1,4 +1,20 @@
-# 한 대화에서 여러 로컬 폴더 사용하기
+# Use multiple local folders in one conversation / 한 대화에서 여러 로컬 폴더 사용하기
+
+## English
+
+Open **Additional folders** from the project menu in the native app. Select **Add folder** and choose a folder to connect. Select **Done** to close the dialog. Connected folders appear with their full paths. Use **Remove** to disconnect a folder. The list is saved per project and persists across app restarts.
+
+Additional folders require a local Codex conversation and Codex CLI 0.167.1 or later. Other providers and remote projects do not receive additional folders. Starting an unsupported provider in a project with connected folders shows an error with instructions to remove them. Older Codex versions can ignore folder access settings, so the app blocks execution for projects using this feature and asks you to update.
+
+Changes apply to the next regular turn after the current execution finishes. Messages sent while a turn is running use that turn's folder list. You can continue using an existing conversation.
+
+The primary working folder, file explorer, and Git root stay the same. In modes that allow edits, connected folders are included as writable roots. Read-only and plan modes still restrict writes. Approval and network policies still apply.
+
+The folder list does not restrict file reads to these paths. Removing a folder does not erase earlier conversation content. It does not revoke access granted by other means, such as full-access mode or a path under the primary working folder.
+
+If a connected folder disappears or points to a different target, execution stops with an error. Remove that folder from the list, then connect it again.
+
+## 한국어
 
 네이티브 앱의 프로젝트 메뉴에서 **Additional folders**를 엽니다. **Add folder**로 연결할 폴더를 선택하고 **Done**으로 닫습니다. 연결된 폴더는 전체 경로로 표시되며 **Remove**로 제거합니다. 목록은 프로젝트별로 저장되어 앱을 다시 열어도 유지됩니다.
 
