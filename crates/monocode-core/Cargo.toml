@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+monocode-mascots = { path = "../monocode-mascots", default-features = false }
 serde.workspace = true
 # Stored floats must reload exactly, or saved revisions stop matching.
 serde_json = { workspace = true, features = ["float_roundtrip"] }

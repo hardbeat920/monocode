@@ -1,0 +1,15 @@
+[package]
+name = "monocode-arcade"
+workspace = "../monocode-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+gpui = ["dep:gpui", "monocode-mascots/gpui"]
+
+[dependencies]
+monocode-mascots = { path = "../monocode-mascots", default-features = false }
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, optional = true }

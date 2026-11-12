@@ -11,7 +11,7 @@ impl TranscriptView {
         }
         if self.anchor_prompts && !self.mono {
             self.anchor_turn = Some(SAVED_DRAFT_START);
-            self.show_jump = false;
+            self.set_show_jump(false, cx);
             if self.visible && self.chat_layout && !cx.reduce_motion() {
                 self.prompt_rise = Some((SAVED_DRAFT_START, Instant::now()));
                 self.prompt_rise_pending = true;
@@ -297,6 +297,14 @@ mod tests {
             cx.refresh().unwrap();
             window
                 .update(cx, |view, _, cx| {
+                    if history {
+                        view.set_show_jump(true, cx);
+                        let geometry = view.jump_geometry(cx);
+                        geometry.update(cx, |geometry, cx| {
+                            geometry.measure(geometry.generation, view.viewport, cx)
+                        });
+                        assert!(geometry.read(cx).bounds().is_some());
+                    }
                     view.introduce_saved_draft(
                         Draft {
                             id: "new".into(),
@@ -305,6 +313,12 @@ mod tests {
                             ..Default::default()
                         },
                         cx,
+                    );
+                    assert!(!view.show_jump);
+                    assert!(
+                        view.jump_geometry
+                            .as_ref()
+                            .is_none_or(|geometry| geometry.read(cx).bounds().is_none())
                     );
                     assert!(
                         !view.streaming,

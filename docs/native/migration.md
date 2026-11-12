@@ -10,16 +10,20 @@ reference. Production builds, CI, releases and updater feeds continue to use Tau
 | --- | --- |
 | `crates/monocode-core/` | Provider transports, persistence, accounts, Git/files, remote connections and shared services |
 | `crates/monocode-gpui/` | Native shell, composer, transcript, editor, settings and platform UI |
+| `crates/monocode-mascots/` | Shared mascot artwork, selection and composer animation; optional GPUI views |
+| `crates/monocode-arcade/` | Headless native game engines and optional GPUI views |
 | `crates/monocode-gpui/Cargo.toml` | Independent native Cargo workspace, profiles and dependency patches |
 | `scripts/dev-native.mjs` | Development build and manual restart runner |
 | `scripts/build-native.mjs` | Optimized build and macOS packaging |
-| `scripts/native-editor/`, `scripts/native-settings/` | Generators for embedded JavaScript assets |
+| `scripts/native-editor/` | Generator for embedded editor JavaScript assets |
 | `vendor/gpui-pre*/` | Pinned framework and platform patches |
 
-`monocode-core` has no Tauri or GPUI dependency. Keep provider and storage
-behavior in core services, with UI work in GPUI views. Development uses isolated
-data; release builds use the installed desktop database. See the
-[native guide](README.md#data-and-configuration) for paths and commands.
+Standalone `monocode-core` builds have no Tauri or GPUI dependency. Core uses
+headless `monocode-mascots`; the app enables the shared crates' optional `gpui`
+features. Keep provider and storage behavior in core services, with UI work in
+GPUI views. Development uses isolated data; release builds use the installed
+desktop database. See the [native guide](README.md#data-and-configuration) for
+paths and commands.
 
 Provider transports use Codex app-server, Claude stream-json, OpenCode HTTP/SSE,
 ACP for Cursor/Grok/Antigravity/fx/Hermes/Devin, and Pi/omp RPC. They reuse the
@@ -36,6 +40,11 @@ The editor embeds generated analysis and formatting bundles. After changing thei
 source services or dependencies, run `npm ci` and `npm run build` inside
 `scripts/native-editor/`. Generated bundles and their license notices belong
 in the repository.
+
+Native games use `monocode-arcade`; artwork and composer animation use
+`monocode-mascots`. Both are headless Rust with optional GPUI views. The app
+supplies styling, assets, geometry and scheduling. Neither uses QuickJS or JSON
+frames; unrelated editor/core QuickJS features remain unchanged.
 
 ## Framework patches
 
