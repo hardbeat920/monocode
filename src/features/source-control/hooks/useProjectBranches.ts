@@ -26,6 +26,7 @@ function branchesEqual(a: GitBranches | null, b: GitBranches | null): boolean {
   if (
     a.current !== b.current ||
     a.detached !== b.detached ||
+    a.defaultBranch !== b.defaultBranch ||
     a.branches.length !== b.branches.length
   ) {
     return false;

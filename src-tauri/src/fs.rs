@@ -1727,6 +1727,7 @@ fn github_check_details_with(
 pub struct GitBranches {
     pub current: Option<String>,
     pub detached: bool,
+    pub default_branch: Option<String>,
     pub branches: Vec<GitBranchEntry>,
 }
 
@@ -4843,9 +4844,16 @@ fn git_branches_for(root: &Path) -> GitBranches {
         }
     }
 
+    let default_remote = git_remote_name(root);
+    let default_branch = git_default_branch(root, default_remote.as_deref());
+    let is_default = |entry: &GitBranchEntry| {
+        default_branch.as_deref() == Some(entry.name.as_str())
+            && (entry.remote.is_none() || entry.remote == default_remote)
+    };
     branches.sort_by(|a, b| {
-        b.current
-            .cmp(&a.current)
+        is_default(b)
+            .cmp(&is_default(a))
+            .then(b.current.cmp(&a.current))
             .then(a.remote.is_some().cmp(&b.remote.is_some()))
             .then_with(|| {
                 a.name
@@ -4858,6 +4866,7 @@ fn git_branches_for(root: &Path) -> GitBranches {
     GitBranches {
         current,
         detached,
+        default_branch,
         branches,
     }
 }
@@ -9578,6 +9587,9 @@ mod tests {
         );
         let listed = git_branches_for(&dir.0);
         assert_eq!(listed.current.as_deref(), Some("feat/picker"));
+        assert_eq!(listed.default_branch.as_deref(), Some("main"));
+        assert_eq!(listed.branches[0].name, "main");
+        assert_eq!(listed.branches[1].name, "feat/picker");
         assert_eq!(git_checkout_for(&dir.0, "main", None).unwrap(), "main");
         assert_eq!(git_head_branch(&dir.0).as_deref(), Some("main"));
         assert!(git_create_branch_for(&dir.0, "feat/picker").is_err());
@@ -9712,6 +9724,8 @@ mod tests {
             .branches
             .iter()
             .any(|branch| branch.name == "main" && branch.remote.is_some()));
+        assert_eq!(listed.default_branch.as_deref(), Some("main"));
+        assert_eq!(listed.branches[0].name, "main");
         assert_eq!(
             git_checkout_for(&repo.0, "feature", Some("origin")).unwrap(),
             "feature"

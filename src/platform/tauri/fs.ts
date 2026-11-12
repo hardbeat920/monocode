@@ -428,6 +428,7 @@ export type GitBranchInfo = {
 export type GitBranches = {
   current: string | null;
   detached: boolean;
+  defaultBranch?: string | null;
   branches: GitBranchInfo[];
 };
 
