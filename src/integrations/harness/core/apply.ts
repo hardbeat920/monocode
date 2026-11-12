@@ -258,6 +258,9 @@ function mergeTurnMetrics(
     ...(event.cacheHitPercent != null
       ? { cacheHitPercent: event.cacheHitPercent }
       : {}),
+    ...(event.outputTokensPerSecond != null
+      ? { outputTokensPerSecond: event.outputTokensPerSecond }
+      : {}),
   };
   const blocks = session.blocks.slice();
   blocks[userIndex] = { ...current, turnMetrics: metrics };
