@@ -458,6 +458,8 @@ export type Session = {
   /** Project / working directory for this session. */
   cwd: string;
   blocks: Block[];
+  /** Current keyed extension statuses. */
+  extensionStatuses?: Record<string, string>;
   /** Mono-only database window. Older blocks are fetched separately by the viewer. */
   monoTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */

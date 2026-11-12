@@ -399,6 +399,7 @@ export async function stopSession(
   const live = liveByThread.get(sessionId);
   liveByThread.delete(sessionId);
   if (live) {
+    live.onEvent({ type: "status.clear" });
     live.muteUpdates = true;
     live.settleToken += 1;
     for (const [, pending] of live.approvals) pending.resolve("deny");
@@ -483,6 +484,7 @@ async function startLive(
 ): Promise<Live> {
   const state = stateFor(flavor);
   const { liveByThread } = state;
+  input.onEvent({ type: "status.clear" });
   const { path } = await state.resolveBinary();
   const native = nativeModelId(input.model);
   const modelRef = parsePiModelRef(native);
@@ -541,6 +543,8 @@ async function startLive(
       const current = liveRef.current;
       if (!current?.muteUpdates) {
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+      } else {
+        current.onEvent({ type: "status.clear" });
       }
       if (current) {
         for (const question of current.questions.values())

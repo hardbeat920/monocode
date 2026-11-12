@@ -98,6 +98,15 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(340));
 }
 
+it("hides legacy keyed status blocks from work history", () => {
+  render([
+    { id: "user", role: "user", text: "Go" },
+    { id: "old-status", role: "system", text: "20 TPS", statusKey: "tps" },
+    { id: "notice", role: "system", text: "Plugin ready" },
+  ]);
+  expect(container.textContent).not.toContain("20 TPS");
+});
+
 it("shows a document below its reply in the originating turn and opens it", () => {
   const onOpenArtifact = vi.fn();
   const card = {

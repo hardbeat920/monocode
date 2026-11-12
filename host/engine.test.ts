@@ -711,6 +711,7 @@ describe("headless session ownership", () => {
           session: {
             ...value.session,
             busy: true,
+            extensionStatuses: { tps: "20 TPS" },
             providerSessionId: "retained",
             blocks: [
               {
@@ -728,6 +729,7 @@ describe("headless session ownership", () => {
     const recovered = new HostEngine(store, { codex: provider });
     expect(store.session(id).status).toBe("interrupted");
     expect(store.session(id).session.busy).toBe(false);
+    expect(store.session(id).session.extensionStatuses).toBeUndefined();
     expect(store.session(id).session.blocks[0].durationMs).toBe(2_000);
     expect(provider.send).not.toHaveBeenCalled();
     expect(provider.bind).toHaveBeenCalledWith(
@@ -735,6 +737,19 @@ describe("headless session ownership", () => {
       "retained",
       value.session.cwd,
     );
+    await recovered.close();
+  });
+
+  it("clears persisted extension statuses for an idle session on restart", async () => {
+    const { store, provider, id } = setup();
+    const value = store.session(id);
+    store.transaction(() => store.save(
+      { ...value, revision: value.revision + 1, session: { ...value.session, extensionStatuses: { mode: "coding" } } },
+      { type: "accepted" },
+    ));
+    const recovered = new HostEngine(store, { codex: provider });
+    expect(store.session(id).session.extensionStatuses).toBeUndefined();
+    expect(store.session(id).revision).toBe(value.revision + 2);
     await recovered.close();
   });
 

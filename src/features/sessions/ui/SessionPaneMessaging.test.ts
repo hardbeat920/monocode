@@ -146,6 +146,38 @@ function field() {
   )!;
 }
 
+it("displays and clears current extension statuses", () => {
+  const pane = props();
+  pane.session.extensionStatuses = { tps: "10 TPS" };
+  render(pane);
+  expect(container.textContent).toContain("10 TPS");
+  const announcements = container.querySelector('[aria-live="polite"][aria-atomic="true"]')!;
+  expect(announcements.textContent).not.toContain("TPS");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: { mode: "Coding mode" } } });
+  expect(announcements.textContent).toContain("Coding mode");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: { tps: "20 TPS model mode" } } });
+  expect(container.textContent).toContain("20 TPS");
+  expect(announcements.textContent).not.toContain("20 TPS");
+  expect(container.textContent).not.toContain("10 TPS");
+  render({ ...pane, session: { ...pane.session, extensionStatuses: {} } });
+  expect(container.textContent).not.toContain("20 TPS");
+});
+
+it("announces underscore-delimited permission and mode keys without TPS updates", () => {
+  const pane = props();
+  render(pane);
+  const announcements = container.querySelector('[aria-live="polite"][aria-atomic="true"]')!;
+  for (const tps of ["20 TPS mode", "30 TPS mode"]) {
+    render({ ...pane, session: { ...pane.session, extensionStatuses: {
+      permission_level: "read-only", coding_mode: "enabled", TPS_status: tps,
+    } } });
+    expect(announcements.textContent).toContain("read-only");
+    expect(announcements.textContent).toContain("enabled");
+    expect(announcements.textContent).not.toContain(tps);
+    expect(container.textContent).toContain(tps);
+  }
+});
+
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");
   const pane = props();
