@@ -39,19 +39,58 @@ pub(super) fn events(kind: &str) -> Vec<(String, String)> {
             ("draft_opened", "Draft opened"),
             ("pull_request_opened", "Pull request opened"),
             ("issue_opened", "Issue opened"),
+            ("label_added", "Label added"),
         ],
         "gitlab" => &[
             ("merge_request_opened", "Merge request opened"),
             ("issue_opened", "Issue opened"),
+            ("label_added", "Label added"),
         ],
-        "linear" => &[("issue_created", "Issue created")],
-        "jira" => &[("issue_created", "Issue appeared")],
+        "linear" => &[
+            ("issue_created", "Issue created"),
+            ("label_added", "Label added"),
+        ],
+        "jira" => &[
+            ("issue_created", "Issue appeared"),
+            ("label_added", "Label added"),
+        ],
         "azuredevops" => &[
             ("pull_request_appeared", "Pull request appeared"),
             ("work_item_appeared", "Work item appeared"),
+            ("label_added", "Tag added"),
         ],
         _ => &[],
     })
+}
+const OP_WIDTH: f32 = 92.;
+const FIELD_WIDTH: f32 = 280.;
+/// A labelled row under an event trigger: scope or filter.
+fn filter_row(label: &'static str) -> gpui::Div {
+    div()
+        .min_h(px(28.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(div().w(px(78.)).flex_shrink_0().child(label))
+}
+fn field_box(input: Entity<Input>) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w(px(80.))
+        .h(px(26.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(content(0.1))
+        .flex()
+        .items_center()
+        .text_color(content(0.9))
+        .child(input)
+}
+/// Keeps the add and remove buttons in one column whether or not a row has
+/// suggestions.
+fn button_slot() -> gpui::Div {
+    div().size(px(24.)).flex_shrink_0()
 }
 fn section(label: &'static str) -> gpui::Div {
     div()
@@ -93,6 +132,13 @@ fn settings_row(label: &'static str, hint: &'static str, control: impl IntoEleme
                 ),
         )
         .child(control)
+}
+fn trigger_mut<'a>(editor: &'a mut Editor, id: &str) -> Option<&'a mut AutomationTrigger> {
+    editor
+        .draft
+        .triggers
+        .as_mut()
+        .and_then(|ts| ts.iter_mut().find(|t| t.id == id))
 }
 impl Automations {
     fn select_control(
@@ -160,6 +206,7 @@ impl Automations {
             }))
     }
     pub(super) fn apply_choice(&mut self, field: Choice, value: String, cx: &mut Context<Self>) {
+        self.commit_trigger_inputs(cx);
         let Some(editor) = &mut self.editor else {
             return;
         };
@@ -196,6 +243,67 @@ impl Automations {
                     trigger.event = value.clone();
                     if trigger.kind == "time" {
                         trigger.schedule_kind = value;
+                    } else if value == "label_added"
+                        && !trigger.filters.iter().any(|f| f.field == "labels")
+                    {
+                        trigger.filters.insert(0, TriggerFilter::new("labels"));
+                    }
+                }
+            }
+            Choice::Actor(id) => {
+                let custom = value == "custom";
+                if let Some(fields) = editor.fields.iter_mut().find(|f| f.id == id) {
+                    fields.custom_actor = custom;
+                }
+                if !custom && let Some(trigger) = trigger_mut(editor, &id) {
+                    trigger.actor = value;
+                }
+            }
+            Choice::AddFilter(id) => {
+                if let Some(trigger) = trigger_mut(editor, &id)
+                    && !trigger.filters.iter().any(|f| f.field == value)
+                {
+                    trigger.filters.push(TriggerFilter::new(&value));
+                }
+            }
+            Choice::FilterOp(id, index) => {
+                if let Some(filter) =
+                    trigger_mut(editor, &id).and_then(|t| t.filters.get_mut(index))
+                {
+                    filter.op = value;
+                }
+            }
+            Choice::FilterValue(id, index) => {
+                let input = editor
+                    .fields
+                    .iter()
+                    .find(|f| f.id == id)
+                    .and_then(|f| f.filters.get(index))
+                    .cloned();
+                if let Some(filter) =
+                    trigger_mut(editor, &id).and_then(|t| t.filters.get_mut(index))
+                    && !filter.values.contains(&value)
+                {
+                    filter.values.push(value);
+                    let text = filter.values.join(", ");
+                    if let Some(input) = input {
+                        input.update(cx, |input, cx| input.set_text(text, cx));
+                    }
+                }
+            }
+            Choice::ScopeValue(id) => {
+                let input = editor
+                    .fields
+                    .iter()
+                    .find(|f| f.id == id)
+                    .map(|f| f.repos.clone());
+                if let Some(trigger) = trigger_mut(editor, &id)
+                    && !trigger.repos.contains(&value)
+                {
+                    trigger.repos.push(value);
+                    let text = trigger.repos.join(", ");
+                    if let Some(input) = input {
+                        input.update(cx, |input, cx| input.set_text(text, cx));
                     }
                 }
             }
@@ -402,27 +510,38 @@ impl Automations {
                         )),
                 );
         } else {
-            sentence = sentence
-                .child(self.select_control(
-                    ("trigger-event", index),
-                    automations::event_label(&trigger.kind, &trigger.event),
-                    Choice::TriggerEvent(id.clone()),
-                    events(&trigger.kind),
+            sentence = sentence.child(self.select_control(
+                ("trigger-event", index),
+                automations::event_label(&trigger.kind, &trigger.event),
+                Choice::TriggerEvent(id.clone()),
+                events(&trigger.kind),
+                cx,
+            ));
+            if automations::has_authors(&trigger.kind)
+                && let Some(fields) = fields
+            {
+                let actor = if fields.custom_actor {
+                    "specific people"
+                } else if trigger.actor == "people" {
+                    "people, not bots"
+                } else {
+                    "anyone"
+                };
+                sentence = sentence.child("by").child(self.select_control(
+                    ("trigger-actor", index),
+                    actor.into(),
+                    Choice::Actor(id.clone()),
+                    options(&[
+                        ("anyone", "anyone"),
+                        ("people", "people, not bots"),
+                        ("custom", "specific people…"),
+                    ]),
                     cx,
-                ))
-                .child("by");
-            if let Some(fields) = fields {
-                sentence = sentence.child(
-                    div()
-                        .w(px(80.))
-                        .h(px(28.))
-                        .rounded(px(6.))
-                        .bg(content(0.1))
-                        .px(px(8.))
-                        .flex()
-                        .items_center()
-                        .child(fields.actor.clone()),
-                );
+                ));
+                if fields.custom_actor {
+                    sentence = sentence
+                        .child(field_box(fields.actor.clone()).w(px(160.)).bg(content(0.1)));
+                }
             }
         }
         let row = div()
@@ -467,20 +586,229 @@ impl Automations {
         if trigger.kind != "time"
             && let Some(fields) = fields
         {
-            result = result.child(
-                div()
-                    .pl(px(24.))
-                    .pb(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .child("Repositories")
-                    .child(div().flex_1().max_w(px(340.)).child(fields.repos.clone())),
-            );
+            result = result.child(self.render_trigger_filters(trigger, index, fields, cx));
         }
         result.into_any_element()
+    }
+    /// The repository scope and each filter as a labelled row under the
+    /// trigger sentence, then "Add filter".
+    fn render_trigger_filters(
+        &self,
+        trigger: &AutomationTrigger,
+        index: usize,
+        fields: &TriggerFields,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let id = trigger.id.clone();
+        let suggestions = |field: &str, current: &[String]| {
+            let mut values = self
+                .trigger_suggestions
+                .get(&format!("{}:{field}", trigger.kind))
+                .cloned()
+                .unwrap_or_default();
+            if field == "assignee" {
+                values.insert(0, automations::UNASSIGNED.to_string());
+            }
+            values
+                .into_iter()
+                .filter(|value| !current.iter().any(|c| c.eq_ignore_ascii_case(value)))
+                .map(|value| {
+                    let label = if value == automations::UNASSIGNED {
+                        "Unassigned".to_string()
+                    } else {
+                        value.clone()
+                    };
+                    (value, label)
+                })
+                .collect::<Vec<_>>()
+        };
+        let (scope, _) = automations::scope_label(&trigger.kind);
+        let mut rows = div()
+            .pl(px(24.))
+            .pb(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .text_size(px(11.))
+            .text_color(content(0.4))
+            .child(
+                filter_row(scope)
+                    .child(field_box(fields.repos.clone()).max_w(px(FIELD_WIDTH + OP_WIDTH + 6.)))
+                    .child({
+                        let values = suggestions("repo", &trigger.repos);
+                        if values.is_empty() {
+                            button_slot().into_any_element()
+                        } else {
+                            self.suggest_button(
+                                ("trigger-scope-add", index),
+                                format!("Add {}", scope.to_lowercase()),
+                                Choice::ScopeValue(id.clone()),
+                                values,
+                                cx,
+                            )
+                            .into_any_element()
+                        }
+                    })
+                    .child(button_slot()),
+            );
+        for (position, (filter, input)) in trigger.filters.iter().zip(&fields.filters).enumerate() {
+            let label = if trigger.event == "label_added" && filter.field == "labels" {
+                if trigger.kind == "azuredevops" {
+                    "Added tag"
+                } else {
+                    "Added label"
+                }
+            } else {
+                automations::filter_label(&trigger.kind, &filter.field)
+            };
+            let ops = automations::filter_ops(&filter.field);
+            let op = ops
+                .iter()
+                .find(|(value, _)| *value == filter.op)
+                .unwrap_or(&ops[0])
+                .1;
+            let values = suggestions(&filter.field, &filter.values);
+            let remove_id = id.clone();
+            rows = rows.child(
+                filter_row(label)
+                    .child(
+                        div().w(px(OP_WIDTH)).flex_shrink_0().flex().child(
+                            self.select_control(
+                                SharedString::from(format!("trigger-{index}-filter-op-{position}")),
+                                op.into(),
+                                Choice::FilterOp(id.clone(), position),
+                                ops.iter()
+                                    .map(|(value, label)| (value.to_string(), label.to_string()))
+                                    .collect(),
+                                cx,
+                            )
+                            .w_full()
+                            .justify_between(),
+                        ),
+                    )
+                    .child(field_box(input.clone()).max_w(px(FIELD_WIDTH)))
+                    .child(if values.is_empty() {
+                        button_slot().into_any_element()
+                    } else {
+                        self.suggest_button(
+                            SharedString::from(format!("trigger-{index}-filter-add-{position}")),
+                            format!("Add {}", label.to_lowercase()),
+                            Choice::FilterValue(id.clone(), position),
+                            values,
+                            cx,
+                        )
+                        .into_any_element()
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "trigger-{index}-filter-remove-{position}"
+                            )))
+                            .role(Role::Button)
+                            .aria_label(format!("Remove {} filter", label.to_lowercase()))
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .rounded(px(6.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(content(0.35))
+                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .child(icon("close", 12.))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.commit_trigger_inputs(cx);
+                                if let Some(editor) = &mut this.editor {
+                                    if let Some(trigger) = trigger_mut(editor, &remove_id)
+                                        && position < trigger.filters.len()
+                                    {
+                                        trigger.filters.remove(position);
+                                    }
+                                    editor.dirty = true;
+                                }
+                                this.rebuild_trigger_fields(cx);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        let available: Vec<(String, String)> = automations::filter_fields(&trigger.kind)
+            .iter()
+            .filter(|field| !trigger.filters.iter().any(|f| f.field == **field))
+            .map(|field| {
+                (
+                    field.to_string(),
+                    automations::filter_label(&trigger.kind, field).to_string(),
+                )
+            })
+            .collect();
+        if !available.is_empty() {
+            let anchor = AnchorSlot::default();
+            let captured = anchor.clone();
+            rows = rows.child(
+                div().ml(px(-6.)).flex().child(
+                    div()
+                        .id(("trigger-add-filter", index))
+                        .role(Role::Button)
+                        .aria_label("Add filter")
+                        .relative()
+                        .h(px(24.))
+                        .px(px(6.))
+                        .rounded(px(6.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .hover(|s| s.bg(content(0.06)).text_color(content(1.)))
+                        .child(anchor.probe())
+                        .child(icon("plus", 12.))
+                        .child("Add filter")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.choice = Some(ChoiceMenu {
+                                field: Choice::AddFilter(id.clone()),
+                                options: available.clone(),
+                                anchor: captured.clone(),
+                            });
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
+        rows
+    }
+    fn suggest_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        label: String,
+        field: Choice,
+        values: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let anchor = AnchorSlot::default();
+        let captured = anchor.clone();
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(label)
+            .relative()
+            .size(px(24.))
+            .flex_shrink_0()
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(content(0.45))
+            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .child(anchor.probe())
+            .child(icon("plus", 12.))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.choice = Some(ChoiceMenu {
+                    field: field.clone(),
+                    options: values.clone(),
+                    anchor: captured.clone(),
+                });
+                cx.notify();
+            }))
     }
     pub(super) fn render_editor(&self, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.editor.as_ref().expect("editor");

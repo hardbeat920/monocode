@@ -84,7 +84,9 @@ impl Shell {
                         this.automation_state.session_automations = sessions;
                         this.automation_state.service = Some(service);
                         for item in retries {
-                            this.automation_state.event_retries.insert(item.key(), item);
+                            this.automation_state
+                                .event_retries
+                                .insert(item.event_key(), item);
                         }
                         if !cfg!(test) {
                             this.ensure_background_inbox(window, cx);
@@ -179,7 +181,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         for item in items {
-            self.automation_state.event_retries.insert(item.key(), item);
+            self.automation_state
+                .event_retries
+                .insert(item.event_key(), item);
         }
         if self.automation_state.event_retries.len() > 500 {
             let mut items = self
@@ -192,7 +196,7 @@ impl Shell {
             self.automation_state.event_retries = items
                 .into_iter()
                 .take(500)
-                .map(|item| (item.key(), item))
+                .map(|item| (item.event_key(), item))
                 .collect();
         }
         if self.automation_state.events_polling || self.automation_state.event_retries.is_empty() {
@@ -235,10 +239,14 @@ impl Shell {
                 match result {
                     Ok((runs, retry)) => {
                         for item in attempted {
-                            this.automation_state.event_retries.remove(&item.key());
+                            this.automation_state
+                                .event_retries
+                                .remove(&item.event_key());
                         }
                         for item in retry {
-                            this.automation_state.event_retries.insert(item.key(), item);
+                            this.automation_state
+                                .event_retries
+                                .insert(item.event_key(), item);
                         }
                         for run in runs {
                             this.launch_automation(run, false, cx);

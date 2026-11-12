@@ -159,9 +159,28 @@ pub struct AutomationTrigger {
     pub repo: String,
     #[serde(default)]
     pub branch: String,
+    /// "anyone", "people" (anyone but bots) or comma-separated author logins.
     #[serde(default = "default_actor")]
     pub actor: String,
+    /// Every filter must pass for an Inbox event to start a run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<TriggerFilter>,
 }
+
+/// One condition on an Inbox event. Values compare case-insensitively.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TriggerFilter {
+    /// "labels", "assignee", "status", "project" or "title".
+    pub field: String,
+    /// Labels: "any", "all", "none". Title: "contains", "not_contains".
+    /// Everything else: "is", "is_not".
+    pub op: String,
+    pub values: Vec<String>,
+}
+
+/// Matches an empty assignee list in an assignee filter.
+pub const UNASSIGNED: &str = "unassigned";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -447,6 +466,7 @@ fn trigger_from_fields(
         repo: String::new(),
         branch: String::new(),
         actor: default_actor(),
+        filters: Vec::new(),
     }
 }
 
@@ -1047,7 +1067,31 @@ impl AutomationTrigger {
             repo: String::new(),
             branch: String::new(),
             actor: "anyone".into(),
+            filters: Vec::new(),
         }
+    }
+    /// The actor, repository and filters of an event trigger. The event itself
+    /// is checked by the caller.
+    pub fn matches_item(&self, item: &crate::inbox::Item) -> bool {
+        let repos: Vec<_> = self
+            .repos
+            .iter()
+            .chain(std::iter::once(&self.repo))
+            .map(|repo| repo.trim())
+            .filter(|repo| !repo.is_empty())
+            .collect();
+        if !repos.is_empty()
+            && !repos
+                .iter()
+                .any(|repo| repo.eq_ignore_ascii_case(item.repo.trim()))
+        {
+            return false;
+        }
+        actor_matches(&self.actor, &item.provider, &item.author.login)
+            && self
+                .filters
+                .iter()
+                .all(|filter| filter.matches(item, self.event == "label_added"))
     }
     pub fn label(&self) -> String {
         if self.kind != "time" {
@@ -1117,9 +1161,141 @@ impl AutomationTrigger {
     }
 }
 
+impl TriggerFilter {
+    pub fn new(field: &str) -> Self {
+        Self {
+            field: field.into(),
+            op: filter_ops(field)
+                .first()
+                .map(|(op, _)| op.to_string())
+                .unwrap_or_default(),
+            values: Vec::new(),
+        }
+    }
+    /// For a "label added" event the labels filter checks the labels that
+    /// were added rather than every label on the item.
+    pub fn matches(&self, item: &crate::inbox::Item, added_labels: bool) -> bool {
+        let wanted: Vec<String> = self
+            .values
+            .iter()
+            .map(|value| normalize_name(value))
+            .filter(|value| !value.is_empty())
+            .collect();
+        if wanted.is_empty() {
+            return true;
+        }
+        let have: Vec<String> = match self.field.as_str() {
+            "labels" if added_labels => item
+                .added_labels
+                .iter()
+                .map(|l| normalize_name(l))
+                .collect(),
+            "labels" => item
+                .labels
+                .iter()
+                .map(|l| normalize_name(&l.name))
+                .collect(),
+            "assignee" if item.assignees.is_empty() => vec![UNASSIGNED.to_string()],
+            "assignee" => item
+                .assignees
+                .iter()
+                .map(|p| normalize_name(&p.login))
+                .collect(),
+            "status" => vec![normalize_name(&item.state)],
+            "project" => vec![normalize_name(&item.project_name)],
+            "title" => {
+                let title = item.title.to_lowercase();
+                let found = wanted.iter().any(|value| title.contains(value.as_str()));
+                return found != (self.op == "not_contains");
+            }
+            _ => return true,
+        };
+        let has = |value: &String| have.contains(value);
+        match self.op.as_str() {
+            "all" => wanted.iter().all(has),
+            "none" | "is_not" => !wanted.iter().any(has),
+            _ => wanted.iter().any(has),
+        }
+    }
+}
+
+fn normalize_name(value: &str) -> String {
+    value.trim().trim_start_matches('@').to_lowercase()
+}
+
+/// Bot accounts as GitHub and GitLab name them.
+fn is_bot(login: &str) -> bool {
+    login.ends_with("[bot]") || login.ends_with("-bot") || login.starts_with("app/")
+}
+
+/// Only providers whose Inbox rows carry an author can filter by actor; the
+/// others match any actor so a saved value cannot silently stop a trigger.
+fn actor_matches(actor: &str, provider: &str, author: &str) -> bool {
+    let actor = actor.trim();
+    if actor.is_empty() || actor.eq_ignore_ascii_case("anyone") || !has_authors(provider) {
+        return true;
+    }
+    let author = normalize_name(author);
+    if author.is_empty() {
+        return false;
+    }
+    if actor.eq_ignore_ascii_case("people") {
+        return !is_bot(&author);
+    }
+    actor
+        .split(',')
+        .any(|login| normalize_name(login) == author)
+}
+
+/// Providers whose Inbox list rows include the author.
+pub fn has_authors(kind: &str) -> bool {
+    matches!(kind, "github" | "gitlab")
+}
+
+/// The filters an event trigger offers, in menu order.
+pub fn filter_fields(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "linear" => &["labels", "status", "project", "assignee", "title"],
+        "jira" | "azuredevops" => &["labels", "status", "assignee", "title"],
+        _ => &["labels", "assignee", "title"],
+    }
+}
+
+pub fn filter_label(kind: &str, field: &str) -> &'static str {
+    match (kind, field) {
+        ("azuredevops", "labels") => "Tags",
+        (_, "labels") => "Labels",
+        ("azuredevops", "status") => "State",
+        (_, "status") => "Status",
+        (_, "project") => "Project",
+        (_, "assignee") => "Assignee",
+        (_, "title") => "Title",
+        _ => "Filter",
+    }
+}
+
+pub fn filter_ops(field: &str) -> &'static [(&'static str, &'static str)] {
+    match field {
+        "labels" => &[("any", "any of"), ("all", "all of"), ("none", "none of")],
+        "title" => &[("contains", "contains"), ("not_contains", "excludes")],
+        _ => &[("is", "is"), ("is_not", "is not")],
+    }
+}
+
+/// What the trigger's repository field narrows, by provider.
+pub fn scope_label(kind: &str) -> (&'static str, &'static str) {
+    match kind {
+        "linear" => ("Teams", "Any team"),
+        "jira" | "gitlab" => ("Projects", "Any project"),
+        _ => ("Repositories", "Any repository"),
+    }
+}
+
 pub fn event_label(kind: &str, event: &str) -> String {
     match (kind, event) {
         ("jira", "issue_created") => "Issue appeared",
+        ("azuredevops", "label_added") => "Tag added",
+        (_, "label_added") => "Label added",
         (_, "draft_opened") => "Draft opened",
         (_, "pull_request_opened") => "Pull request opened",
         (_, "issue_opened") => "Issue opened",
@@ -1302,7 +1478,9 @@ pub fn claim_inbox_events_retry(
     let mut claimed = Vec::new();
     let mut retry = Vec::new();
     for item in items {
+        let labeled = !item.added_labels.is_empty();
         let event = match (item.provider.as_str(), item.kind.as_str(), item.draft) {
+            _ if labeled => "label_added",
             ("github", "pr", true) => "draft_opened",
             ("github", "pr", false) => "pull_request_opened",
             ("github" | "gitlab", "issue", _) => "issue_opened",
@@ -1326,6 +1504,17 @@ pub fn claim_inbox_events_retry(
                 "{}:{}:{}:{}",
                 item.provider, item.kind, item.repo, item.number
             )
+        };
+        let identity = if labeled {
+            let mut added: Vec<String> = item
+                .added_labels
+                .iter()
+                .map(|l| l.trim().to_lowercase())
+                .collect();
+            added.sort();
+            format!("{identity}:labeled:{}", added.join(","))
+        } else {
+            identity
         };
         let event_key = identity
             .trim()
@@ -1365,24 +1554,9 @@ pub fn claim_inbox_events_retry(
                 continue;
             }
             let trigger = automation.triggers().into_iter().find(|trigger| {
-                if trigger.kind != item.provider || trigger.event != event {
-                    return false;
-                }
-                let actor = trigger.actor.trim();
-                if !actor.is_empty() && !actor.eq_ignore_ascii_case("anyone") {
-                    return false;
-                }
-                let repos: Vec<_> = trigger
-                    .repos
-                    .iter()
-                    .chain(std::iter::once(&trigger.repo))
-                    .map(|repo| repo.trim())
-                    .filter(|repo| !repo.is_empty())
-                    .collect();
-                repos.is_empty()
-                    || repos
-                        .iter()
-                        .any(|repo| repo.eq_ignore_ascii_case(item.repo.trim()))
+                trigger.kind == item.provider
+                    && trigger.event == event
+                    && trigger.matches_item(item)
             });
             let Some(trigger) = trigger else {
                 continue;
@@ -1421,7 +1595,24 @@ pub fn claim_inbox_events_retry(
                 prompt.push('\n');
                 prompt.push_str(item.url.trim());
             }
-            let created = crate::inbox::timestamp_ms(&item.created_at);
+            if labeled {
+                prompt.push_str(&format!(
+                    "\n\n{} added: {}",
+                    if item.provider == "azuredevops" {
+                        "Tag"
+                    } else {
+                        "Label"
+                    },
+                    item.added_labels.join(", ")
+                ));
+            }
+            // A label lands long after the item was opened, so it counts from
+            // the item's last update instead.
+            let created = if labeled {
+                0
+            } else {
+                crate::inbox::timestamp_ms(&item.created_at)
+            };
             let occurred_at = if created != 0 {
                 created
             } else {
@@ -1567,6 +1758,108 @@ mod tests {
         draft.sync_triggers(now_millis());
         service.upsert(draft).unwrap();
         assert!(claim_inbox_events(&mut service, &[item(4)], now_millis())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn trigger_filters_match_labels_assignees_titles_and_authors() {
+        let label = |name: &str| crate::inbox::Label {
+            name: name.into(),
+            color: String::new(),
+        };
+        let mut issue = item(1);
+        issue.kind = "issue".into();
+        issue.title = "Crash when archiving".into();
+        issue.labels = vec![label("Bug"), label("p1")];
+        issue.author.login = "Octocat".into();
+        let filtered = |filters: Vec<TriggerFilter>| AutomationTrigger {
+            filters,
+            ..AutomationTrigger::new("github", "issue_opened")
+        };
+        let filter = |field: &str, op: &str, values: &[&str]| TriggerFilter {
+            field: field.into(),
+            op: op.into(),
+            values: values.iter().map(|v| v.to_string()).collect(),
+        };
+        assert!(filtered(vec![filter("labels", "any", &["bug", "docs"])]).matches_item(&issue));
+        assert!(!filtered(vec![filter("labels", "all", &["bug", "docs"])]).matches_item(&issue));
+        assert!(!filtered(vec![filter("labels", "none", &["P1"])]).matches_item(&issue));
+        assert!(filtered(vec![filter("labels", "any", &[])]).matches_item(&issue));
+        assert!(filtered(vec![filter("assignee", "is", &[UNASSIGNED])]).matches_item(&issue));
+        assert!(filtered(vec![filter("title", "contains", &["crash"])]).matches_item(&issue));
+        assert!(!filtered(vec![
+            filter("title", "contains", &["crash"]),
+            filter("title", "not_contains", &["archiving"]),
+        ])
+        .matches_item(&issue));
+
+        let by = |actor: &str| AutomationTrigger {
+            actor: actor.into(),
+            ..AutomationTrigger::new("github", "issue_opened")
+        };
+        assert!(by("anyone").matches_item(&issue));
+        assert!(by("people").matches_item(&issue));
+        assert!(by("someone, @octocat").matches_item(&issue));
+        assert!(!by("someone").matches_item(&issue));
+        issue.author.login = "dependabot[bot]".into();
+        assert!(!by("people").matches_item(&issue));
+        // Linear rows carry no author, so the actor cannot filter them.
+        let mut linear = issue.clone();
+        linear.provider = "linear".into();
+        linear.author.login.clear();
+        assert!(AutomationTrigger {
+            actor: "someone".into(),
+            ..AutomationTrigger::new("linear", "issue_created")
+        }
+        .matches_item(&linear));
+    }
+
+    #[test]
+    fn label_added_events_claim_once_per_added_label() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("sessions.sqlite")).unwrap();
+        save(
+            &mut service,
+            vec![AutomationTrigger {
+                filters: vec![TriggerFilter {
+                    field: "labels".into(),
+                    op: "any".into(),
+                    values: vec!["bug".into()],
+                }],
+                ..AutomationTrigger::new("github", "label_added")
+            }],
+        );
+        let mut opened = item(7);
+        opened.labels = vec![crate::inbox::Label {
+            name: "bug".into(),
+            color: String::new(),
+        }];
+        assert!(
+            claim_inbox_events(&mut service, &[opened.clone()], now_millis())
+                .unwrap()
+                .is_empty()
+        );
+        let mut docs = opened.clone();
+        docs.added_labels = vec!["docs".into()];
+        assert!(claim_inbox_events(&mut service, &[docs], now_millis())
+            .unwrap()
+            .is_empty());
+        let mut bug = opened;
+        bug.added_labels = vec!["Bug".into()];
+        let claims = claim_inbox_events(&mut service, &[bug.clone()], now_millis()).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(
+            claims[0].run.event_key.as_deref(),
+            Some("github:pr:acme/app:7:labeled:bug")
+        );
+        assert!(claims[0]
+            .run
+            .prompt
+            .as_deref()
+            .unwrap()
+            .ends_with("Label added: Bug"));
+        assert!(claim_inbox_events(&mut service, &[bug], now_millis())
             .unwrap()
             .is_empty());
     }
