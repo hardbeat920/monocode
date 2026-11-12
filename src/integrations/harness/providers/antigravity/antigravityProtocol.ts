@@ -2,6 +2,7 @@ import { promptBlocks, type PromptContentBlock } from "../../../../features/sess
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
+import { aggregateModelCalls, withLiveContext } from "../../core/contextLevel";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 import {
   composeToolTitle,
@@ -145,6 +146,10 @@ export function permissionRequestFromAcp(
 
 export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
   const rec = asRecord(params);
+  return withLiveContext(rec, mapAcpUpdate(rec));
+}
+
+function mapAcpUpdate(rec: Record<string, unknown> | null): HarnessEvent[] {
   const update = asRecord(rec?.update) ?? rec;
   if (!update) return [];
   const kind = String(
@@ -378,11 +383,18 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
     asRecord(update.token_usage) ??
     (hasUsageFields(update) ? update : null);
   if (!usage) return [];
-  const used =
-    numberField(usage, "used") ??
-    numberField(usage, "usedTokens") ??
-    numberField(usage, "used_tokens") ??
-    sumNumbers(usage, ["inputTokens", "outputTokens", "input_tokens", "output_tokens"]);
+  const aggregate = aggregateModelCalls(usage);
+  const used = aggregate
+    ? undefined
+    : numberField(usage, "used") ??
+      numberField(usage, "usedTokens") ??
+      numberField(usage, "used_tokens") ??
+      sumNumbers(usage, [
+        "inputTokens",
+        "outputTokens",
+        "input_tokens",
+        "output_tokens",
+      ]);
   const window =
     numberField(usage, "window") ??
     numberField(usage, "size") ??
@@ -391,7 +403,7 @@ function usageFromUpdate(update: Record<string, unknown>): HarnessEvent[] {
     numberField(usage, "maxTokens") ??
     numberField(usage, "max_tokens");
   const events: HarnessEvent[] = [];
-  if (used != null || window != null) {
+  if (!aggregate && (used != null || window != null)) {
     events.push({
       type: "context",
       ...(used != null ? { used } : {}),

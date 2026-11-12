@@ -202,7 +202,7 @@ describe("grok protocol", () => {
     });
   });
 
-  it("maps turn_completed usage onto the context meter", () => {
+  it("maps a single-call turn_completed usage onto the context meter", () => {
     expect(
       eventsFromAcpUpdate({
         sessionUpdate: "turn_completed",
@@ -219,6 +219,44 @@ describe("grok protocol", () => {
         inputTokens: 19762,
         outputTokens: 36,
       },
+    ]);
+  });
+
+  it("keeps a multi-call turn total off the context meter", () => {
+    expect(
+      eventsFromAcpUpdate({
+        sessionUpdate: "turn_completed",
+        usage: {
+          inputTokens: 277125,
+          outputTokens: 634,
+          totalTokens: 277759,
+          cachedReadTokens: 275712,
+          reasoningTokens: 335,
+          modelCalls: 4,
+          numTurns: 4,
+        },
+      }),
+    ).toEqual([
+      {
+        type: "turn.metrics",
+        inputTokens: 277125,
+        outputTokens: 634,
+      },
+    ]);
+  });
+
+  it("reads the live window level from the update envelope", () => {
+    expect(
+      eventsFromAcpUpdate({
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "hi" },
+        },
+        _meta: { totalTokens: 68587, requestTrimmedTokens: 0 },
+      }),
+    ).toEqual([
+      { type: "message.delta", text: "hi" },
+      { type: "context", used: 68587 },
     ]);
   });
 

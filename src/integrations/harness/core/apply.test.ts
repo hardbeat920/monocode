@@ -1261,6 +1261,21 @@ describe("applyHarnessEvent context", () => {
     expect(session.context).toEqual({ used: 12_000, window: 400_000 });
   });
 
+  it("ignores a repeated level", () => {
+    const session = applyHarnessEvent(newSession("grok", "/repo"), {
+      type: "context",
+      used: 68_587,
+      window: 256_000,
+    });
+    expect(
+      applyHarnessEvent(session, {
+        type: "context",
+        used: 68_587,
+        window: 256_000,
+      }),
+    ).toBe(session);
+  });
+
   it("leaves blocks alone", () => {
     const session = applyHarnessEvent(newSession("codex", "/repo"), {
       type: "context",
