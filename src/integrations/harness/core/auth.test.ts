@@ -9,6 +9,7 @@ const child = vi.hoisted(() => ({
   resolveCodexBinary: vi.fn(async () => ({ path: "/bin/codex" })),
   resolveCursorBinary: vi.fn(async () => ({ path: "/bin/agent" })),
   resolveGrokBinary: vi.fn(async () => ({ path: "/bin/grok" })),
+  resolveCopilotBinary: vi.fn(async () => ({ path: "/bin/copilot" })),
   resolveFxBinary: vi.fn(async () => ({ path: "/bin/fx" })),
 }));
 
@@ -37,6 +38,7 @@ describe("harness login", () => {
     expect(harnessLoginArgs("claude")).toEqual(["auth", "login"]);
     expect(harnessLoginArgs("codex")).toEqual(["login"]);
     expect(harnessLoginArgs("cursor")).toEqual(["login"]);
+    expect(harnessLoginArgs("copilot")).toEqual(["login", "--web-flow"]);
     expect(harnessLoginArgs("grok")).toEqual(["login", "--oauth"]);
     expect(harnessLoginArgs("fx")).toEqual(["login", "vercel"]);
     expect(supportsHarnessLogin("opencode")).toBe(false);
@@ -85,6 +87,23 @@ describe("harness login", () => {
       ((code: number | null) => void) | undefined;
     onExit?.(0);
     await expect(login).resolves.toBeUndefined();
+  });
+
+  it("launches Copilot's browser login without a terminal prompt", async () => {
+    const login = loginHarness("copilot");
+    await vi.waitFor(() => expect(child.watchChild).toHaveBeenCalledOnce());
+    expect(child.spawnChild).toHaveBeenCalledWith(
+      "monocode-provider-login-test-window-copilot",
+      "/bin/copilot",
+      ["login", "--web-flow"],
+      "/home/alice",
+      undefined,
+      "copilot",
+    );
+    const onExit = child.watchChild.mock.calls[0]?.[2] as
+      ((code: number | null) => void) | undefined;
+    onExit?.(0);
+    await login;
   });
 
   it("isolates a named Codex account during sign-in", async () => {

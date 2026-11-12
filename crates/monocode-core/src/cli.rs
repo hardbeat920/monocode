@@ -109,6 +109,9 @@ pub fn inspect(kind: Kind, path: Option<&str>) -> Result<Inspection, String> {
     {
         return Err("Codex CLI returned an invalid version.".into());
     }
+    if kind == Kind::Copilot && !version.to_lowercase().contains("copilot") {
+        return Err("GitHub Copilot CLI returned an invalid version.".into());
+    }
     if kind == Kind::OpenCode {
         let v = regex::Regex::new(r"(?:^|\s)v?(\d+)\.(\d+)\.(\d+)").unwrap();
         let c = v

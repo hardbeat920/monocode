@@ -392,6 +392,8 @@ function modelFromListRow(raw: unknown): AgentModel | null {
       ? { aliasTarget: fromResolved.id }
       : {}),
     ...(settings.length > 0 ? { settings } : {}),
+    // The CLI only sends this when true, so absent means unsupported.
+    supportsAuto: rec.supportsAutoMode === true,
   };
 }
 

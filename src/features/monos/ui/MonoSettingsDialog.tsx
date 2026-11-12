@@ -12,6 +12,7 @@ import { Modal } from "../../../shared/ui/Modal";
 import { Popover } from "../../../shared/ui/Popover";
 import { Settings, Sparkles, StickyNote } from "../../../shared/ui/icons";
 import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
+import { runtimeModesFor } from "../../sessions/model/models";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
@@ -193,18 +194,22 @@ function GeneralSection({
             <SettingRow label={label}>{control}</SettingRow>
           )}
         />
-        <SettingRow
-          label="Permissions"
-          description="What it may do without asking."
-        >
-          <AccessPicker
-            value={runtimeMode}
-            onChange={onRuntimeModeChange}
-            busy={busy}
-            side="bottom"
-            variant="plain"
-          />
-        </SettingRow>
+        {runtimeModesFor(harness, model).length > 1 ? (
+          <SettingRow
+            label="Permissions"
+            description="What it may do without asking."
+          >
+            <AccessPicker
+              harness={harness}
+              model={model}
+              value={runtimeMode}
+              onChange={onRuntimeModeChange}
+              busy={busy}
+              side="bottom"
+              variant="plain"
+            />
+          </SettingRow>
+        ) : null}
       </SettingGroup>
 
       <GroupHeading

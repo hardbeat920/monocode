@@ -17,6 +17,7 @@ pub fn supported_providers() -> &'static [&'static str] {
         "fx",
         "hermes",
         "antigravity",
+        "copilot",
         "devin",
     ]
 }
@@ -30,7 +31,7 @@ pub fn wire_model_settings(
     let mut values = settings.model_settings.clone();
     if let Some(effort) = &settings.effort {
         values.insert(
-            if provider == "codex" {
+            if matches!(provider, "codex" | "copilot") {
                 "reasoningEffort"
             } else {
                 "effort"

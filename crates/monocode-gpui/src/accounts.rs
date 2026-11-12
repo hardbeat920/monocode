@@ -890,6 +890,7 @@ mod tests {
         state.complete(Err(FetchError {
             message: "Offline".into(),
             unavailable: false,
+            authentication_required: false,
         }));
         assert_eq!(
             state.snapshot.as_ref().unwrap().windows[0].used_percent,
@@ -898,6 +899,7 @@ mod tests {
         state.complete(Err(FetchError {
             message: "Not signed in".into(),
             unavailable: true,
+            authentication_required: true,
         }));
         assert!(state.snapshot.is_none());
         assert_ne!(

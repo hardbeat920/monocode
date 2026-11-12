@@ -7,7 +7,10 @@ import {
   applyHarnessEvent,
   stopStreaming,
 } from "../src/integrations/harness/core/apply";
-import { resolveModel } from "../src/features/sessions/model/models";
+import {
+  coerceRuntimeMode,
+  resolveModel,
+} from "../src/features/sessions/model/models";
 import { isVisionImage } from "../src/features/sessions/model/attachments";
 import type {
   HarnessEvent,
@@ -796,7 +799,13 @@ export class HostEngine {
               cwd: session.cwd,
               model: session.model,
               modelSettings: session.modelSettings,
-              runtimeMode: session.runtimeMode,
+              // The saved mode is the user's choice; the provider gets what
+              // this host's catalog says the model supports.
+              runtimeMode: coerceRuntimeMode(
+                session.harness,
+                session.model,
+                session.runtimeMode,
+              ),
               intent,
               onEvent: (event) => this.event(session.id, runId!, event),
             };

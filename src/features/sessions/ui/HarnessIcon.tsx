@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import claude from "../../../assets/providers/claude.svg";
 import codex from "../../../assets/providers/codex.svg";
+import copilot from "../../../assets/providers/copilot.svg";
 import cursor from "../../../assets/providers/cursor.svg";
 import devin from "../../../assets/providers/devin.svg";
 import fx from "../../../assets/providers/fx.svg";
@@ -15,6 +16,7 @@ import type { HarnessId } from "../model/session";
 export const HARNESS_ICONS: Record<HarnessId, string> = {
   claude,
   codex,
+  copilot,
   cursor,
   grok,
   opencode,
@@ -34,8 +36,11 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "pi",
   "fx",
   "hermes",
+  "copilot",
   "devin",
 ]);
+
+const MASK_ICON_HARNESSES = new Set<HarnessId>(["hermes", "copilot", "devin"]);
 
 function MonoIcon({
   className,
@@ -82,7 +87,7 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (harness === "hermes" || harness === "devin") {
+  if (MASK_ICON_HARNESSES.has(harness)) {
     const mark = HARNESS_ICONS[harness];
     return (
       <span
@@ -90,7 +95,7 @@ export function HarnessIcon({
         className={`inline-flex items-center justify-center ${className}`}
       >
         <span
-          className={`block ${harness === "hermes" ? "size-[72%]" : "size-[88%]"} bg-current`}
+          className={`block ${harness === "devin" ? "size-[88%]" : "size-[72%]"} bg-current`}
           style={{
             // Quoted: Vite inlines small SVGs as data URIs that contain spaces.
             maskImage: `url("${mark}")`,
