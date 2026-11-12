@@ -176,6 +176,7 @@ impl Shell {
                     | "notes.list"
                     | "notes.read"
                     | "worktrees.list"
+                    | "cow.list"
             )
         {
             return Err("This thread's access policy allows read-only app actions.".into());
@@ -321,7 +322,11 @@ impl Shell {
         let project = caller.summary.cwd.clone();
         let provider = caller.summary.provider.clone();
         let inherited = caller.settings.clone();
-        let input = call.input.clone();
+        let input = if call.action == "cow.create" {
+            app::cow_launch_input(call.input.clone())
+        } else {
+            call.input.clone()
+        };
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
             "sessions.list" => Ok(
@@ -353,7 +358,7 @@ impl Shell {
                 );
                 return;
             }
-            "sessions.start" => {
+            "sessions.start" | "cow.create" => {
                 let parsed = (|| {
                     let prompt = app::prompt(&input)?;
                     let kind = Kind::parse(input["harness"].as_str().unwrap_or(&provider))
@@ -376,7 +381,7 @@ impl Shell {
                 };
                 let caller = call.session;
                 let request = call.request_id.clone();
-                let fingerprint = app::fingerprint(&action, &input);
+                let fingerprint = app::fingerprint(&action, &call.input);
                 self.app_background(call,move|store| {
                     let models=if input.get("model").is_some() || input.get("modelSettings").is_some() || input.get("effort").is_some() {
                         monocode_core::catalog::models_for(kind,&settings.account)?
@@ -384,18 +389,31 @@ impl Shell {
                     let mut settings=app::launch_settings(&input,&provider,settings,kind,&models)?;
                     settings.revision=0;
                     let title=app::optional_text(&input,"title",160)?.unwrap_or_else(||prompt.chars().take(160).collect());
-                    let mut store=locked(&store)?;
-                    let (mut summary,fresh)=store.create_app_session(caller,&request,&fingerprint,kind.id(),&project)?;
+                    let (mut summary,fresh,isolation,owner)={
+                        let db=locked(&store)?;
+                        let (summary,fresh)=db.create_app_session(caller,&request,&fingerprint,kind.id(),&project)?;
+                        let owner=db.persisted_session_id(summary.id)?;
+                        (summary,fresh,monocode_core::isolation::Isolation::for_store(&db),owner)
+                    };
                     if fresh {
-                        if let Err(error)=app::launch_checkout(&input,&project,summary.id,&mut settings) {let _=store.delete(summary.id);return Err(error);}
-                        store.title(summary.id,&title)?;summary.title=title;
-                        store.configure_agent(summary.id,kind.id(),&settings)?;
-                        store.save_started_link(summary.id,caller)?;
-                        store.prepare_app_prompt(summary.id,&request,&prompt)?;
+                        let workspace=(|| {
+                            app::launch_checkout(&input,&project,summary.id,&mut settings)?;
+                            if action=="cow.create" {isolation.create(std::path::Path::new(&project),&owner,&mut settings)?;}
+                            Ok::<_,String>(())
+                        })();
+                        if let Err(error)=workspace {let _=locked(&store)?.delete(summary.id);return Err(error);}
+                        let db=locked(&store)?;
+                        db.title(summary.id,&title)?;summary.title=title;
+                        db.configure_agent(summary.id,kind.id(),&settings)?;
+                        db.save_started_link(summary.id,caller)?;
+                        db.prepare_app_prompt(summary.id,&request,&prompt)?;
                         summary.has_messages=true;
+                    } else {
+                        settings=locked(&store)?.agent_settings(summary.id)?.unwrap_or_default();
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
-                    let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
+                    let mut value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
+                    if action=="cow.create" {value["cowId"]=json!(settings.cow_id);value["path"]=json!(settings.worktree_cwd);}
                     Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement)))}else{Effect::None}))
                 },cx);
                 return;
@@ -574,6 +592,21 @@ impl Shell {
                     }
                 }
             },
+            "cow.list" => {
+                self.app_background(
+                    call,
+                    move |store| {
+                        let isolation =
+                            monocode_core::isolation::Isolation::for_store(&*locked(&store)?);
+                        Ok((
+                            json!({"copies":isolation.list(std::path::Path::new(&project))?}),
+                            Effect::None,
+                        ))
+                    },
+                    cx,
+                );
+                return;
+            }
             "worktrees.list" | "worktrees.create" => {
                 self.app_background(
                     call,
@@ -617,6 +650,7 @@ fn mutating(action: &str) -> bool {
             | "notes.list"
             | "notes.read"
             | "worktrees.list"
+            | "cow.list"
     )
 }
 fn worktree_json(tree: &monocode_core::git::Worktree) -> Value {

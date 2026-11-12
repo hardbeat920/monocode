@@ -10,6 +10,7 @@ enum State {
     Pending,
     Starting,
     Running,
+    Integrating,
     Done,
     Failed,
     Blocked,
@@ -130,8 +131,9 @@ impl Shell {
             .map(|(lead, _)| *lead)
             .collect();
         for lead in leads {
+            let mut integrations = Vec::new();
             if let Some(run) = self.orchestrations.get_mut(&lead) {
-                for task in &mut run.tasks {
+                for (ix, task) in run.tasks.iter_mut().enumerate() {
                     if task.session == Some(id)
                         && task.state == State::Running
                         && let Some(view) = self.sessions.get(&id)
@@ -140,10 +142,61 @@ impl Shell {
                         if !view.busy {
                             let (success, report) = view.external_outcome(cx);
                             task.report = report;
-                            task.state = if success { State::Done } else { State::Failed };
+                            if success && view.settings.cow_id.is_some() && !run.stopped {
+                                task.state = State::Integrating;
+                                integrations.push((
+                                    ix,
+                                    view.summary.cwd.clone(),
+                                    view.settings.clone(),
+                                    run.cwd.clone(),
+                                ));
+                            } else {
+                                task.state = if success { State::Done } else { State::Failed };
+                            }
                         }
                     }
                 }
+            }
+            for (ix, project, settings, destination) in integrations {
+                let store = self.store.clone();
+                let retained_path = settings
+                    .worktree_cwd
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into());
+                let work = cx.background_executor().spawn(async move {
+                    let (isolation, worker_owner, lead_owner) = {
+                        let store = locked(&store)?;
+                        (
+                            monocode_core::isolation::Isolation::for_store(&store),
+                            store.persisted_session_id(id)?,
+                            store.persisted_session_id(lead)?,
+                        )
+                    };
+                    isolation.integrate(
+                        std::path::Path::new(&project),
+                        &worker_owner,
+                        &settings,
+                        &lead_owner,
+                        std::path::Path::new(&destination),
+                    )
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = work.await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(run) = this.orchestrations.get_mut(&lead)
+                            && let Some(task) = run.tasks.get_mut(ix)
+                            && task.session == Some(id) && task.state == State::Integrating
+                        {
+                            task.state = if result.is_ok() { State::Done } else { State::Failed };
+                            if let Err(error) = result {
+                                task.report.push_str(&format!("\nWorker copy retained at {retained_path}. Integration failed: {error}"));
+                            }
+                        }
+                        this.schedule_orchestration(lead, cx);
+                        this.sync_git(cx);
+                        cx.notify();
+                    });
+                }).detach();
             }
             self.schedule_orchestration(lead, cx);
         }
@@ -176,7 +229,12 @@ impl Shell {
         let mut occupied: Vec<Vec<String>> = run
             .tasks
             .iter()
-            .filter(|t| matches!(t.state, State::Starting | State::Running))
+            .filter(|t| {
+                matches!(
+                    t.state,
+                    State::Starting | State::Running | State::Integrating
+                )
+            })
             .map(|t| t.task.files.clone())
             .collect();
         let completed: HashSet<_> = run
@@ -233,6 +291,7 @@ impl Shell {
                         State::Pending => "waiting",
                         State::Starting => "starting",
                         State::Running => "working",
+                        State::Integrating => "integrating",
                         State::Done => "done",
                         State::Failed => "failed",
                         State::Blocked => "blocked",
@@ -257,7 +316,7 @@ impl Shell {
                     model: run.settings.model.clone(),
                     status: match t.state {
                         State::Pending | State::Starting => "queued",
-                        State::Running => "running",
+                        State::Running | State::Integrating => "running",
                         State::Done => "completed",
                         State::Failed => "failed",
                         State::Blocked => "blocked",
@@ -346,7 +405,12 @@ impl Shell {
                 let mut summary = store.create(&provider, &project)?;
                 summary.title = format!("Agent · {}", task.title);
                 store.title(summary.id, &summary.title)?;
-                settings.worktree_cwd = Some(cwd);
+                if settings.cow_id.is_some() {
+                    settings.fork_isolation();
+                    settings.cow_source_cwd = Some(cwd);
+                } else {
+                    settings.worktree_cwd = Some(cwd);
+                }
                 store.save_agent_settings(summary.id, &settings)?;
                 Ok::<_, String>((
                     summary,
@@ -395,6 +459,147 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[gpui::test]
+    fn completed_copy_workers_integrate_before_becoming_done(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!(
+            "monocode-cow-orchestration-{}",
+            monocode_core::mono::new_id()
+        ));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("file"), "original").unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["add", "file"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "Base",
+            ],
+        ] {
+            let output = std::process::Command::new("git")
+                .current_dir(&project)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let db = monocode_core::store::Store::open_monocode(&root.join("app/monocode.db")).unwrap();
+        let lead = db.create("codex", project.to_str().unwrap()).unwrap();
+        let worker = db.create("codex", project.to_str().unwrap()).unwrap();
+        let isolation = monocode_core::isolation::Isolation::for_store(&db);
+        if !isolation.supported(&project) {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "Native CoW filesystem required"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let mut lead_settings = Settings::default();
+        lead_settings.isolation_default("cow");
+        let lead_copy = isolation
+            .create(
+                &project,
+                &db.persisted_session_id(lead.id).unwrap(),
+                &mut lead_settings,
+            )
+            .unwrap();
+        let mut worker_settings = lead_settings.clone();
+        worker_settings.fork_isolation();
+        let worker_copy = isolation
+            .create(
+                &project,
+                &db.persisted_session_id(worker.id).unwrap(),
+                &mut worker_settings,
+            )
+            .unwrap();
+        std::fs::write(worker_copy.join("file"), "worker edit").unwrap();
+        db.save_agent_settings(lead.id, &lead_settings).unwrap();
+        db.save_agent_settings(worker.id, &worker_settings).unwrap();
+        let (lead_id, worker_id) = (lead.id, worker.id);
+        let store = Arc::new(Mutex::new(db));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store,
+                        vec![lead, worker],
+                        project.to_string_lossy().into_owned(),
+                        None,
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.ensure_session(lead_id, cx);
+                shell.ensure_session(worker_id, cx);
+                shell.sessions[&lead_id].update(cx, |view, cx| {
+                    view.install_transfer(lead_settings.clone(), None, cx);
+                    view.input.update(cx, |input, cx| {
+                        input.set_text("Hold coordinator until reviewed".into(), cx)
+                    });
+                });
+                shell.sessions[&worker_id].update(cx, |view, cx| {
+                    view.install_transfer(worker_settings, None, cx)
+                });
+                shell.orchestrations.insert(
+                    lead_id,
+                    Run {
+                        cwd: lead_copy.to_string_lossy().into_owned(),
+                        provider: "codex".into(),
+                        settings: lead_settings,
+                        tasks: vec![Assignment {
+                            task: Task {
+                                id: "worker".into(),
+                                title: "Edit file".into(),
+                                prompt: "Edit".into(),
+                                files: vec!["file".into()],
+                                depends_on: vec![],
+                            },
+                            session: Some(worker_id),
+                            state: State::Running,
+                            report: String::new(),
+                        }],
+                        stopped: false,
+                    },
+                );
+                shell.orchestration_session_changed(worker_id, cx);
+                assert!(shell.orchestrations[&lead_id].tasks[0].state == State::Integrating);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.orchestrations[&lead_id].tasks[0].state == State::Done)
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(lead_copy.join("file")).unwrap(),
+            "worker edit"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("file")).unwrap(),
+            "original"
+        );
+        assert!(worker_copy.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[gpui::test]
     fn reviewed_dispatch_caps_workers_serializes_scopes_and_stops_before_launch(
         cx: &mut TestAppContext,

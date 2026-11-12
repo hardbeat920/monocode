@@ -1448,6 +1448,17 @@ impl Shell {
                 cx.notify();
             },
         ));
+        self.observations.push(cx.subscribe(
+            &view,
+            |_, _, _: &crate::conversation::OpenIsolationSettings, cx| {
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.open_settings(crate::settings::Section::Worktrees, window, cx)
+                    });
+                })
+                .detach();
+            },
+        ));
         self.observations
             .push(cx.observe(&view, move |this, _, cx| {
                 if this
@@ -1588,8 +1599,10 @@ impl Shell {
                 model_settings: transfer.target.settings.clone(),
                 access: transfer.settings.access,
                 worktree_cwd: transfer.settings.worktree_cwd.clone(),
+                cow_id: transfer.settings.cow_id.clone(),
                 ..Settings::default()
             };
+            settings.fork_isolation();
             let prompt = if transfer.kind == TransferKind::SecondOpinion {
                 Some(response::second_opinion(&transfer.from, &transfer.turn))
             } else {
@@ -3054,18 +3067,21 @@ impl Shell {
     /// newTerminalCwd: the focused session's worktree, else its folder, else
     /// the project.
     fn terminal_cwd(&self, cx: &App) -> String {
-        self.workspace
-            .active
-            .and_then(|id| self.sessions.get(&id))
-            .map(|view| {
-                let view = view.read(cx);
-                view.settings
-                    .worktree_cwd
-                    .clone()
-                    .unwrap_or_else(|| view.summary.cwd.clone())
-            })
-            .unwrap_or_else(|| self.working_copy().to_owned())
+        if let Some(pane) = self.workspace.active {
+            if let Some(terminal) = self.terminal_pane_views.get(&pane) {
+                return terminal.read(cx).cwd.clone();
+            }
+            if let Some(terminal) = self.workspace.terminal_panes.get(&pane) {
+                return terminal.cwd.clone();
+            }
+            let owner = self.workspace.session_for_pane(pane);
+            if self.session_summaries.contains_key(&owner) {
+                return self.session_working_copy(owner, cx).to_owned();
+            }
+        }
+        self.working_copy().to_owned()
     }
+
     fn spawn_terminal(&mut self, cwd: String, cx: &mut Context<Self>) -> Entity<Terminal> {
         let terminal = cx.new(|cx| Terminal::new(cwd, cx));
         self.observations
@@ -3589,7 +3605,7 @@ impl Shell {
         let kind = self
             .workspace
             .active
-            .and_then(|id| self.sessions.get(&id))
+            .and_then(|id| self.sessions.get(&self.workspace.session_for_pane(id)))
             .map_or(Kind::Codex, |s| Kind::from_id(&s.read(cx).summary.provider));
         let defaults = session_loading::NewSessionDefaults::read(
             self.explicit_choice(kind),
@@ -3610,9 +3626,10 @@ impl Shell {
             )
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
-        let work = cx
-            .background_executor()
-            .spawn(async move { defaults.create(&*locked(&store)?, &cwd, worktree_cwd) });
+        let isolation_default = self.workspace.preferences.default_isolation.clone();
+        let work = cx.background_executor().spawn(async move {
+            defaults.create(&*locked(&store)?, &cwd, worktree_cwd, &isolation_default)
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
@@ -4619,20 +4636,48 @@ impl Shell {
         let store = self.store.clone();
         let cwd = self.workspace.project.clone();
         let focus = self.worktree_focus.get(&cwd).cloned();
-        // The project folder as a selected checkout is not a separate worktree.
         let copy = focus.clone().filter(|f| {
             monocode_core::files::path_key(&f.path) != monocode_core::files::path_key(&cwd)
         });
+        let source_copy = self
+            .workspace
+            .active
+            .map(|pane| self.workspace.session_for_pane(pane))
+            .filter(|id| self.session_metadata(*id, cx).summary.cwd == cwd)
+            .map(|id| self.session_working_copy(id, cx).to_owned())
+            .filter(|path| {
+                monocode_core::files::path_key(path) != monocode_core::files::path_key(&cwd)
+            });
         let blank_key = format!("{cwd}\0{}", focus.as_ref().map_or("", |f| f.path.as_str()));
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
         let navigation_revision = self.navigation_revision;
         let defaults = session_loading::NewSessionDefaults::read(choice, &cwd, cx);
+        let isolation_default = self.workspace.preferences.default_isolation.clone();
         let work = cx.background_executor().spawn({
             let cwd = cwd.clone();
-            let worktree_cwd = copy.as_ref().map(|f| f.path.clone());
-            async move { defaults.create(&*locked(&store)?, &cwd, worktree_cwd) }
+            let worktree_cwd = focus.as_ref().map(|f| f.path.clone());
+            async move {
+                let store = locked(&store)?;
+                let isolation = monocode_core::isolation::Isolation::for_store(&store);
+                let source_copy = match source_copy {
+                    Some(path)
+                        if isolation
+                            .owner(std::path::Path::new(&cwd), std::path::Path::new(&path))?
+                            .is_some() =>
+                    {
+                        Some(path)
+                    }
+                    _ => None,
+                };
+                defaults.create(
+                    &store,
+                    &cwd,
+                    worktree_cwd.or(source_copy),
+                    &isolation_default,
+                )
+            }
         });
         let previous = self.new_tab_task.take();
         self.new_tab_task = Some(cx.spawn(async move |this, cx| {
@@ -5707,7 +5752,7 @@ impl Shell {
                             &self.workspace.project,
                         ))
                     });
-                let worktree = MenuAction::new("switch-worktree", "Switch worktree")
+                let worktree = MenuAction::new("switch-worktree", "Switch working copy")
                     .icon("folder-tree")
                     .flyout(self.worktree_flyout(events, window, cx));
                 (

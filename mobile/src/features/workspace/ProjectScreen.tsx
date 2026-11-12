@@ -136,7 +136,7 @@ export function ProjectScreen({
   // A session's reads from the desktop wait for its push, so their replies
   // don't re-render it as it slides in; meanwhile it shows the last ones.
   const pushedIn = usePushedIn(!!sessionId);
-  const { worktrees, loaded } = useProjectWorktrees(project.id, pushedIn);
+  const { worktrees, loaded, cowSupported } = useProjectWorktrees(project.id, pushedIn);
   const { catalog } = useModelCatalog(
     pushedIn ? project.id : undefined,
     sessionId,
@@ -154,7 +154,7 @@ export function ProjectScreen({
   // files are its project's, as it starts off HEAD. A session's is the
   // worktree the desktop says it works in, or else the project's checkout; an
   // older desktop doesn't say, so it goes by the worktree on its branch.
-  const fresh = !sessionId && workspace.mode === "worktree";
+  const fresh = !sessionId && (workspace.mode === "worktree" || workspace.mode === "cow");
   const sessionBranch = session?.branch || project.branch || "";
   const offCheckout =
     !!sessionId &&
@@ -181,7 +181,7 @@ export function ProjectScreen({
   const branch = sessionId
     ? changesState.result?.branch || sessionBranch
     : fresh
-      ? "new worktree"
+      ? workspace.mode === "cow" ? "new copy-on-write" : "new worktree"
       : changesState.result?.branch ||
         (workspace.mode === "existing"
           ? workspace.worktree.name
@@ -216,6 +216,8 @@ export function ProjectScreen({
   }, [focused, emptyOpacity]);
 
   const start = async (text: string, attachments: Attachment[]) => {
+    if (workspace.mode === "cow" && !cowSupported)
+      throw new Error("This desktop no longer supports copy-on-write for this project. Reconnect or choose another working copy.");
     // When opening the session, wait for the background and intro to fade,
     // even if the desktop replies first. Otherwise stay ready for another.
     const faded = openAfterStarting
@@ -244,8 +246,8 @@ export function ProjectScreen({
             // Unpicked here or in Settings, the desktop starts it with its own
             // mode at send time.
             ...(startAccess ? { runtimeMode: startAccess } : {}),
-            ...(workspace.mode === "worktree"
-              ? { workspaceMode: "worktree" as const }
+            ...(workspace.mode !== "existing"
+              ? { workspaceMode: workspace.mode }
               : {}),
             ...(workspace.mode === "existing"
               ? { worktreePath: workspace.worktree.path }
@@ -333,6 +335,7 @@ export function ProjectScreen({
           <WorkspaceMenu
             value={workspace}
             worktrees={worktrees}
+            cowSupported={cowSupported}
             onChange={setWorkspace}
             branch={branch}
             checkoutBranch={project.branch}
@@ -402,6 +405,7 @@ export function ProjectScreen({
                   workspace: (
                     <ComposerWorkspace
                       value={workspace}
+                      cowSupported={cowSupported}
                       onChange={setWorkspace}
                       disabled={offline}
                     />

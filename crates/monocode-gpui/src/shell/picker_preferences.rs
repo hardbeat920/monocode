@@ -11,6 +11,7 @@ impl Shell {
                 && saved.recent_models == prefs.recent_models
                 && saved.file_view_mode == prefs.file_view_mode
                 && saved.default_access == prefs.default_access
+                && saved.default_isolation == prefs.default_isolation
                 && saved.provider_efforts == prefs.provider_efforts
             {
                 return;
@@ -20,6 +21,7 @@ impl Shell {
             saved.recent_models = prefs.recent_models.clone();
             saved.file_view_mode = prefs.file_view_mode.clone();
             saved.default_access = prefs.default_access.clone();
+            saved.default_isolation = prefs.default_isolation.clone();
             saved.provider_efforts = prefs.provider_efforts.clone();
             this.sync_settings(cx);
             this.persist(cx);

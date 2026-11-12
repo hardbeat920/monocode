@@ -30,7 +30,8 @@ pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_diff_files", json!({"cwd":cwd}));
     }
-    Ok(diff_index_with(&expand_home(cwd), false))
+    let root = expand_home(cwd);
+    Ok(cow::index(&root, false)?.unwrap_or_else(|| diff_index_with(&root, false)))
 }
 
 /// Revalidate the review's file list without computing every file's line
@@ -40,6 +41,9 @@ pub fn review_index(cwd: &Path, previous: Option<&DiffIndex>) -> Result<DiffInde
         return diff_files(cwd);
     }
     let root = expand_home(cwd);
+    if let Some(index) = cow::index(&root, false)? {
+        return Ok(index);
+    }
     let status = git_run(
         &root,
         &[
@@ -150,6 +154,44 @@ pub fn file_diff_versions(
         return Ok(versions);
     }
     let root = expand_home(cwd);
+    if let Some(trees) = cow::trees(&root)? {
+        let prefix = git_stdout(&root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+        let mut versions = HashMap::new();
+        for file in &snapshot.files {
+            for staged in [true, false] {
+                if if staged { !file.staged } else { !file.unstaged } {
+                    continue;
+                }
+                let side = if staged { &trees.head } else { &trees.worktree };
+                let index = git_stdout(
+                    &root,
+                    &[
+                        "rev-parse",
+                        &format!("{}:{prefix}{}", trees.index, file.relative),
+                    ],
+                )
+                .unwrap_or_default();
+                let other = git_stdout(
+                    &root,
+                    &["rev-parse", &format!("{side}:{prefix}{}", file.relative)],
+                )
+                .unwrap_or_default();
+                versions.insert(
+                    format!(
+                        "{}:{}",
+                        if staged { "staged" } else { "unstaged" },
+                        file.relative
+                    ),
+                    FileDiffVersion {
+                        index: format!("{index}:{other}"),
+                        head: Some(trees.head.clone()),
+                        disk: None,
+                    },
+                );
+            }
+        }
+        return Ok(versions);
+    }
     let listing = git_run(&root, &["ls-files", "--stage", "-z", "--", "."])
         .ok_or_else(|| "Could not read Git index versions".to_string())?;
     let mut index: HashMap<&str, String> = HashMap::new();
@@ -220,6 +262,27 @@ pub fn file_diff(cwd: &Path, relative: &str, staged: bool) -> Result<FileDiff, S
         return Err("Not a git repository".into());
     }
     let prefix = git_stdout(&root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    if let Some(trees) = cow::trees(&root)? {
+        let (before, after) = if staged {
+            (&trees.head, &trees.index)
+        } else {
+            (&trees.index, &trees.worktree)
+        };
+        let original = git_blob(&root, &format!("{before}:{prefix}{relative}"));
+        let current = git_blob(&root, &format!("{after}:{prefix}{relative}"));
+        let status = match (original.is_some(), current.is_some()) {
+            (false, true) => "added",
+            (true, false) => "deleted",
+            _ => "modified",
+        };
+        return Ok(text_diff(
+            path_to_js(&abs),
+            relative,
+            status,
+            original.unwrap_or_default(),
+            current.unwrap_or_default(),
+        ));
+    }
     let index_spec = format!(":{prefix}{relative}");
     let (original, current) = if staged {
         let head_spec = format!("HEAD:{prefix}{relative}");
@@ -352,6 +415,9 @@ pub fn stage_contents(cwd: &Path, relative: &str, contents: &[u8]) -> Result<(),
     let relative = resolve_repo_path(&root, relative)?;
     if contents.len() as u64 > MAX_TEXT_FILE_BYTES {
         return Err("File too large".into());
+    }
+    if cow::stage(&root, "contents", Some(&relative), Some(contents))? {
+        return Ok(());
     }
     let hash = hash_object(&root, &relative, contents)?;
     let mode = index_mode(&root, &relative).unwrap_or_else(|| "100644".into());

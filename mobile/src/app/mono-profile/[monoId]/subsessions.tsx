@@ -3,6 +3,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { Fragment, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 
+import { useConnection } from "@/features/connection/ConnectionProvider";
 import { isModel, useMonoSubsessions } from "@/features/models/useMonoSubsessions";
 import type { CatalogModel } from "@/features/models/types";
 import { ProviderLogo } from "@/features/sessions/ProviderLogo";
@@ -17,6 +18,8 @@ import { radii, themedStyles, useColors } from "@/ui/theme";
 export default function MonoSubsessionsScreen() {
   const { monoId } = useLocalSearchParams<{ monoId: string }>();
   const { monos, editMono } = useWorkspace();
+  const connection = useConnection();
+  const supportsIsolation = connection.connected && connection.catalog.subsessionIsolation === true;
   const mono = monos.find((m) => m.id === monoId);
   const colors = useColors();
   const styles = useStyles();
@@ -35,12 +38,12 @@ export default function MonoSubsessionsScreen() {
   // Another model's effort may not fit, so a new model starts on its default.
   const pickModel = (entry: CatalogModel) => {
     if (!inherited && model && entry.id === model.id && entry.harness === harness) return;
-    save({ harness: entry.harness, model: entry.id });
+    save({ harness: entry.harness, model: entry.id, workspaceMode: set.workspaceMode });
   };
   const pickEffort = (value: string | undefined) => {
     if (value === effortValue) return;
     const next = { ...set, effort: value };
-    save(next.harness || next.effort ? next : null);
+    save(next.harness || next.effort || next.workspaceMode ? next : null);
   };
 
   const needle = query.trim().toLowerCase();
@@ -76,6 +79,38 @@ export default function MonoSubsessionsScreen() {
           For sessions {mono.name} starts without naming a model. Ones that name their own keep it.
         </Text>
 
+        {supportsIsolation && !needle ? (
+          <>
+            <Text style={styles.heading}>Work isolation</Text>
+            <View style={styles.card}>
+              {[
+                { value: undefined, label: "Desktop default" },
+                { value: "current" as const, label: "Current checkout" },
+                { value: "worktree" as const, label: "New worktree" },
+                ...(connection.catalog.cowIsolation === true
+                  ? [{ value: "cow" as const, label: "New copy-on-write" }]
+                  : []),
+              ].map((option, index) => (
+                <Fragment key={option.value ?? "default"}>
+                  {index > 0 ? <View style={styles.divider} /> : null}
+                  <SettingsRow
+                    label={option.label}
+                    showChevron={false}
+                    accessory={option.value === set.workspaceMode ? check : null}
+                    onPress={() => {
+                      const next = { ...set, workspaceMode: option.value };
+                      save(next.harness || next.effort || next.workspaceMode ? next : null);
+                    }}
+                  />
+                </Fragment>
+              ))}
+            </View>
+            <Text style={styles.note}>
+              For project sessions this Mono launches. Copy-on-write requires APFS on a Mac or Btrfs on Linux.
+            </Text>
+          </>
+        ) : null}
+
         {effort && !needle ? (
           <>
             <Text style={styles.heading}>{effort.label}</Text>
@@ -103,7 +138,7 @@ export default function MonoSubsessionsScreen() {
               showChevron={false}
               accessory={inherited ? check : null}
               onPress={() => {
-                if (!inherited) save(set.effort ? { effort: set.effort } : null);
+                if (!inherited) save(set.effort || set.workspaceMode ? { effort: set.effort, workspaceMode: set.workspaceMode } : null);
               }}
             />
           </View>

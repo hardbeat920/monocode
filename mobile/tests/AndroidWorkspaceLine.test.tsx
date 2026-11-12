@@ -167,3 +167,29 @@ it("keeps worktree selection available while changes load and replaces the pendi
     act(() => root.unmount());
   }
 });
+
+
+it("gates copy-on-write by desktop support and prevents opening source changes for a pending copy", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const onChange = vi.fn();
+  const render = (cowSupported: boolean, mode: "current" | "cow" = "current") => act(() => root.render(
+    <WorkspaceMenu value={{ mode }} worktrees={[]} cowSupported={cowSupported} onChange={onChange}
+      branch={mode === "cow" ? "new copy-on-write" : "main"} files={[]} loading={false} onOpenChanges={() => {}} />,
+  ));
+  const button = (label: string) => [...container.querySelectorAll("button")].find(item => item.getAttribute("aria-label") === label)!;
+  try {
+    render(false);
+    act(() => button("Workspace: main").click());
+    expect(button("New copy-on-write")).toBeUndefined();
+    render(true);
+    act(() => button("New copy-on-write").click());
+    expect(onChange).toHaveBeenCalledWith({ mode: "cow" });
+    render(true, "cow");
+    act(() => button("Workspace: new copy-on-write").click());
+    expect(button("View changes").disabled).toBe(true);
+  } finally {
+    act(() => root.unmount());
+  }
+});

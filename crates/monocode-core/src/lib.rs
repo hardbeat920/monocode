@@ -48,4 +48,5 @@ pub mod search;
 pub mod cli;
 pub mod mcp;
 
+pub mod isolation;
 pub mod worktree_management;

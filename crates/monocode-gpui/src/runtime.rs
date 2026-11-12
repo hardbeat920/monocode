@@ -4,6 +4,7 @@ use monocode_core::{
     store::{Session, Store},
     transcript::{Row, Transcript},
 };
+use std::path::Path;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -29,6 +30,7 @@ struct TurnInput {
 }
 pub(crate) struct Update {
     pub(crate) worktree_cwd: Option<String>,
+    pub(crate) cow_id: Option<String>,
     pub(crate) commands: Option<Vec<provider::NativeCommand>>,
     pub(crate) provider_turn_id: Option<String>,
     pub(crate) turn_ready: bool,
@@ -145,6 +147,8 @@ fn run_turn_using(
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
     let mut checkpoint: Option<(String, String)> = None;
     let mut created_worktree = None;
+    let mut created_cow = None;
+    let mut _isolation_lease = None;
     let mut context = locked(&store)
         .ok()
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
@@ -157,6 +161,16 @@ fn run_turn_using(
         if settings.worktree_removed {
             return Err("Select a branch or worktree to continue this conversation.".into());
         }
+        let (isolation, owner) = {
+            let store = locked(&store)?;
+            (
+                monocode_core::isolation::Isolation::for_store(&store),
+                store.persisted_session_id(summary.id)?,
+            )
+        };
+        isolation.authorize(Path::new(&summary.cwd), &owner, &mut settings)?;
+        created_cow = settings.cow_id.clone();
+        _isolation_lease = isolation.lease(Path::new(&summary.cwd), &owner, &settings)?;
         if settings.account.id != monocode_core::accounts::DEFAULT
             && !locked(&store)?
                 .provider_accounts()?
@@ -226,12 +240,13 @@ fn run_turn_using(
         persistence::save_turn_receipt(&store, summary.id, turn, info.clone())?;
         turn_receipt = Some((turn, info));
         initial_delivery = settings.mono_message_id.clone();
-        let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
+        let creating_worktree = settings.pending_isolation() && settings.worktree_cwd.is_none();
         publish(
             &tx,
             &cancel,
             Update {
                 worktree_cwd: None,
+                cow_id: None,
                 commands: None,
                 provider_turn_id: None,
                 turn_ready: false,
@@ -255,7 +270,11 @@ fn run_turn_using(
                 questions_resolved: Vec::new(),
                 handoff: None,
                 status: if creating_worktree {
-                    "Creating worktree…"
+                    if settings.new_cow {
+                        "Creating copy-on-write workspace…"
+                    } else {
+                        "Creating worktree…"
+                    }
                 } else if settings.pending_provider_switch.is_some() {
                     "Preparing handoff…"
                 } else {
@@ -266,20 +285,31 @@ fn run_turn_using(
             },
         )?;
         if creating_worktree {
-            let path = monocode_core::git::create_worktree(
-                std::path::Path::new(&summary.cwd),
-                settings.worktree_base.as_deref().unwrap_or("HEAD"),
-                summary.id,
-            )?;
+            let path = if settings.new_cow {
+                isolation.create(Path::new(&summary.cwd), &owner, &mut settings)?
+            } else {
+                monocode_core::git::create_worktree(
+                    Path::new(&summary.cwd),
+                    settings.worktree_base.as_deref().unwrap_or("HEAD"),
+                    summary.id,
+                )?
+            };
             let cwd = path.to_string_lossy().into_owned();
             created_worktree = Some(cwd.clone());
+            created_cow = settings.cow_id.clone();
             settings.worktree_cwd = Some(cwd.clone());
+            if settings.cow_id.is_some() {
+                _isolation_lease = isolation.lease(Path::new(&summary.cwd), &owner, &settings)?;
+            }
             settings.new_worktree = false;
             {
                 let store = locked(&store)?;
                 let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
                 persisted.worktree_cwd = Some(cwd.clone());
                 persisted.new_worktree = false;
+                persisted.new_cow = false;
+                persisted.cow_id = settings.cow_id.clone();
+                persisted.cow_source_cwd = None;
                 store.save_agent_settings(summary.id, &persisted)?;
             }
             publish(
@@ -287,6 +317,7 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     worktree_cwd: Some(cwd),
+                    cow_id: settings.cow_id.clone(),
                     commands: None,
                     provider_turn_id: None,
                     turn_ready: false,
@@ -335,6 +366,7 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     worktree_cwd: None,
+                    cow_id: None,
                     commands: None,
                     provider_turn_id: None,
                     turn_ready: false,
@@ -362,6 +394,7 @@ fn run_turn_using(
                 },
             )?;
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
+            isolation.authorize(Path::new(&summary.cwd), &owner, &mut settings)?;
             let prepared = handoff::prepare(
                 summary.id,
                 &source,
@@ -395,6 +428,7 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     worktree_cwd: None,
+                    cow_id: None,
                     commands: None,
                     provider_turn_id: None,
                     turn_ready: false,
@@ -525,6 +559,11 @@ fn run_turn_using(
             checkpoint = Some((cwd.to_owned(), id));
         }
         let mut prompt = provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?;
+        if settings.cow_id.is_some() {
+            prompt = format!(
+                "This copy-on-write checkout includes inherited, uncommitted source edits as private input. Publish only changes made after this copy was created. Native Changes and this copy's Git hooks enforce that boundary. Raw git status can still show inherited edits; do not disable hooks or use --no-verify. If an edit cannot be separated safely, retain the copy and report the conflict instead of publishing inherited changes.\n\n{prompt}"
+            );
+        }
         if !raw_native_command && prompt.contains("@note:") {
             let notes = locked(&store)?.notes()?;
             for note in notes {
@@ -581,6 +620,7 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
+        isolation.authorize(Path::new(&summary.cwd), &owner, &mut settings)?;
         let request = Request {
             kind,
             binary,
@@ -595,6 +635,7 @@ fn run_turn_using(
             settings,
         };
         let mut tool_rows = std::collections::HashMap::new();
+        let execution_cwd = request.cwd.to_string_lossy().into_owned();
         // The running-work list attributes the provider and its tools to this session.
         let result = monocode_core::process::owned_by(summary.id, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
@@ -738,7 +779,7 @@ fn run_turn_using(
                                 serde_json::to_string(&tool).map_err(|e| e.to_string())?;
                             start = start.min(ix);
                             pending.changed(ix);
-                            contributions::record(&store, summary.id, &summary.cwd, &tool);
+                            contributions::record(&store, summary.id, &execution_cwd, &tool);
                         }
                         Event::SessionId(id) => {
                             if provider_id.as_ref() != Some(&id) {
@@ -872,6 +913,7 @@ fn run_turn_using(
                         &cancel,
                         Update {
                             worktree_cwd: None,
+                            cow_id: None,
                             commands,
                             provider_turn_id,
                             turn_ready,
@@ -1059,12 +1101,14 @@ fn run_turn_using(
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");
     }
+    drop(_isolation_lease);
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
         // A stop can make the UI skip intermediate updates. Keep the created
         // checkout in the final receipt so the next Send cannot create it twice.
         worktree_cwd: created_worktree,
+        cow_id: created_cow,
         commands: None,
         provider_turn_id: None,
         turn_ready: false,

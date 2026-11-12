@@ -294,8 +294,17 @@ impl Shell {
                 |this, _, event: &inbox::Event, window, cx| match event {
                     inbox::Event::Close => this.close_app_view(window, cx),
                     inbox::Event::OpenSession(id) => this.open(*id, window, cx),
-                    inbox::Event::StartSession { item, prompt } => {
-                        this.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
+                    inbox::Event::StartSession {
+                        item,
+                        prompt,
+                        workspace_mode,
+                    } => {
+                        this.start_inbox_session(
+                            item.as_ref().clone(),
+                            prompt.clone(),
+                            workspace_mode.as_deref(),
+                            cx,
+                        );
                     }
                     inbox::Event::ItemsChanged(items) => {
                         this.inbox_automation_events(items.clone(), cx)
@@ -397,7 +406,7 @@ impl Shell {
         let choice = self.new_chat_choice(&cwd);
         let kind = choice.kind;
         let store = self.store.clone();
-        let settings = monocode_core::agent::Settings {
+        let mut settings = monocode_core::agent::Settings {
             model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
@@ -412,6 +421,7 @@ impl Shell {
                 .unwrap_or_default(),
             ..Default::default()
         };
+        settings.isolation_default(&self.workspace.preferences.default_isolation);
         self.leave_app_views(cx);
         self.navigation_revision += 1;
         let revision = self.navigation_revision;
@@ -457,6 +467,7 @@ impl Shell {
         &mut self,
         item: monocode_core::inbox::Item,
         prompt: String,
+        workspace_mode: Option<&str>,
         cx: &mut Context<Self>,
     ) {
         let cwd = if item.project_path.is_empty() {
@@ -466,7 +477,7 @@ impl Shell {
         };
         let choice = self.new_chat_choice(&cwd);
         let kind = choice.kind;
-        let settings = monocode_core::agent::Settings {
+        let mut settings = monocode_core::agent::Settings {
             model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
@@ -481,6 +492,9 @@ impl Shell {
                 .unwrap_or_default(),
             ..Default::default()
         };
+        settings.isolation_default(
+            workspace_mode.unwrap_or(&self.workspace.preferences.default_isolation),
+        );
         let store = self.store.clone();
         self.navigation_revision += 1;
         let revision = self.navigation_revision;

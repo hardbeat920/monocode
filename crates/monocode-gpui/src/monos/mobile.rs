@@ -216,7 +216,7 @@ impl Monos {
                 .filter(|c| *c <= 0xffffff)
                 .ok_or("Unknown colour")?;
         }
-        // The model and effort for sessions it starts; null inherits its own.
+        // Defaults for project sessions it starts; null inherits the app/session defaults.
         if let Some(value) = params.get("subsessions") {
             mono.subsessions = if value.is_null() {
                 None

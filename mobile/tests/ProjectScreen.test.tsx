@@ -12,6 +12,8 @@ const desktop = vi.hoisted(() => ({
   startSession: vi.fn(),
   sendMessage: vi.fn(),
   offline: false,
+  cowSupported: false,
+  sendError: "",
   page: "chat",
   focused: true,
   os: "ios",
@@ -154,7 +156,7 @@ vi.mock("@/features/connection/useProjectChanges", () => ({
   }),
 }));
 vi.mock("@/features/connection/useProjectWorktrees", () => ({
-  useProjectWorktrees: () => ({ worktrees: [desktop.existing], loaded: true }),
+  useProjectWorktrees: () => ({ worktrees: [desktop.existing], loaded: true, cowSupported: desktop.cowSupported }),
 }));
 vi.mock("@/features/background/useEmptyBackground", () => ({
   useEmptyBackground: vi.fn(),
@@ -187,7 +189,7 @@ vi.mock("@/features/sessions/Composer", () => ({
   }) => (
     <section data-composer data-active={String(active)}>
       {workspace}
-      <button onClick={() => void onSend("Build the app", [])}>Send</button>
+      <button onClick={() => void onSend("Build the app", []).catch(reason => { desktop.sendError = String(reason); })}>Send</button>
     </section>
   ),
 }));
@@ -258,12 +260,15 @@ vi.mock("@/features/workspace/WorkspaceMenu", () => ({
   WorkspaceMenu: ({
     value,
     onChange,
+    cowSupported,
   }: {
     value: Workspace;
+    cowSupported?: boolean;
     onChange: (value: Workspace) => void;
   }) => (
     <>
       <output data-workspace>{value.mode}</output>
+      {cowSupported ? <button onClick={() => onChange({ mode: "cow" })}>Header: new copy-on-write</button> : null}
       <button onClick={() => onChange({ mode: "worktree" })}>
         Header: new worktree
       </button>
@@ -390,6 +395,8 @@ describe("new session composer workspace", () => {
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
+    desktop.cowSupported = false;
+    desktop.sendError = "";
     desktop.page = "chat";
     desktop.focused = true;
     desktop.os = "ios";
@@ -514,7 +521,53 @@ describe("new session composer workspace", () => {
     expect(desktop.startSession).toHaveBeenCalledWith(
       project.id,
       "Build the app",
-      {},
+      { workspaceMode: "current" },
+      [],
+    );
+  });
+
+  it("offers copy-on-write only on a supporting desktop and sends the explicit isolation choice", async () => {
+    render();
+    expect(container.textContent).not.toContain("Header: new copy-on-write");
+    desktop.cowSupported = true;
+    render();
+    click("Current checkout");
+    click("New worktree");
+    expect(button("New copy-on-write")).toBeDefined();
+    expect(container.querySelector("[data-workspace]")?.textContent).toBe("cow");
+    expect(desktop.startSession).not.toHaveBeenCalled();
+    await send();
+    expect(desktop.startSession).toHaveBeenCalledWith(
+      project.id,
+      "Build the app",
+      { workspaceMode: "cow" },
+      [],
+    );
+  });
+
+  it("refuses to submit a selected copy-on-write draft after its supporting desktop disconnects", async () => {
+    desktop.cowSupported = true;
+    render();
+    click("Header: new copy-on-write");
+    desktop.cowSupported = false;
+    render();
+    await send();
+    expect(desktop.startSession).not.toHaveBeenCalled();
+    expect(desktop.sendError).toContain("no longer supports copy-on-write");
+  });
+
+  it("keeps the header and composer copy-on-write choices in sync and can return to current", async () => {
+    desktop.cowSupported = true;
+    render();
+    click("Header: new copy-on-write");
+    expect(button("New copy-on-write")).toBeDefined();
+    click("New copy-on-write");
+    expect(button("Current checkout")).toBeDefined();
+    await send();
+    expect(desktop.startSession).toHaveBeenCalledWith(
+      project.id,
+      "Build the app",
+      { workspaceMode: "current" },
       [],
     );
   });

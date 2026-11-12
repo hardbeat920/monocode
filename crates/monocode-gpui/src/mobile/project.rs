@@ -48,6 +48,32 @@ pub(crate) fn resolve_root(cwd: &Path, worktree: Option<&str>) -> Result<PathBuf
         .ok_or_else(|| "That worktree is no longer available".to_string())
 }
 
+/// Existing copies may be browsed by paired devices; a new session must not
+/// attach to another copy's owner, so creation keeps using resolve_root.
+pub(crate) fn resolve_copy(
+    cwd: &Path,
+    worktree: Option<&str>,
+    isolation: &monocode_core::isolation::Isolation,
+) -> Result<PathBuf, String> {
+    match resolve_root(cwd, worktree) {
+        Ok(root) => Ok(root),
+        Err(error) => {
+            let Some(path) = worktree else {
+                return Err(error);
+            };
+            let copy = isolation.owner(cwd, Path::new(path))?.ok_or(error)?;
+            if !copy.belongs_to(cwd) {
+                return Err("Copy belongs to another project".into());
+            }
+            let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
+            if !path.starts_with(&copy.path) {
+                return Err("Path is outside this working copy".into());
+            }
+            Ok(path)
+        }
+    }
+}
+
 /// The other working copies a phone can start a session in, as the desktop
 /// composer's workspace picker lists them.
 pub(crate) fn worktrees(cwd: &Path) -> Result<Value, String> {
@@ -894,6 +920,49 @@ mod tests {
         std::fs::remove_dir_all(&linked).unwrap();
         assert_eq!(worktrees(root).unwrap()["worktrees"], json!([]));
         assert!(resolve_root(root, linked.to_str()).is_err());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn paired_devices_use_only_registered_same_project_copies() {
+        let dir = Temp::new("owned-copies");
+        let project = dir.0.join("project");
+        let foreign = dir.0.join("foreign");
+        for root in [&project, &foreign] {
+            std::fs::create_dir(root).unwrap();
+            run_git(root, &["init", "-b", "main"]);
+            run_git(root, &["commit", "--allow-empty", "-m", "Initial"]);
+        }
+        let isolation = monocode_core::isolation::Isolation::at(dir.0.join("isolation"));
+        if !isolation.supported(&project) {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "Native CoW filesystem required"
+            );
+            return;
+        }
+        let mut settings = monocode_core::agent::Settings::default();
+        settings.isolation_default("cow");
+        let copy = isolation
+            .create(&project, "phone-owner", &mut settings)
+            .unwrap();
+        std::fs::create_dir(copy.join("nested")).unwrap();
+        std::os::unix::fs::symlink(&foreign, copy.join("escape")).unwrap();
+        assert_eq!(
+            resolve_copy(&project, copy.to_str(), &isolation).unwrap(),
+            copy
+        );
+        assert_eq!(
+            resolve_copy(&project, copy.join("nested").to_str(), &isolation).unwrap(),
+            copy.join("nested")
+        );
+        assert!(
+            resolve_root(&project, copy.to_str()).is_err(),
+            "new sessions cannot attach to another owner's copy"
+        );
+        assert!(resolve_copy(&foreign, copy.to_str(), &isolation).is_err());
+        assert!(resolve_copy(&project, foreign.to_str(), &isolation).is_err());
+        assert!(resolve_copy(&project, copy.join("escape").to_str(), &isolation).is_err());
     }
 
     #[test]

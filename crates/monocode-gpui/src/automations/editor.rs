@@ -141,10 +141,9 @@ impl Automations {
             .child(icon("chevron-down", 12.).text_color(content(0.45)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if matches!(field, Choice::Conversation)
-                    && this
-                        .editor
-                        .as_ref()
-                        .is_some_and(|e| e.draft.workspace_mode == "worktree")
+                    && this.editor.as_ref().is_some_and(|e| {
+                        matches!(e.draft.workspace_mode.as_str(), "worktree" | "cow")
+                    })
                 {
                     return;
                 }
@@ -168,7 +167,7 @@ impl Automations {
             Choice::Workspace => {
                 editor.draft.workspace_mode = value;
                 editor.draft.worktree_cwd.clear();
-                if editor.draft.workspace_mode == "worktree" {
+                if matches!(editor.draft.workspace_mode.as_str(), "worktree" | "cow") {
                     editor.draft.reuse_session = false;
                 }
             }
@@ -876,7 +875,9 @@ impl Automations {
             .unwrap_or_else(|| "No folder".into());
         let workspace = self.select_control(
             "automation-workspace",
-            if draft.workspace_mode == "worktree" {
+            if draft.workspace_mode == "cow" {
+                "Fresh copy-on-write"
+            } else if matches!(draft.workspace_mode.as_str(), "worktree" | "cow") {
                 "Fresh worktree"
             } else if draft.workspace_mode == "existing" {
                 "Existing worktree"
@@ -885,7 +886,11 @@ impl Automations {
             }
             .into(),
             Choice::Workspace,
-            options(&[("current", "Current"), ("worktree", "Fresh worktree")]),
+            options(&[
+                ("current", "Current"),
+                ("worktree", "Fresh worktree"),
+                ("cow", "Fresh copy-on-write"),
+            ]),
             cx,
         );
         let conversation = self
@@ -898,14 +903,17 @@ impl Automations {
                 }
                 .into(),
                 Choice::Conversation,
-                if draft.workspace_mode == "worktree" {
+                if matches!(draft.workspace_mode.as_str(), "worktree" | "cow") {
                     vec![("fresh".into(), "Start fresh".into())]
                 } else {
                     options(&[("fresh", "Start fresh"), ("reuse", "Continue last")])
                 },
                 cx,
             )
-            .when(draft.workspace_mode == "worktree", |d| d.opacity(0.5));
+            .when(
+                matches!(draft.workspace_mode.as_str(), "worktree" | "cow"),
+                |d| d.opacity(0.5),
+            );
         let session = div().child(section("Session")).child(
             div()
                 .mt(px(12.))

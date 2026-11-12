@@ -8,6 +8,7 @@ use std::{path::Path, time::Instant};
 struct Checkout {
     root: String,
     count: usize,
+    cow: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Project {
@@ -68,6 +69,7 @@ impl ProjectChanges {
                         checkouts: vec![Checkout {
                             root: path.clone(),
                             count: 0,
+                            cow: false,
                         }],
                     })
             })
@@ -141,6 +143,7 @@ fn group_files(
                         .map(|c| Checkout {
                             root: c.root.clone(),
                             count: 0,
+                            cow: c.cow,
                         })
                         .collect::<Vec<_>>()
                 })
@@ -151,6 +154,7 @@ fn group_files(
                     Checkout {
                         root: path.clone(),
                         count: 0,
+                        cow: false,
                     },
                 );
             }
@@ -168,11 +172,16 @@ fn group_files(
         let Some((root, main)) = locate(Path::new(&file.path)) else {
             continue;
         };
+        let logical = Path::new(&main).join(
+            Path::new(&file.path)
+                .strip_prefix(&root)
+                .unwrap_or(Path::new(&file.path)),
+        );
         // Prefer the most specific assigned folder, then its main repository.
         let index = attached
             .iter()
             .enumerate()
-            .filter(|(_, path)| Path::new(&file.path).starts_with(Path::new(path)))
+            .filter(|(_, path)| logical.starts_with(Path::new(path)))
             .max_by_key(|(_, path)| path.len())
             .map(|(i, _)| i)
             .or_else(|| {
@@ -189,7 +198,14 @@ fn group_files(
         let target = if Path::new(&file.path).starts_with(Path::new(&project.path)) {
             project.path.clone()
         } else {
-            root
+            let folder = Path::new(&project.path)
+                .strip_prefix(&main)
+                .unwrap_or(Path::new(""));
+            if folder.as_os_str().is_empty() {
+                root
+            } else {
+                Path::new(&root).join(folder).to_string_lossy().into_owned()
+            }
         };
         if let Some(checkout) = project.checkouts.iter_mut().find(|c| c.root == target) {
             checkout.count += 1;
@@ -197,7 +213,82 @@ fn group_files(
             project.checkouts.push(Checkout {
                 root: target,
                 count: 1,
+                cow: false,
             });
+        }
+    }
+    projects
+}
+
+fn group_owned_files(
+    attached: &[String],
+    files: &[monocode_core::checkpoint::CheckpointFile],
+    previous: &[Project],
+    copies: &[monocode_core::isolation::Workspace],
+) -> Vec<Project> {
+    let source_names: HashMap<_, _> = attached
+        .iter()
+        .filter_map(|path| repository(Path::new(path)))
+        .filter_map(|(_, main)| {
+            Path::new(&main)
+                .canonicalize()
+                .ok()
+                .map(|canonical| (canonical.to_string_lossy().into_owned(), main))
+        })
+        .collect();
+    let mut projects = group_files(attached, files, previous, |path| {
+        copies
+            .iter()
+            .find(|copy| path.starts_with(&copy.path))
+            .map(|copy| {
+                (
+                    copy.path.clone(),
+                    source_names
+                        .get(&copy.project_cwd)
+                        .unwrap_or(&copy.project_cwd)
+                        .clone(),
+                )
+            })
+            .or_else(|| repository(path))
+    });
+    for project in &mut projects {
+        project.checkouts.retain(|checkout| {
+            !checkout.cow
+                || copies
+                    .iter()
+                    .any(|copy| Path::new(&checkout.root).starts_with(&copy.path))
+        });
+        for copy in copies {
+            let assigned = Path::new(&project.path)
+                .canonicalize()
+                .unwrap_or_else(|_| project.path.clone().into());
+            let Ok(folder) = assigned.strip_prefix(&copy.project_cwd) else {
+                continue;
+            };
+            let root = if folder.as_os_str().is_empty() {
+                copy.path.clone()
+            } else {
+                Path::new(&copy.path)
+                    .join(folder)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            if !project
+                .checkouts
+                .iter()
+                .any(|checkout| checkout.root == root)
+            {
+                project.checkouts.push(Checkout {
+                    root,
+                    count: 0,
+                    cow: true,
+                });
+            }
+        }
+        for checkout in &mut project.checkouts {
+            checkout.cow = copies
+                .iter()
+                .any(|copy| Path::new(&checkout.root).starts_with(&copy.path));
         }
     }
     projects
@@ -275,11 +366,22 @@ impl Monos {
                 }
                 _ => Vec::new(),
             };
-            Ok::<_, String>(group_files(
+            let isolation = {
+                let db = locked(&database)?;
+                monocode_core::isolation::Isolation::for_store(&db)
+            };
+            let mut copies = Vec::new();
+            for project in &work_source.projects {
+                if !Path::new(project).is_dir() {
+                    continue;
+                }
+                copies.extend(isolation.roots(Path::new(project))?);
+            }
+            Ok::<_, String>(group_owned_files(
                 &work_source.projects,
                 &files,
                 &previous,
-                repository,
+                &copies,
             ))
         });
         cx.spawn(async move |this, cx| {
@@ -521,7 +623,12 @@ impl Monos {
                         |n| n.to_string_lossy().into_owned(),
                     ),
                 )
-                .description(checkout.root.clone())
+                .icon(if checkout.cow { "copy" } else { "git-branch" })
+                .description(if checkout.cow {
+                    format!("Copy-on-write · {}", checkout.root)
+                } else {
+                    checkout.root.clone()
+                })
                 .checked(selected == Some(&checkout.root))
                 .badge(if checkout.count > 0 {
                     checkout.count.to_string()
@@ -762,6 +869,93 @@ mod tests {
         }
         None
     }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn registered_copies_are_visible_in_assigned_project_changes() {
+        struct Temp(PathBuf);
+        impl Drop for Temp {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let temp = Temp(std::env::temp_dir().join(format!("mono-changes-cow-{}", mono::new_id())));
+        let project = temp.0.join("project");
+        std::fs::create_dir_all(project.join("nested")).unwrap();
+        std::fs::write(project.join("nested/file"), "base\n").unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "Base",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(&project)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let project = project.canonicalize().unwrap();
+        let isolation = monocode_core::isolation::Isolation::at(temp.0.join("registry"));
+        if !isolation.supported(&project) {
+            assert!(
+                std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                "Native CoW filesystem required"
+            );
+            return;
+        }
+        let mut settings = monocode_core::agent::Settings::default();
+        settings.isolation_default("cow");
+        let copy = isolation
+            .create(&project, "mono-changes-owner", &mut settings)
+            .unwrap();
+        let copies = isolation.roots(&project).unwrap();
+        let alias = temp.0.join("project-alias");
+        std::os::unix::fs::symlink(&project, &alias).unwrap();
+        let alias_projects = group_owned_files(
+            &[alias.join("nested").to_string_lossy().into_owned()],
+            &[file(&copy.join("nested/file").to_string_lossy())],
+            &[],
+            &copies,
+        );
+        assert_eq!(alias_projects[0].count(), 1);
+        assert!(
+            alias_projects[0]
+                .checkouts
+                .iter()
+                .any(|checkout| checkout.cow
+                    && checkout.root == copy.join("nested").to_string_lossy())
+        );
+        let attached = vec![project.join("nested").to_string_lossy().into_owned()];
+        let changed = copy.join("nested/file").to_string_lossy().into_owned();
+        let projects = group_owned_files(&attached, &[file(&changed)], &[], &copies);
+        assert_eq!(projects[0].count(), 1);
+        let checkout = projects[0].checkouts.iter().find(|c| c.cow).unwrap();
+        assert_eq!(checkout.root, copy.join("nested").to_string_lossy());
+        let selected = checkout.root.clone();
+        let settled = group_owned_files(&attached, &[], &projects, &copies);
+        assert_eq!(
+            selected_root(Some(&selected), &settled),
+            Some(selected.clone())
+        );
+        assert_eq!(settled[0].count(), 0);
+        let removed = group_owned_files(&attached, &[], &settled, &[]);
+        assert!(removed[0].checkouts.iter().all(|c| !c.cow));
+        assert_ne!(selected_root(Some(&selected), &removed), Some(selected));
+    }
+
     #[test]
     fn all_assignments_have_tabs_and_recorded_worktrees_stay_with_their_project() {
         let assigned = vec!["/a".into(), "/b".into(), "/empty".into()];

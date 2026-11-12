@@ -73,6 +73,12 @@ impl DesktopPreferences {
         }
         for (field, key, allowed, default) in [
             (
+                "default_isolation",
+                "defaultIsolationMode",
+                &["local", "worktree", "cow"][..],
+                "local",
+            ),
+            (
                 "theme",
                 "colorScheme",
                 &["dark", "light", "system"][..],

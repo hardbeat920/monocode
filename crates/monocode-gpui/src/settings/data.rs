@@ -23,6 +23,7 @@ pub(super) struct McpServer {
 }
 #[derive(Default)]
 pub(super) struct Discovery {
+    pub cow_error: Option<String>,
     pub binaries: Vec<(Kind, Option<PathBuf>)>,
     pub skills: Vec<Skill>,
     pub mcp: Vec<McpServer>,
@@ -31,6 +32,7 @@ pub(super) struct Discovery {
 }
 #[derive(Clone, Debug)]
 pub(super) struct Tree {
+    pub cow_id: Option<String>,
     pub tree: git::Worktree,
     pub locked: bool,
     pub dirty: Option<bool>,
@@ -44,7 +46,7 @@ pub(super) struct ResultTrees {
     pub main: String,
     pub error: Option<String>,
 }
-pub(super) fn discover(cwd: &str) -> Discovery {
+pub(super) fn discover(cwd: &str, isolation: Option<PathBuf>) -> Discovery {
     let mut data = Discovery {
         binaries: Kind::ALL
             .into_iter()
@@ -100,6 +102,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                         let status =
                             monocode_core::worktree_management::status(Path::new(cwd), &tree);
                         Tree {
+                            cow_id: None,
                             tree,
                             locked: status.0,
                             dirty: status.1,
@@ -109,6 +112,29 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                     .collect();
             }
             Err(e) => data.worktrees.error = Some(e),
+        }
+    }
+    if !cwd.is_empty()
+        && let Some(registry) = isolation
+    {
+        match monocode_core::isolation::Isolation::at(registry).list(Path::new(cwd)) {
+            Ok(copies) => data
+                .worktrees
+                .trees
+                .extend(copies.into_iter().map(|copy| Tree {
+                    cow_id: Some(copy.id),
+                    tree: git::Worktree {
+                        path: copy.path,
+                        branch: copy.branch,
+                        head: copy.head,
+                        main: false,
+                        missing: false,
+                    },
+                    locked: false,
+                    dirty: copy.dirty,
+                    unpushed: copy.unpushed.unwrap_or_default() as usize,
+                })),
+            Err(error) => data.cow_error = Some(error),
         }
     }
     data

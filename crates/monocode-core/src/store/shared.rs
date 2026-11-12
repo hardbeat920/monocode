@@ -726,6 +726,31 @@ impl Store {
         settings.service_tier = controls.get("serviceTier").cloned();
         settings.thinking = controls.get("thinking").and_then(|s| s.parse().ok());
         settings.model_settings = controls;
+        if self.shared_field("cow_id", "NULL") != "NULL" {
+            let value: Option<String> = sql(self.conn.query_row(
+                "SELECT cow_id FROM sessions WHERE id=?1",
+                [self.persisted_session_id(id)?],
+                |r| r.get(0),
+            ))?;
+            settings.cow_id = value;
+        }
+        let isolation_fields = ["workspace_mode", "worktree_base", "cow_source_cwd"]
+            .map(|name| self.shared_field(name, "NULL"));
+        let (mode, base, source): (Option<String>, Option<String>, Option<String>) =
+            sql(self.conn.query_row(
+                &format!(
+                    "SELECT {} FROM sessions WHERE id=?1",
+                    isolation_fields.join(",")
+                ),
+                [self.persisted_session_id(id)?],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ))?;
+        if self.shared_field("workspace_mode", "NULL") != "NULL" {
+            settings.new_cow = mode.as_deref() == Some("cow") && cwd.is_none();
+            settings.new_worktree = mode.as_deref() == Some("worktree") && cwd.is_none();
+            settings.worktree_base = base;
+            settings.cow_source_cwd = source;
+        }
         settings.worktree_cwd = cwd;
         settings.worktree_removed = removed.unwrap_or(false);
         settings.account.id = account.unwrap_or_else(|| crate::accounts::DEFAULT.into());
@@ -814,6 +839,19 @@ impl Store {
             ("runtime_mode", json!(settings.access.id())),
             ("worktree_cwd", json!(settings.worktree_cwd)),
             ("worktree_removed", json!(settings.worktree_removed)),
+            ("cow_id", json!(settings.cow_id)),
+            (
+                "workspace_mode",
+                json!(if settings.new_cow {
+                    Some("cow")
+                } else if settings.new_worktree {
+                    Some("worktree")
+                } else {
+                    None
+                }),
+            ),
+            ("worktree_base", json!(settings.worktree_base)),
+            ("cow_source_cwd", json!(settings.cow_source_cwd)),
             ("provider_account_id", json!(settings.account.id)),
         ];
         let (provider, saved_model): (String, String) = sql(self.conn.query_row(
@@ -1546,8 +1584,7 @@ impl Store {
             settings.worktree_cwd = Some(execution.into());
             settings.worktree_removed = true;
             settings.revision += 1;
-            settings.new_worktree = false;
-            settings.worktree_base = None;
+            settings.clear_isolation();
             if crate::files::is_equal_or_inside(&session.cwd, path) {
                 session.cwd = main.into();
             }

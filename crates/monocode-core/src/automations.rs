@@ -275,7 +275,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.workspace_mode.as_str(),
-        "current" | "worktree" | "existing"
+        "current" | "worktree" | "cow" | "existing"
     ) {
         return Err("Invalid automation workspace mode.".into());
     }

@@ -194,3 +194,107 @@ fn mono_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppC
     assert_eq!(switch.size, size(px(36.), px(20.)));
     assert!(switch.right() <= px(700.));
 }
+
+#[gpui::test]
+fn isolation_defaults_use_the_shared_three_way_radio_group(cx: &mut TestAppContext) {
+    let window = window(Section::Worktrees, cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    assert_eq!(Section::Worktrees.label(), "Work Isolation");
+    for (mode, selector) in [
+        ("cow", "settings-default-isolation-cow"),
+        ("worktree", "settings-default-isolation-worktree"),
+        ("local", "settings-default-isolation-local"),
+    ] {
+        let bounds = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |view, _, _| {
+                assert_eq!(view.prefs.default_isolation, mode)
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn deleting_working_copy_shows_progress_until_completion(cx: &mut TestAppContext) {
+    let window = window(Section::Worktrees, cx);
+    let requests = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _subscription = window
+        .update(cx, |view, w, cx| {
+            let requests = requests.clone();
+            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &SettingsEvent, _| {
+                if matches!(event, SettingsEvent::RemoveWorktree { .. }) {
+                    requests.set(requests.get() + 1);
+                }
+            });
+            view.open_management(
+                management::Target::DeleteTree(data::Tree {
+                    cow_id: Some("test-copy".into()),
+                    tree: monocode_core::git::Worktree {
+                        path: "/project-cow/test-copy".into(),
+                        branch: Some("mc/test".into()),
+                        ..Default::default()
+                    },
+                    locked: false,
+                    dirty: Some(false),
+                    unpushed: 0,
+                }),
+                w,
+                cx,
+            );
+            subscription
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("working-copy-deletion-progress")
+            .is_none()
+    );
+    let submit = visual.debug_bounds("submit-management").unwrap();
+    visual.simulate_click(submit.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(requests.get(), 1);
+    assert!(
+        visual
+            .debug_bounds("working-copy-deletion-progress")
+            .is_some(),
+        "pending deletion must visibly explain why controls are disabled"
+    );
+    let submit = visual.debug_bounds("submit-management").unwrap();
+    visual.simulate_click(submit.center(), Default::default());
+    let cancel = visual.debug_bounds("cancel-management").unwrap();
+    visual.simulate_click(cancel.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(requests.get(), 1, "busy deletion cannot be submitted twice");
+    assert!(visual.debug_bounds("settings-management-dialog").is_some());
+    window
+        .update(visual, |view, _, cx| {
+            view.management_finished(Err("Cannot delete this copy".into()), cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("working-copy-deletion-progress")
+            .is_none()
+    );
+    window
+        .update(visual, |view, _, _| {
+            let editor = view.management.as_ref().unwrap();
+            assert!(!editor.busy);
+            assert_eq!(editor.error.as_deref(), Some("Cannot delete this copy"));
+        })
+        .unwrap();
+    let submit = visual.debug_bounds("submit-management").unwrap();
+    visual.simulate_click(submit.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(requests.get(), 2);
+    window
+        .update(visual, |view, _, cx| view.management_finished(Ok(()), cx))
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("settings-management-dialog").is_none());
+}

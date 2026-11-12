@@ -134,18 +134,40 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let title = self.session_metadata(id, cx).display_title();
-        let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
-            &format!("Delete “{title}”?"),
-            Some("This conversation and its saved settings will be removed permanently."),
-            &["Delete", "Cancel"],
-            cx,
-        );
+        let project = self.session_metadata(id, cx).summary.cwd.clone();
+        let path = self.session_working_copy(id, cx).to_owned();
+        let isolated =
+            monocode_core::files::path_key(&path) != monocode_core::files::path_key(&project);
+        let buttons: &[&str] = if isolated {
+            &["Delete", "Delete and clean up", "Cancel"]
+        } else {
+            &["Delete", "Cancel"]
+        };
+        let prompt = window.prompt(gpui::PromptLevel::Warning, &format!("Delete “{title}”?"),
+            Some("The conversation is permanently deleted. Optional cleanup keeps branches and commits and refuses unsafe copy removal."), buttons, cx);
         cx.spawn(async move |this, cx| {
-            if prompt.await != Ok(0) {
+            let Ok(choice) = prompt.await else {
+                return;
+            };
+            if choice != 0 && !(isolated && choice == 1) {
                 return;
             }
-            let _ = this.update_in(cx, |this, window, cx| this.delete_session(id, window, cx));
+            let pending = this.update_in(cx, |this, window, cx| {
+                this.delete_session(id, window, cx);
+                if isolated && choice == 1 {
+                    this.group_writes.take()
+                } else {
+                    None
+                }
+            });
+            if let Ok(Some(pending)) = pending {
+                pending.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if !this.session_summaries.contains_key(&id) {
+                        this.remove_settings_worktree(project, path, false, window, cx);
+                    }
+                });
+            }
         })
         .detach();
     }

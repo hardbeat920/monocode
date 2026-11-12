@@ -46,9 +46,9 @@ import type { ChangedFile, Worktree } from "./types";
 
 /** Where a new session works, as the desktop composer's workspace picker offers. */
 export type Workspace =
-  { mode: "current" } | { mode: "worktree" } | { mode: "existing"; worktree: Worktree };
+  { mode: "current" } | { mode: "worktree" } | { mode: "cow" } | { mode: "existing"; worktree: Worktree };
 
-type RowSymbol = "folder" | "arrow.triangle.branch" | "folder.badge.gearshape" | "plus.forwardslash.minus";
+type RowSymbol = "doc.on.doc" | "folder" | "arrow.triangle.branch" | "folder.badge.gearshape" | "plus.forwardslash.minus";
 
 const SECONDARY = foregroundStyle({ type: "hierarchical", style: "secondary" });
 /** The pushed page of existing worktrees, by its `NavigationLink` value. */
@@ -69,6 +69,7 @@ const keyOf = (workspace: Workspace) =>
 export function WorkspaceMenu({
   value,
   worktrees,
+  cowSupported = false,
   onChange,
   branch,
   checkoutBranch,
@@ -78,6 +79,7 @@ export function WorkspaceMenu({
 }: {
   value: Workspace;
   worktrees: Worktree[];
+  cowSupported?: boolean;
   onChange: (value: Workspace) => void;
   branch: string;
   /** The project checkout's own branch, to name it in the sheet. */
@@ -126,6 +128,7 @@ export function WorkspaceMenu({
         value={value}
         pending={loading ? pending : null}
         worktrees={worktrees}
+        cowSupported={cowSupported}
         checkoutBranch={checkoutBranch}
         files={files}
         onOpenChanges={onOpenChanges}
@@ -150,6 +153,7 @@ function WorkspaceSheet({
   value,
   pending,
   worktrees,
+  cowSupported,
   checkoutBranch,
   files,
   onChange,
@@ -161,6 +165,7 @@ function WorkspaceSheet({
   /** The key of a pick still being read, spinning in its row. */
   pending: string | null;
   worktrees: Worktree[];
+  cowSupported: boolean;
   checkoutBranch?: string;
   files: ChangedFile[];
   onChange: (value: Workspace) => void;
@@ -215,6 +220,16 @@ function WorkspaceSheet({
               busy={pending === "worktree"}
               onPress={() => onChange({ mode: "worktree" })}
             />
+            {cowSupported ? (
+              <Choice
+                symbol="doc.on.doc"
+                title="New copy-on-write"
+                hint="A private copy, including current uncommitted files"
+                selected={value.mode === "cow"}
+                busy={pending === "cow"}
+                onPress={() => onChange({ mode: "cow" })}
+              />
+            ) : null}
             {worktrees.length > 0 ? (
               <NavigationLink value={EXISTING}>
                 <HStack spacing={14}>
@@ -245,17 +260,17 @@ function WorkspaceSheet({
             ) : null}
           </Section>
           <Section
-            footer={value.mode === "worktree" ? (
-              <Text>Changes are available after the worktree is created.</Text>
+            footer={value.mode === "worktree" || value.mode === "cow" ? (
+              <Text>Changes are available after the working copy is created.</Text>
             ) : undefined}
           >
             <Button
               modifiers={[
                 buttonStyle("plain"),
-                disabled(value.mode === "worktree" || !!pending),
+                disabled(value.mode === "worktree" || value.mode === "cow" || !!pending),
               ]}
               onPress={() => {
-                if (value.mode === "worktree" || pending) return;
+                if (value.mode === "worktree" || value.mode === "cow" || pending) return;
                 afterDismiss.current = onOpenChanges;
                 onDismiss();
               }}

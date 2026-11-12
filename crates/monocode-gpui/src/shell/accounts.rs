@@ -119,10 +119,12 @@ impl Shell {
             return;
         }
         let mut settings = current.settings.clone();
+        settings.fork_isolation();
         settings.account = profile;
         settings.mono = None;
         settings.usage_limit = None;
         settings.handoff = None;
+        settings.pending_provider_switch = None;
         settings.turns.clear();
         settings.operator_enabled = false;
         settings.revision = 0;

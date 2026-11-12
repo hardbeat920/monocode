@@ -44,6 +44,7 @@ pub(crate) struct ArchivedSession {
 /// What Settings shows about the workspace around it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SettingsContext {
+    pub isolation_directory: Option<std::path::PathBuf>,
     /// The desktop's shared remote connection and SSH setup service.
     pub remote: Option<std::sync::Arc<monocode_core::remote::Connections>>,
     pub monos: Vec<MonoSetting>,
@@ -431,10 +432,11 @@ impl SettingsView {
             });
         }
         let cwd = self.selected_project.clone();
+        let isolation = self.ctx.isolation_directory.clone();
         self.discovery_loading = true;
         let work = cx
             .background_executor()
-            .spawn(async move { data::discover(&cwd) });
+            .spawn(async move { data::discover(&cwd, isolation) });
         self.discovery_task = Some(cx.spawn(async move |this, cx| {
             let data = work.await;
             let _ = this.update(cx, |this, cx| {

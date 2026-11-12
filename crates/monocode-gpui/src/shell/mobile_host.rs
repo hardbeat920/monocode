@@ -606,7 +606,7 @@ impl Shell {
                 // and its phones hide them. `push`: it notifies phones through
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true}),
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "subsessionIsolation": true, "cowIsolation": monocode_core::isolation::PLATFORM_SUPPORTED}),
                 ids,
                 previews,
             ))
@@ -753,22 +753,36 @@ impl Shell {
                 Err(error) => return request.reply(Err(error)),
             };
         let method = request.method.clone();
+        let store = self.store.clone();
         let work = cx.background_executor().spawn(async move {
+            let isolation = {
+                let store = locked(&store)?;
+                monocode_core::isolation::Isolation::for_store(&store)
+            };
             let cwd = PathBuf::from(cwd);
             let worktree = params["worktreePath"].as_str();
             let path = string(&params, "path").unwrap_or_default();
             match method.as_str() {
-                "project.worktrees" => project::worktrees(&cwd),
-                "project.changes" => {
-                    project::changes(&project::resolve_root(&cwd, worktree)?, worktree)
+                "project.worktrees" => {
+                    let mut value = project::worktrees(&cwd)?;
+                    value["cowSupported"] = json!(isolation.supported(&cwd));
+                    Ok(value)
                 }
-                "project.files" => project::files(&project::resolve_root(&cwd, worktree)?, &path),
-                "project.file" => project::file(&project::resolve_root(&cwd, worktree)?, &path),
+                "project.changes" => project::changes(
+                    &project::resolve_copy(&cwd, worktree, &isolation)?,
+                    worktree,
+                ),
+                "project.files" => {
+                    project::files(&project::resolve_copy(&cwd, worktree, &isolation)?, &path)
+                }
+                "project.file" => {
+                    project::file(&project::resolve_copy(&cwd, worktree, &isolation)?, &path)
+                }
                 "project.search" => project::search(
-                    &project::resolve_root(&cwd, worktree)?,
+                    &project::resolve_copy(&cwd, worktree, &isolation)?,
                     params["query"].as_str().unwrap_or_default(),
                 ),
-                "project.git" => project::git(&project::resolve_root(&cwd, worktree)?),
+                "project.git" => project::git(&project::resolve_copy(&cwd, worktree, &isolation)?),
                 _ => Err("Unsupported mobile operation".into()),
             }
         });
@@ -802,11 +816,18 @@ impl Shell {
                 let chosen = cx
                     .try_global::<crate::settings::Preferences>()
                     .and_then(|p| p.background_text_model());
+                let store = self.store.clone();
                 cx.background_executor()
                     .spawn(async move {
                         let cwd = PathBuf::from(cwd);
-                        let outcome = project::resolve_root(&cwd, params["worktreePath"].as_str())
-                            .and_then(|root| project::git_action(&root, &params, chosen));
+                        let outcome = (|| {
+                            let isolation = {
+                                let store = locked(&store)?;
+                                monocode_core::isolation::Isolation::for_store(&store)
+                            };
+                            project::resolve_copy(&cwd, params["worktreePath"].as_str(), &isolation)
+                                .and_then(|root| project::git_action(&root, &params, chosen))
+                        })();
                         if let Ok(mut slot) = slot.lock() {
                             *slot = Some(outcome);
                         }
@@ -1518,6 +1539,19 @@ impl Shell {
         let params = request.params.clone();
         let prepared = (|| {
             let text = message_text(&params)?;
+            if params.get("workspaceMode").is_some_and(|mode| {
+                !matches!(
+                    mode.as_str(),
+                    Some("current" | "checkout" | "worktree" | "cow")
+                )
+            }) {
+                return Err("workspaceMode must be current, worktree or cow".into());
+            }
+            if matches!(params["workspaceMode"].as_str(), Some("worktree" | "cow"))
+                && params.get("worktreePath").is_some()
+            {
+                return Err("worktreePath requires workspaceMode current".into());
+            }
             let cwd =
                 self.mobile_project_path(&string(&params, "projectId").unwrap_or_default(), cx)?;
             let (default_kind, default_model, default_access) = self.mobile_defaults(&cwd, cx);
@@ -1545,6 +1579,7 @@ impl Shell {
         };
         let effort = crate::conversation::preferred_effort(kind.id(), cx);
         let mut chosen_settings = model_settings(&params);
+        let isolation_default = self.workspace.preferences.default_isolation.clone();
         let stage = self.stage_mobile_attachments(&params, cx);
         let store = self.store.clone();
         let work = cx.background_executor().spawn(async move {
@@ -1578,9 +1613,19 @@ impl Shell {
                 settings.thinking = Some(thinking == "true");
             }
             settings.model_settings.extend(chosen_settings);
+            settings.isolation_default(&isolation_default);
+            if matches!(
+                params["workspaceMode"].as_str(),
+                Some("current" | "checkout")
+            ) || worktree.is_some()
+            {
+                settings.clear_isolation();
+            }
             settings.worktree_cwd = worktree;
             // A new worktree off HEAD is made on the first send, as automations do.
-            settings.new_worktree = params["workspaceMode"] == "worktree";
+            if let Some(mode @ ("worktree" | "cow")) = params["workspaceMode"].as_str() {
+                settings.isolation_default(mode);
+            }
             store.save_agent_settings(summary.id, &settings)?;
             Ok::<_, String>((summary, settings, attachments))
         });

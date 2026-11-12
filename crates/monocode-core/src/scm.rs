@@ -1,5 +1,6 @@
 //! Source control for the Changes and History panes, ported from
 //! src-tauri/src/fs.rs. Synchronous: callers run these on a background executor.
+mod cow;
 mod review;
 pub(crate) mod shell;
 pub(crate) mod text;
@@ -133,7 +134,15 @@ pub fn diff_stats(cwd: &Path) -> Result<DiffStats, String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_diff_stats", json!({"cwd":cwd}));
     }
-    Ok(diff_stats_for(&expand_home(cwd)))
+    let root = expand_home(cwd);
+    if let Some(index) = cow::index(&root, false)? {
+        return Ok(DiffStats {
+            files: index.files.len() as i64,
+            additions: index.additions,
+            deletions: index.deletions,
+        });
+    }
+    Ok(diff_stats_for(&root))
 }
 
 /// Changed files under `cwd` (paths relative to it), with per-file line counts,
@@ -142,7 +151,8 @@ pub fn diff_index(cwd: &Path) -> Result<DiffIndex, String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_diff_index", json!({"cwd":cwd}));
     }
-    Ok(diff_index_with(&expand_home(cwd), true))
+    let root = expand_home(cwd);
+    Ok(cow::index(&root, true)?.unwrap_or_else(|| diff_index_with(&root, true)))
 }
 
 /// Recent commits for the Graph view: HEAD, upstream, and the default branch.
@@ -161,6 +171,9 @@ pub fn stage_file(cwd: &Path, relative: &str) -> Result<(), String> {
     }
     let root = expand_home(cwd);
     let relative = resolve_repo_path(&root, relative)?;
+    if cow::stage(&root, "file", Some(&relative), None)? {
+        return Ok(());
+    }
     git_checked(&root, &["--literal-pathspecs", "add", "--", &relative])
 }
 
@@ -174,6 +187,9 @@ pub fn unstage_file(cwd: &Path, relative: &str) -> Result<(), String> {
     }
     let root = expand_home(cwd);
     let relative = resolve_repo_path(&root, relative)?;
+    if cow::stage(&root, "unstage-file", Some(&relative), None)? {
+        return Ok(());
+    }
     git_checked(
         &root,
         &[
@@ -194,7 +210,12 @@ pub fn discard_file(cwd: &Path, relative: &str) -> Result<(), String> {
             json!({"cwd":cwd,"relative":relative}),
         );
     }
-    discard_file_for(&expand_home(cwd), relative)
+    let root = expand_home(cwd);
+    let relative = resolve_repo_path(&root, relative)?;
+    if cow::discard(&root, Some(&relative))? {
+        return Ok(());
+    }
+    discard_file_for(&root, &relative)
 }
 
 /// Stage every changed file in the repo.
@@ -202,7 +223,11 @@ pub fn stage_all(cwd: &Path) -> Result<(), String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_stage_all", json!({"cwd":cwd}));
     }
-    git_checked(&expand_home(cwd), &["add", "-A", "--", "."])
+    let root = expand_home(cwd);
+    if cow::stage(&root, "all", None, None)? {
+        return Ok(());
+    }
+    git_checked(&root, &["add", "-A", "--", "."])
 }
 
 /// Unstage every staged file.
@@ -210,7 +235,11 @@ pub fn unstage_all(cwd: &Path) -> Result<(), String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_unstage_all", json!({"cwd":cwd}));
     }
-    git_checked(&expand_home(cwd), &["restore", "--staged", "--", "."])
+    let root = expand_home(cwd);
+    if cow::stage(&root, "unstage-all", None, None)? {
+        return Ok(());
+    }
+    git_checked(&root, &["restore", "--staged", "--", "."])
 }
 
 /// Discard every unstaged change (restore tracked files; delete untracked).
@@ -219,6 +248,9 @@ pub fn discard_all(cwd: &Path) -> Result<(), String> {
         return remote_workspace::command("git_discard_all", json!({"cwd":cwd}));
     }
     let root = expand_home(cwd);
+    if cow::discard(&root, None)? {
+        return Ok(());
+    }
     let files: Vec<String> = diff_index_with(&root, true)
         .files
         .into_iter()
@@ -240,7 +272,9 @@ pub fn commit(cwd: &Path, message: &str, amend: bool) -> Result<(), String> {
         );
     }
     let extra: &[&str] = if amend { &["--amend"] } else { &[] };
-    commit_args(&expand_home(cwd), message, extra)
+    let root = expand_home(cwd);
+    cow::prepare(&root)?;
+    commit_args(&root, message, extra)
 }
 
 /// Full message (subject and body) of the commit at HEAD.
@@ -257,7 +291,9 @@ pub fn push(cwd: &Path) -> Result<(), String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_push", json!({"cwd":cwd}));
     }
-    push_for(&expand_home(cwd))
+    let root = expand_home(cwd);
+    cow::canonicalize(&root)?;
+    push_for(&root)
 }
 
 /// Fast-forward the current branch from its upstream.
@@ -265,7 +301,9 @@ pub fn pull(cwd: &Path) -> Result<(), String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_pull", json!({"cwd":cwd}));
     }
-    git_checked(&expand_home(cwd), &["pull", "--ff-only"])
+    let root = expand_home(cwd);
+    cow::canonicalize(&root)?;
+    git_checked(&root, &["pull", "--ff-only"])
 }
 
 /// Pull incoming commits, then push local commits.
@@ -274,6 +312,7 @@ pub fn sync(cwd: &Path) -> Result<(), String> {
         return remote_workspace::command("git_sync", json!({"cwd":cwd}));
     }
     let root = expand_home(cwd);
+    cow::canonicalize(&root)?;
     if git_stdout(&root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
         git_checked(&root, &["pull", "--no-edit", "--ff"]).map_err(with_signing_hint)?;
         return git_checked(&root, &["push"]);
@@ -288,6 +327,28 @@ pub fn staged_context(cwd: &Path) -> Result<StagedContext, String> {
     }
     let root = expand_home(cwd);
     let root = root.as_path();
+    if let Some(trees) = cow::trees(root)? {
+        let next = if trees.head != trees.index {
+            &trees.index
+        } else {
+            &trees.worktree
+        };
+        let summary =
+            git_run(root, &["diff", "--stat", &trees.head, next, "--", "."]).unwrap_or_default();
+        let patch = git_run(
+            root,
+            &["diff", "--no-ext-diff", &trees.head, next, "--", "."],
+        )
+        .unwrap_or_default();
+        if summary.trim().is_empty() && patch.trim().is_empty() {
+            return Err("No new copy-on-write edits to summarize".into());
+        }
+        return Ok(StagedContext {
+            branch: git_branch(root),
+            summary,
+            patch,
+        });
+    }
     let mut summary = git_run(root, &["diff", "--cached", "--stat", "--", "."]).unwrap_or_default();
     let mut patch =
         git_run(root, &["diff", "--cached", "--no-ext-diff", "--", "."]).unwrap_or_default();
@@ -325,6 +386,7 @@ pub fn range_context(cwd: &Path) -> Result<RangeContext, String> {
     }
     let root = expand_home(cwd);
     let root = root.as_path();
+    cow::canonicalize(root)?;
     let head = git_branch(root).ok_or_else(|| "Not on a branch".to_string())?;
     let remote = git_remote_name(root);
     let default_branch = git_default_branch(root, remote.as_deref())
@@ -386,6 +448,9 @@ pub fn pr_create(
     }
     let root = expand_home(cwd);
     let title = title.trim();
+    if cow::canonicalize(&root)? && git_branch(&root).as_deref() != Some(head.trim()) {
+        return Err("Select this copy's current branch before creating its pull request".into());
+    }
     if title.is_empty() {
         return Err("Pull request title cannot be empty".into());
     }

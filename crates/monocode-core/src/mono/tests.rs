@@ -217,6 +217,7 @@ fn subsessions_fill_only_a_start_that_names_no_model() {
         harness: Some("claude".into()),
         model: Some("opus".into()),
         effort: Some("high".into()),
+        ..Default::default()
     };
     let mut bare = serde_json::json!({"prompt": "x"});
     set.fill(&mut bare);
@@ -253,4 +254,64 @@ fn subsessions_normalize_away_when_everything_is_inherited() {
         ..Default::default()
     };
     assert_eq!(orphan.normalized(), None);
+}
+
+#[test]
+fn subsession_isolation_is_independent_of_model_and_explicit_checkout_choices() {
+    let settings = Subsessions {
+        harness: Some("claude".into()),
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+        workspace_mode: Some("cow".into()),
+    };
+    let mut input = serde_json::json!({"prompt":"Fix the bug","harness":"codex","model":"chosen"});
+    settings.fill(&mut input);
+    assert_eq!(
+        input,
+        serde_json::json!({"prompt":"Fix the bug","harness":"codex","model":"chosen","workspaceMode":"cow"})
+    );
+    for explicit in [
+        serde_json::json!({"workspaceMode":"current"}),
+        serde_json::json!({"workspaceMode":"worktree","worktreeBase":"main"}),
+        serde_json::json!({"worktreeCwd":"/project-worktrees/selected"}),
+    ] {
+        let mut input = explicit.clone();
+        settings.fill(&mut input);
+        for (key, value) in explicit.as_object().unwrap() {
+            assert_eq!(input[key], *value);
+        }
+        if explicit.get("workspaceMode").is_none() {
+            assert!(input.get("workspaceMode").is_none());
+        }
+        assert_eq!(input["model"], "opus");
+    }
+}
+
+#[test]
+fn subsession_isolation_normalizes_and_survives_a_roster_reload() {
+    let db = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut roster = Roster::default();
+    let id = roster.create(vec!["/project".into()]).id.clone();
+    let mono = roster.get_mut(&id).unwrap();
+    mono.subsessions = Some(Subsessions {
+        workspace_mode: Some(" cow ".into()),
+        ..Default::default()
+    });
+    mono.normalize();
+    roster.save(&db).unwrap();
+    let saved = Roster::load(&db).unwrap();
+    let settings = saved.get(&id).unwrap().subsessions.as_ref().unwrap();
+    assert_eq!(settings.workspace_mode.as_deref(), Some("cow"));
+    assert_eq!(
+        serde_json::to_value(settings).unwrap()["workspaceMode"],
+        "cow"
+    );
+    for mode in ["", "unsupported", "checkout"] {
+        assert!(Subsessions {
+            workspace_mode: Some(mode.into()),
+            ..Default::default()
+        }
+        .normalized()
+        .is_none());
+    }
 }

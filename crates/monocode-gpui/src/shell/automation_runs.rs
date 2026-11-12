@@ -383,7 +383,8 @@ impl Shell {
             .and_then(|value| value.parse().ok());
         settings.access = monocode_core::agent::AccessMode::from_id(&automation.runtime_mode);
         settings.new_worktree = automation.workspace_mode == "worktree";
-        settings.worktree_base = (automation.workspace_mode == "worktree").then(|| "HEAD".into());
+        settings.new_cow = automation.workspace_mode == "cow";
+        settings.worktree_base = settings.pending_isolation().then(|| "HEAD".into());
         settings.worktree_cwd =
             (automation.workspace_mode == "existing").then(|| automation.worktree_cwd.clone());
         settings.plan = false;

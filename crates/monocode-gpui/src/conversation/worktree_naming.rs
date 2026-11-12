@@ -30,9 +30,7 @@ impl Conversation {
             return;
         };
         let id = self.summary.id;
-        let Some(expected) = naming::temporary_branch(Path::new(&cwd), id) else {
-            return;
-        };
+        let settings = self.settings.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.worktree_name_cancel = Some(cancel.clone());
         let flag = cancel.clone();
@@ -41,6 +39,18 @@ impl Conversation {
         let work_cwd = cwd.clone();
         let work = cx.background_executor().spawn(async move {
             let path = Path::new(&work_cwd);
+            let (isolation, owner) = {
+                let store = locked(&store).ok()?;
+                (
+                    monocode_core::isolation::Isolation::for_store(&store),
+                    store.persisted_session_id(id).ok()?,
+                )
+            };
+            let expected = if settings.cow_id.is_some() {
+                isolation.owner(Path::new(&root), path).ok()??.branch?
+            } else {
+                naming::temporary_branch(path, id)?
+            };
             if git::snapshot(path).ok()?.current.as_deref() != Some(&expected) {
                 return None;
             }
@@ -54,7 +64,19 @@ impl Conversation {
             if retained.get(&id).and_then(Option::as_deref) != Some(work_cwd.as_str()) {
                 return None;
             }
-            naming::rename(Path::new(&root), path, &expected, &branch).ok()
+            if settings.cow_id.is_some() {
+                naming::rename_copy(
+                    &isolation,
+                    Path::new(&root),
+                    &owner,
+                    &settings,
+                    &expected,
+                    &branch,
+                )
+                .ok()
+            } else {
+                naming::rename(Path::new(&root), path, &expected, &branch).ok()
+            }
         });
         cx.spawn(async move |this, cx| {
             let named = work.await;
@@ -120,20 +142,41 @@ mod tests {
             "-m",
             "Base",
         ]);
-        let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
+        let store = Arc::new(Mutex::new(
+            Store::open_monocode(&root.join("app/monocode.db")).unwrap(),
+        ));
 
-        for deleted in [false, true] {
+        for (cow, deleted) in [(false, false), (false, true), (true, false), (true, true)] {
             let summary = locked(&store)
                 .unwrap()
                 .create("codex", project.to_str().unwrap())
                 .unwrap();
             let id = summary.id;
-            let path = git::create_worktree(&project, "HEAD", id).unwrap();
-            let temporary = naming::temporary_branch(&path, id).unwrap();
-            let settings = Settings {
-                worktree_cwd: Some(path.to_string_lossy().into_owned()),
-                ..Default::default()
+            let mut settings = Settings::default();
+            let path = if cow {
+                let db = locked(&store).unwrap();
+                let isolation = monocode_core::isolation::Isolation::for_store(&db);
+                if !isolation.supported(&project) {
+                    assert!(
+                        std::env::var_os("MONOCODE_REQUIRE_COW").is_none(),
+                        "APFS required"
+                    );
+                    continue;
+                }
+                settings.isolation_default("cow");
+                isolation
+                    .create(
+                        &project,
+                        &db.persisted_session_id(id).unwrap(),
+                        &mut settings,
+                    )
+                    .unwrap()
+            } else {
+                let path = git::create_worktree(&project, "HEAD", id).unwrap();
+                settings.worktree_cwd = Some(path.to_string_lossy().into_owned());
+                path
             };
+            let temporary = git::snapshot(&path).unwrap().current.unwrap();
             locked(&store)
                 .unwrap()
                 .save_agent_settings(id, &settings)

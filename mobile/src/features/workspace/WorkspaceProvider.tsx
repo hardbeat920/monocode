@@ -34,7 +34,7 @@ import { applyFrames, type WatchFrame } from "./watchUpdates";
  */
 /** A new session's model and permissions, and where it works if not the
  *  project's checkout: a new worktree off HEAD, or an existing one. */
-type StartChoice = Partial<ModelChoice> & { workspaceMode?: "worktree"; worktreePath?: string };
+type StartChoice = Partial<ModelChoice> & { workspaceMode?: "current" | "worktree" | "cow"; worktreePath?: string };
 
 export type MonoChange = {
   name?: string;
