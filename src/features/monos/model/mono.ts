@@ -52,6 +52,8 @@ export type Mono = {
    * it inherits. The folder moves under its id the first time it is read.
    */
   legacyProject?: string;
+  /** When this Mono was last opened. */
+  lastOpenedAt?: number;
 };
 
 const ROSTER_KEY = "monocode:mono-roster";
@@ -173,6 +175,10 @@ function parseMono(value: unknown): Mono | undefined {
     ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
+    ...(typeof entry.lastOpenedAt === "number" &&
+    Number.isFinite(entry.lastOpenedAt)
+      ? { lastOpenedAt: entry.lastOpenedAt }
+      : {}),
   };
 }
 
@@ -310,6 +316,13 @@ export function saveMonoSessionId(monoId: string, sessionId: string): void {
   updateMono(monoId, (mono) => ({ ...mono, sessionId }));
 }
 
+export function markMonoOpened(monoId: string): void {
+  updateMono(monoId, (mono) => ({
+    ...mono,
+    lastOpenedAt: Math.max(Date.now(), (mono.lastOpenedAt ?? 0) + 1),
+  }));
+}
+
 export function saveMonoName(monoId: string, name: string): void {
   updateMono(monoId, (mono) => ({ ...mono, name }));
 }
@@ -337,6 +350,28 @@ export function removeMonoProject(monoId: string, path: string): void {
 export function monoWorksOn(mono: Pick<Mono, "projects">, path: string) {
   const key = projectKey(path);
   return mono.projects.some((project) => projectKey(project) === key);
+}
+
+/** The most recently opened Mono with an existing conversation for this project. */
+export function projectLandingMono(
+  path: string,
+  lastOpenedId?: string,
+  enabled = true,
+): Mono | undefined {
+  if (!enabled) return undefined;
+  const eligible = listMonos().filter(
+    (mono) => mono.sessionId && monoWorksOn(mono, path),
+  );
+  const latest = eligible.reduce<Mono | undefined>(
+    (current, mono) =>
+      !current || (mono.lastOpenedAt ?? 0) > (current.lastOpenedAt ?? 0)
+        ? mono
+        : current,
+    undefined,
+  );
+  return latest?.lastOpenedAt != null
+    ? latest
+    : (eligible.find((mono) => mono.id === lastOpenedId) ?? latest);
 }
 
 export function subscribeMonos(onChange: () => void): () => void {

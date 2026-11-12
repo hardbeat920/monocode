@@ -18,6 +18,16 @@ import { forgetMonoRotation } from "./monoRotation";
 
 const openingMonos = new Map<string, Promise<Session | undefined>>();
 
+export async function rememberMonoAfterOpen(
+  monoId: string,
+  opening: Promise<Session | undefined>,
+  onOpened: (monoId: string) => void,
+): Promise<Session | undefined> {
+  const session = await opening;
+  if (session) onOpened(monoId);
+  return session;
+}
+
 /**
  * Load the Mono's conversation without opening or replacing a workspace tab.
  * A new one starts with Auto permissions in the home folder: no single
@@ -39,6 +49,31 @@ export function ensureMonoSession(
   });
   openingMonos.set(monoId, opening);
   return opening;
+}
+
+/** Let only the latest asynchronous Mono view request finish navigation. */
+export async function ensureLatestMonoSession(
+  monoId: string,
+  request: { current: number },
+  host: Parameters<typeof ensureMonoSession>[1],
+): Promise<Session | undefined> {
+  const current = ++request.current;
+  const session = await ensureMonoSession(monoId, host);
+  return current === request.current ? session : undefined;
+}
+
+/** Load a saved Mono conversation without creating one when it is missing. */
+export async function loadLatestMonoSession(
+  monoId: string,
+  request: { current: number },
+  host: Pick<Parameters<typeof ensureMonoSession>[1], "load">,
+): Promise<Session | undefined> {
+  const current = ++request.current;
+  const sessionId = findMono(monoId)?.sessionId;
+  const session = sessionId
+    ? ((await host.load(sessionId)) ?? undefined)
+    : undefined;
+  return current === request.current ? session : undefined;
 }
 
 async function loadMonoSession(

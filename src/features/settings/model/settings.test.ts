@@ -29,6 +29,7 @@ import {
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
+  loadProjectMonoLanding,
   keybindingPressed,
   matchCustomKeybinding,
   loadQuickComposerShortcut,
@@ -45,6 +46,7 @@ import {
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveNotesEnabled,
+  saveProjectMonoLanding,
   saveKeybindingOverride,
   type KeybindingOverride,
   saveQuickComposerShortcut,
@@ -67,6 +69,19 @@ const FILE_TAB_MODE_KEY = "monocode.fileTabMode";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 const TAB_ANIMATIONS_KEY = "monocode.tabAnimationsEnabled";
 const COLLAPSED_PROJECT_RAIL_MODE_KEY = "monocode.collapsedProjectRailMode";
+
+describe("project Mono landing setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem("monocode.projectMonoLanding");
+  });
+
+  it("defaults to the remembered workspace and persists the opt-in", () => {
+    expect(loadProjectMonoLanding()).toBe(false);
+    saveProjectMonoLanding(true);
+    expect(loadProjectMonoLanding()).toBe(true);
+  });
+});
 
 describe("follow-up behavior setting", () => {
   beforeEach(mockLocalStorage);

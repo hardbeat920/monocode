@@ -352,6 +352,7 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadProjectMonoLanding,
   loadMonosEnabled,
   loadMonoMenuBarIcon,
   loadKeybindingOverrides,
@@ -375,6 +376,7 @@ import {
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveProjectMonoLanding,
   saveMonosEnabled,
   subscribeMonosEnabled,
   saveKeybindingOverride,
@@ -848,6 +850,9 @@ function GeneralPage({
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermission>(cachedNotificationPermission);
   const [notesEnabled, setNotesEnabled] = useState(loadNotesEnabled);
+  const [projectMonoLanding, setProjectMonoLanding] = useState(
+    loadProjectMonoLanding,
+  );
   const [liveAgentsEnabled, setLiveAgentsEnabled] = useState(
     loadLiveAgentsEnabled,
   );
@@ -890,6 +895,11 @@ function GeneralPage({
   const onNotesEnabled = (next: boolean) => {
     saveNotesEnabled(next);
     setNotesEnabled(next);
+  };
+
+  const onProjectMonoLanding = (next: boolean) => {
+    saveProjectMonoLanding(next);
+    setProjectMonoLanding(next);
   };
 
   const onQuickComposerEnabled = (next: boolean) => {
@@ -978,6 +988,17 @@ function GeneralPage({
               { value: "workspace", label: "Top bar" },
             ]}
             onChange={onFileTabMode}
+          />
+        </Row>
+        <Row
+          id="project-mono-landing"
+          label="Open project Mono"
+          description="When switching projects, open the most recently used Mono assigned to that project. Projects without a used Mono keep their remembered workspace."
+        >
+          <Toggle
+            label="Open project Mono"
+            on={projectMonoLanding}
+            onChange={onProjectMonoLanding}
           />
         </Row>
         <Row
