@@ -1286,7 +1286,9 @@ impl Conversation {
                             .text_color(content(0.55))
                             .group_hover("mono-attach", |s| s.text_color(content(1.))),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_attachments(cx))),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.choose_attachments(window, cx)),
+                    ),
             )
             .child(
                 tool("mono-emoji", "Add emoji")

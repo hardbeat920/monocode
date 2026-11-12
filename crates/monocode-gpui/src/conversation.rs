@@ -2424,11 +2424,11 @@ impl Conversation {
             }
         });
         events.push(
-            cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, _, cx| {
+            cx.subscribe_in(&menu, window, |this, menu, event: &MenuEvent, w, cx| {
                 if let MenuEvent::Picked(id, _) = event {
                     let toggle = menu.read(cx).toggle_state(id);
                     if id.as_ref() == "upload" {
-                        this.choose_attachments(cx);
+                        this.choose_attachments(w, cx);
                     } else {
                         this.menu_choice(id, cx);
                     }
@@ -4840,6 +4840,47 @@ mod menu_tests {
             .update(cx, |c, _, _| assert!(c.menu.is_none()))
             .unwrap();
         assert!(input_focused(window, cx));
+    }
+
+    #[gpui::test]
+    fn the_attach_picker_hands_focus_back_to_the_composer(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let file = std::env::temp_dir().join(format!(
+            "monocode-attach-focus-{}.txt",
+            monocode_core::mono::new_id()
+        ));
+        std::fs::write(&file, "notes").unwrap();
+        for pick in [Some(vec![file.clone()]), None] {
+            window
+                .update(cx, |c, w, cx| {
+                    w.blur(cx);
+                    c.choose_attachments(w, cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert!(!input_focused(window, cx));
+            let pick = pick.clone();
+            cx.simulate_path_prompt_response(move |_| pick);
+            cx.run_until_parked();
+            // Attaching and cancelling both return to the draft.
+            assert!(input_focused(window, cx));
+        }
+        window
+            .update(cx, |c, _, _| assert_eq!(c.attachments, vec![file.clone()]))
+            .unwrap();
+        std::fs::remove_file(file).ok();
+        // Focus moved elsewhere while the panel was open (say, to another
+        // session) stays where the user put it.
+        let other = window.update(cx, |_, _, cx| cx.focus_handle()).unwrap();
+        window
+            .update(cx, |c, w, cx| c.choose_attachments(w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window.update(cx, |_, w, cx| w.focus(&other, cx)).unwrap();
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        assert!(!input_focused(window, cx));
+        assert!(window.update(cx, |_, w, _| other.is_focused(w)).unwrap());
     }
 }
 
