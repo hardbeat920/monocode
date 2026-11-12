@@ -3590,6 +3590,29 @@ mod composer_motion_tests {
         from
     }
     #[gpui::test]
+    fn composer_placeholder_stays_still_at_fractional_scale(cx: &mut TestAppContext) {
+        let window = window(cx, 1000.);
+        window
+            .update(cx, |c, w, cx| {
+                c.input.update(cx, |i, cx| i.take(cx));
+                w.set_scale_factor(2.2);
+                cx.notify();
+            })
+            .unwrap();
+        let mut initial_position = None;
+        for _ in 0..8 {
+            cx.refresh().unwrap();
+            let geometry = window
+                .update(cx, |c, _, cx| c.input.read(cx).diagnostic_geometry())
+                .unwrap();
+            let bounds = geometry.0.unwrap();
+            assert!(bounds.size.height < px(22.));
+            assert_eq!(geometry.1, px(0.));
+            let position = bounds.top() - geometry.1;
+            assert_eq!(*initial_position.get_or_insert(position), position);
+        }
+    }
+    #[gpui::test]
     fn composer_uses_react_surface_and_equal_text_padding_with_attachments(
         cx: &mut TestAppContext,
     ) {
