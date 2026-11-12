@@ -432,20 +432,16 @@ describe("Mono database pagination and writes", () => {
     );
   });
 
-  it("keeps normal session loading and complete saves unchanged", async () => {
+  it("keeps normal session loading and sends only a header update when the transcript is unchanged", async () => {
     const session = await load(false);
     expect(call).toHaveBeenCalledWith("session_get", { sessionId: session.id });
     call.mockResolvedValueOnce(saved(session));
     await upsertSession(session);
     expect(call).toHaveBeenLastCalledWith(
-      "session_upsert",
+      "session_upsert_tail",
       expect.objectContaining({
-        session: expect.objectContaining({
-          blocks: [
-            expect.objectContaining({ id: "u" }),
-            expect.objectContaining({ id: "a" }),
-          ],
-        }),
+        blocksChanged: false,
+        session: expect.objectContaining({ blocks: [] }),
       }),
     );
   });

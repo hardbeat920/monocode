@@ -47,7 +47,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     state = { ...state, ...removal };
   });
   mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "session_upsert") {
+    if (command === "session_upsert_tail") {
       return { ...args.session, createdAt: 1, updatedAt: 1 };
     }
   });
@@ -153,7 +153,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     });
     mocks.invoke.mockImplementation(async (command, args) => {
       await saving.promise;
-      return command === "session_upsert"
+      return command === "session_upsert_tail"
         ? { ...args.session, createdAt: 1, updatedAt: 1 }
         : undefined;
     });
@@ -216,7 +216,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     });
     mocks.invoke.mockImplementation(async (command, args) => {
       f.write({ ...f.read(), dirtyFiles: new Set([file.id]) });
-      return command === "session_upsert"
+      return command === "session_upsert_tail"
         ? { ...args.session, createdAt: 1, updatedAt: 1 }
         : undefined;
     });
@@ -268,13 +268,13 @@ it("archives the flushed transcript after cancellation, with streaming stopped",
   });
   await f.run();
   const [command, args] = mocks.invoke.mock.calls[0];
-  expect(command).toBe("session_upsert");
+  expect(command).toBe("session_upsert_tail");
   expect(args.session.blocks.at(-1)).toMatchObject({
     text: "last buffered output",
   });
   expect(args.session.blocks.at(-1).streaming).toBeFalsy();
   expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
-    "session_upsert",
+    "session_upsert_tail",
     "session_set_archived",
   ]);
 });

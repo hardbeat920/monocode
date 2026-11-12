@@ -51,7 +51,7 @@ describe("restoring a session whose repair cannot be persisted", () => {
     expect(session?.sidebarHidden).toBe(true);
     expect(session?.blocks[0].text).toBe("list the agents");
     const repaired = invoke.mock.calls.find(
-      ([cmd]) => cmd === "session_upsert",
+      ([cmd]) => cmd === "session_upsert_tail",
     );
     expect(repaired?.[1].session.sidebarHidden).toBe(true);
   });
@@ -77,7 +77,7 @@ describe("restoring a session whose repair cannot be persisted", () => {
   it("still returns the repaired session when the write fails", async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "session_get") return Promise.resolve(codexRecord());
-      if (cmd === "session_upsert")
+      if (cmd === "session_upsert" || cmd === "session_upsert_tail")
         return Promise.reject(new Error("db locked"));
       return Promise.resolve(null);
     });
@@ -97,7 +97,7 @@ describe("restoring a session whose repair cannot be persisted", () => {
 
     const session = await getSession("s1");
     expect(session?.blocks[1].text).toBe("Find files");
-    expect(invoke.mock.calls.some(([cmd]) => cmd === "session_upsert")).toBe(
+    expect(invoke.mock.calls.some(([cmd]) => cmd === "session_upsert_tail")).toBe(
       true,
     );
   });
