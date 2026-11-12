@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatLiveElapsed,
-  liveAgentsFromSessions,
-} from "./liveAgents";
+import { formatLiveElapsed, liveAgentsFromSessions } from "./liveAgents";
 import { newSession, type Block, type Session } from "./session";
 
+/**
+ * Creates a base Claude session with one user block; `patch.blocks` replaces it.
+ */
 function chat(cwd: string, patch: Partial<Session> = {}): Session {
   const session = newSession("claude", cwd);
   session.title = "claude · Fix the sidebar";
-  session.blocks = [{ id: "u1", role: "user", text: "hello", startedAt: 1_000 }];
+  session.blocks = [
+    { id: "u1", role: "user", text: "hello", startedAt: 1_000 },
+  ];
   return { ...session, ...patch, blocks: patch.blocks ?? session.blocks };
 }
 
+/**
+ * Builds a tool block fixture with a write preview and configurable status.
+ */
 function edit(id: string, path = "src/App.tsx", status = "in_progress"): Block {
   const fileName = path.split("/").pop() ?? path;
   return {
@@ -31,15 +36,28 @@ describe("liveAgentsFromSessions", () => {
   it("excludes Mono activity while keeping regular working and finished sessions", () => {
     const working = chat("/repo", { id: "working", busy: true });
     const done = chat("/repo", { id: "done" });
-    const monoWorking = chat("~", { id: "mono-working", busy: true });
+    const monoWorking = chat("~", {
+      id: "mono-working",
+      busy: true,
+      blocks: [
+        {
+          id: "u1",
+          role: "user",
+          text: "Review my projects",
+          turnMetrics: { inputTokens: 10_000, outputTokens: 2_000 },
+        },
+      ],
+    });
     const monoWaiting = chat("~", {
       id: "mono-waiting",
-      blocks: [{
-        id: "approval",
-        role: "approval",
-        text: "Run a command",
-        approval: { requestId: 1 },
-      }],
+      blocks: [
+        {
+          id: "approval",
+          role: "approval",
+          text: "Run a command",
+          approval: { requestId: 1 },
+        },
+      ],
     });
     const monoDone = chat("~", { id: "mono-done" });
     const agents = liveAgentsFromSessions(
@@ -53,8 +71,14 @@ describe("liveAgentsFromSessions", () => {
 
   it("keeps internal workers in their lead's agent panel", () => {
     const lead = chat("/repo", { id: "lead", busy: true });
-    const worker = chat("/repo", { id: "worker", busy: true, orchestrationLeadId: "lead" });
-    expect(liveAgentsFromSessions([lead, worker]).map((agent) => agent.id)).toEqual(["lead"]);
+    const worker = chat("/repo", {
+      id: "worker",
+      busy: true,
+      orchestrationLeadId: "lead",
+    });
+    expect(
+      liveAgentsFromSessions([lead, worker]).map((agent) => agent.id),
+    ).toEqual(["lead"]);
   });
   it("skips idle sessions", () => {
     expect(liveAgentsFromSessions([chat("/tmp/a")])).toEqual([]);
@@ -83,6 +107,48 @@ describe("liveAgentsFromSessions", () => {
     ]);
   });
 
+  it("keeps only provider metrics for the current turn", () => {
+    const session = chat("/tmp/tokens", {
+      busy: true,
+      blocks: [
+        {
+          id: "u1",
+          role: "user",
+          text: "first",
+          turnMetrics: { inputTokens: 1_250, outputTokens: 0 },
+        },
+      ],
+    });
+
+    expect(liveAgentsFromSessions([session])[0]?.turnMetrics).toEqual({
+      inputTokens: 1_250,
+      outputTokens: 0,
+    });
+
+    const updated = {
+      ...session,
+      blocks: [
+        {
+          ...session.blocks[0],
+          turnMetrics: { inputTokens: 0, outputTokens: 84 },
+        },
+      ],
+    };
+    expect(liveAgentsFromSessions([updated])[0]?.turnMetrics).toEqual({
+      inputTokens: 0,
+      outputTokens: 84,
+    });
+
+    const nextTurn = {
+      ...updated,
+      blocks: [
+        updated.blocks[0],
+        { id: "u2", role: "user" as const, text: "second", startedAt: 2_000 },
+      ],
+    };
+    expect(liveAgentsFromSessions([nextTurn])[0]?.turnMetrics).toBeUndefined();
+  });
+
   it("puts sessions waiting on approval first", () => {
     const working = chat("/tmp/a", {
       busy: true,
@@ -103,9 +169,9 @@ describe("liveAgentsFromSessions", () => {
         },
       ],
     });
-    expect(liveAgentsFromSessions([working, waiting]).map((row) => row.id)).toEqual(
-      [waiting.id, working.id],
-    );
+    expect(
+      liveAgentsFromSessions([working, waiting]).map((row) => row.id),
+    ).toEqual([waiting.id, working.id]);
     expect(liveAgentsFromSessions([working, waiting])[0]?.needsApproval).toBe(
       true,
     );
@@ -145,9 +211,9 @@ describe("liveAgentsFromSessions", () => {
       busy: true,
       blocks: [{ id: "u1", role: "user", text: "go", startedAt: 1_000 }],
     });
-    expect(liveAgentsFromSessions([newer, older]).map((row) => row.cwd)).toEqual(
-      ["/tmp/old", "/tmp/new"],
-    );
+    expect(
+      liveAgentsFromSessions([newer, older]).map((row) => row.cwd),
+    ).toEqual(["/tmp/old", "/tmp/new"]);
   });
 
   it("keeps an unfocused finished session until it is seen", () => {
@@ -159,14 +225,13 @@ describe("liveAgentsFromSessions", () => {
           text: "go",
           startedAt: 1_000,
           durationMs: 12_000,
+          turnMetrics: { inputTokens: 1_024, outputTokens: 32 },
         },
         edit("t1", "src/App.tsx", "completed"),
       ],
     });
     expect(liveAgentsFromSessions([finished])).toEqual([]);
-    expect(
-      liveAgentsFromSessions([finished], new Set([finished.id])),
-    ).toEqual([
+    expect(liveAgentsFromSessions([finished], new Set([finished.id]))).toEqual([
       {
         id: finished.id,
         cwd: "/tmp/done",
@@ -175,6 +240,7 @@ describe("liveAgentsFromSessions", () => {
         activity: "Done",
         startedAt: 1_000,
         durationMs: 12_000,
+        turnMetrics: { inputTokens: 1_024, outputTokens: 32 },
         needsApproval: false,
         done: true,
       },
@@ -198,10 +264,9 @@ describe("liveAgentsFromSessions", () => {
       ],
     });
     expect(
-      liveAgentsFromSessions(
-        [finished, working],
-        new Set([finished.id]),
-      ).map((row) => row.cwd),
+      liveAgentsFromSessions([finished, working], new Set([finished.id])).map(
+        (row) => row.cwd,
+      ),
     ).toEqual(["/tmp/a", "/tmp/b"]);
   });
 });
