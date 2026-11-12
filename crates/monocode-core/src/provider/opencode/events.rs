@@ -91,6 +91,7 @@ pub(super) fn forget_session(session: &str, account: &str, cwd: &Path) {
 }
 
 pub(super) struct Pending {
+    pub approval_instance: Option<u64>,
     pub session: String,
     pub wire: String,
     pub form: Option<Value>,
@@ -462,15 +463,18 @@ impl State {
                         client.permission(&session, id, allow)?;
                     } else {
                         let ui = format!("opencode-permission-{id}");
+                        let instance = crate::agent::next_approval_instance();
                         self.approvals.insert(
                             ui.clone(),
                             Pending {
+                                approval_instance: Some(instance),
                                 session: session.clone(),
                                 wire: id.into(),
                                 form: None,
                             },
                         );
                         events.push(Event::Approval(Approval {
+                            instance,
                             id: ui,
                             title: action.into(),
                             detail: permission.to_string(),
@@ -495,6 +499,7 @@ impl State {
                     self.questions.insert(
                         ui.clone(),
                         Pending {
+                            approval_instance: None,
                             session: session.clone(),
                             wire: id.into(),
                             form,
@@ -506,6 +511,7 @@ impl State {
                         self.respond(
                             client,
                             Control {
+                                approval_instance: None,
                                 id: ui,
                                 decision: Decision::Deny,
                             },
@@ -723,6 +729,13 @@ impl State {
         }
     }
     pub fn respond(&mut self, client: &Client, control: Control) -> Result<Vec<Event>, String> {
+        if control.approval_instance.is_some_and(|instance| {
+            self.approvals
+                .get(&control.id)
+                .is_none_or(|pending| pending.approval_instance != Some(instance))
+        }) {
+            return Ok(Vec::new());
+        }
         if matches!(control.decision, Decision::KeepOpen) {
             return Ok(Vec::new());
         }
@@ -821,6 +834,7 @@ impl State {
             let _ = self.respond(
                 client,
                 Control {
+                    approval_instance: None,
                     id,
                     decision: Decision::Deny,
                 },
@@ -918,4 +932,60 @@ pub(super) fn error_message(value: &Value) -> String {
         .or_else(|| value["error"]["message"].as_str())
         .unwrap_or("OpenCode session failed.")
         .into()
+}
+
+#[cfg(test)]
+mod approval_instance_tests {
+    use super::*;
+
+    #[test]
+    fn stale_approval_decisions_do_not_consume_reused_opencode_permissions() {
+        // An invalid endpoint ensures a stale control cannot make an HTTP request.
+        let client = Client::new("invalid://unused".into(), "/tmp".into(), false, None);
+        let mut state = State::new(
+            Request {
+                kind: Kind::OpenCode,
+                binary: "unused".into(),
+                cwd: "/tmp".into(),
+                prompt: "Hello".into(),
+                provider_id: None,
+                model: None,
+                settings: Default::default(),
+            },
+            "approval-instance-test".into(),
+            false,
+        );
+        let frame = json!({"type":"permission.asked", "properties":{"id":"same", "permission":"bash", "sessionID":"approval-instance-test"}});
+        let first = state.frame(&client, frame.clone(), true).unwrap();
+        let Event::Approval(first) = &first[0] else {
+            panic!("first approval")
+        };
+        // OpenCode ignores duplicate notifications while a request is pending.
+        assert!(state
+            .frame(&client, frame.clone(), true)
+            .unwrap()
+            .is_empty());
+        state.approvals.remove(&first.id);
+        let next = state.frame(&client, frame, true).unwrap();
+        let Event::Approval(next) = &next[0] else {
+            panic!("replacement approval")
+        };
+        assert_eq!(first.id, next.id);
+        assert_ne!(first.instance, next.instance);
+        assert!(state
+            .respond(
+                &client,
+                Control {
+                    id: first.id.clone(),
+                    approval_instance: Some(first.instance),
+                    decision: Decision::Allow,
+                }
+            )
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            state.approvals[&next.id].approval_instance,
+            Some(next.instance)
+        );
+    }
 }

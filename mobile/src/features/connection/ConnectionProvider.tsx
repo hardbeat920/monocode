@@ -18,6 +18,7 @@ import type {
   SessionSummary,
   Message,
   QuestionPrompt,
+  ApprovalPrompt,
   UsageLimitState,
   Turn,
 } from "@/features/workspace/types";
@@ -332,6 +333,7 @@ export type Conversation = {
   busy: boolean;
   /** What the agent waits on the user to answer; absent from an older desktop. */
   question?: QuestionPrompt | null;
+  approvals?: ApprovalPrompt[];
   usageLimit?: UsageLimitState | null;
 };
 
