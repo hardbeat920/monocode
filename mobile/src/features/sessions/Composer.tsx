@@ -4,6 +4,7 @@ import { useNavigation } from "expo-router";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   Easing,
   FadeIn,
@@ -127,6 +128,7 @@ export function Composer({
   const scheme = useScheme();
   const colors = useColors();
   const styles = useStyles();
+  const insets = useSafeAreaInsets();
   const offline = useOffline();
   // Losing the desktop holds back only what needs it, Send and Stop; the
   // person can keep writing. An error waits until it's back.
@@ -215,7 +217,10 @@ export function Composer({
 
   const containerStyle = useAnimatedStyle(() => ({
     height: interpolate(progress.get(), [0, 1], [COLLAPSED, expandedHeight]),
-    marginHorizontal: interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, marginExpanded]),
+    // The dock already applies the side safe area. Its edge matches the
+    // native toolbar; only add our normal margin on sides without an inset.
+    marginLeft: insets.left > 0 ? 0 : interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, marginExpanded]),
+    marginRight: insets.right > 0 ? 0 : interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, marginExpanded]),
   }));
   // The field slides from between the pill's buttons to its own band in the card.
   const inputStyle = useAnimatedStyle(() => {

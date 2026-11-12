@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useScenePager } from "@/ui/ScenePager";
 import { useContentWidth } from "@/ui/ContentPane";
@@ -59,19 +60,25 @@ export function ProjectPages({
 }) {
   const width = useContentWidth();
   return (
-    <Animated.View
-      style={[styles.pages, { width: width * PROJECT_VIEWS.length }, pages.slide]}
-    >
-      {/* The sessions come first in the view order, but laid out on the
-          right: iOS blurs under the native header the scroll view it finds
-          down each view's first child, and the list is what scrolls there. */}
-      <View style={{ width }}>{sessions}</View>
-      <View style={{ width }}>{chat}</View>
-    </Animated.View>
+    // A screen-local measurement for both pages, especially the live-session
+    // pills. The pane's provider sits above the navigator and can miss bars
+    // belonging to this native screen. Keep this provider outside the slide.
+    <SafeAreaProvider style={styles.viewport}>
+      <Animated.View
+        style={[styles.pages, { width: width * PROJECT_VIEWS.length }, pages.slide]}
+      >
+        {/* The sessions come first in the view order, but laid out on the
+            right: iOS blurs under the native header the scroll view it finds
+            down each view's first child, and the list is what scrolls there. */}
+        <View style={{ width }}>{sessions}</View>
+        <View style={{ width }}>{chat}</View>
+      </Animated.View>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  viewport: { flex: 1 },
   pages: {
     flex: 1,
     flexDirection: "row-reverse",
