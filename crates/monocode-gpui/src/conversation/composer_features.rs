@@ -457,6 +457,11 @@ impl Conversation {
             monocode_core::response::limit(&format!("{}\n{}", self.status, text), 12_000),
         )
     }
+    /// `external_outcome` without the reply: for a caller that keeps the
+    /// transcript itself and only needs whether the turn succeeded, and why not.
+    pub(crate) fn external_status(&self) -> (bool, String) {
+        (self.status == "Ready", self.status.clone())
+    }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         self.history_ready()
             && !self.editing_last_turn.pending()

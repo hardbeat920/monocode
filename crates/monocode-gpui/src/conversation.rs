@@ -45,8 +45,11 @@ use gpui::{
 pub(crate) use mobile::{
     Waiting as MobileWaiting, mobile_access_modes, usage_state as mobile_usage_state,
 };
+#[cfg(test)]
+pub(crate) use mono::QUEUE_ERROR_LIMIT as MONO_QUEUE_ERROR_LIMIT;
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
+pub(crate) use mono::short_error as mono_short_error;
 use monocode_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
     catalog::{self, Model},
@@ -176,6 +179,8 @@ pub(crate) struct Conversation {
     pending_search: Option<(usize, String)>,
     loading: bool,
     pub(crate) busy: bool,
+    /// The last turn succeeded but waits for a later save; see `runtime::Update`.
+    pub(crate) reply_kept_unsaved: bool,
     /// The UI is idle; serialize the next launch behind the worker's last save.
     stopping: bool,
     notification_cancelled: bool,
@@ -633,6 +638,7 @@ impl Conversation {
             pending_search: None,
             loading: false,
             busy: false,
+            reply_kept_unsaved: false,
             stopping: false,
             notification_cancelled: false,
             draft_hint: false,
@@ -739,7 +745,9 @@ impl Conversation {
             (
                 locked(&store)
                     .and_then(|s| {
-                        let history = s.load(id)?;
+                        let mut history = s.load(id)?;
+                        // A reply still waiting for disk space shows meanwhile.
+                        crate::runtime::show_kept(&store, id, &mut history.rows);
                         let edits = if mono {
                             Vec::new()
                         } else {
@@ -1371,6 +1379,9 @@ impl Conversation {
                         }
                         if !stopping || finished {
                             this.status = update.status;
+                        }
+                        if finished {
+                            this.reply_kept_unsaved = update.kept_unsaved;
                         }
                         if let Some(tasks) = update.background.filter(|_| !stopping) {
                             this.set_background(tasks, cx);

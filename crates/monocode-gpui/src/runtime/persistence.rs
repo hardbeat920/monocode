@@ -107,6 +107,220 @@ impl PendingSave {
     }
 }
 
+/// A finished turn's rows that the store refused (a full disk, say). The
+/// rows stay in memory, retrying the save with backoff, and are journaled to
+/// `<database>.gpui-unsaved/<session>.json` so a restart replays them. The
+/// next turn of that conversation waits until they're saved, so it can't
+/// start from the older history and write over them.
+///
+/// The limit: if the journal write fails too (the disk is truly full) and
+/// Monocode quits before space frees up, the rows existed only in memory and
+/// are lost. Everything the store had already committed stays.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Unsaved {
+    pub(crate) session: i64,
+    /// The turn's first row, its prompt.
+    pub(crate) start: usize,
+    pub(crate) rows: Vec<Row>,
+}
+
+struct Kept {
+    unsaved: Unsaved,
+    journaled: bool,
+    generation: u64,
+}
+
+type Key = (usize, i64);
+type Registry = (u64, std::collections::HashMap<Key, Kept>);
+static KEPT: std::sync::LazyLock<Mutex<Registry>> = std::sync::LazyLock::new(Default::default);
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+
+// One app shares one store; a retry thread holds its Arc, so the address
+// can't be reused while a turn waits.
+fn key(store: &Database, session: i64) -> Key {
+    (Arc::as_ptr(store) as *const () as usize, session)
+}
+fn kept() -> std::sync::MutexGuard<'static, Registry> {
+    KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+fn journal_dir(store: &Store) -> Option<std::path::PathBuf> {
+    store.data_dir()?;
+    let mut dir = store.database_path().as_os_str().to_owned();
+    dir.push(".gpui-unsaved");
+    Some(dir.into())
+}
+fn journal_path(store: &Database, session: i64) -> Option<std::path::PathBuf> {
+    journal_dir(&*locked(store).ok()?).map(|dir| dir.join(format!("{session}.json")))
+}
+fn write_journal(store: &Database, unsaved: &Unsaved) -> Result<(), String> {
+    let path = journal_path(store, unsaved.session).ok_or("No data folder for a journal")?;
+    let json = serde_json::to_vec(unsaved).map_err(|e| e.to_string())?;
+    let partial = path.with_extension("json.partial");
+    (|| {
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(&partial, &json)?;
+        std::fs::rename(&partial, &path)
+    })()
+    .map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        error.to_string()
+    })
+}
+fn register(store: &Database, unsaved: Unsaved, journaled: bool) {
+    let mut guard = kept();
+    guard.0 += 1;
+    let generation = guard.0;
+    guard.1.insert(
+        key(store, unsaved.session),
+        Kept {
+            unsaved,
+            journaled,
+            generation,
+        },
+    );
+}
+
+/// Keeps `unsaved` until a save succeeds; returns whether its journal was
+/// written, so it survives a restart.
+pub(super) fn keep(store: &Database, unsaved: Unsaved) -> bool {
+    let journaled = write_journal(store, &unsaved).is_ok();
+    let session = unsaved.session;
+    register(store, unsaved, journaled);
+    retry_later(store.clone(), session);
+    journaled
+}
+
+fn retry_later(store: Database, session: i64) {
+    std::thread::spawn(move || {
+        let mut delay = RETRY_FIRST;
+        loop {
+            std::thread::sleep(delay);
+            let journaled = match kept().1.get(&key(&store, session)) {
+                None => return,
+                Some(kept) => kept.journaled,
+            };
+            if save_kept(&store, session).is_ok() {
+                continue;
+            }
+            // Space may free for the small journal before the store.
+            if !journaled {
+                let unsaved = kept()
+                    .1
+                    .get(&key(&store, session))
+                    .map(|kept| kept.unsaved.clone());
+                if let Some(unsaved) = unsaved
+                    && write_journal(&store, &unsaved).is_ok()
+                    && let Some(kept) = kept().1.get_mut(&key(&store, session))
+                {
+                    kept.journaled = true;
+                }
+            }
+            delay = (delay * 2).min(RETRY_MAX);
+        }
+    });
+}
+
+/// Saves a turn kept by `keep`, if there is one. A journal whose turn no
+/// longer lines up with the saved history (another app continued the
+/// conversation) is set aside as `<session>.stale-<time>.json`, not merged.
+pub(crate) fn save_kept(store: &Database, session: i64) -> Result<(), String> {
+    let Some((unsaved, generation)) = kept()
+        .1
+        .get(&key(store, session))
+        .map(|kept| (kept.unsaved.clone(), kept.generation))
+    else {
+        return Ok(());
+    };
+    let fits = {
+        let mut db = locked(store)?;
+        let fits = lines_up(&db.load(session)?.rows, &unsaved);
+        if fits {
+            db.write_rows(session, unsaved.start, &unsaved.rows)?;
+        }
+        fits
+    };
+    {
+        let mut guard = kept();
+        if guard
+            .1
+            .get(&key(store, session))
+            .is_some_and(|kept| kept.generation == generation)
+        {
+            guard.1.remove(&key(store, session));
+        }
+    }
+    if let Some(path) = journal_path(store, session) {
+        if fits {
+            let _ = std::fs::remove_file(&path);
+        } else if path.exists() {
+            let stale =
+                path.with_extension(format!("stale-{}.json", monocode_core::time::now_ms()));
+            let _ = std::fs::rename(&path, stale);
+        }
+    }
+    Ok(())
+}
+
+fn lines_up(saved: &[Row], unsaved: &Unsaved) -> bool {
+    saved.len() >= unsaved.start
+        && saved.len() <= unsaved.start + unsaved.rows.len()
+        && saved[unsaved.start..]
+            .iter()
+            .zip(unsaved.rows.iter().take(1))
+            .all(|(saved, kept)| saved.role == kept.role && saved.text == kept.text)
+}
+
+/// Shows a kept turn in `rows` just loaded from the store, so reopening the
+/// conversation before the save succeeds still shows the reply.
+pub(crate) fn show_kept(store: &Database, session: i64, rows: &mut Vec<Row>) {
+    if let Some(kept) = kept().1.get(&key(store, session))
+        && lines_up(rows, &kept.unsaved)
+    {
+        rows.truncate(kept.unsaved.start);
+        rows.extend(kept.unsaved.rows.iter().cloned());
+    }
+}
+
+/// At startup, saves the turns journaled by an earlier run, keeping (and
+/// retrying) any the store still refuses.
+pub(crate) fn recover_kept(store: &Database) {
+    let Some(dir) = locked(store).ok().and_then(|db| journal_dir(&db)) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let Some(session) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|name| name.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        let Some(unsaved) = std::fs::read(&path)
+            .ok()
+            .and_then(|json| serde_json::from_slice::<Unsaved>(&json).ok())
+            .filter(|unsaved| unsaved.session == session)
+        else {
+            continue;
+        };
+        register(store, unsaved, true);
+        if save_kept(store, session).is_err() {
+            retry_later(store.clone(), session);
+        }
+    }
+}
+
+/// Drops every kept turn from memory, as quitting would.
+#[cfg(test)]
+pub(super) fn forget_kept(store: &Database) {
+    let pointer = key(store, 0).0;
+    kept().1.retain(|(store, _), _| *store != pointer);
+}
+
 pub(super) fn save_turn_receipt(
     store: &Database,
     session: i64,
@@ -202,6 +416,79 @@ mod tests {
                 .unwrap(),
             Some("1".into())
         );
+    }
+
+    #[test]
+    fn a_journaled_turn_is_saved_by_the_next_run() {
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-kept-turn-{}",
+            monocode_core::mono::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sessions.db");
+        let mut store = Store::open_monocode(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap().id;
+        let mut transcript = Transcript::default();
+        transcript.begin("user");
+        transcript.append("Prompt");
+        transcript.begin("assistant");
+        store.write_rows(session, 0, &transcript.rows).unwrap();
+        let store: Database = Arc::new(Mutex::new(store));
+        let full = rusqlite::Connection::open(&path).unwrap();
+        full.execute_batch(
+            "CREATE TRIGGER test_full BEFORE UPDATE ON sessions
+             BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+        )
+        .unwrap();
+        transcript.append("The answer");
+        let unsaved = Unsaved {
+            session,
+            start: 0,
+            rows: transcript.rows.clone(),
+        };
+        assert!(keep(&store, unsaved), "journaled");
+        assert!(save_kept(&store, session).is_err());
+        // Quit while the disk is still full.
+        forget_kept(&store);
+        drop(store);
+        full.execute_batch("DROP TRIGGER test_full;").unwrap();
+
+        let store: Database = Arc::new(Mutex::new(Store::open_monocode(&path).unwrap()));
+        assert_ne!(
+            locked(&store).unwrap().load(session).unwrap().rows,
+            transcript.rows
+        );
+        recover_kept(&store);
+        assert_eq!(
+            locked(&store).unwrap().load(session).unwrap().rows,
+            transcript.rows
+        );
+        let journal = dir.join("sessions.db.gpui-unsaved");
+        assert_eq!(std::fs::read_dir(&journal).unwrap().count(), 0);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_kept_turn_that_no_longer_lines_up_is_set_aside_not_merged() {
+        let (store, id, transcript) = conversation();
+        let mut kept_rows = transcript.rows.clone();
+        kept_rows[0].text = "Another prompt".into();
+        register(
+            &store,
+            Unsaved {
+                session: id,
+                start: 0,
+                rows: kept_rows,
+            },
+            false,
+        );
+        save_kept(&store, id).unwrap();
+        assert_eq!(
+            locked(&store).unwrap().load(id).unwrap().rows,
+            transcript.rows
+        );
+        assert!(save_kept(&store, id).is_ok(), "and is no longer kept");
     }
 
     #[test]

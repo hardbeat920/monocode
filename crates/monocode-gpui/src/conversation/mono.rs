@@ -30,12 +30,41 @@ pub(crate) struct QueueChanged {
 }
 impl EventEmitter<QueueChanged> for Conversation {}
 impl EventEmitter<Submitted> for Conversation {}
+/// The most of a queued message's error the Mono keeps and shows: its first
+/// line, cut to fit. A failure report must never carry a whole reply, nor
+/// grow the queue card past its Retry and Discard buttons.
+pub(crate) const QUEUE_ERROR_LIMIT: usize = 240;
+pub(crate) fn short_error(error: &str) -> String {
+    let line = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Failed");
+    if line.chars().count() <= QUEUE_ERROR_LIMIT {
+        line.into()
+    } else {
+        let cut: String = line.chars().take(QUEUE_ERROR_LIMIT - 1).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
 impl Conversation {
     #[cfg(test)]
     pub(crate) fn queue_test_focus(&self, id: &str, index: usize) -> gpui::FocusHandle {
         self.mono_ui.queue_focus[id].0[index].clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_status(&mut self, status: &str) {
+        self.status = status.into();
+    }
+    /// A running turn that takes steered messages on `controls`.
+    #[cfg(test)]
+    pub(crate) fn set_test_steerable(&mut self, controls: std::sync::mpsc::Sender<Control>) {
+        self.summary.provider = "codex".into();
+        self.busy = true;
+        self.controls = Some(controls);
+        self.follow_ups.ready = true;
+    }
     #[cfg(test)]
     pub(crate) fn queue_test_list_focus(&self) -> gpui::FocusHandle {
         self.mono_ui.queue_list_focus.as_ref().unwrap().clone()
@@ -181,7 +210,7 @@ impl Conversation {
             .map(|m| crate::transcript::PendingMessage {
                 id: m.id.clone(),
                 text: m.text.clone().into(),
-                error: m.error.clone(),
+                error: m.error.as_deref().map(short_error),
                 sent_at: m.sent_at,
                 attachments: m.attachments.iter().map(PathBuf::from).collect(),
             })
@@ -401,11 +430,11 @@ impl Conversation {
         self.mono_ui.delivered.insert(id);
         self.sync_mono_pending(cx);
     }
-    pub(super) fn mono_message_failed(&mut self, id: String, error: String) {
+    pub(crate) fn mono_message_failed(&mut self, id: String, error: String) {
         if self.mono_ui.sending.as_ref() == Some(&id) {
             self.mono_ui.sending = None;
         }
-        self.mono_ui.failed.push((id, error));
+        self.mono_ui.failed.push((id, short_error(&error)));
     }
     pub(crate) fn mono_take_failures(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.mono_ui.failed)
@@ -745,14 +774,23 @@ impl Conversation {
                                                     .bg(content(0.04))
                                                     .text_size(px(13.))
                                                     .text_color(content(0.6))
-                                                    .child(if message.internal {
-                                                        "Completion update".into()
-                                                    } else {
-                                                        message.text.clone()
-                                                    })
+                                                    // Title and buttons share the first row, so no
+                                                    // length of error can push the buttons away.
+                                                    .child(
+                                                        div()
+                                                            .debug_selector(|| "mono-internal-queue-header".into())
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_2()
+                                                            .child(div().flex_1().min_w_0().truncate().child(if message.internal {
+                                                                SharedString::from("Completion update")
+                                                            } else {
+                                                                message.text.clone().into()
+                                                            }))
                                                     .when(message.error.is_some(), |d| {
                                                         d.child(
                                                             div()
+                                                                .flex_none()
                                                                 .flex()
                                                                 .gap_2()
                                                                 .child(
@@ -792,15 +830,20 @@ impl Conversation {
                                                                     )),
                                                                 ),
                                                         )
-                                                    })
+                                                    }))
                                                     .child(
                                                         div()
+                                                            .debug_selector(|| "mono-internal-queue-error".into())
                                                             .text_size(px(11.))
+                                                            .line_height(px(16.))
+                                                            .max_h(px(48.))
+                                                            .overflow_hidden()
                                                             .text_color(content(0.4))
                                                             .child(
                                                                 message
                                                                     .error
-                                                                    .clone()
+                                                                    .as_deref()
+                                                                    .map(short_error)
                                                                     .unwrap_or_else(|| {
                                                                         "Pending".into()
                                                                     }),

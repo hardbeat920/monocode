@@ -1253,6 +1253,278 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
     );
 }
 
+fn queued(id: &str, internal: bool, error: Option<&str>) -> Message {
+    Message {
+        id: id.into(),
+        text: format!("{id} text"),
+        sent_at: None,
+        internal,
+        error: error.map(Into::into),
+        attachments: Vec::new(),
+    }
+}
+#[gpui::test]
+fn a_failed_message_waits_without_blocking_the_queue_behind_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        let chat = m.chats[&s.id].clone();
+        chat.update(cx, |chat, _| {
+            // Fails at startup without launching a real provider.
+            chat.summary.provider = "fixture".into();
+        });
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox.push(queued(
+            "failed-update",
+            true,
+            Some("Saving failed: disk is full"),
+        ));
+        outbox.push(queued("failed-user", false, Some("Delivery failed")));
+        outbox.push(queued("user", false, None));
+        m.persisted_messages
+            .extend(["failed-update", "failed-user", "user"].map(String::from));
+        m.dispatch(&s.id, cx);
+        assert_eq!(
+            m.inflight.get(&s.id).map(|sent| sent.id.as_str()),
+            Some("user"),
+            "the user's message goes out past the failed ones"
+        );
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert!(
+            outbox[0].error.is_some() && outbox[1].error.is_some(),
+            "failed messages keep waiting for Retry or Discard"
+        );
+    });
+}
+#[gpui::test]
+fn an_unsaved_message_still_holds_back_the_messages_behind_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| chat.summary.provider = "fixture".into());
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox.push(queued("failed", true, Some("Delivery failed")));
+        outbox.push(queued("unsaved", false, None));
+        outbox.push(queued("later", false, None));
+        m.persisted_messages
+            .extend(["failed", "later"].map(String::from));
+        m.dispatch(&s.id, cx);
+        assert!(
+            !m.inflight.contains_key(&s.id),
+            "nothing overtakes a message that isn't saved yet"
+        );
+    });
+}
+#[gpui::test]
+fn a_turn_that_failed_to_save_keeps_its_reply_out_of_the_error(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let reply = "The whole reply. ".repeat(400);
+    s.manager.update(cx, |m, cx| {
+        let chat = m.chats[&s.id].clone();
+        chat.update(cx, |chat, cx| {
+            chat.mono_post("assistant", reply.clone(), cx).unwrap();
+            chat.busy = false;
+            chat.set_test_status(
+                "database or disk is full · Saving failed: database or disk is full",
+            );
+        });
+        m.inflight
+            .insert(s.id.clone(), queued("completion", true, None));
+        m.chat_changed(&s.id, cx);
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert_eq!(
+            outbox.len(),
+            1,
+            "the failed turn waits for Retry or Discard"
+        );
+        assert_eq!(
+            outbox[0].error.as_deref(),
+            Some("database or disk is full · Saving failed: database or disk is full")
+        );
+        assert!(
+            chat.read(cx)
+                .mono_rows(cx)
+                .iter()
+                .any(|row| row.role == "assistant" && row.text.contains("The whole reply.")),
+            "the reply stays in the transcript"
+        );
+    });
+}
+#[gpui::test]
+fn a_turn_whose_reply_waits_for_room_to_save_is_not_queued_to_run_again(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.summary.provider = "fixture".into();
+            chat.busy = false;
+            chat.reply_kept_unsaved = true;
+            chat.set_test_status(
+                "Saving failed: database or disk is full · The reply is kept and saves once there's room",
+            );
+        });
+        m.inflight
+            .insert(s.id.clone(), queued("completion", true, None));
+        m.chat_changed(&s.id, cx);
+        assert!(
+            m.roster.get(&s.id).unwrap().outbox.is_empty(),
+            "the turn ran; Retry would run its prompt again"
+        );
+    });
+}
+#[gpui::test]
+fn a_retried_message_waits_for_the_running_turn_instead_of_steering_into_it(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let (send, receive) = std::sync::mpsc::channel();
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| chat.set_test_steerable(send));
+        m.roster.get_mut(&s.id).unwrap().outbox.push(queued(
+            "older",
+            false,
+            Some("Delivery failed"),
+        ));
+        m.persisted_messages.insert("older".into());
+        m.queue_changed(&s.id, "older", false, cx);
+        assert!(
+            receive.try_recv().is_err(),
+            "a retried message is not merged into the newer turn"
+        );
+        let outbox = &m.roster.get(&s.id).unwrap().outbox;
+        assert!(outbox[0].id == "older" && outbox[0].error.is_none());
+        // A new message still steers the running turn.
+        m.roster
+            .get_mut(&s.id)
+            .unwrap()
+            .outbox
+            .push(queued("newer", false, None));
+        m.persisted_messages.insert("newer".into());
+        m.dispatch(&s.id, cx);
+        let control = receive.try_recv().unwrap();
+        let monocode_core::agent::Decision::Steer(steer) = control.decision else {
+            panic!("expected a steer");
+        };
+        assert_eq!(steer.id, "newer");
+    });
+}
+#[gpui::test]
+fn steering_failures_and_saved_errors_are_cut_to_fit_the_card(cx: &mut TestAppContext) {
+    use crate::conversation::MONO_QUEUE_ERROR_LIMIT;
+    let s = setup(cx);
+    let huge = "x".repeat(1_500_000);
+    s.manager.update(cx, |m, cx| {
+        let mono = m.roster.get_mut(&s.id).unwrap();
+        mono.outbox.push(queued("steered", false, None));
+        // An older build saved whole errors.
+        mono.outbox.push(queued("saved", false, Some(&huge)));
+        m.save(cx);
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.mono_message_failed("steered".into(), huge.clone())
+        });
+        m.dispatch(&s.id, cx);
+        let error = m.roster.get(&s.id).unwrap().outbox[0]
+            .error
+            .clone()
+            .unwrap();
+        assert_eq!(error.chars().count(), MONO_QUEUE_ERROR_LIMIT);
+    });
+    cx.run_until_parked();
+    let store = s.store.clone();
+    let cwd = s.project.clone();
+    let reopened = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, Vec::new(), cwd, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let manager = reopened
+        .update(cx, |shell, _, _| shell.mono_manager())
+        .unwrap();
+    manager.read_with(cx, |m, _| {
+        let saved = m
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .find(|q| q.id == "saved");
+        assert_eq!(
+            saved
+                .and_then(|q| q.error.as_ref())
+                .map(|e| e.chars().count()),
+            Some(MONO_QUEUE_ERROR_LIMIT)
+        );
+    });
+}
+#[test]
+fn queue_errors_keep_the_first_line_and_fit_the_card() {
+    use crate::conversation::{MONO_QUEUE_ERROR_LIMIT, mono_short_error};
+    assert_eq!(
+        mono_short_error("disk is full · Saving failed\nThe whole reply"),
+        "disk is full · Saving failed"
+    );
+    assert_eq!(mono_short_error("\n  \nLate reason\nreply"), "Late reason");
+    assert_eq!(mono_short_error(""), "Failed");
+    let long = mono_short_error(&"é".repeat(5_000));
+    assert_eq!(long.chars().count(), MONO_QUEUE_ERROR_LIMIT);
+    assert!(long.ends_with('…'));
+}
+#[gpui::test]
+fn a_long_failure_keeps_retry_and_discard_on_screen(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    let error = format!(
+        "database or disk is full · Saving failed: database or disk is full {}\n{}",
+        "detail ".repeat(200),
+        "A long reply line.\n".repeat(400)
+    );
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(queued(
+                    "completion",
+                    true,
+                    Some(&error),
+                ));
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let viewport = s
+        .window
+        .update(visual, |_, w, _| w.viewport_size())
+        .unwrap();
+    let card = visual.debug_bounds("mono-internal-queue").unwrap();
+    let header = visual.debug_bounds("mono-internal-queue-header").unwrap();
+    let text = visual.debug_bounds("mono-internal-queue-error").unwrap();
+    assert!(
+        text.size.height <= px(48.),
+        "error text is clamped: {text:?}"
+    );
+    assert!(
+        card.size.height <= px(120.),
+        "the card stays compact: {card:?}"
+    );
+    for button in [
+        "mono-queue-retry-completion",
+        "mono-queue-discard-completion",
+    ] {
+        let bounds = visual.debug_bounds(button).unwrap();
+        assert!(
+            bounds.top() >= px(0.) && bounds.bottom() <= viewport.height,
+            "{button} {bounds:?} in viewport {viewport:?}"
+        );
+        assert!(
+            bounds.top() >= header.top() && bounds.bottom() <= header.bottom(),
+            "{button} sits in the card's header row, above the error"
+        );
+        assert!(bounds.bottom() <= text.top());
+    }
+}
+
 #[gpui::test]
 fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
     let s = setup(cx);
@@ -1459,8 +1731,13 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
             .iter()
             .any(|m| m.id == "first" && m.error.is_none())
     }));
+    // A card's error is clamped, so overflow the list with more failures to
+    // give the keyboard something to scroll.
+    let fillers = ["filler-0", "filler-1", "filler-2", "filler-3"];
     s.manager.update(visual, |m, cx| {
-        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Long failure. ".repeat(500));
+        let outbox = &mut m.roster.get_mut(&s.id).unwrap().outbox;
+        outbox[0].error = Some("Long failure. ".repeat(500));
+        outbox.extend(fillers.map(|id| queued(id, true, Some("Delivery failed"))));
         m.configure_chat(&s.id, cx);
     });
     visual.run_until_parked();
@@ -1484,6 +1761,10 @@ fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext)
         retry.top() < list.top(),
         "test must scroll before clearing the queue"
     );
+    for id in fillers {
+        s.manager
+            .update(visual, |m, cx| m.queue_changed(&s.id, id, true, cx));
+    }
     s.manager
         .update(visual, |m, cx| m.queue_changed(&s.id, "first", true, cx));
     visual.run_until_parked();
