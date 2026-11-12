@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   discoverPiSkills: vi.fn(),
   discoverOmpCommands: vi.fn(),
+  discoverClaudeCommands: vi.fn(),
   subscribe: vi.fn(),
   listSkills: vi.fn(),
   readTextFile: vi.fn(),
@@ -24,7 +25,14 @@ vi.mock("../../../integrations/harness/core/registry", () => ({
               rawSlashCommands: true,
             },
           }
-        : undefined,
+        : id === "claude"
+          ? {
+              commands: {
+                discover: mocks.discoverClaudeCommands,
+                mergesFileSkills: true,
+              },
+            }
+          : undefined,
 }));
 
 vi.mock("../../../platform/tauri/fs", () => ({
@@ -85,8 +93,10 @@ beforeEach(() => {
   ]);
   mocks.subscribe.mockReset();
   mocks.listSkills.mockReset();
+  mocks.discoverClaudeCommands.mockReset();
   mocks.discoverPiSkills.mockResolvedValue([piSkill("architect")]);
   mocks.listSkills.mockResolvedValue([]);
+  mocks.discoverClaudeCommands.mockResolvedValue([]);
 });
 
 describe("provider-aware skill catalog", () => {
@@ -182,7 +192,7 @@ describe("provider-aware skill catalog", () => {
   });
 
   it("keeps filesystem discovery and the built-in row for non-Pi providers", async () => {
-    const catalog = await loadSkills({ harness: "claude", cwd: "/repo" });
+    const catalog = await loadSkills({ harness: "codex", cwd: "/repo" });
 
     expect(mocks.listSkills).toHaveBeenCalledWith("/repo", []);
     expect(catalog).toContainEqual(BUILTIN_CREATE_SKILL);
@@ -195,19 +205,19 @@ describe("provider-aware skill catalog", () => {
 
     const first = loadSkills({ harness: "pi", cwd: "/repo/" });
     const second = loadSkills({ harness: "pi", cwd: "/repo" });
-    const claude = loadSkills({ harness: "claude", cwd: "/repo" });
+    const codex = loadSkills({ harness: "codex", cwd: "/repo" });
 
     expect(mocks.discoverPiSkills).toHaveBeenCalledTimes(1);
     expect(skillCatalogKey({ harness: "pi", cwd: "/repo/" })).toBe(
       skillCatalogKey({ harness: "pi", cwd: "/repo" }),
     );
     expect(skillCatalogKey({ harness: "pi", cwd: "/repo" })).not.toBe(
-      skillCatalogKey({ harness: "claude", cwd: "/repo" }),
+      skillCatalogKey({ harness: "codex", cwd: "/repo" }),
     );
 
     pending.resolve([piSkill("architect")]);
     await expect(first).resolves.toEqual(await second);
-    await claude;
+    await codex;
   });
 
   it("refreshes stale Pi data and retains it after a failed refresh", async () => {
@@ -276,6 +286,94 @@ describe("provider-aware skill catalog", () => {
   });
 });
 
+describe("Claude native commands merged with file skills", () => {
+  it("combines discovered commands with the filesystem scan, unlike Pi/OMP", async () => {
+    mocks.discoverClaudeCommands.mockResolvedValue([
+      {
+        name: "compact",
+        description: "Free up context",
+        invocation: "claude:compact",
+        source: "claude",
+      },
+    ]);
+    mocks.listSkills.mockResolvedValue([
+      {
+        name: "review-pr",
+        description: "Review pull requests",
+        path: "/repo/.claude/skills/review-pr/SKILL.md",
+        source: "claude",
+        scope: "project",
+      },
+    ]);
+
+    const catalog = await loadSkills({ harness: "claude", cwd: "/repo" });
+
+    expect(mocks.discoverClaudeCommands).toHaveBeenCalledWith({
+      harness: "claude",
+      cwd: "/repo",
+    });
+    expect(mocks.listSkills).toHaveBeenCalledWith("/repo", []);
+    expect(catalog).toContainEqual({
+      kind: "native",
+      name: "compact",
+      description: "Free up context",
+      invocation: "claude:compact",
+      source: "claude",
+    });
+    expect(catalog).toContainEqual(
+      expect.objectContaining({ kind: "file", name: "review-pr" }),
+    );
+  });
+
+  it("keeps the native command when a discovered command and a file skill share a name", async () => {
+    mocks.discoverClaudeCommands.mockResolvedValue([
+      {
+        name: "review-pr",
+        description: "The built-in reviewer",
+        invocation: "review-pr",
+        source: "claude",
+      },
+    ]);
+    mocks.listSkills.mockResolvedValue([
+      {
+        name: "review-pr",
+        description: "A same-named file skill",
+        path: "/repo/.claude/skills/review-pr/SKILL.md",
+        source: "claude",
+        scope: "project",
+      },
+    ]);
+
+    const catalog = await loadSkills({ harness: "claude", cwd: "/repo" });
+    const matches = catalog.filter((skill) => skill.name === "review-pr");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      kind: "native",
+      description: "The built-in reviewer",
+    });
+  });
+
+  it("keeps file skills when Claude command discovery fails", async () => {
+    mocks.discoverClaudeCommands.mockRejectedValue(new Error("probe timed out"));
+    mocks.listSkills.mockResolvedValue([
+      {
+        name: "review-pr",
+        description: "Review pull requests",
+        path: "/repo/.claude/skills/review-pr/SKILL.md",
+        source: "claude",
+        scope: "project",
+      },
+    ]);
+
+    const catalog = await loadSkills({ harness: "claude", cwd: "/repo" });
+
+    expect(catalog).toContainEqual(
+      expect.objectContaining({ kind: "file", name: "review-pr" }),
+    );
+    expect(catalog.some((skill) => skill.kind === "native")).toBe(false);
+  });
+});
+
 describe("file skill visibility preferences", () => {
   const path = "/repo/.agents/skills/review/SKILL.md";
   let storage: Map<string, string>;
@@ -304,7 +402,7 @@ describe("file skill visibility preferences", () => {
   });
 
   it("removes a hidden file from a cached catalog and restores it", async (): Promise<void> => {
-    const context = { harness: "claude", cwd: "/repo" } satisfies Parameters<
+    const context = { harness: "codex", cwd: "/repo" } satisfies Parameters<
       typeof loadSkills
     >[0];
     expect(
@@ -321,7 +419,7 @@ describe("file skill visibility preferences", () => {
   it("does not inject hidden skill content into a submitted turn", async (): Promise<void> => {
     saveDisabledSkillPaths([path]);
     const result = await applySkillsToTurn("/review inspect this", {
-      harness: "claude",
+      harness: "codex",
       cwd: "/repo",
     });
     expect(result).toBe("/review inspect this");
@@ -381,7 +479,7 @@ describe("file skill visibility preferences", () => {
 
     const pending = deferred<DiscoveredSkill[]>();
     mocks.listSkills.mockReturnValueOnce(pending.promise);
-    const context = { harness: "claude", cwd: "/repo" } satisfies Parameters<
+    const context = { harness: "codex", cwd: "/repo" } satisfies Parameters<
       typeof loadSkills
     >[0];
 
@@ -443,7 +541,7 @@ describe("file skill visibility preferences", () => {
   it("falls back to same-name personal skill when project skill is disabled, and injects its content", async (): Promise<void> => {
     const projectSkillPath = "/repo/.agents/skills/review/SKILL.md";
     const personalSkillPath = "/home/user/.agents/skills/review/SKILL.md";
-    const context = { harness: "claude", cwd: "/repo" } satisfies Parameters<
+    const context = { harness: "codex", cwd: "/repo" } satisfies Parameters<
       typeof loadSkills
     >[0];
 
