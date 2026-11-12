@@ -53,6 +53,7 @@ mod modal;
 mod monos;
 mod notes;
 mod notifications;
+mod omarchy_theme;
 mod pane_layout;
 mod pane_motion;
 mod particle_text;

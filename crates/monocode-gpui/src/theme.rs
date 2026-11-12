@@ -75,7 +75,6 @@ pub(crate) fn configure_project(
     system_light: bool,
     animate: bool,
 ) -> bool {
-    let light = p.theme == "light" || (p.theme == "system" && system_light);
     let (workspace_theme, accent_color, hue, saturation, dark_lightness) = match project {
         Some(t) => (
             t.workspace_theme.as_str(),
@@ -92,10 +91,14 @@ pub(crate) fn configure_project(
             p.theme_dark_lightness,
         ),
     };
+    let omarchy = (workspace_theme == "omarchy")
+        .then(crate::omarchy_theme::current)
+        .flatten();
+    let light = effective_light(p, system_light, omarchy);
     let palette = crate::settings::palette(workspace_theme, light);
-    let glass = window_glass(p, system_light);
+    let glass = window_glass(light);
     // Both layouts derive their surface roles from the same saved settings.
-    let shell = gpui::hsla(
+    let mut shell = gpui::hsla(
         hue.min(360) as f32 / 360.,
         saturation.min(100) as f32 / 100.,
         if light {
@@ -109,6 +112,11 @@ pub(crate) fn configure_project(
             1.
         },
     );
+    if let Some(theme) = omarchy {
+        let alpha = shell.a;
+        shell = rgb(theme.background).into();
+        shell.a = alpha;
+    }
     let mut pane = shell;
     pane.a = if glass && p.body_glass { 0.28 } else { 1. };
     // The window already paints its glass tint. A glass content card reveals
@@ -122,9 +130,11 @@ pub(crate) fn configure_project(
         .and_then(|s| u32::from_str_radix(s.trim_start_matches('#'), 16).ok());
     let tokens = Tokens {
         light,
-        ink: rgb(palette.content).into(),
-        accent: rgb(custom.unwrap_or(palette.accent)).into(),
-        user_accent: custom.map(|c| rgb(c).into()),
+        ink: rgb(omarchy.map_or(palette.content, |t| t.foreground)).into(),
+        accent: rgb(custom.unwrap_or_else(|| omarchy.map_or(palette.accent, |t| t.accent))).into(),
+        user_accent: custom
+            .or_else(|| omarchy.map(|t| t.accent))
+            .map(|c| rgb(c).into()),
         shell,
         pane,
         inset_pane,
@@ -204,8 +214,18 @@ impl Tokens {
 /// vibrancy and Windows Acrylic. Linux blur is compositor-dependent, so it
 /// stays opaque rather than exposing the raw desktop.
 pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows"));
-pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
-    GLASS_PLATFORM && p.theme != "light" && !(p.theme == "system" && system_light)
+fn effective_light(
+    p: &crate::settings::Preferences,
+    system_light: bool,
+    omarchy: Option<crate::omarchy_theme::Theme>,
+) -> bool {
+    omarchy.map_or(
+        p.theme == "light" || (p.theme == "system" && system_light),
+        |theme| theme.light,
+    )
+}
+pub(crate) fn window_glass(light: bool) -> bool {
+    GLASS_PLATFORM && !light
 }
 /// What the compositor puts behind a window that does or doesn't paint glass.
 pub(crate) fn window_backdrop(glass: bool) -> gpui::WindowBackgroundAppearance {
@@ -661,6 +681,31 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn omarchy_mode_controls_glass_even_when_app_mode_differs() {
+        let mut prefs = crate::settings::Preferences::default();
+        let mut theme = crate::omarchy_theme::Theme {
+            background: 0x121212,
+            foreground: 0xeeeeee,
+            accent: 0xff9900,
+            light: false,
+        };
+        prefs.theme = "light".into();
+        let dark = effective_light(&prefs, true, Some(theme));
+        assert!(!dark);
+        assert_eq!(window_glass(dark), GLASS_PLATFORM);
+
+        prefs.theme = "dark".into();
+        theme.light = true;
+        let light = effective_light(&prefs, false, Some(theme));
+        assert!(light);
+        assert!(!window_glass(light));
+        assert!(matches!(
+            window_backdrop(window_glass(light)),
+            gpui::WindowBackgroundAppearance::Opaque
+        ));
+    }
 
     #[test]
     fn composer_surface_matches_react_dark_ink_and_solid_light_background() {

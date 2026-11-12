@@ -551,7 +551,7 @@ impl SettingsView {
         id: &'static str,
         label: &'static str,
         value: &str,
-        options: Vec<(String, SharedString, Option<AnyElement>)>,
+        options: Vec<(String, SharedString, Option<(AnyElement, AnyElement)>)>,
         width: Option<f32>,
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static,
@@ -568,7 +568,11 @@ impl SettingsView {
         let (trigger_label, trigger_icon) = match selected {
             Some(ix) => {
                 let (_, text, icon) = &mut options[ix];
-                (text.clone(), icon.take())
+                (
+                    text.clone(),
+                    icon.as_mut()
+                        .map(|(trigger, _)| std::mem::replace(trigger, div().into_any_element())),
+                )
             }
             None => (SharedString::from(value.to_owned()), None),
         };
@@ -625,6 +629,9 @@ impl SettingsView {
                             .when_some(trigger_icon, |d, icon| {
                                 d.child(
                                     div()
+                                        .debug_selector(move || {
+                                            format!("settings-select-icon-{id}")
+                                        })
                                         .size_4()
                                         .flex_shrink_0()
                                         .flex()
@@ -672,6 +679,7 @@ impl SettingsView {
                     .into_iter()
                     .enumerate()
                     .map(|(ix, (option, text, icon_el))| {
+                        let icon_el = icon_el.map(|(_, menu)| menu);
                         let is_selected = option == value;
                         let highlighted = ix == active;
                         let change = change.clone();
@@ -703,6 +711,9 @@ impl SettingsView {
                             .when_some(icon_el, |d, icon_el| {
                                 d.child(
                                     div()
+                                        .debug_selector(move || {
+                                            format!("settings-option-icon-{id}-{ix}")
+                                        })
                                         .size_4()
                                         .flex_shrink_0()
                                         .flex()
@@ -847,7 +858,10 @@ impl SettingsView {
                 (
                     path.clone(),
                     SharedString::from(label.clone()),
-                    Some(icon("folder", 14.).into_any_element()),
+                    Some((
+                        icon("folder", 14.).into_any_element(),
+                        icon("folder", 14.).into_any_element(),
+                    )),
                 )
             })
             .collect();

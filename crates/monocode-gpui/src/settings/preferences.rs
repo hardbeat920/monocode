@@ -206,6 +206,10 @@ impl Preferences {
     }
 
     pub(crate) fn apply_workspace_theme(&mut self, id: String) {
+        if id == "omarchy" {
+            self.workspace_theme = id;
+            return;
+        }
         let color: gpui::Hsla = gpui::rgb(super::palette(&id, false).surface).into();
         self.theme_hue = (color.h * 360.).round() as u32;
         self.theme_saturation = (color.s * 100.).round() as u32;
@@ -293,6 +297,26 @@ impl Preferences {
 #[cfg(test)]
 mod decoration_tests {
     use super::Preferences;
+
+    #[test]
+    fn omarchy_selection_preserves_manual_colors() {
+        let mut prefs = Preferences {
+            theme_hue: 42,
+            theme_saturation: 31,
+            theme_dark_lightness: 15,
+            ..Default::default()
+        };
+        prefs.apply_workspace_theme("omarchy".into());
+        assert_eq!(prefs.workspace_theme, "omarchy");
+        assert_eq!(
+            (
+                prefs.theme_hue,
+                prefs.theme_saturation,
+                prefs.theme_dark_lightness
+            ),
+            (42, 31, 15)
+        );
+    }
 
     #[test]
     fn decoration_requests_are_scoped_to_the_wayland_backend() {
