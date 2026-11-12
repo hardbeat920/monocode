@@ -2799,6 +2799,51 @@ fn which_in_path(path: &str, name: &str) -> Option<PathBuf> {
     })
 }
 
+/// `Command::new(name)` with `PATH` set to `path`, started by its full path.
+/// Once `PATH` is overridden, std only uses posix_spawn when the program is a
+/// path; a bare name falls back to fork, which copies the whole address space
+/// while every other thread's malloc waits on it, the UI main thread included.
+/// A git refresh after each agent tool call then froze typing for up to a second.
+pub(crate) fn command_on_path(name: &str, path: String) -> Command {
+    // Windows has no fork to avoid, and its lookup there would also pick up
+    // `.cmd` shims that a bare `git` never ran.
+    #[cfg(unix)]
+    let program = which_in_path(&path, name).unwrap_or_else(|| name.into());
+    #[cfg(not(unix))]
+    let program = PathBuf::from(name);
+    let mut cmd = Command::new(program);
+    cmd.env("PATH", path);
+    cmd
+}
+
+#[cfg(target_os = "macos")]
+const TASKPOLICY: &str = "/usr/sbin/taskpolicy";
+
+/// `command_on_path` below the interactive UI, with the policy of
+/// `background_work::configure_child` (nice 10, plus throttled disk IO on
+/// macOS) that everything it starts inherits. That one sets it in `pre_exec`,
+/// and any `pre_exec` hook sends std down the fork path again, so here the
+/// program runs under `nice` / `taskpolicy` instead. Without `nice` it starts
+/// at normal priority.
+pub(crate) fn background_command_on_path(name: &str, path: String) -> Command {
+    #[cfg(unix)]
+    {
+        if let (Some(program), Some(nice)) =
+            (which_in_path(&path, name), which_in_path(&path, "nice"))
+        {
+            let mut cmd = Command::new(nice);
+            cmd.args(["-n", "10"]);
+            #[cfg(target_os = "macos")]
+            if Path::new(TASKPOLICY).is_file() {
+                cmd.args([TASKPOLICY, "-d", "throttle"]);
+            }
+            cmd.arg(program).env("PATH", path);
+            return cmd;
+        }
+    }
+    command_on_path(name, path)
+}
+
 fn first_binary(candidates: Vec<PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find_map(existing_binary)
 }
@@ -3723,11 +3768,46 @@ mod tests {
             unreadable.display(),
             real.display()
         );
-        assert_eq!(which_in_path(&path, "claude"), Some(target));
+        assert_eq!(which_in_path(&path, "claude"), Some(target.clone()));
         assert_eq!(which_in_path(&path, "codex"), None);
+        // A full path keeps std on posix_spawn instead of fork.
+        assert_eq!(
+            command_on_path("claude", path.clone()).get_program(),
+            target.as_os_str()
+        );
+        assert_eq!(
+            command_on_path("codex", path.clone()).get_program(),
+            "codex"
+        );
         assert_eq!(which_in_path("", "claude"), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The priority comes from wrapper programs, so the command std sees is
+    /// still a full path with no `pre_exec` hook: posix_spawn, not fork.
+    #[cfg(unix)]
+    #[test]
+    fn background_command_wraps_the_full_path_in_nice() {
+        use std::ffi::OsStr;
+        let path = cached_gui_search_path();
+        let git = which_in_path(&path, "git").expect("git on PATH");
+        let cmd = background_command_on_path("git", path);
+        let program = Path::new(cmd.get_program());
+        assert!(program.is_absolute(), "{program:?}");
+        assert!(program.ends_with("nice"), "{program:?}");
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            args,
+            ["-n", "10", TASKPOLICY, "-d", "throttle"]
+                .map(OsStr::new)
+                .into_iter()
+                .chain([git.as_os_str()])
+                .collect::<Vec<_>>()
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(args, [OsStr::new("-n"), OsStr::new("10"), git.as_os_str()]);
     }
 
     #[test]
