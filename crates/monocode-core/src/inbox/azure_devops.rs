@@ -254,7 +254,7 @@ fn azure_devops_list_work_items_for(
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
     validate_kind(kind)?;
     let (project, repo_name) = split_repo(repo)?;
-    let limit = limit.clamp(1, 100);
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT);
     if kind == "pr" {
         let me = if assigned_to_me {
             Some(azure_current_user_id(config)?)
@@ -272,7 +272,7 @@ fn azure_devops_list_todos_for(
     limit: u32,
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
     validate_kind(kind)?;
-    let limit = limit.clamp(1, 100);
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT);
     if kind == "pr" {
         return azure_list_pr_reviews_for(config, limit);
     }
@@ -488,22 +488,15 @@ fn azure_list_prs_for(
     let repo = format!("{project}/{repo_name}");
     let reviewer = assigned_user_id.map(str::trim).filter(|id| !id.is_empty());
     if state.trim().eq_ignore_ascii_case("all") {
-        let mut active = azure_fetch_prs(
-            config,
-            project,
-            repo_name,
-            &repo,
-            "active",
-            limit * 2,
-            reviewer,
-        )?;
+        let mut active =
+            azure_fetch_prs(config, project, repo_name, &repo, "active", limit, reviewer)?;
         let mut completed = azure_fetch_prs(
             config,
             project,
             repo_name,
             &repo,
             "completed",
-            limit * 2,
+            limit,
             reviewer,
         )?;
         // Abandoned PRs surface through the "all" view too, like closed GitHub PRs.
@@ -513,7 +506,7 @@ fn azure_list_prs_for(
             repo_name,
             &repo,
             "abandoned",
-            limit * 2,
+            limit,
             reviewer,
         )?;
         let mut items = Vec::new();
@@ -539,17 +532,35 @@ fn azure_fetch_prs(
     let reviewer = reviewer_id
         .map(|id| format!("&searchCriteria.reviewerId={}", encode_segment(id)))
         .unwrap_or_default();
-    let path = format!(
-        "/{}/_apis/git/repositories/{}/pullrequests?searchCriteria.status={}{}&$top={}&api-version={}",
-        encode_segment(project),
-        encode_segment(repo_name),
-        status,
-        reviewer,
-        limit.clamp(1, 100),
-        API_VERSION
-    );
-    let response = azure_get(config, &path)?;
-    parse_pr_list(&response.value, repo, &config.url)
+    let page = super::PAGE_SIZE as usize;
+    let mut items = Vec::new();
+    // `$skip` counts the rows the service sent, which parsing may drop.
+    let mut sent = 0;
+    loop {
+        let path = format!(
+            "/{}/_apis/git/repositories/{}/pullrequests?searchCriteria.status={}{}&$top={}&$skip={}&api-version={}",
+            encode_segment(project),
+            encode_segment(repo_name),
+            status,
+            reviewer,
+            page,
+            sent,
+            API_VERSION
+        );
+        let response = azure_get(config, &path)?;
+        let returned = response
+            .value
+            .get("value")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        items.extend(parse_pr_list(&response.value, repo, &config.url)?);
+        sent += returned;
+        if returned < page || items.len() >= limit as usize {
+            break;
+        }
+    }
+    items.truncate(limit as usize);
+    Ok(items)
 }
 
 fn azure_list_pr_reviews_for(
@@ -557,32 +568,43 @@ fn azure_list_pr_reviews_for(
     limit: u32,
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
     let user_id = azure_current_user_id(config)?;
-    let path = format!(
-        "/_apis/git/pullrequests?searchCriteria.status=active&searchCriteria.reviewerId={}&$top={}&api-version={}",
-        encode_segment(&user_id),
-        limit.clamp(1, 100),
-        API_VERSION
-    );
-    let response = azure_get(config, &path)?;
-    let rows = response
-        .value
-        .get("value")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Azure DevOps did not return pull requests".to_string())?;
+    let page = super::PAGE_SIZE as usize;
     let mut items = Vec::new();
-    for row in rows {
-        let (project, repo_name) = pr_repo_parts(row);
-        let repo = match (project, repo_name) {
-            (Some(project), Some(repo_name)) => format!("{project}/{repo_name}"),
-            _ => continue,
-        };
-        if let Some(mut item) = parse_pr(row, &repo, &config.url) {
-            if item.attention_reason.is_empty() {
-                item.attention_reason = "review_requested".into();
+    // `$skip` counts the rows the service sent, which this loop may drop.
+    let mut sent = 0;
+    loop {
+        let path = format!(
+            "/_apis/git/pullrequests?searchCriteria.status=active&searchCriteria.reviewerId={}&$top={}&$skip={}&api-version={}",
+            encode_segment(&user_id),
+            page,
+            sent,
+            API_VERSION
+        );
+        let response = azure_get(config, &path)?;
+        let rows = response
+            .value
+            .get("value")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "Azure DevOps did not return pull requests".to_string())?;
+        for row in rows {
+            let (project, repo_name) = pr_repo_parts(row);
+            let repo = match (project, repo_name) {
+                (Some(project), Some(repo_name)) => format!("{project}/{repo_name}"),
+                _ => continue,
+            };
+            if let Some(mut item) = parse_pr(row, &repo, &config.url) {
+                if item.attention_reason.is_empty() {
+                    item.attention_reason = "review_requested".into();
+                }
+                items.push(item);
             }
-            items.push(item);
+        }
+        sent += rows.len();
+        if rows.len() < page || items.len() >= limit as usize {
+            break;
         }
     }
+    items.truncate(limit as usize);
     Ok(items)
 }
 
@@ -595,13 +617,15 @@ fn azure_list_wit_for(
     state: &str,
     limit: u32,
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
-    let limit = limit.clamp(1, 100);
+    let limit = limit.clamp(1, super::MAX_FETCH_LIMIT);
     let wiql = wit_wiql(project, assigned_to_me, state);
     let ids = azure_query_wit_ids(config, &wiql, limit)?;
-    if ids.is_empty() {
-        return Ok(Vec::new());
+    let mut items = Vec::new();
+    for chunk in ids.chunks(super::PAGE_SIZE as usize) {
+        items.extend(azure_fetch_wit_batch(config, chunk)?);
     }
-    azure_fetch_wit_batch(config, &ids)
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(items)
 }
 
 fn wit_wiql(project: Option<&str>, assigned_to_me: bool, state: &str) -> String {

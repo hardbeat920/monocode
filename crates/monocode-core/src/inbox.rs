@@ -14,7 +14,7 @@ use crate::{desktop_preferences::DesktopPreferences, session_groups::WorkItem, s
 use chrono::{Datelike, Local, TimeZone};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -421,6 +421,10 @@ pub struct ViewState {
     pub hidden_linear_teams: Vec<String>,
     pub hidden_jira_projects: Vec<String>,
     pub list_width: f32,
+    /// How many of the newest items each repository and kind is asked for.
+    /// "Load more" raises it for the session; it is not saved.
+    #[serde(skip)]
+    pub fetch_limit: u32,
 }
 impl Default for ViewState {
     fn default() -> Self {
@@ -431,6 +435,7 @@ impl Default for ViewState {
             hidden_linear_teams: vec![],
             hidden_jira_projects: vec![],
             list_width: 280.,
+            fetch_limit: DEFAULT_FETCH_LIMIT,
         }
     }
 }
@@ -447,12 +452,13 @@ impl ViewState {
         let mut jira = self.hidden_jira_projects.clone();
         jira.sort();
         format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             self.filters.assigned_to_me,
             self.filters.fetch_state(),
             paths.join("|"),
             teams.join(","),
-            jira.join(",")
+            jira.join(","),
+            self.fetch_limit
         )
     }
     pub fn load(store: &Store) -> Self {
@@ -504,10 +510,30 @@ impl ViewState {
         )
     }
 }
+/// Items a provider returns per request before the inbox pages for more.
+pub const PAGE_SIZE: u32 = 100;
+/// Newest items fetched per repository and kind until the user asks for more.
+pub const DEFAULT_FETCH_LIMIT: u32 = 200;
+/// The most the "Load more" action will ask a provider for per request.
+pub const MAX_FETCH_LIMIT: u32 = 1000;
+
+/// A repository (or project) whose rows could not be fetched while the rest of
+/// its provider could.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartialFailure {
+    pub repo: String,
+    pub kind: String,
+    pub error: String,
+}
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub items: Vec<Item>,
     pub errors: BTreeMap<String, String>,
+    /// Providers that loaded, but not from every repository.
+    pub partial: BTreeMap<String, Vec<PartialFailure>>,
+    /// Providers where at least one request filled the fetch limit, so older
+    /// items may exist that were not fetched.
+    pub capped: BTreeSet<String>,
     pub connections: BTreeMap<String, Status>,
     pub linear_teams: Vec<OptionRow>,
     pub jira_projects: Vec<OptionRow>,
@@ -605,6 +631,55 @@ fn repo_checkouts<'a>(
     }
     checkouts
 }
+/// Rows from every repository that could be fetched, and those that could not.
+struct Fetched {
+    items: Vec<Item>,
+    failures: Vec<PartialFailure>,
+    capped: bool,
+}
+/// Fetches issues and pull requests for each checkout. One repository failing
+/// (issues disabled, no access, rate limited) is recorded and skipped so the
+/// others' rows still load; only a provider where every request failed is an
+/// error.
+fn fetch_checkouts(
+    checkouts: &[(&PathBuf, String)],
+    provider: &str,
+    limit: u32,
+    mut fetch: impl FnMut(&Path, &str, &str) -> Result<Vec<Item>, String>,
+) -> Result<Fetched, String> {
+    let mut fetched = Fetched {
+        items: vec![],
+        failures: vec![],
+        capped: false,
+    };
+    let mut succeeded = 0usize;
+    for (project, repo) in checkouts {
+        for kind in ["issue", "pr"] {
+            let rows = match fetch(project, repo, kind) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    fetched.failures.push(PartialFailure {
+                        repo: repo.clone(),
+                        kind: kind.into(),
+                        error,
+                    });
+                    continue;
+                }
+            };
+            succeeded += 1;
+            fetched.capped |= rows.len() as u32 >= limit;
+            fetched.items.extend(rows.into_iter().map(|mut item| {
+                item.provider = provider.into();
+                item.project_path = project.to_string_lossy().into_owned();
+                item
+            }));
+        }
+    }
+    match fetched.failures.first() {
+        Some(failure) if succeeded == 0 => Err(failure.error.clone()),
+        _ => Ok(fetched),
+    }
+}
 fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
     serde_json::from_value(serde_json::to_value(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
@@ -664,11 +739,7 @@ impl Service {
     }
     pub fn list(&self, projects: &[PathBuf], state: &ViewState) -> Snapshot {
         let mut snapshot = Snapshot::default();
-        let limit = if state.filters.fetch_state() == "all" {
-            100
-        } else {
-            40
-        };
+        let limit = state.fetch_limit.clamp(1, MAX_FETCH_LIMIT);
         for provider in PROVIDERS {
             let status = match self.status(provider) {
                 Ok(status) => status,
@@ -682,6 +753,8 @@ impl Service {
             if !connected {
                 continue;
             }
+            let mut failures: Vec<PartialFailure> = vec![];
+            let mut capped = false;
             let result: Result<Vec<Item>, String> = (|| {
                 if provider == "linear" {
                     let teams = linear::linear_list_teams(self.data_dir.clone())?;
@@ -694,7 +767,7 @@ impl Service {
                     if !state.hidden_linear_teams.is_empty() && visible.is_empty() {
                         return Ok(vec![]);
                     }
-                    return convert(linear::linear_list_issues(
+                    let rows: Vec<Item> = convert(linear::linear_list_issues(
                         self.data_dir.clone(),
                         state.filters.assigned_to_me,
                         state.filters.fetch_state().into(),
@@ -704,7 +777,9 @@ impl Service {
                             visible
                         },
                         Some(limit),
-                    )?);
+                    )?)?;
+                    capped |= rows.len() as u32 >= limit;
+                    return Ok(rows);
                 }
                 if provider == "jira" {
                     let projects = jira::jira_list_projects(self.data_dir.clone())?;
@@ -717,7 +792,7 @@ impl Service {
                     if !state.hidden_jira_projects.is_empty() && visible.is_empty() {
                         return Ok(vec![]);
                     }
-                    return convert(jira::jira_list_issues(
+                    let rows: Vec<Item> = convert(jira::jira_list_issues(
                         self.data_dir.clone(),
                         state.filters.assigned_to_me,
                         state.filters.fetch_state().into(),
@@ -727,7 +802,9 @@ impl Service {
                             visible
                         },
                         Some(limit),
-                    )?);
+                    )?)?;
+                    capped |= rows.len() as u32 >= limit;
+                    return Ok(rows);
                 }
                 let mut items = Vec::new();
                 if state.filters.assigned_to_me && provider != "github" {
@@ -745,6 +822,7 @@ impl Service {
                                 Some(limit),
                             )?)?
                         };
+                        capped |= rows.len() as u32 >= limit;
                         items.extend(rows.into_iter().map(|mut item| {
                             item.provider = provider.into();
                             item
@@ -768,18 +846,18 @@ impl Service {
                     }
                     .ok()
                 });
-                for (project, repo) in checkouts {
-                    for kind in ["issue", "pr"] {
-                        let rows: Vec<Item> = match provider {
+                let fetched =
+                    fetch_checkouts(&checkouts, provider, limit, |project, repo, kind| {
+                        match provider {
                             "github" => convert(github::git_github_work_items_for(
                                 project,
-                                &repo,
+                                repo,
                                 kind,
                                 state.filters.assigned_to_me,
                                 state.filters.fetch_state(),
                                 "",
                                 limit,
-                            )?)?,
+                            )?),
                             "gitlab" => convert(gitlab::gitlab_list_work_items(
                                 self.data_dir.clone(),
                                 project.to_string_lossy().into_owned(),
@@ -787,7 +865,7 @@ impl Service {
                                 false,
                                 state.filters.fetch_state().into(),
                                 Some(limit),
-                            )?)?,
+                            )?),
                             _ => convert(azure_devops::azure_devops_list_work_items(
                                 self.data_dir.clone(),
                                 project.to_string_lossy().into_owned(),
@@ -795,19 +873,24 @@ impl Service {
                                 false,
                                 state.filters.fetch_state().into(),
                                 Some(limit),
-                            )?)?,
-                        };
-                        items.extend(rows.into_iter().map(|mut item| {
-                            item.provider = provider.into();
-                            item.project_path = project.to_string_lossy().into_owned();
-                            item
-                        }));
-                    }
-                }
+                            )?),
+                        }
+                    })?;
+                capped |= fetched.capped;
+                failures = fetched.failures;
+                items.extend(fetched.items);
                 Ok(items)
             })();
             match result {
-                Ok(items) => snapshot.items.extend(items),
+                Ok(items) => {
+                    snapshot.items.extend(items);
+                    if capped {
+                        snapshot.capped.insert(provider.into());
+                    }
+                    if !failures.is_empty() {
+                        snapshot.partial.insert(provider.into(), failures);
+                    }
+                }
                 Err(error) => {
                     snapshot.errors.insert(provider.into(), error);
                 }
@@ -1160,5 +1243,91 @@ mod notification_tests {
                 "from {cwd:?}: {checkouts:?}"
             );
         }
+    }
+
+    fn rows(repo: &str, kind: &str, count: i64) -> Vec<Item> {
+        (1..=count)
+            .map(|number| Item {
+                repo: repo.into(),
+                kind: kind.into(),
+                ..item(number, "github")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failing_repository_keeps_the_rest_of_its_provider() {
+        let project = PathBuf::from("/work/app");
+        let checkouts = vec![
+            (&project, "acme/app".to_string()),
+            (&project, "acme/upstream".to_string()),
+        ];
+        let fetched = fetch_checkouts(&checkouts, "github", 100, |_, repo, kind| {
+            if repo == "acme/upstream" && kind == "issue" {
+                Err("the repository has disabled issues".into())
+            } else {
+                Ok(rows(repo, kind, 2))
+            }
+        })
+        .unwrap();
+        assert_eq!(fetched.items.len(), 6, "every other request still counts");
+        assert_eq!(
+            fetched.failures,
+            vec![PartialFailure {
+                repo: "acme/upstream".into(),
+                kind: "issue".into(),
+                error: "the repository has disabled issues".into(),
+            }]
+        );
+        assert!(!fetched.capped);
+        assert!(fetched
+            .items
+            .iter()
+            .all(|item| item.project_path == "/work/app"));
+    }
+
+    #[test]
+    fn a_provider_where_every_request_fails_is_an_error() {
+        let project = PathBuf::from("/work/app");
+        let checkouts = vec![(&project, "acme/app".to_string())];
+        let error = fetch_checkouts(&checkouts, "github", 100, |_, _, _| {
+            Err("rate limited".into())
+        })
+        .err()
+        .unwrap();
+        assert_eq!(error, "rate limited");
+    }
+
+    #[test]
+    fn a_full_request_marks_the_provider_as_capped() {
+        let project = PathBuf::from("/work/app");
+        let checkouts = vec![(&project, "acme/app".to_string())];
+        let full = fetch_checkouts(&checkouts, "github", 3, |_, repo, kind| {
+            Ok(rows(repo, kind, if kind == "pr" { 3 } else { 1 }))
+        })
+        .unwrap();
+        assert!(full.capped, "the pull request list filled the limit");
+        let short = fetch_checkouts(&checkouts, "github", 4, |_, repo, kind| {
+            Ok(rows(repo, kind, if kind == "pr" { 3 } else { 1 }))
+        })
+        .unwrap();
+        assert!(!short.capped, "everything fit under the limit");
+    }
+
+    #[test]
+    fn load_more_changes_the_fetch_scope_but_is_not_saved() {
+        let mut state = ViewState::default();
+        let before = state.fetch_scope(&[]);
+        assert_eq!(state.fetch_limit, DEFAULT_FETCH_LIMIT);
+        state.fetch_limit += DEFAULT_FETCH_LIMIT;
+        assert_ne!(
+            before,
+            state.fetch_scope(&[]),
+            "a bigger fetch is a new one"
+        );
+        let saved = serde_json::to_string(&state).unwrap();
+        assert!(!saved.contains("fetchLimit") && !saved.contains("fetch_limit"));
+        let restored: ViewState = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.fetch_limit, DEFAULT_FETCH_LIMIT);
     }
 }
