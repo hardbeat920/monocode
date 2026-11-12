@@ -27,6 +27,14 @@ export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 export const listWorktrees = (cwd: string) =>
   invokeWorkspace<Worktrees>("git_worktrees", { cwd });
 
+/** Git's raw "fatal: not a git repository …" is noise for a plain folder. */
+export function worktreeLoadError(error: unknown): string {
+  const message = String(error);
+  return /not a git repository/i.test(message)
+    ? "This folder isn’t a Git repository"
+    : message;
+}
+
 export async function createWorktree(
   cwd: string,
   branch: string,

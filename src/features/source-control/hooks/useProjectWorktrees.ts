@@ -1,7 +1,11 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { subscribeGitChanged } from "../../../platform/tauri/fs";
 import { pathKey } from "../../../shared/lib/paths";
-import { listWorktrees, type Worktrees } from "../model/worktrees";
+import {
+  listWorktrees,
+  worktreeLoadError,
+  type Worktrees,
+} from "../model/worktrees";
 
 type Snapshot = { data?: Worktrees; error?: string };
 type Entry = {
@@ -52,7 +56,7 @@ function load(entry: Entry, invalidated = false): Promise<boolean> {
     } catch (error) {
       // A background failure must not replace a usable list with a loading or
       // error screen. The caller can still surface the error beside the list.
-      publish(entry, { ...entry.snapshot, error: String(error) });
+      publish(entry, { ...entry.snapshot, error: worktreeLoadError(error) });
     }
     entry.inFlight = undefined;
     if (entry.invalidated) {

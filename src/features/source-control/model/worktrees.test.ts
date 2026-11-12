@@ -6,6 +6,7 @@ import {
   detachSessionWorktree,
   assertWorktreeFilesClosed,
   worktreeDeletedExternally,
+  worktreeLoadError,
   worktreeSessionIds,
   type Worktree,
 } from "./worktrees";
@@ -236,5 +237,24 @@ describe("worktrees removed outside the app", () => {
     // An unmounted volume takes the parent with it; keep the session bound.
     dirs.delete("/repo-worktrees");
     expect(await worktreeDeletedExternally(tree.path)).toBe(false);
+  });
+});
+
+describe("worktree load errors", () => {
+  it("replaces Git's not-a-repository failure with a plain message", () => {
+    expect(
+      worktreeLoadError(
+        "fatal: not a git repository (or any of the parent directories): .git",
+      ),
+    ).toBe("This folder isn’t a Git repository");
+    expect(
+      worktreeLoadError(new Error("fatal: Not a git repository: /tmp/x")),
+    ).toBe("This folder isn’t a Git repository");
+  });
+
+  it("keeps other failures unchanged", () => {
+    expect(worktreeLoadError("fatal: unsafe repository")).toBe(
+      "fatal: unsafe repository",
+    );
   });
 });
