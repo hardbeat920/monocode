@@ -20,6 +20,7 @@ import FileScriptIcon from "@hugeicons/core-free-icons/FileScriptIcon";
 import FlashIcon from "@hugeicons/core-free-icons/FlashIcon";
 import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
+import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
 import Image01Icon from "@hugeicons/core-free-icons/Image01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
 import InformationCircleIcon from "@hugeicons/core-free-icons/InformationCircleIcon";
@@ -74,6 +75,7 @@ const icons = {
   chevronUpDown: UnfoldMoreIcon,
   chevronRight: ArrowRight01Icon,
   branch: GitBranchIcon,
+  pullRequest: GitPullRequestIcon,
   computer: ComputerIcon,
   computerOff: ComputerRemoveIcon,
   sparkle: SparklesIcon,
