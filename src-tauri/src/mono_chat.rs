@@ -822,23 +822,7 @@ pub async fn mono_chat_action(
     if panel(&app, &window)? != mono_id {
         return Err("This action belongs to a different Mono.".into());
     }
-    let kind = action
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(
-        kind,
-        "submit"
-            | "create"
-            | "stop"
-            | "approval"
-            | "question"
-            | "questionInteraction"
-            | "reveal"
-            | "openFile"
-            | "openArtifact"
-            | "resume"
-    ) {
+    if !valid_chat_action(&action) {
         return Err("Unknown chat action.".into());
     }
     if action.to_string().len() > 32 * 1024 * 1024 {
@@ -883,6 +867,28 @@ pub async fn mono_chat_action(
     }
 }
 
+fn valid_chat_action(action: &Value) -> bool {
+    let kind = action
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        kind,
+        "submit"
+            | "create"
+            | "stop"
+            | "approval"
+            | "question"
+            | "questionInteraction"
+            | "reveal"
+            | "openFile"
+            | "openArtifact"
+            | "resume"
+            | "navigateProject"
+    ) && (kind != "navigateProject"
+        || matches!(action.get("delta").and_then(Value::as_i64), Some(-1 | 1)))
+}
+
 #[tauri::command]
 pub fn mono_chat_keep_alive(app: AppHandle, window: WebviewWindow) -> bool {
     let state = app.state::<MonoChatState>();
@@ -920,6 +926,22 @@ pub fn window_closed(app: &AppHandle, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_navigation_actions_only_accept_a_direction() {
+        assert!(valid_chat_action(
+            &json!({ "kind": "navigateProject", "delta": -1 })
+        ));
+        assert!(valid_chat_action(
+            &json!({ "kind": "navigateProject", "delta": 1 })
+        ));
+        assert!(!valid_chat_action(
+            &json!({ "kind": "navigateProject", "delta": 0 })
+        ));
+        assert!(!valid_chat_action(
+            &json!({ "kind": "navigateProject", "delta": "next" })
+        ));
+    }
 
     #[test]
     fn menu_bar_mark_is_sixteen_points_inside_the_standard_eighteen_point_image() {

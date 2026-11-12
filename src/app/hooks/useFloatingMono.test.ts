@@ -74,6 +74,7 @@ beforeEach(() => {
     reveal: vi.fn(),
     openFile: vi.fn(),
     resume: vi.fn(),
+    navigateProject: vi.fn(),
   };
   native.listen.mockReset().mockResolvedValue(() => {});
   native.invoke.mockReset().mockImplementation(async (command) => {
