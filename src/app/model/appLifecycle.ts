@@ -145,6 +145,18 @@ export async function handleQuitRequested(): Promise<boolean> {
   }
 }
 
+/**
+ * How many turns are live in this window right now. Callers outside the quit
+ * coordinator (the updater) use this to ask their own busy-confirmation
+ * before doing something that ends the process, instead of relying on the
+ * ⌘Q dialog racing a relaunch that has already been kicked off.
+ */
+export function liveInFlightCount(): number {
+  if (!liveWorkspace) return 0;
+  liveWorkspace.flush();
+  return liveWorkspace.sessions().filter(isInFlightSession).length;
+}
+
 /** Each window counts its own live turns; Rust sums them into one decision. */
 export async function reportQuitPoll(id: number): Promise<void> {
   let inFlight = 0;
