@@ -94,51 +94,115 @@ impl SettingsView {
                     cx.window_appearance(),
                     gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
                 ));
-        let mut theme = vec![self.row(
-            Some("theme"),
-            true,
-            "Theme",
-            Some("System follows the OS appearance.".into()),
-            vec![self.segmented(
-                "theme",
+        let omarchy = p.workspace_theme == "omarchy" && crate::omarchy_theme::current().is_some();
+        let light = if omarchy {
+            crate::omarchy_theme::current().unwrap().light
+        } else {
+            light
+        };
+        let mut theme = vec![
+            self.row(
+                Some("theme"),
+                true,
                 "Theme",
-                &p.theme,
-                &[("system", "System"), ("dark", "Dark"), ("light", "Light")],
-                cx,
-                |this, v, cx| this.update(cx, |p| p.theme = v.into()),
-            )],
-        )];
-        let options = crate::settings::palettes::PALETTES
+                Some(
+                    if omarchy {
+                        "Follows the active Omarchy theme."
+                    } else {
+                        "System follows the OS appearance."
+                    }
+                    .into(),
+                ),
+                if omarchy {
+                    vec![
+                        div()
+                            .text_color(content(0.6))
+                            .child(if light { "Light" } else { "Dark" })
+                            .into_any_element(),
+                    ]
+                } else {
+                    vec![self.segmented(
+                        "theme",
+                        "Theme",
+                        &p.theme,
+                        &[("system", "System"), ("dark", "Dark"), ("light", "Light")],
+                        cx,
+                        |this, v, cx| this.update(cx, |p| p.theme = v.into()),
+                    )]
+                },
+            ),
+        ];
+        let mut options: Vec<_> = crate::settings::palettes::PALETTES
             .iter()
             .map(|&(id, label, dark, pale)| {
                 let palette = if light { pale } else { dark };
                 (
                     id.to_owned(),
                     SharedString::from(label),
-                    Some(swatch(
-                        palette.surface,
-                        palette.panel,
-                        palette.solid,
-                        palette.accent,
+                    Some((
+                        swatch(
+                            palette.surface,
+                            palette.panel,
+                            palette.solid,
+                            palette.accent,
+                        ),
+                        swatch(
+                            palette.surface,
+                            palette.panel,
+                            palette.solid,
+                            palette.accent,
+                        ),
                     )),
                 )
             })
             .collect();
-        theme.push(self.row(
-            Some("workspace-theme"),
-            false,
-            "Workspace theme",
-            Some("Choose a color preset.".into()),
-            vec![self.select(
-                "workspace-theme",
+        if let Some(palette) = crate::omarchy_theme::current() {
+            options.insert(
+                1,
+                (
+                    "omarchy".to_owned(),
+                    "Omarchy".into(),
+                    Some((
+                        swatch(
+                            palette.background,
+                            palette.background,
+                            palette.foreground,
+                            palette.accent,
+                        ),
+                        swatch(
+                            palette.background,
+                            palette.background,
+                            palette.foreground,
+                            palette.accent,
+                        ),
+                    )),
+                ),
+            );
+        }
+        theme.push(
+            self.row(
+                Some("workspace-theme"),
+                false,
                 "Workspace theme",
-                &p.workspace_theme,
-                options,
-                Some(192.),
-                cx,
-                |this, v, cx| this.update(cx, |p| p.apply_workspace_theme(v)),
-            )],
-        ));
+                Some(
+                    if crate::omarchy_theme::current().is_some() {
+                        "Choose a color preset. Omarchy follows your desktop theme."
+                    } else {
+                        "Choose a color preset."
+                    }
+                    .into(),
+                ),
+                vec![self.select(
+                    "workspace-theme",
+                    "Workspace theme",
+                    &p.workspace_theme,
+                    options,
+                    Some(192.),
+                    cx,
+                    |this, v, cx| this.update(cx, |p| p.apply_workspace_theme(v)),
+                )],
+            ),
+        );
         #[cfg(target_os = "linux")]
         if cx.compositor_name() == "Wayland" {
             theme.push(self.row(
@@ -189,7 +253,7 @@ impl SettingsView {
                     true,
                     "Hue",
                     Some("Base hue for the window and main-pane surfaces.".into()),
-                    vec![self.slider(SliderKind::Hue, format!("{}°", p.theme_hue), false, cx)],
+                    vec![self.slider(SliderKind::Hue, format!("{}°", p.theme_hue), omarchy, cx)],
                 ),
                 self.row(
                     Some("saturation"),
@@ -199,7 +263,7 @@ impl SettingsView {
                     vec![self.slider(
                         SliderKind::Saturation,
                         format!("{}%", p.theme_saturation),
-                        false,
+                        omarchy,
                         cx,
                     )],
                 ),
@@ -215,7 +279,7 @@ impl SettingsView {
                     vec![self.slider(
                         SliderKind::DarkLightness,
                         format!("{}%", p.theme_dark_lightness),
-                        light,
+                        light || omarchy,
                         cx,
                     )],
                 ),

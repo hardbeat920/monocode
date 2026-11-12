@@ -55,13 +55,19 @@ impl SettingsView {
         let mut options = vec![(
             "global".into(),
             SharedString::from("Global"),
-            Some(icon("globe", 14.).into_any_element()),
+            Some((
+                icon("globe", 14.).into_any_element(),
+                icon("globe", 14.).into_any_element(),
+            )),
         )];
         options.extend(self.ctx.projects.iter().map(|(path, label)| {
             (
                 path.clone(),
                 SharedString::from(label.clone()),
-                Some(icon("folder", 14.).into_any_element()),
+                Some((
+                    icon("folder", 14.).into_any_element(),
+                    icon("folder", 14.).into_any_element(),
+                )),
             )
         }));
         let scope = self.provider_scope.clone();
@@ -278,7 +284,7 @@ impl SettingsView {
         let mut background = vec![(
             "auto".to_owned(),
             SharedString::from("Automatic"),
-            None::<AnyElement>,
+            None::<(AnyElement, AnyElement)>,
         )];
         for kind in Kind::ALL {
             let installed = binaries.iter().any(|(k, p)| *k == kind && p.is_some());
@@ -290,13 +296,19 @@ impl SettingsView {
                     (
                         format!("{}:{id}", kind.id()),
                         SharedString::from(format!("{} · {name}", kind.label())),
-                        Some(provider_icon(kind.id(), 14.).into_any_element()),
+                        Some((
+                            provider_icon(kind.id(), 14.).into_any_element(),
+                            provider_icon(kind.id(), 14.).into_any_element(),
+                        )),
                     )
                 })),
                 None => background.push((
                     format!("{}:", kind.id()),
                     SharedString::from(format!("{} · Default model", kind.label())),
-                    Some(provider_icon(kind.id(), 14.).into_any_element()),
+                    Some((
+                        provider_icon(kind.id(), 14.).into_any_element(),
+                        provider_icon(kind.id(), 14.).into_any_element(),
+                    )),
                 )),
             }
         }
@@ -318,7 +330,10 @@ impl SettingsView {
                     Kind::from_id(&choice.provider).label(),
                     choice.model.as_deref().unwrap_or("Default model")
                 )),
-                Some(provider_icon(&choice.provider, 14.).into_any_element()),
+                Some((
+                    provider_icon(&choice.provider, 14.).into_any_element(),
+                    provider_icon(&choice.provider, 14.).into_any_element(),
+                )),
             ));
         }
         let background = vec![self.row(

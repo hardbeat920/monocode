@@ -804,6 +804,34 @@ mod tests {
     }
 
     #[gpui::test]
+    fn selected_workspace_theme_keeps_its_icon_in_the_open_menu(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.workspace_theme = "default".into();
+                shell.open_settings(Section::Appearance, w, cx);
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let select = visual
+            .debug_bounds("settings-select-workspace-theme")
+            .unwrap();
+        visual.simulate_click(select.center(), Default::default());
+        visual.run_until_parked();
+        assert!(
+            visual
+                .debug_bounds("settings-select-icon-workspace-theme")
+                .is_some()
+        );
+        assert!(
+            visual
+                .debug_bounds("settings-option-icon-workspace-theme-0")
+                .is_some()
+        );
+    }
+
+    #[gpui::test]
     fn native_setting_edits_persist_and_theme_switches_live(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);
         window

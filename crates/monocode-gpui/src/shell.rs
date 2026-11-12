@@ -665,6 +665,7 @@ pub(crate) struct Shell {
     remote_refreshing: bool,
     remote_marks: HashMap<i64, (bool, bool)>,
     _remote_clock: gpui::Task<()>,
+    _omarchy_watch: Option<gpui::Task<()>>,
     sessions: HashMap<i64, Entity<Conversation>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
@@ -906,6 +907,36 @@ impl Shell {
                 }
             }
         });
+        let omarchy_watch = crate::omarchy_theme::watch_root().map(|root| {
+            cx.spawn(async move |this, cx| {
+                let watch = cx
+                    .background_executor()
+                    .spawn(async move { crate::fs_watch::watch(&[root]) })
+                    .await;
+                loop {
+                    let changed = cx
+                        .background_executor()
+                        .spawn(async { crate::omarchy_theme::refresh() })
+                        .await;
+                    if changed && this.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                    if let Some((_, changes)) = &watch {
+                        if changes.recv().await.is_err() {
+                            return;
+                        }
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(200))
+                            .await;
+                        while changes.try_recv().is_ok() {}
+                    } else {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(30))
+                            .await;
+                    }
+                }
+            })
+        });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
         let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
         monocode_core::cli::initialize(&workspace.preferences.binary_paths);
@@ -1057,6 +1088,7 @@ impl Shell {
             remote_refreshing: false,
             remote_marks: HashMap::new(),
             _remote_clock: remote_clock,
+            _omarchy_watch: omarchy_watch,
             sessions: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,
@@ -8655,7 +8687,7 @@ impl Render for Shell {
         if self.theme_project.as_ref() != Some(project) {
             self.theme_project = Some(project.clone());
         }
-        let glass = window_glass(p, system_light);
+        let glass = window_glass(is_light());
         if self.window_glass != Some(glass) {
             self.window_glass = Some(glass);
             window.set_background_appearance(crate::theme::window_backdrop(glass));
