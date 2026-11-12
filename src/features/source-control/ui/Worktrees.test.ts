@@ -1006,6 +1006,33 @@ it("offers to keep or delete the last session's worktree", async () => {
   });
 });
 
+it("offers the last session's worktree when archiving", async () => {
+  const onClose = vi.fn();
+  await act(async () =>
+    root.render(
+      createElement(DeleteSessionDialog, {
+        mode: "archive",
+        title: "Feature",
+        unusedWorktree: tree.path,
+        onClose,
+      }),
+    ),
+  );
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Archive session?");
+  expect(dialog.textContent).toContain("“Feature” will be archived.");
+  expect(dialog.textContent).not.toContain("permanently deleted");
+  expect(button("Delete session")).toBeUndefined();
+  await act(async () =>
+    document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(),
+  );
+  await act(async () => button("Archive session").click());
+  expect(onClose).toHaveBeenLastCalledWith({
+    confirmed: true,
+    deleteWorktree: true,
+  });
+});
+
 it("uses searchable custom selects in the create worktree dialog", async () => {
   vi.mocked(useProjectBranchesState).mockReturnValue({
     branches: {
