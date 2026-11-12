@@ -7,6 +7,10 @@ let onChildExit: ((code: number | null) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
 let sessionMessages: unknown[] = [];
+let v2MessagePages: Record<
+  string,
+  { data: unknown[]; cursor?: { next?: string } }
+> = {};
 let openCodeVersion = "opencode 1.14.19";
 /** v2 inbox ids handed out, in order, by the prompt and compact routes. */
 let admittedIds: Record<string, string[]> = {};
@@ -55,7 +59,12 @@ const harnessHttp = vi.fn(
       return v2Session("session_fork", v2ForkDirectory ?? "");
     }
     if (input.method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(url.pathname)) {
-      return { status: 200, body: JSON.stringify({ data: [] }) };
+      return {
+        status: 200,
+        body: JSON.stringify(
+          v2MessagePages[url.searchParams.get("cursor") ?? ""] ?? { data: sessionMessages },
+        ),
+      };
     }
     if (
       (input.method === "POST" && url.pathname === "/session") ||
@@ -203,6 +212,7 @@ beforeEach(() => {
   onSseEvent = undefined;
   onSseEnd = undefined;
   sessionMessages = [];
+  v2MessagePages = {};
   openCodeVersion = "opencode 1.14.19";
   admittedIds = {};
   onAdmit = undefined;
@@ -861,6 +871,77 @@ describe("OpenCode subagent trails", () => {
 });
 
 describe("OpenCode event stream recovery", () => {
+  it.each([false, true])(
+    "recovers v2 rejected files across pages, unless a later reply succeeded (%s)",
+    async (recovered) => {
+      openCodeVersion = "opencode v2.0.19";
+      v2MessagePages = {
+        "": {
+          data: [
+            {
+              id: "message_bad_file",
+              type: "user",
+              time: { created: 1 },
+              files: [
+                {
+                  name: "Info.plist",
+                  uri: "data:application/octet-stream;base64,YQ==",
+                },
+              ],
+            },
+          ],
+          cursor: { next: "older_page" },
+        },
+        older_page: {
+          data: [
+            {
+              id: "message_bad_reply",
+              type: "assistant",
+              time: { created: 2 },
+              content: [],
+              error: {
+                message:
+                  "'file part media type application/octet-stream' functionality not supported.",
+              },
+            },
+            ...(recovered
+              ? [
+                  {
+                    id: "message_recovered",
+                    type: "assistant",
+                    time: { created: 3 },
+                    content: [{ type: "text", text: "Recovered" }],
+                  },
+                ]
+              : []),
+          ],
+        },
+      };
+      bindOpenCodeSession("opencode-live", "session_1", "/repo");
+      const done = turn([]);
+      await waitFor(
+        () =>
+          harnessHttp.mock.calls.some(([input]) =>
+            new URL(input.url).pathname.endsWith("/prompt"),
+          ),
+        "resumed v2 prompt",
+      );
+      const revert = harnessHttp.mock.calls.find(([input]) =>
+        input.url.includes("/revert/stage"),
+      );
+      if (recovered) expect(revert).toBeUndefined();
+      else
+        expect(revert?.[0].body).toBe(
+          JSON.stringify({ messageID: "message_bad_file" }),
+        );
+      onSseEvent?.({
+        type: "session.execution.succeeded",
+        data: { sessionID: "session_1" },
+      });
+      await done;
+    },
+  );
+
   it("reverts a rejected file turn before continuing a resumed session", async () => {
     sessionMessages = [
       {
@@ -1022,6 +1103,173 @@ describe("OpenCode event stream recovery", () => {
     await second;
     expect(secondEvents).toContainEqual({ type: "message.completed" });
   });
+});
+
+describe("OpenCode interactions answered elsewhere", () => {
+  beforeEach(() => {
+    openCodeVersion = "opencode v2.0.19";
+  });
+
+  const start = async (events: HarnessEvent[], sessionID: string) => {
+    const done = turn(events);
+    await waitFor(
+      () =>
+        harnessHttp.mock.calls.some(([input]) =>
+          new URL(input.url).pathname.endsWith("/prompt"),
+        ),
+      "v2 prompt",
+    );
+    if (sessionID !== "session_1") {
+      onSseEvent?.({
+        type: "session.created",
+        data: { sessionID, parentID: "session_1" },
+      });
+    }
+    return { done };
+  };
+
+  it.each([
+    ["session_1", "once"],
+    ["session_1", "always"],
+    ["session_1", "reject"],
+    ["session_child", "once"],
+    ["session_child", "reject"],
+  ])(
+    "dismisses a %s permission answered %s without echoing a reply",
+    async (sessionID, reply) => {
+      const events: HarnessEvent[] = [];
+      const { done } = await start(events, sessionID);
+      onSseEvent?.({
+        type: "permission.asked",
+        data: {
+          id: "per_external",
+          sessionID,
+          action: "shell",
+          resources: ["npm test"],
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "approval.requested"),
+        "permission card",
+      );
+      const request = events.find(
+        (event) => event.type === "approval.requested",
+      )!;
+      onSseEvent?.({
+        type: "permission.replied",
+        data: {
+          requestID: "per_external",
+          sessionID: "unrelated",
+          reply,
+        },
+      });
+      expect(events.some((event) => event.type === "approval.resolved")).toBe(
+        false,
+      );
+      onSseEvent?.({
+        type: "permission.replied",
+        data: { requestID: "per_external", sessionID, reply },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "approval.resolved"),
+        "resolved permission",
+      );
+      respondOpenCodeApproval("opencode-live", request.requestId, "allow");
+      expect(events).toContainEqual({
+        type: "approval.resolved",
+        requestId: request.requestId,
+        decision: reply === "reject" ? "deny" : "allow",
+      });
+      expect(
+        harnessHttp.mock.calls.some(([input]) =>
+          input.url.includes("/permission/"),
+        ),
+      ).toBe(false);
+      onSseEvent?.({
+        type: "session.execution.succeeded",
+        data: { sessionID: "session_1" },
+      });
+      await done;
+    },
+  );
+
+  it.each([
+    ["session_1", "form.replied"],
+    ["session_1", "form.cancelled"],
+    ["session_child", "form.replied"],
+    ["session_child", "form.cancelled"],
+  ])(
+    "dismisses a %s form on %s and shows the next queued question",
+    async (sessionID, type) => {
+      const events: HarnessEvent[] = [];
+      const { done } = await start(events, sessionID);
+      for (const id of ["frm_first", "frm_next"]) {
+        onSseEvent?.({
+          type: "form.created",
+          data: {
+            form: {
+              id,
+              sessionID,
+              fields: [
+                {
+                  key: "choice",
+                  type: "string",
+                  title: "Which?",
+                  custom: true,
+                },
+              ],
+            },
+          },
+        });
+      }
+      await waitFor(
+        () => events.some((event) => event.type === "question.asked"),
+        "question card",
+      );
+      const question = events.find((event) => event.type === "question.asked")!;
+      onSseEvent?.({
+        type,
+        data: {
+          id: "frm_first",
+          sessionID: "unrelated",
+          answer: { choice: "Yes" },
+        },
+      });
+      expect(events.some((event) => event.type === "question.resolved")).toBe(
+        false,
+      );
+      onSseEvent?.({
+        type,
+        data: { id: "frm_first", sessionID, answer: { choice: "Yes" } },
+      });
+      await waitFor(
+        () =>
+          events.filter((event) => event.type === "question.asked").length ===
+          2,
+        "next queued question",
+      );
+      expect(events).toContainEqual({
+        type: "question.resolved",
+        requestId: question.requestId,
+        decision: type === "form.replied" ? "answered" : "cancelled",
+      });
+      respondOpenCodeQuestion("opencode-live", question.requestId, {
+        kind: "skipped",
+      });
+      expect(
+        harnessHttp.mock.calls.some(([input]) => input.url.includes("/form/")),
+      ).toBe(false);
+      onSseEvent?.({
+        type: "form.cancelled",
+        data: { id: "frm_next", sessionID },
+      });
+      onSseEvent?.({
+        type: "session.execution.succeeded",
+        data: { sessionID: "session_1" },
+      });
+      await done;
+    },
+  );
 });
 
 describe("OpenCode edit recovery", () => {

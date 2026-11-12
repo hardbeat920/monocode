@@ -80,12 +80,46 @@ export class OpenCodeClient {
   }
 
   async getMessages(sessionID: string): Promise<OpenCodeMessage[]> {
-    const messages = await this.request<unknown[]>(
-      "GET",
-      this.path(`/session/${enc(sessionID)}/message`),
-    );
-    if (this.generation === "v1") return messages as OpenCodeMessage[];
-    return messages.map(normalizeV2Message);
+    const path = this.path(`/session/${enc(sessionID)}/message`);
+    if (this.generation === "v1") {
+      return this.request<OpenCodeMessage[]>("GET", path);
+    }
+    const messages: OpenCodeMessage[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    let parentID: string | undefined;
+    do {
+      const page = await this.request<{
+        data: unknown[];
+        cursor?: { next?: string };
+      }>("GET", path, {
+        query: cursor
+          ? { cursor, limit: "200" }
+          : { order: "asc", limit: "200" },
+        raw: true,
+      });
+      if (!Array.isArray(page?.data)) {
+        throw new Error("OpenCode returned an invalid message page");
+      }
+      for (const value of page.data) {
+        const message = normalizeV2Message(value);
+        if (message.info?.role === "user") {
+          parentID = stringField(message.info, "id");
+        } else if (message.info?.role === "assistant" && parentID) {
+          // v2 omits parentID; ascending pages keep each reply with its user.
+          message.info = { ...message.info, parentID };
+        }
+        messages.push(message);
+      }
+      cursor = page.data.length > 0 ? page.cursor?.next : undefined;
+      if (cursor) {
+        if (cursors.has(cursor)) {
+          throw new Error("OpenCode repeated a message pagination cursor");
+        }
+        cursors.add(cursor);
+      }
+    } while (cursor);
+    return messages;
   }
 
   async createSession(input: {
@@ -550,6 +584,24 @@ export class OpenCodeClient {
         },
       };
     }
+    if (type === "permission.replied") {
+      const id = stringField(properties, "requestID");
+      if (id && this.permissionSessions.get(id) === properties.sessionID) {
+        this.permissionSessions.delete(id);
+      }
+      return event;
+    }
+    if (type === "form.replied" || type === "form.cancelled") {
+      const id = stringField(properties, "id");
+      if (id && this.forms.get(id)?.sessionID === properties.sessionID) {
+        this.forms.delete(id);
+      }
+      return {
+        ...event,
+        type:
+          type === "form.replied" ? "question.replied" : "question.rejected",
+      };
+    }
     if (type !== "form.created") return event;
     const form = asRecord(properties.form) ?? properties;
     const id = stringField(form, "id");
@@ -601,7 +653,7 @@ export class OpenCodeClient {
               stringField(field, "description") ??
               formFields[index].key,
             multiple: fieldType === "multiselect",
-            custom: options.length === 0,
+            custom: field.custom === true || options.length === 0,
             options,
           };
         }),
@@ -616,6 +668,7 @@ export class OpenCodeClient {
       body?: unknown;
       query?: Record<string, string>;
       timeoutMs?: number;
+      raw?: boolean;
     },
   ): Promise<T> {
     const url = this.url(path, opts?.query);
@@ -645,7 +698,7 @@ export class OpenCodeClient {
         httpErrorMessage(response.status, response.body, parsed),
       );
     }
-    return unwrapData<T>(parsed);
+    return opts?.raw ? (parsed as T) : unwrapData<T>(parsed);
   }
 
   private url(path: string, query?: Record<string, string>): string {
@@ -744,7 +797,9 @@ function normalizeV2Message(value: unknown): OpenCodeMessage {
         const item = asRecord(file);
         return {
           type: "file",
-          mime: stringField(item, "mime"),
+          mime:
+            stringField(item, "mime") ??
+            stringField(item, "uri")?.match(/^data:([^;,]+)[;,]/i)?.[1],
           filename: stringField(item, "name"),
           url: stringField(item, "uri"),
         };
