@@ -1,0 +1,7 @@
+{
+  "name": "hello",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "The smallest MonoMod: a sidebar tab, a status chip, a toast and a band above the prompt",
+  "entry": "src/register.tsx"
+}

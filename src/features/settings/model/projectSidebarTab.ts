@@ -1,5 +1,10 @@
 import { pathKey } from "../../../shared/lib/paths";
-import { loadSidebarTabOrder, type SidebarTabId } from "./appearance";
+import {
+  isModSidebarTabId,
+  isSidebarTabId,
+  loadSidebarTabOrder,
+  type SidebarTabId,
+} from "./appearance";
 
 const KEY = "monocode.projectSidebarTabs.v1";
 
@@ -7,7 +12,7 @@ type ProjectSidebarTab = Exclude<SidebarTabId, "inbox">;
 type StoredTabs = Record<string, ProjectSidebarTab>;
 
 function isProjectSidebarTab(value: unknown): value is ProjectSidebarTab {
-  return value === "sessions" || value === "files" || value === "changes";
+  return isSidebarTabId(value) && value !== "inbox";
 }
 
 function readAll(): StoredTabs {
@@ -35,7 +40,11 @@ function writeAll(tabs: StoredTabs): void {
 
 export function loadProjectSidebarTab(project: string): ProjectSidebarTab {
   const saved = readAll()[pathKey(project)];
-  return saved ?? loadSidebarTabOrder().find(isProjectSidebarTab) ?? "sessions";
+  // A mod tab never becomes the default: its mod may be gone or not loaded here.
+  const fallback = loadSidebarTabOrder().find(
+    (tab) => isProjectSidebarTab(tab) && !isModSidebarTabId(tab),
+  );
+  return saved ?? fallback ?? "sessions";
 }
 
 export function saveProjectSidebarTab(

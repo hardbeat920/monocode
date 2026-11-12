@@ -29,11 +29,13 @@ import {
   Folder,
   GitBranch,
   GitPullRequest,
+  iconByName,
   Inbox,
   ListFilter,
   PanelLeft,
   Pin,
   Plus,
+  Puzzle,
   Search,
   Share,
   Settings,
@@ -62,13 +64,19 @@ import {
   type RefObject,
 } from "react";
 import {
+  isModSidebarTabId,
   loadSidebarTabOrder,
+  modSidebarTabId,
+  parseModSidebarTabId,
   saveSidebarTabOrder,
+  type ModSidebarTabId,
   loadRightPanelTabOrder,
   saveRightPanelTabOrder,
   type RightPanelTab,
   type SidebarTabId,
 } from "../../features/settings/model/appearance";
+import { useModViews, type ModView } from "../../features/mods/runtime/host";
+import { ModSurface } from "../../features/mods/ui/ModSurface";
 import { formatInteger } from "../../shared/lib/numbers";
 import {
   type GitFileDiffKind,
@@ -262,8 +270,9 @@ const REMINDERS_COLOR = "#f59e0b";
 let rememberedWidth = DEFAULT_WIDTH;
 
 type SidebarTab = SidebarTabId;
+type BuiltinSidebarTab = Exclude<SidebarTab, ModSidebarTabId>;
 
-const TAB_LABELS: Record<SidebarTab | RightPanelTab, string> = {
+const TAB_LABELS: Record<BuiltinSidebarTab | RightPanelTab, string> = {
   sessions: "Sessions",
   inbox: "Inbox",
   files: "Explorer",
@@ -271,12 +280,36 @@ const TAB_LABELS: Record<SidebarTab | RightPanelTab, string> = {
   graph: "History",
 };
 
-const COMPACT_TAB_ICONS: Record<SidebarTab, typeof PanelLeft> = {
+const COMPACT_TAB_ICONS: Record<BuiltinSidebarTab, typeof PanelLeft> = {
   sessions: Chatting,
   inbox: Inbox,
   files: FileScript,
   changes: GitBranch,
 };
+
+function modTabView(tab: SidebarTab, views: ModView[]): ModView | undefined {
+  const parsed = parseModSidebarTabId(tab);
+  return parsed
+    ? views.find(
+        (view) =>
+          view.site === "SidebarTab" &&
+          view.name === parsed.name &&
+          view.id === parsed.viewId,
+      )
+    : undefined;
+}
+
+function tabLabel(tab: SidebarTab, views: ModView[]): string {
+  return isModSidebarTabId(tab)
+    ? (modTabView(tab, views)?.title ?? tab)
+    : TAB_LABELS[tab];
+}
+
+function tabIcon(tab: SidebarTab, views: ModView[]): typeof PanelLeft {
+  return isModSidebarTabId(tab)
+    ? (iconByName(modTabView(tab, views)?.icon) ?? Puzzle)
+    : COMPACT_TAB_ICONS[tab];
+}
 
 function projectPathBusy(
   paths: Iterable<string> | undefined,
@@ -513,7 +546,15 @@ function SidebarComponent({
 }: Props) {
   const trafficLightsVisible = useTrafficLightsVisible();
   const remoteProject = isRemoteProjectPath(cwd);
-  const tab: SidebarTabId = requestedTab;
+  const modViews = useModViews();
+  const modTabIds = modViews
+    .filter((view) => view.site === "SidebarTab")
+    .map((view) => modSidebarTabId(view.name, view.id));
+  // A saved mod tab whose mod is not loaded (yet) shows Sessions meanwhile.
+  const tab: SidebarTabId =
+    isModSidebarTabId(requestedTab) && !modTabIds.includes(requestedTab)
+      ? "sessions"
+      : requestedTab;
   const remote = useRemoteProjectSessions(cwd, remoteProject);
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
   const remoteChange = async (
@@ -936,13 +977,21 @@ function SidebarComponent({
   const sessionListKey = `${cwd}\0${sessionFilters.showArchived}\0${sessionFilters.time}\0${sessionFilters.hiddenHarnesses.join(",")}\0${sessionFilters.status.working}\0${sessionFilters.status.needsApproval}\0${sessionFilters.status.done}\0${searchQuery}`;
   const sessionHarnesses = harnessesInSessions(projectSessions);
   const narrowedByUser = searchNarrowed || filtersActive;
-  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  const visibleTabs = [
+    ...tabOrder.filter(
+      (itemId) =>
+        itemId !== "inbox" &&
+        (!isModSidebarTabId(itemId) || modTabIds.includes(itemId)),
+    ),
+    ...modTabIds.filter((itemId) => !tabOrder.includes(itemId)),
+  ];
   const onReorderTabs = (ids: SidebarTab[]) => {
-    const reordered = new Set(ids);
-    let index = 0;
+    // Hidden ids (Inbox, unloaded mods) keep their slots; new mod tabs append.
+    const queue = [...ids];
     const next = tabOrder.map((itemId) =>
-      reordered.has(itemId) ? ids[index++] : itemId,
+      visibleTabs.includes(itemId) ? (queue.shift() ?? itemId) : itemId,
     );
+    next.push(...queue);
     setTabOrder(next);
     saveSidebarTabOrder(next);
   };
@@ -2103,7 +2152,7 @@ function SidebarComponent({
             <DiffStat additions={changeAdditions} deletions={changeDeletions} />
           ) : (
             <span className="block truncate leading-label">
-              {TAB_LABELS[itemId]}
+              {tabLabel(itemId, modViews)}
             </span>
           )}
         </button>
@@ -3079,6 +3128,20 @@ function SidebarComponent({
           )}
         </div>
         {paneHost ? null : changesPane}
+        {isModSidebarTabId(tab)
+          ? modViews
+              .filter((view) => modSidebarTabId(view.name, view.id) === tab)
+              .map((view) => (
+                <ModSurface
+                  key={tab}
+                  name={view.name}
+                  site="SidebarTab"
+                  requestId={view.id}
+                  title={view.title}
+                  cwd={gitRoot}
+                />
+              ))
+          : null}
         {showSidebarFooter ? (
           <>
             <LiveAgentsPreview
@@ -3624,6 +3687,7 @@ function CompactProjectRail({
     !notesActive &&
     !automationsActive &&
     !monoViewActive;
+  const modViews = useModViews();
   const openWorkspaceTab = (nextTab: SidebarTab) => {
     if (!workspaceActive) onLeaveActive?.();
     onTabChange(nextTab);
@@ -3721,15 +3785,15 @@ function CompactProjectRail({
                   ? changesLabel
                   : itemId === "sessions" && hasUnseenFinished
                     ? "Sessions, new replies"
-                    : TAB_LABELS[itemId]
+                    : tabLabel(itemId, modViews)
               }
-              tipLabel={TAB_LABELS[itemId]}
+              tipLabel={tabLabel(itemId, modViews)}
               diff={
                 itemId === "changes"
                   ? { additions: changeAdditions, deletions: changeDeletions }
                   : undefined
               }
-              icon={COMPACT_TAB_ICONS[itemId]}
+              icon={tabIcon(itemId, modViews)}
               active={workspaceActive && tabShown && activeTab === itemId}
               dot={
                 (itemId === "changes" && hasChanges) ||
