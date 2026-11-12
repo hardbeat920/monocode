@@ -5,6 +5,8 @@ import {
   useState,
   type ComponentProps,
 } from "react";
+import { BranchPicker } from "../../source-control/ui/BranchPicker";
+import { useRepoLock } from "../../source-control/hooks/useRepoLock";
 import { Popover } from "../../../shared/ui/Popover";
 import {
   Check,
@@ -95,6 +97,8 @@ export function MonoChangesView({
     setIndexes((previous) => previous.get(root) === index ? previous : new Map(previous).set(root, index));
   }, []);
 
+  const projectIndex = project ? indexes.get(project.root) : undefined;
+
   // A changed file, open with its changes over its checkout's list until Back.
   const [diff, setDiff] = useState<{ root: string; path: string } | null>(null);
 
@@ -132,12 +136,31 @@ export function MonoChangesView({
         </>
       ) : null}
       {project && !diff ? (
-        <ProjectTabs
-          projects={projects}
-          selected={project}
-          indexes={indexes}
-          onSelect={setSelectedRoot}
-        />
+        <>
+          <ProjectTabs
+            projects={projects}
+            selected={project}
+            indexes={indexes}
+            onSelect={setSelectedRoot}
+          />
+          {projectIndex?.branch ? (
+            <div className="flex h-7 shrink-0 items-center gap-1 border-b border-stroke px-3 text-[11px] text-content/50">
+              <BranchPicker
+                key={project.root}
+                cwd={project.root}
+                branch={projectIndex?.branch ?? undefined}
+                popoverSide="bottom"
+                compact
+              />
+              {(projectIndex?.ahead ?? 0) > 0 ? (
+                <span className="tabular-nums">↑{projectIndex?.ahead}</span>
+              ) : null}
+              {(projectIndex?.behind ?? 0) > 0 ? (
+                <span className="tabular-nums">↓{projectIndex?.behind}</span>
+              ) : null}
+            </div>
+          ) : null}
+        </>
       ) : null}
       {project ? (
         <div className="relative min-h-0 flex-1" hidden={!!diff}>
@@ -187,12 +210,21 @@ export function MonoChangesView({
 function ProjectCommit({
   onIndex,
   ...props
-}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex"> & {
+}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex" | "busy" | "acquire"> & {
   onIndex: (root: string, index: GitDiffIndex | null) => void;
 }) {
   const { index, reload } = useProjectIndex(props.root);
   useEffect(() => onIndex(props.root, index), [props.root, index, onIndex]);
-  return <MonoProjectCommit {...props} index={index} reloadIndex={reload} />;
+  const { busy, acquire } = useRepoLock(props.root);
+  return (
+    <MonoProjectCommit
+      {...props}
+      index={index}
+      reloadIndex={reload}
+      busy={busy}
+      acquire={acquire}
+    />
+  );
 }
 
 /**

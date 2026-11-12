@@ -16,8 +16,10 @@ import {
   notifyGitChanged,
   type GitBranchInfo,
 } from "../../../platform/tauri/fs";
+import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useProjectBranchesState } from "../hooks/useProjectBranches";
+import { useRepoLock } from "../hooks/useRepoLock";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { GitPickerTrigger } from "./GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
@@ -34,9 +36,12 @@ type Props = {
   onClose?: () => void;
   onOpenChange?: (open: boolean) => void;
   popoverSide?: "top" | "bottom";
+  compact?: boolean;
 };
 
 const MENU_WIDTH = 280;
+
+const REPO_BUSY = "Another Git operation is running in this repository.";
 
 type CreateRow = { kind: "create"; name: string };
 type BranchRow = { kind: "branch"; branch: GitBranchInfo };
@@ -60,6 +65,7 @@ export function BranchPicker({
   onClose,
   onOpenChange,
   popoverSide = "top",
+  compact = false,
 }: Props) {
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
@@ -78,6 +84,32 @@ export function BranchPicker({
   onCloseRef.current = onClose;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  // The repository's shared Git lock, held from the first Git call until the
+  // last one settles. Closing the popover or disabling the picker resets the
+  // UI, never this lock. Any other holder (a commit, another picker, an
+  // earlier mount of this one) disables the picker until it settles.
+  const [owner] = useState(() => ({}));
+  const { lock, acquire } = useRepoLock(cwd);
+  const lockedElsewhere = lock !== null && lock.owner !== owner;
+  const usable = enabled && !lockedElsewhere;
+  const mutatingRef = useRef(false);
+  const [mutating, setMutating] = useState(false);
+  /** False, without running `work`, when the repository is already busy. */
+  const mutate = async (work: () => Promise<void>) => {
+    const release = acquire("checkout", owner);
+    if (!release) return false;
+    mutatingRef.current = true;
+    setMutating(true);
+    try {
+      await work();
+    } finally {
+      mutatingRef.current = false;
+      setMutating(false);
+      release();
+    }
+    return true;
+  };
 
   const surfaceOpen = open || creating || blocked !== null;
   useEffect(() => {
@@ -122,7 +154,7 @@ export function BranchPicker({
   }, [open]);
 
   useEffect(() => {
-    if (enabled) return;
+    if (usable) return;
     setOpen(false);
     setCreating(false);
     setQuery("");
@@ -131,7 +163,7 @@ export function BranchPicker({
     setBlocked(null);
     setBlockedError(null);
     setBlockedBusy(null);
-  }, [enabled]);
+  }, [usable]);
 
   const createName = query.trim();
   const createTaken = (projectBranches?.branches ?? []).some(
@@ -172,8 +204,14 @@ export function BranchPicker({
       ? gitCreateBranch(cwd, pending.name)
       : gitCheckout(cwd, pending.name, pending.remote);
 
-  const finishSwitch = () => {
+  // A checkout rewrites the working tree, so open editors must reload too.
+  const worktreeChanged = () => {
     notifyGitChanged();
+    invalidateWatchedFiles();
+  };
+
+  const finishSwitch = () => {
+    worktreeChanged();
     onChangeRef.current?.();
     dismiss(true);
   };
@@ -185,28 +223,34 @@ export function BranchPicker({
     pending: PendingSwitch,
     source: "picker" | "dialog" = "picker",
   ) => {
-    if (busy || blocked) return;
+    if (busy || blocked || mutatingRef.current) return;
     setBusy(true);
     setError(null);
-    try {
-      await applySwitch(pending);
-      finishSwitch();
-    } catch (err) {
-      const message = failMessage(err);
-      if (isCheckoutBlockedByChanges(message)) {
-        setOpen(false);
-        setCreating(false);
-        setQuery("");
-        setError(null);
+    const ran = await mutate(async () => {
+      try {
+        await applySwitch(pending);
+        finishSwitch();
+      } catch (err) {
+        const message = failMessage(err);
+        if (isCheckoutBlockedByChanges(message)) {
+          setOpen(false);
+          setCreating(false);
+          setQuery("");
+          setError(null);
+          setBusy(false);
+          setBlockedError(null);
+          setBlockedBusy(null);
+          setBlocked(pending);
+          return;
+        }
+        setError(message);
         setBusy(false);
-        setBlockedError(null);
-        setBlockedBusy(null);
-        setBlocked(pending);
-        return;
+        if (source === "picker") search.current?.focus();
       }
-      setError(message);
+    });
+    if (!ran) {
+      setError(REPO_BUSY);
       setBusy(false);
-      if (source === "picker") search.current?.focus();
     }
   };
 
@@ -214,15 +258,26 @@ export function BranchPicker({
     kind: "stash" | "commit",
     work: () => Promise<unknown>,
   ) => {
-    if (!blocked || blockedBusy) return;
+    if (!blocked || blockedBusy || mutatingRef.current) return;
+    const pending = blocked;
     setBlockedBusy(kind);
     setBlockedError(null);
-    try {
-      await work();
-      await applySwitch(blocked);
-      finishSwitch();
-    } catch (err) {
-      setBlockedError(failMessage(err));
+    const ran = await mutate(async () => {
+      let prepared = false;
+      try {
+        await work();
+        prepared = true;
+        await applySwitch(pending);
+        finishSwitch();
+      } catch (err) {
+        // The stash or commit already changed the working tree.
+        if (prepared) worktreeChanged();
+        setBlockedError(failMessage(err));
+        setBlockedBusy(null);
+      }
+    });
+    if (!ran) {
+      setBlockedError(REPO_BUSY);
       setBlockedBusy(null);
     }
   };
@@ -289,7 +344,7 @@ export function BranchPicker({
     : missingGit
       ? "No git repository"
       : label;
-  const interactive = enabled && !awaitingBranch && !missingGit;
+  const interactive = usable && !awaitingBranch && !missingGit;
 
   return (
     <div ref={root} className="relative flex min-w-0 shrink">
@@ -304,10 +359,12 @@ export function BranchPicker({
         }
         aria-expanded={missingGit ? undefined : open}
         aria-haspopup={missingGit ? undefined : "dialog"}
-        disabled={!interactive}
+        disabled={!interactive || (mutating && !open)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
           if (!interactive || blocked) return;
+          // A dismissed checkout may still be running; don't start another.
+          if (!open && mutatingRef.current) return;
           if (open) {
             dismiss(true);
             return;
@@ -317,6 +374,7 @@ export function BranchPicker({
         label={label}
         loading={awaitingBranch}
         worktree={worktree}
+        compact={compact}
       />
       {blocked ? (
         <SwitchBranchDialog
