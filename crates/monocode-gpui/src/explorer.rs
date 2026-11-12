@@ -196,6 +196,8 @@ pub(crate) struct Explorer {
     /// listCachedDir: the last listing of each folder, or its error.
     dirs: HashMap<String, Result<Vec<DirEntry>, String>>,
     reading: HashSet<String>,
+    /// The Git listing these folders were last read at.
+    listing: u64,
     naming: Option<NameMode>,
     name_input: Entity<Input>,
     name_attempted: bool,
@@ -288,6 +290,7 @@ impl Explorer {
             saved: HashMap::new(),
             dirs: HashMap::new(),
             reading: HashSet::new(),
+            listing: 0,
             naming: None,
             name_input,
             name_attempted: false,
@@ -375,7 +378,7 @@ impl Explorer {
     }
     fn git_changed(&mut self, cx: &mut Context<Self>) {
         if self.enabled {
-            if !self.sync_project(cx) {
+            if !self.sync_project(cx) && self.git.read(cx).listing != self.listing {
                 self.refresh_loaded(cx);
             }
         } else if self.git.read(cx).root != self.cwd {
@@ -411,6 +414,7 @@ impl Explorer {
         self.menu = None;
         self.set_operation_error(None, cx);
         self.list.scroll_to(gpui::ListOffset::default());
+        self.listing = self.git.read(cx).listing;
         self.read_dir(root, cx);
         self.rebuild(cx);
         true
@@ -440,6 +444,7 @@ impl Explorer {
     }
     /// Rereads every folder shown, keeping the current rows meanwhile.
     fn refresh_loaded(&mut self, cx: &mut Context<Self>) {
+        self.listing = self.git.read(cx).listing;
         let mut shown: Vec<String> = self
             .expanded
             .iter()
