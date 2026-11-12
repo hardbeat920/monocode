@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const options = (cwd: string) => ({
+  windowsHide: true,
   cwd,
   timeout: 10_000,
   maxBuffer: 1024 * 1024,

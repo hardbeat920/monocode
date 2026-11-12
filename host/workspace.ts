@@ -63,6 +63,7 @@ export async function existingPath(root: string, input: unknown, allowRoot = fal
 async function git(root: string, args: string[], maxBuffer = 4 * 1024 * 1024) {
   return (
     await exec("git", ["-c", "core.pager=cat", ...args], {
+      windowsHide: true,
       cwd: root,
       timeout: 10_000,
       maxBuffer,
@@ -79,6 +80,7 @@ function gitWithInput(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["-c", "core.pager=cat", ...args], {
+      windowsHide: true,
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -826,6 +828,7 @@ export async function hostGitAction(
       return;
     case "createPr": {
       const output = await exec("gh", ["pr", "create", "--fill"], {
+        windowsHide: true,
         cwd: root,
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
