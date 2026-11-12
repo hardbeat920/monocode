@@ -338,6 +338,20 @@ describe("headless session ownership", () => {
     expect(store.sync(id, initial.revision)).toMatchObject({ kind: "delta" });
     store.updateSession(id, { linkedWorkItem: null });
     expect(store.summaries(project.id)[0].linkedWorkItem).toBeUndefined();
+    store.updateSession(id, {
+      linkedWorkItem: {
+        kind: "linear",
+        identifier: "SW-29",
+        repo: "SW",
+        number: 29,
+        url: "https://linear.app/acme/issue/SW-29",
+      },
+    });
+    expect(store.summaries(project.id)[0].linkedWorkItem).toMatchObject({
+      kind: "linear",
+      identifier: "SW-29",
+    });
+    store.updateSession(id, { linkedWorkItem: null });
 
     store.deleteSession(id);
     expect(store.summaries(project.id)).toEqual([]);

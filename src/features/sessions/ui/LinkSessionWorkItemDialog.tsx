@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Modal } from "../../../shared/ui/Modal";
 import type { LinkedWorkItem } from "../model/session";
-import { parseGithubWorkItemUrl } from "../model/sessionWorkItem";
+import { parseWorkItemUrl } from "../model/sessionWorkItem";
 
 export function LinkSessionWorkItemDialog({
   initial,
@@ -19,9 +19,11 @@ export function LinkSessionWorkItemDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const item = parseGithubWorkItemUrl(url.trim());
+    const item = parseWorkItemUrl(url.trim());
     if (!item) {
-      setError("Enter a valid GitHub issue or pull request URL.");
+      setError(
+        "Enter a GitHub issue or pull request URL, or a Linear issue URL.",
+      );
       return;
     }
     onSave(item);
@@ -29,7 +31,7 @@ export function LinkSessionWorkItemDialog({
 
   return (
     <Modal
-      title={initial ? "Edit GitHub link" : "Link GitHub issue or PR"}
+      title={initial ? "Edit linked item" : "Link issue or PR"}
       description={sessionTitle}
       size="sm"
       onClose={onClose}
@@ -43,7 +45,7 @@ export function LinkSessionWorkItemDialog({
             autoFocus
             type="url"
             value={url}
-            aria-label="GitHub issue or pull request URL"
+            aria-label="GitHub or Linear issue URL"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? "linked-work-item-error" : undefined}
             placeholder="https://github.com/owner/repo/pull/123"
@@ -65,8 +67,8 @@ export function LinkSessionWorkItemDialog({
             </span>
           ) : (
             <span className="text-[11px] text-content/45">
-              Paste the full github.com URL. The linked item will appear on the
-              session card.
+              Paste the full github.com or linear.app URL. The linked item will
+              appear on the session card.
             </span>
           )}
         </label>

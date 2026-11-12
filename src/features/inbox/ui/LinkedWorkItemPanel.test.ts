@@ -64,10 +64,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function render(visible: boolean) {
+function render(visible: boolean, linked: LinkedWorkItem = target) {
   root.render(
     createElement(LinkedWorkItemPanel, {
-      target,
+      target: linked,
       cwd: "/tmp/web",
       recents: [],
       visible,
@@ -75,6 +75,54 @@ function render(visible: boolean) {
     }),
   );
 }
+
+describe("LinkedWorkItemPanel Linear links", () => {
+  it("refuses an issue that resolves in a different workspace", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "linear_issue_lookup") {
+        return {
+          provider: "linear",
+          kind: "linear",
+          id: "issue-uuid",
+          identifier: "ENG-42",
+          number: 42,
+          title: "Someone else's ENG-42",
+          url: "https://linear.app/connected/issue/ENG-42",
+          state: "Todo",
+          stateType: "unstarted",
+          updatedAt: "2026-09-16T08:00:00Z",
+          labels: [],
+          assignees: [],
+          draft: false,
+          repo: "ENG",
+          teamId: "t1",
+          teamName: "Eng",
+          projectId: "",
+          projectName: "",
+          projectPath: "",
+        };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    await act(async () =>
+      render(true, {
+        kind: "linear",
+        identifier: "ENG-42",
+        repo: "ENG",
+        number: 42,
+        url: "https://linear.app/other-workspace/issue/ENG-42",
+      }),
+    );
+    await act(async () => {});
+
+    expect(container.textContent).not.toContain("Someone else's ENG-42");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "different Linear workspace",
+    );
+    expect(container.textContent).toContain("Open in Linear");
+  });
+});
 
 describe("LinkedWorkItemPanel tab persistence", () => {
   it("keeps fetched data mounted while hidden and reuses it when shown again", async () => {
