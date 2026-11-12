@@ -144,6 +144,9 @@ const COMPACTION_TIMEOUT_MS = 30 * 60_000;
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+// Keep preflight rejections across transport stops, but never rewind an older
+// server turn for a prompt that was rejected locally.
+const unsubmittedTurns = new Map<string, symbol>();
 
 let resolveOpenCodeBinaryImpl: () => Promise<{ path: string }> =
   resolveOpenCodeBinary;
@@ -156,11 +159,22 @@ export function setOpenCodeBinaryResolver(
 }
 
 export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
+  if (cancelledThreads.delete(input.sessionId)) return;
+  const model = parseOpenCodeModelSlug(nativeModelId(input.model));
+  if (!model) {
+    unsubmittedTurns.set(input.sessionId, Symbol());
+    throw new Error(
+      "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
+    );
+  }
+  const unsubmittedTurn = unsubmittedTurns.get(input.sessionId);
   let live: Live;
   try {
     live = await ensureLive(input);
   } catch (error) {
-    cancelledThreads.delete(input.sessionId);
+    if (!cancelledThreads.delete(input.sessionId)) {
+      unsubmittedTurns.set(input.sessionId, Symbol());
+    }
     throw error;
   }
   if (cancelledThreads.delete(input.sessionId)) return;
@@ -174,7 +188,19 @@ export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
       live.cancelled = false;
       live.muteUpdates = false;
       try {
-        await runTurn(live, input);
+        await runTurn(
+          live,
+          {
+            ...input,
+            onAccepted: () => {
+              if (unsubmittedTurns.get(input.sessionId) === unsubmittedTurn) {
+                unsubmittedTurns.delete(input.sessionId);
+              }
+              input.onAccepted?.();
+            },
+          },
+          model,
+        );
       } catch (error) {
         if (live.cancelled) return;
         throw error;
@@ -220,6 +246,10 @@ export async function compactOpenCodeContext(
 export async function rewindOpenCodeLastTurn(
   input: RewindLastTurnInput,
 ): Promise<RewindLastTurnResult> {
+  if (unsubmittedTurns.has(input.sessionId)) {
+    cancelledThreads.delete(input.sessionId);
+    return { submitted: false };
+  }
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -236,12 +266,17 @@ export async function rewindOpenCodeLastTurn(
   }
 
   const messageID = await latestOpenCodeUserMessageId(live);
-  await live.client.revertSession(live.openCodeSessionId, messageID);
+  if (messageID) {
+    await live.client.revertSession(live.openCodeSessionId, messageID);
+  }
   return { submitted: false };
 }
 
-async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
+async function latestOpenCodeUserMessageId(
+  live: Live,
+): Promise<string | undefined> {
   const messages = await live.client.getMessages(live.openCodeSessionId);
+  if (messages.length === 0) return undefined;
   const candidates = messages.flatMap((message) => {
     const info = asRecord(message.info);
     if (stringField(info, "role") !== "user") return [];
@@ -368,6 +403,7 @@ export async function stopOpenCodeSession(sessionId: string): Promise<void> {
 
 export async function forgetOpenCodeSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
+  unsubmittedTurns.delete(sessionId);
   await stopOpenCodeSession(sessionId);
 }
 
@@ -618,13 +654,11 @@ function isEmptySessionFork(error: unknown): boolean {
   );
 }
 
-async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
-  const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
-  if (!parsed) {
-    throw new Error(
-      "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
-    );
-  }
+async function runTurn(
+  live: Live,
+  input: SendTurnInput,
+  model: { providerID: string; modelID: string },
+): Promise<void> {
   const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
@@ -641,10 +675,13 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   try {
     const inboxID = await live.client.promptAsync({
       sessionID: live.openCodeSessionId,
-      model: parsed,
+      model,
       agent: openCodeAgentForTurn(input),
       variant: input.modelSettings?.variant,
       parts,
+      onPreSubmissionFailure: () => {
+        unsubmittedTurns.set(input.sessionId, Symbol());
+      },
     });
     input.onAccepted?.();
     if (v2) {
@@ -1619,4 +1656,5 @@ export function __openCodeTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();
+  unsubmittedTurns.clear();
 }
