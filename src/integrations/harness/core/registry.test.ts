@@ -350,6 +350,31 @@ describe("harness registry", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(stopSession).toHaveBeenCalledWith("s1");
   });
+
+  it("waits to park a child until its background work is done", async () => {
+    vi.useFakeTimers();
+    const stopSession = vi.fn(async () => undefined);
+    let busy = true;
+    registerHarness(stub("pi", { stopSession, hasBackgroundWork: () => busy }));
+
+    await sendHarnessTurn({
+      harness: "pi",
+      sessionId: "s1",
+      cwd: "/tmp",
+      model: "pi:default",
+      text: "hi",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(HARNESS_IDLE_PARK_MS * 3);
+    expect(stopSession).not.toHaveBeenCalled();
+
+    busy = false;
+    await vi.advanceTimersByTimeAsync(HARNESS_IDLE_PARK_MS);
+    expect(stopSession).toHaveBeenCalledWith("s1");
+  });
+
   describe("idle limit", () => {
     const turn = (sessionId: string) =>
       sendHarnessTurn({
@@ -407,6 +432,23 @@ describe("harness registry", () => {
       await running;
       await vi.advanceTimersByTimeAsync(0);
       expect(stopSession.mock.calls).toEqual([["other"], ["running"]]);
+    });
+
+    it("never counts a child with background work, even at a limit of zero", async () => {
+      vi.useFakeTimers();
+      const stopSession = vi.fn(async () => undefined);
+      registerHarness(
+        stub("cursor", {
+          stopSession,
+          hasBackgroundWork: (id) => id === "busy",
+        }),
+      );
+      configureHarnessIdlePark({ limit: () => 0, keep: () => false });
+
+      await turn("busy");
+      await turn("quiet");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession.mock.calls).toEqual([["quiet"]]);
     });
 
     it("parks every idle child at a limit of zero, including the one on screen", async () => {
