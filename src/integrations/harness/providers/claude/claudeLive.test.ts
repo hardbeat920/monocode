@@ -347,6 +347,47 @@ describe("claude streamed tool inputs", () => {
   });
 });
 
+describe("claude API retries", () => {
+  it("shows one retry row and clears it once the reply streams", async () => {
+    const { events, turn } = await startTurn("s1");
+    for (const attempt of [1, 2]) {
+      emit({
+        type: "system",
+        subtype: "api_retry",
+        session_id: "sess_1",
+        attempt,
+        max_retries: 10,
+        error_status: null,
+      });
+    }
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: { content: [{ type: "text", text: "Back online." }] },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(
+      events.filter(
+        (event) => event.type === "status" && event.key === "claude-api-retry",
+      ),
+    ).toEqual([
+      {
+        type: "status",
+        key: "claude-api-retry",
+        text: "Connection error · retrying (1/10)…",
+      },
+      {
+        type: "status",
+        key: "claude-api-retry",
+        text: "Connection error · retrying (2/10)…",
+      },
+      { type: "status", key: "claude-api-retry", text: "" },
+    ]);
+  });
+});
+
 describe("claude task tools", () => {
   function emitTaskTool(
     id: string,
