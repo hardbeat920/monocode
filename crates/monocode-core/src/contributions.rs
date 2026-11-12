@@ -282,6 +282,16 @@ pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> (Contributio
                 "--",
             ],
         ) {
+            let Ok(candidates) = crate::git::git(
+                &checkout,
+                &["rev-parse", &format!("--disambiguate={}", found.reference)],
+            ) else {
+                return (contribution, false);
+            };
+            let mut ids = candidates.lines();
+            if ids.next() != out.split_whitespace().next() || ids.next().is_some() {
+                return (contribution, false);
+            }
             if !same_commit_output(output.as_deref(), &out) {
                 return (contribution, false);
             }
@@ -295,7 +305,10 @@ pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> (Contributio
     let Some((id, time)) = lines.next().and_then(|l| l.split_once(' ')) else {
         return (contribution, false);
     };
-    if !matches!(id.len(), 40 | 64) || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !matches!(id.len(), 40 | 64)
+        || !id.bytes().all(|b| b.is_ascii_hexdigit())
+        || !id.starts_with(&found.reference)
+    {
         return (contribution, false);
     }
     contribution.reference = id.to_owned();
@@ -595,6 +608,83 @@ mod tests {
             );
             assert_eq!(resolved.reference, found.reference);
         }
+    }
+
+    #[test]
+    fn hash_named_tag_cannot_choose_between_colliding_objects() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+        git(&["init", "-q", "--object-format=sha1"]);
+        assert_eq!(
+            git(&["mktree"]).trim(),
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        );
+        let commit = |message: u32| {
+            let raw = format!("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@b> 1000000000 +0000\ncommitter A <a@b> 1000000000 +0000\n\n{message}\n");
+            let mut child = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(raw.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let first = commit(12421);
+        let second = commit(30739);
+        assert_ne!(first, second);
+        assert_eq!(&first[..7], &second[..7]);
+        let reference = &first[..7];
+        git(&["tag", reference, &second]);
+        assert_eq!(
+            git(&["show", "-s", "--format=%H", reference]).trim(),
+            second
+        );
+        let found = run(
+            "git commit -m Initial",
+            &format!("[main {reference}] Initial"),
+        );
+        assert!(!resolve(&found[0], 1, dir.path(), 5).1);
+    }
+
+    #[test]
+    fn hash_named_tag_cannot_resolve_to_an_unrelated_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "mono@example.com"]);
+        git(&["config", "user.name", "Mono"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        git(&["add", "a.txt"]);
+        let output = git(&["commit", "-m", "Initial"]);
+        let id = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let found = run("git commit -m Initial", &output).remove(0);
+        git(&["commit", "--allow-empty", "-m", "Unrelated"]);
+        let other = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        assert!(!other.starts_with(&found.reference));
+        git(&["tag", &found.reference]);
+        assert_eq!(
+            git(&["show", "-s", "--format=%H", &found.reference]).trim(),
+            other
+        );
+        let (item, resolved) = resolve(&found, 1, dir.path(), 5);
+        assert!(!resolved);
+        assert_eq!(item.reference, found.reference);
+        git(&["tag", "-d", &found.reference]);
+        let (item, resolved) = resolve(&found, 1, dir.path(), 5);
+        assert!(resolved);
+        assert_eq!(item.reference, id);
+        assert_eq!((item.additions, item.deletions), (2, 0));
     }
 
     #[test]
