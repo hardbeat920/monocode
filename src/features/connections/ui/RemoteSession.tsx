@@ -1248,6 +1248,7 @@ function ConnectedRemoteSession({
     onDeleteQueuedMessage: noop,
     onEditQueuedMessage: noop,
     onQueuedMessageEditingChange: noop,
+    onReorderQueuedMessages: noop,
     onSteerQueuedMessage: noop,
     onResumeQueue: noop,
     onUsageLimitResume: noop,

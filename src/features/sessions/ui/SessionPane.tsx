@@ -199,8 +199,10 @@ export type SessionPaneProps = {
     sessionId: string,
     messageId: string,
     text: string,
+    attachments: Attachment[],
   ) => void;
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
+  onReorderQueuedMessages: (sessionId: string, orderedIds: string[]) => void;
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onUsageLimitResume: (sessionId: string) => void;
@@ -338,6 +340,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
+  onReorderQueuedMessages,
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
@@ -764,11 +767,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onDeleteQueuedMessage={(messageId) =>
         onDeleteQueuedMessage(session.id, messageId)
       }
-      onEditQueuedMessage={(messageId, text) =>
-        onEditQueuedMessage(session.id, messageId, text)
+      onEditQueuedMessage={(messageId, text, attachments) =>
+        onEditQueuedMessage(session.id, messageId, text, attachments)
       }
       onQueuedMessageEditingChange={(messageId) =>
         onQueuedMessageEditingChange(session.id, messageId)
+      }
+      onReorderQueuedMessages={(orderedIds) =>
+        onReorderQueuedMessages(session.id, orderedIds)
       }
       onSteerQueuedMessage={(messageId) =>
         onSteerQueuedMessage(session.id, messageId)
