@@ -549,9 +549,9 @@ export function groupMonoTurnItems(
   blocks: Block[],
   options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
 ): TurnItem[] {
-  // Read the original order before moving user bubbles above the work. Once
-  // the user joins in, hiding subsequent replies makes a delivered message
-  // look ignored. Queued or failed messages have not reached the agent yet.
+  // Once the user joins in, hiding subsequent replies makes a delivered
+  // message look ignored. Queued or failed messages have not reached the agent
+  // yet.
   const followUpReplies = new Set<string>();
   let interactive = false;
   for (const block of blocks) {
@@ -566,17 +566,13 @@ export function groupMonoTurnItems(
       interactive = true;
     if (interactive && isProseBlock(block)) followUpReplies.add(block.id);
   }
-  // Keep the user's messages together above the work, without mutating history.
-  const items = groupTurnItems([
-    ...blocks.filter((block) => block.role === "user"),
-    ...blocks.filter((block) => block.role !== "user"),
-  ]);
+  const items = groupTurnItems(blocks);
   const start = items.findIndex(
     (item) => item.type !== "block" || item.block.role !== "user",
   );
   if (start < 0) return items;
   let end = -1;
-  const boundary = yieldedAt(items);
+  const yielded = yieldedReplies(items);
   for (let index = start; index < items.length; index += 1) {
     const item = items[index];
     // Status pings after an answer are not new work that should absorb it.
@@ -592,9 +588,14 @@ export function groupMonoTurnItems(
   if (end < start) return items;
 
   const grouped: TurnItem[] = [];
+  const folded = new Set<TurnItem>();
   let work: Block[] = [];
   const flush = () => {
-    if (work.length) grouped.push({ type: "activity", blocks: work });
+    if (work.length) {
+      const item: TurnItem = { type: "activity", blocks: work };
+      folded.add(item);
+      grouped.push(item);
+    }
     work = [];
   };
   items.forEach((item, index) => {
@@ -603,7 +604,7 @@ export function groupMonoTurnItems(
       index <= end &&
       !(item.type === "block" && followUpReplies.has(item.block.id)) &&
       // A reply already delivered before background work resumed stays put.
-      !(boundary < items.length && index === boundary - 1) &&
+      !(item.type === "block" && yielded.has(item.block.id)) &&
       (item.type !== "block" ||
         isProseBlock(item.block) ||
         isToolBlock(item.block))
@@ -615,7 +616,52 @@ export function groupMonoTurnItems(
     }
   });
   flush();
-  return grouped;
+  // Keep the user's messages together above the work, without mutating
+  // history, but never above something the agent has already shown: a
+  // message sent after a visible reply belongs below that reply.
+  const lifted: TurnItem[] = [];
+  for (const item of grouped) {
+    const last = lifted[lifted.length - 1];
+    if (item.type === "block" && item.block.role === "user") {
+      let at = lifted.length;
+      while (at > 0 && folded.has(lifted[at - 1])) at -= 1;
+      lifted.splice(at, 0, item);
+    } else if (
+      item.type === "activity" &&
+      folded.has(item) &&
+      last?.type === "activity" &&
+      folded.has(last)
+    ) {
+      const merged: TurnItem = {
+        type: "activity",
+        blocks: [...last.blocks, ...item.blocks],
+      };
+      folded.add(merged);
+      lifted[lifted.length - 1] = merged;
+    } else lifted.push(item);
+  }
+  return lifted;
+}
+
+/**
+ * The messages a Mono yielded with before a finished background task woke it
+ * up again. Each one answered the user, so later work never absorbs it.
+ */
+function yieldedReplies(items: TurnItem[]): Set<string> {
+  const replies = new Set<string>();
+  let before: TurnItem | undefined;
+  for (const item of items) {
+    if (item.type === "block" && item.block.role === "user") continue;
+    if (
+      item.type === "activity" &&
+      item.blocks.some((block) => !!block.tool?.background) &&
+      before?.type === "block" &&
+      isProseBlock(before.block)
+    )
+      replies.add(before.block.id);
+    before = item;
+  }
+  return replies;
 }
 
 /**

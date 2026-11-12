@@ -366,6 +366,35 @@ describe("groupMonoTurnItems", () => {
     ]);
   });
 
+  it("keeps every reply a background task woke it up to give, and messages sent after one below it", () => {
+    const wait = (id: string, status = "completed"): Block => ({
+      ...shell(id),
+      tool: { kind: "shell", status, background: true },
+    });
+    const blocks: Block[] = [
+      { id: "ask", role: "user", text: "Is the server up?", startedAt: 1 },
+      shell("check"),
+      note("answer", "It is up; the tests are running."),
+      wait("wait-1"),
+      shell("collect"),
+      note("update", "The first batch passed."),
+      wait("wait-2", "in_progress"),
+      { id: "why", role: "user", text: "Why so slow?", sentAt: 10 },
+      shell("look", "in_progress"),
+    ];
+    for (const live of [true, false]) {
+      expect(groupMonoTurnItems(blocks, { live })).toMatchObject([
+        { type: "block", block: { id: "ask" } },
+        { type: "activity", blocks: [{ id: "check" }] },
+        { type: "block", block: { id: "answer" } },
+        { type: "activity", blocks: [{ id: "wait-1" }, { id: "collect" }] },
+        { type: "block", block: { id: "update" } },
+        { type: "block", block: { id: "why" } },
+        { type: "activity", blocks: [{ id: "wait-2" }, { id: "look" }] },
+      ]);
+    }
+  });
+
   it("keeps direct replies and empty turns intact", () => {
     expect(groupMonoTurnItems([])).toEqual([]);
     expect(groupMonoTurnItems([note("answer", "Hello.")])).toMatchObject([
