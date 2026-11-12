@@ -116,6 +116,7 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
             MenuItem::action("Inbox", OpenInbox),
             MenuItem::action("Notes", OpenNotes),
             MenuItem::action("Toggle Terminal", ToggleTerminal),
+            MenuItem::action("Device", ToggleDevice),
             MenuItem::action("Switch Model…", SwitchModel),
             MenuItem::separator(),
             MenuItem::action("Previous Session", PreviousSession),

@@ -221,29 +221,36 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             _ => return Err(format!("Unknown app argument: {arg}")),
         }
     }
-    call(action, input, request_id)
+    call(&action, input, &request_id, &std::env::vars().collect())
 }
 
 /// One authenticated request to the running app, with the capability this
 /// provider process inherited.
-fn call(action: String, input: Value, request_id: String) -> Result<Value, String> {
-    let endpoint: SocketAddr = std::env::var("MONOCODE_APP_ENDPOINT")
-        .map_err(|_| "App access is unavailable outside a Mono's provider process")?
+pub fn call(
+    action: &str,
+    input: Value,
+    request_id: &str,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    let get = |key: &str| {
+        environment
+            .get(key)
+            .cloned()
+            .ok_or_else(|| format!("Missing {key}"))
+    };
+    let endpoint: SocketAddr = get("MONOCODE_APP_ENDPOINT")?
         .parse()
         .map_err(|_| "Invalid app endpoint")?;
     if !endpoint.ip().is_loopback() {
         return Err("App access requires a local endpoint".into());
     }
-    let token = std::env::var("MONOCODE_APP_TOKEN").map_err(|_| "App capability missing")?;
-    let session = std::env::var("MONOCODE_APP_SESSION")
-        .map_err(|_| "App session missing")?
-        .parse()
-        .map_err(|_| "Invalid app session")?;
     let wire = Wire {
-        session,
-        token,
-        request_id,
-        action,
+        session: get("MONOCODE_APP_SESSION")?
+            .parse()
+            .map_err(|_| "Invalid app session")?,
+        token: get("MONOCODE_APP_TOKEN")?,
+        request_id: request_id.to_owned(),
+        action: action.to_owned(),
         input,
     };
     let mut stream =
@@ -375,7 +382,7 @@ fn mcp_response(request: Value) -> Option<Value> {
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .map_or_else(super::new_id, str::to_owned);
-                call(action.to_owned(), input, request_id)
+                call(action, input, &request_id, &std::env::vars().collect())
             } else {
                 Err("action is required".to_string())
             };
