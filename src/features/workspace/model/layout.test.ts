@@ -3,6 +3,7 @@ import {
   closeLeaf,
   closeSurfacePanes,
   editorTabKey,
+  equalizeSplits,
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
@@ -39,6 +40,7 @@ import {
   splitPane,
   splitSizesAtBoundary,
   updateTerminalTab,
+  type LayoutNode,
   type WorkspaceTab,
 } from "./layout";
 
@@ -183,6 +185,36 @@ describe("splitSizesAtBoundary", () => {
   it("leaves invalid boundaries unchanged", () => {
     const sizes = [0.5, 0.5];
     expect(splitSizesAtBoundary(sizes, 2, 0.5)).toBe(sizes);
+  });
+});
+
+describe("equalizeSplits", () => {
+  it("evens out every split, nested ones included", () => {
+    const inner: LayoutNode = {
+      type: "split",
+      id: "inner",
+      dir: "down",
+      sizes: [0.9, 0.1],
+      children: [leaf("b"), leaf("c")],
+    };
+    const layout: LayoutNode = {
+      type: "split",
+      id: "outer",
+      dir: "right",
+      sizes: [0.7, 0.2, 0.1],
+      children: [leaf("a"), inner, leaf("d")],
+    };
+
+    expect(equalizeSplits(layout)).toEqual({
+      ...layout,
+      sizes: [1 / 3, 1 / 3, 1 / 3],
+      children: [leaf("a"), { ...inner, sizes: [0.5, 0.5] }, leaf("d")],
+    });
+  });
+
+  it("leaves a single pane untouched", () => {
+    const single = leaf("a");
+    expect(equalizeSplits(single)).toBe(single);
   });
 });
 
