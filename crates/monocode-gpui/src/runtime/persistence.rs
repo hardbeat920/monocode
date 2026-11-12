@@ -60,7 +60,9 @@ impl PendingSave {
         }
         let mut store = locked(store)?;
         if let Some(from) = self.from {
+            invalidate_contributions(&store, session, &transcript.rows[from..]);
             store.write_rows(session, from, &transcript.rows[from..])?;
+            invalidate_contributions(&store, session, &transcript.rows[from..]);
         }
         if self.context_dirty {
             let selected = if let Some((provider, account)) = &self.context_owner {
@@ -95,15 +97,19 @@ impl PendingSave {
         now: Instant,
     ) -> Result<(), String> {
         let from = self.from.map_or(from, |old| old.min(from));
-        locked(store)?.write_rows_with_message(
-            session,
-            from,
-            &transcript.rows[from..],
-            Some(message),
-        )?;
+        let mut store = locked(store)?;
+        invalidate_contributions(&store, session, &transcript.rows[from..]);
+        store.write_rows_with_message(session, from, &transcript.rows[from..], Some(message))?;
+        invalidate_contributions(&store, session, &transcript.rows[from..]);
         self.from = None;
         self.last_flush = now;
         Ok(())
+    }
+}
+
+fn invalidate_contributions(store: &Store, session: i64, rows: &[monocode_core::transcript::Row]) {
+    if rows.iter().any(|row| row.role == "tool") {
+        super::contributions::invalidate(store, session);
     }
 }
 
@@ -202,6 +208,74 @@ mod tests {
                 .unwrap(),
             Some("1".into())
         );
+    }
+
+    #[test]
+    fn flushing_tool_rows_invalidates_a_stale_scan() {
+        let (store, id, mut transcript) = conversation();
+        let key = format!("{}{id}", monocode_core::contributions::SCANNED);
+        locked(&store).unwrap().save_setting(&key, "1").unwrap();
+        let now = Instant::now();
+        let mut pending = PendingSave::new(true, now);
+        let row = transcript.begin("tool");
+        let mut tool = monocode_core::tool::ToolCall::new("test", "Bash");
+        tool.state = monocode_core::tool::ToolState::Completed;
+        tool.input = serde_json::json!({"command": "git status"}).to_string();
+        transcript.append(&serde_json::to_string(&tool).unwrap());
+        pending.changed(row);
+        pending
+            .flush(&store, id, &transcript, &Default::default(), now)
+            .unwrap();
+        let store = locked(&store).unwrap();
+        assert_eq!(store.setting(&key).unwrap().as_deref(), Some("0"));
+        let rows = store.load(id).unwrap().rows;
+        let saved: monocode_core::tool::ToolCall =
+            serde_json::from_str(&rows.last().unwrap().text).unwrap();
+        assert_eq!(saved.id, "test");
+    }
+
+    #[test]
+    fn marker_write_failure_keeps_transcript_and_invalidates_cached_scan() {
+        let dir =
+            std::env::temp_dir().join(format!("monocode-test-{}", monocode_core::mono::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("monocode.db");
+        let db = Store::open_monocode(&path).unwrap();
+        let id = db.create("codex", "/project").unwrap().id;
+        let key = format!("{}{id}", monocode_core::contributions::SCANNED);
+        let version = super::super::contributions::scan_version();
+        db.save_setting(&key, &version).unwrap();
+        let sidecar = rusqlite::Connection::open(dir.join("monocode.db.gpui.sqlite3")).unwrap();
+        sidecar.execute_batch("CREATE TRIGGER fail_marker BEFORE UPDATE ON settings BEGIN SELECT RAISE(FAIL, 'test failure'); END;").unwrap();
+        let store = Arc::new(Mutex::new(db));
+        let mut transcript = Transcript::default();
+        transcript.begin("user");
+        transcript.append("Prompt");
+        transcript.begin("tool");
+        let mut tool = monocode_core::tool::ToolCall::new("test", "Bash");
+        tool.state = monocode_core::tool::ToolState::Completed;
+        tool.input = serde_json::json!({"command": "git status"}).to_string();
+        transcript.append(&serde_json::to_string(&tool).unwrap());
+        let now = Instant::now();
+        let mut pending = PendingSave::new(true, now);
+        pending.changed(0);
+        pending
+            .flush(&store, id, &transcript, &Default::default(), now)
+            .unwrap();
+        let saved = locked(&store).unwrap();
+        let rows = saved.load(id).unwrap().rows;
+        let tool: monocode_core::tool::ToolCall =
+            serde_json::from_str(&rows.last().unwrap().text).unwrap();
+        assert_eq!(tool.id, "test");
+        assert_eq!(
+            saved.setting(&key).unwrap().as_deref(),
+            Some(version.as_str())
+        );
+        assert_ne!(super::super::contributions::scan_version(), version);
+        drop(saved);
+        drop(store);
+        drop(sidecar);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
