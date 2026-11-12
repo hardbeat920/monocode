@@ -1,4 +1,4 @@
-import { homeDir } from "../../../../platform/tauri/fs";
+import { homeDir, type DiscoveredSkill } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
   type AgentModel,
@@ -6,6 +6,7 @@ import {
   type ModelSettingChoice,
 } from "../../../../features/sessions/model/models";
 import {
+  acquireHarnessBridge,
   killChild,
   resolveCodexBinary,
   spawnChild,
@@ -50,8 +51,84 @@ export function refreshCodexCatalog(): Promise<void> {
 export async function discoverCodexModels(
   workingDirectory?: string,
 ): Promise<AgentModel[]> {
+  return runCodexProbe(workingDirectory, async (rpc) => {
+    const account = await rpc
+      .request<{ account?: unknown; requiresOpenaiAuth?: boolean }>(
+        "account/read",
+        {},
+        REQUEST_TIMEOUT_MS,
+      )
+      .catch(() => null);
+    if (account && !account.account && account.requiresOpenaiAuth) {
+      throw new Error(
+        "Codex CLI is not authenticated. Run `codex login` and try again.",
+      );
+    }
+    return listAllModels(rpc);
+  });
+}
+
+export function discoverCodexPluginSkills(
+  cwd: string,
+): Promise<DiscoveredSkill[]> {
+  return runCodexProbe(cwd, async (rpc) => {
+    const response = await rpc.request<unknown>(
+      "skills/list",
+      { cwds: [cwd], forceReload: true },
+      REQUEST_TIMEOUT_MS,
+    );
+    return parseCodexPluginSkills(response, cwd);
+  });
+}
+
+/** Let Codex resolve active installations, configured home, and disabled plugins. */
+export function parseCodexPluginSkills(
+  response: unknown,
+  cwd: string,
+): DiscoveredSkill[] {
+  const data = asRecord(response)?.data;
+  if (!Array.isArray(data)) return [];
+  const skills = new Map<string, DiscoveredSkill>();
+  for (const entry of data) {
+    const row = asRecord(entry);
+    if (row?.cwd !== cwd || !Array.isArray(row.skills)) continue;
+    for (const raw of row.skills) {
+      const skill = asRecord(raw);
+      const name = stringField(skill, "name");
+      const path = stringField(skill, "path");
+      if (
+        skill?.enabled !== true ||
+        !stringField(skill, "pluginId") ||
+        !name ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) ||
+        !path ||
+        !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(path) ||
+        !/[\\/]SKILL\.md$/.test(path) ||
+        skills.has(name)
+      )
+        continue;
+      skills.set(name, {
+        name,
+        description: stringField(skill, "description") ?? "",
+        path,
+        scope:
+          skill.scope === "repo" || skill.scope === "project"
+            ? "project"
+            : "user",
+        source: "codex",
+      });
+    }
+  }
+  return [...skills.values()];
+}
+
+async function runCodexProbe<T>(
+  workingDirectory: string | undefined,
+  work: (rpc: JsonRpcClient) => Promise<T>,
+): Promise<T> {
   const { path } = await resolveCodexBinary();
   const cwd = workingDirectory ?? (await homeDir());
+  const release = await acquireHarnessBridge();
   const probeId = `${PROBE_ID}-${crypto.randomUUID()}`;
   const rpc = new JsonRpcClient(
     probeId,
@@ -94,20 +171,7 @@ export async function discoverCodexModels(
         );
         await rpc.notify("initialized", undefined);
 
-        const account = await rpc
-          .request<{
-            account?: unknown;
-            requiresOpenaiAuth?: boolean;
-          }>("account/read", {}, REQUEST_TIMEOUT_MS)
-          .catch(() => null);
-
-        if (account && !account.account && account.requiresOpenaiAuth) {
-          throw new Error(
-            "Codex CLI is not authenticated. Run `codex login` and try again.",
-          );
-        }
-
-        return await listAllModels(rpc);
+        return await work(rpc);
       },
       () => {
         void stop();
@@ -115,6 +179,7 @@ export async function discoverCodexModels(
     );
   } finally {
     await stop();
+    release();
   }
 }
 
@@ -296,7 +361,7 @@ async function withTimeout<T>(
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
           onTimeout();
-          reject(new Error("Codex model discovery timed out"));
+          reject(new Error("Codex discovery timed out"));
         }, ms);
       }),
     ]);

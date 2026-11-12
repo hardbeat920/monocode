@@ -12,6 +12,7 @@ import { isLocalProject, normalizeProjectPath } from "../../projects/model/recen
 import { isMarkdownBlockquotePosition } from "../../sessions/model/quoteDraft";
 import type { HarnessId } from "../../sessions/model/session";
 import { getHarness } from "../../../integrations/harness/core/registry";
+import { discoverCodexPluginSkills } from "../../../integrations/harness/providers/codex/codexCatalog";
 import type { NativeCommand } from "../../../integrations/harness/core/nativeCommands";
 import {
   CREATE_SKILL_BODY,
@@ -313,9 +314,37 @@ async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
     }));
   }
   const disabledPaths = loadDisabledSkillPaths();
-  const discovered = await listSkills(context.cwd, disabledPaths);
+  const discovered = await discoverFileSkills(context.cwd, disabledPaths);
   const disabled = disabledSkillPathSet();
   return mergeCatalog(discovered.filter((skill) => !disabled.has(skill.path)));
+}
+
+/** Shared by Settings and the composer so both expose the same plugin paths. */
+export async function discoverFileSkills(
+  cwd: string,
+  disabledPaths?: readonly string[],
+): Promise<DiscoveredSkill[]> {
+  const [files, plugins] = await Promise.all([
+    listSkills(cwd, disabledPaths),
+    discoverCodexPluginSkills(cwd).catch((error: unknown) => {
+      console.debug("[monocode] codex plugin skills", error);
+      return [];
+    }),
+  ]);
+  const disabled = new Set(disabledPaths);
+  const byName = new Map(files.map((skill) => [skill.name, skill]));
+  const paths = new Set(files.map((skill) => skill.path));
+  for (const skill of plugins) {
+    if (
+      disabled.has(skill.path) ||
+      byName.has(skill.name) ||
+      paths.has(skill.path)
+    )
+      continue;
+    byName.set(skill.name, skill);
+    paths.add(skill.path);
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
@@ -422,7 +451,11 @@ export function injectSkillPrompt(
     seen.add(skill.name);
     const body = bodies[skill.name]?.trim();
     if (!body) continue;
-    blocks.push(`## /${skill.name}\n\n${body}`);
+    const location =
+      skill.kind === "file"
+        ? `Skill source: ${skill.path}\nResolve relative references from the directory containing this SKILL.md.\n\n`
+        : "";
+    blocks.push(`## /${skill.name}\n\n${location}${body}`);
   }
   if (blocks.length === 0) return text;
   return [
