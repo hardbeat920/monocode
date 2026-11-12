@@ -19,6 +19,7 @@ fn model() -> Model {
             current: "a".into(),
             choices: vec![("a".into(), "A".into()), ("b".into(), "B".into())],
         }],
+        supports_auto: None,
     }
 }
 

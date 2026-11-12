@@ -396,17 +396,12 @@ impl Shell {
             .unwrap_or_else(|| self.workspace.project.clone());
         let choice = self.new_chat_choice(&cwd);
         let kind = choice.kind;
+        let access = crate::conversation::preferred_access(kind.id(), choice.model.as_deref(), cx);
         let store = self.store.clone();
         let settings = monocode_core::agent::Settings {
             model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
-            access: self
-                .workspace
-                .preferences
-                .default_access
-                .as_deref()
-                .map(monocode_core::agent::AccessMode::from_id)
-                .unwrap_or_default(),
+            access,
             account: crate::accounts::get(cx)
                 .map(|accounts| accounts.read(cx).selected(kind, &cwd))
                 .unwrap_or_default(),
@@ -466,16 +461,11 @@ impl Shell {
         };
         let choice = self.new_chat_choice(&cwd);
         let kind = choice.kind;
+        let access = crate::conversation::preferred_access(kind.id(), choice.model.as_deref(), cx);
         let settings = monocode_core::agent::Settings {
             model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
-            access: self
-                .workspace
-                .preferences
-                .default_access
-                .as_deref()
-                .map(monocode_core::agent::AccessMode::from_id)
-                .unwrap_or_default(),
+            access,
             account: crate::accounts::get(cx)
                 .map(|accounts| accounts.read(cx).selected(kind, &cwd))
                 .unwrap_or_default(),

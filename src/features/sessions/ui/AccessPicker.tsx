@@ -9,17 +9,27 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   RUNTIME_MODE_HINT,
   RUNTIME_MODE_LABEL,
-  RUNTIME_MODES,
+  type HarnessId,
   type RuntimeMode,
 } from "../model/session";
+import {
+  coerceRuntimeMode,
+  getModelSnapshot,
+  runtimeModesFor,
+  subscribeModels,
+} from "../model/models";
+import { useModelSource } from "./modelSource";
 import { Popover } from "../../../shared/ui/Popover";
 
 type Props = {
+  harness: HarnessId;
+  model: string;
   value: RuntimeMode;
   onChange: (mode: RuntimeMode) => void;
   onClose?: () => void;
@@ -38,17 +48,25 @@ const ICONS: Record<RuntimeMode, typeof Lock> = {
 };
 
 export function AccessPicker({
-  value,
+  harness,
+  model,
+  value: requested,
   onChange,
   onClose,
   busy = false,
   side = "top",
   variant = "pill",
 }: Props) {
+  // Re-render when a late catalog discovery changes which modes a model offers.
+  useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
+  // A remote session's capabilities come from its host's catalog, not ours.
+  const source = useModelSource();
+  const modes = runtimeModesFor(harness, model, source);
+  // The stored mode is the user's choice and is left alone; a model that can't
+  // do it just shows (and runs with) the closest preceding supported mode.
+  const value = coerceRuntimeMode(harness, model, requested, source);
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(() =>
-    Math.max(0, RUNTIME_MODES.indexOf(value)),
-  );
+  const [active, setActive] = useState(() => Math.max(0, modes.indexOf(value)));
   const root = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -59,10 +77,14 @@ export function AccessPicker({
     if (restore) onCloseRef.current?.();
   };
 
+  const modesKey = modes.join();
   useEffect(() => {
     if (!open) return;
-    setActive(Math.max(0, RUNTIME_MODES.indexOf(value)));
-  }, [open, value]);
+    setActive(Math.max(0, modes.indexOf(value)));
+    // `modes` is derived from `modesKey`, which keeps this from re-running
+    // every render while still following changes to the offered modes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, value, modesKey]);
 
   const pick = (mode: RuntimeMode) => {
     onChange(mode);
@@ -72,7 +94,7 @@ export function AccessPicker({
   const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((i) => Math.min(RUNTIME_MODES.length - 1, i + 1));
+      setActive((i) => Math.min(modes.length - 1, i + 1));
       return;
     }
     if (e.key === "ArrowUp") {
@@ -82,10 +104,12 @@ export function AccessPicker({
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      const mode = RUNTIME_MODES[active];
+      const mode = modes[active];
       if (mode) pick(mode);
     }
   };
+
+  if (modes.length <= 1) return null;
 
   return (
     <div ref={root} className="relative">
@@ -144,7 +168,7 @@ export function AccessPicker({
           onKeyDown={onMenuKey}
           className="p-1"
         >
-          {RUNTIME_MODES.map((mode, index) => {
+          {modes.map((mode, index) => {
             const ModeIcon = ICONS[mode];
             const selected = mode === value;
             const highlighted = index === active;

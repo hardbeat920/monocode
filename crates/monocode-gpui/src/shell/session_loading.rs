@@ -124,13 +124,14 @@ pub(super) struct NewSessionDefaults {
 impl NewSessionDefaults {
     pub(super) fn read(choice: super::new_chat_choice::NewChatChoice, cwd: &str, cx: &App) -> Self {
         let super::new_chat_choice::NewChatChoice { kind, model } = choice;
+        let access = crate::conversation::preferred_access(kind.id(), model.as_deref(), cx);
         Self {
             kind,
             model,
             account: crate::accounts::get(cx)
                 .map(|center| center.read(cx).selected(kind, cwd))
                 .unwrap_or_default(),
-            access: crate::conversation::default_access(cx),
+            access,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
         }
     }

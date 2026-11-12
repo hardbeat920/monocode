@@ -590,6 +590,12 @@ impl Conversation {
             })
         });
         perf_prompt(cx);
+        let model = std::env::var(format!(
+            "MONOCODE_{}_MODEL",
+            summary.provider.to_uppercase()
+        ))
+        .ok();
+        let access = preferred_access(&summary.provider, model.as_deref(), cx);
         Self {
             editing_last_turn: Default::default(),
             btw: None,
@@ -636,15 +642,11 @@ impl Conversation {
             stopping: false,
             notification_cancelled: false,
             draft_hint: false,
-            model: std::env::var(format!(
-                "MONOCODE_{}_MODEL",
-                summary.provider.to_uppercase()
-            ))
-            .ok(),
+            model,
             resolved_model: None,
             settings: Settings {
                 account,
-                access: default_access(cx),
+                access,
                 effort: preferred_effort(&summary.provider, cx),
                 ..Default::default()
             },
@@ -2041,7 +2043,12 @@ impl Conversation {
         }
         if let Some(mode) = id.strip_prefix("access:") {
             self.settings.access = AccessMode::from_id(mode);
-            remember_access(self.settings.access, cx);
+            remember_access(
+                &self.summary.provider,
+                self.model.as_deref(),
+                self.settings.access,
+                cx,
+            );
         } else if let Some(effort) = id.strip_prefix("effort:") {
             self.set_effort_choice(effort, cx);
         } else if let Some(tier) = id.strip_prefix("tier:") {
@@ -2252,6 +2259,16 @@ impl Conversation {
             return false;
         }
         let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
+        if changed_model {
+            // Keep the requested choice, including Auto while capability discovery
+            // temporarily displays a fallback. Never remember that fallback.
+            remember_access(
+                &self.summary.provider,
+                self.model.as_deref(),
+                self.settings.access,
+                cx,
+            );
+        }
         if std::env::var_os("MONOCODE_NATIVE_TRACE").is_some() {
             eprintln!(
                 "native model session={} provider={} model={:?}",
@@ -2337,6 +2354,10 @@ impl Conversation {
             }
         }
         self.model = picked.1.clone();
+        if changed_model {
+            self.settings.access =
+                preferred_access(&self.summary.provider, self.model.as_deref(), cx);
+        }
         if let Some(context) = &mut self.context {
             context.window = None;
         }
@@ -2805,6 +2826,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let access = self.supported_access();
         let trigger_fast = self.trigger_fast(beside);
         let controls = if beside {
             self.model_controls(cx)
@@ -3023,7 +3045,7 @@ impl Conversation {
                                         tool_pill("composer-access", "Access")
                                             .aria_label(format!(
                                                 "Access, {}",
-                                                self.settings.access.label()
+                                                access.label()
                                             ))
                                             .aria_expanded(self.menu_is(ComposerMenu::Access))
                                             .child(self.access_anchor.probe())
@@ -3032,7 +3054,7 @@ impl Conversation {
                                             }))
                                             .child(
                                                 icon(
-                                                    match self.settings.access {
+                                                    match access {
                                                         AccessMode::FullAccess => "shield-alert",
                                                         AccessMode::AutoAcceptEdits => {
                                                             "pencil-edit"
@@ -3043,8 +3065,7 @@ impl Conversation {
                                                     14.,
                                                 )
                                                 .text_color(
-                                                    if self.settings.access
-                                                        == AccessMode::FullAccess
+                                                    if access == AccessMode::FullAccess
                                                     {
                                                         tint(AMBER_400, 0.9)
                                                     } else {
@@ -3052,7 +3073,7 @@ impl Conversation {
                                                     },
                                                 ),
                                             )
-                                            .child(pill_label(self.settings.access.label()))
+                                            .child(pill_label(access.label()))
                                             .child(icon("chevron-down", 12.)),
                                     ),
                             )
@@ -3480,19 +3501,36 @@ fn perf_prompt(cx: &mut Context<Conversation>) {
     .detach();
 }
 
-/// The access mode the last composer pick left as the default for new chats.
-pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
+/// Restore only this provider/model's choice. Unseen models start Supervised,
+/// so Full access selected elsewhere never becomes their implicit default.
+pub(crate) fn preferred_access(provider: &str, model: Option<&str>, cx: &gpui::App) -> AccessMode {
+    let key = access_model_key(provider, model);
     cx.try_global::<crate::settings::Preferences>()
-        .and_then(|prefs| prefs.default_access.as_deref())
+        .and_then(|prefs| prefs.model_access.get(provider)?.get(&key))
+        .map(String::as_str)
         .map(AccessMode::from_id)
         .unwrap_or_default()
 }
-pub(crate) fn remember_access(mode: AccessMode, cx: &mut gpui::App) {
+pub(crate) fn remember_access(
+    provider: &str,
+    model: Option<&str>,
+    mode: AccessMode,
+    cx: &mut gpui::App,
+) {
     if cx.has_global::<crate::settings::Preferences>() {
         cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
-            prefs.default_access = Some(mode.id().into());
+            prefs
+                .model_access
+                .entry(provider.into())
+                .or_default()
+                .insert(access_model_key(provider, model), mode.id().into());
         });
     }
+}
+fn access_model_key(provider: &str, model: Option<&str>) -> String {
+    model
+        .and_then(|id| monocode_core::store::native_model(id, provider))
+        .unwrap_or_default()
 }
 fn is_effort_key(key: &str) -> bool {
     matches!(
@@ -4134,6 +4172,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 }];
                 cx.set_global(crate::settings::Preferences::default());
                 cx.notify();
@@ -4168,6 +4207,164 @@ mod menu_tests {
     }
 
     #[gpui::test]
+    fn access_menu_offers_auto_only_where_the_model_supports_it(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, _| {
+                let offered = |view: &Conversation| {
+                    view.mono_access_options()
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action(a) => Some((a.id.to_string(), a.checked)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let ids = |view: &Conversation| {
+                    offered(view)
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                };
+                let model = |id: &str, supports_auto| Model {
+                    alias_target: None,
+                    id: id.into(),
+                    name: id.into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                    fast: false,
+                    thinking: false,
+                    default: false,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                    supports_auto,
+                };
+                view.summary.provider = "claude".into();
+                view.catalog = vec![
+                    model("claude-opus-5-5", Some(true)),
+                    model("claude-haiku-4-5", Some(false)),
+                ];
+                view.model = Some("claude-opus-5-5".into());
+                view.settings.access = AccessMode::Auto;
+                assert!(ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::Auto);
+
+                // The saved choice is kept; the model that can't do it shows
+                // and runs with the closest mode before it.
+                view.model = Some("claude-haiku-4-5".into());
+                assert!(!ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::AutoAcceptEdits);
+                assert_eq!(view.settings.access, AccessMode::Auto);
+                assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
+
+                view.summary.provider = "pi".into();
+                view.catalog.clear();
+                view.model = None;
+                assert_eq!(ids(view), ["access:read-only", "access:supervised"]);
+                assert_eq!(view.supported_access(), AccessMode::Supervised);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn access_choices_follow_models_instead_of_leaking_full_access(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let window = conversation(cx);
+        window
+            .update(cx, |c, _, cx| {
+                let opus = Some("claude-opus-5-5".to_owned());
+                let haiku = Some("claude-haiku-4-5".to_owned());
+                c.model = opus.clone();
+                c.catalog = [("claude-opus-5-5", true), ("claude-haiku-4-5", false)]
+                    .into_iter()
+                    .map(|(id, supports_auto)| Model {
+                        id: id.into(),
+                        name: id.into(),
+                        alias_target: None,
+                        efforts: Vec::new(),
+                        default_effort: None,
+                        fast: false,
+                        thinking: false,
+                        default: false,
+                        tiers: Vec::new(),
+                        controls: Vec::new(),
+                        supports_auto: Some(supports_auto),
+                    })
+                    .collect();
+                // A saved session's choice is retained even without a preference entry.
+                c.settings.access = AccessMode::Auto;
+                c.apply_model_pick(&ModelPicked(Kind::Claude, haiku.clone()), cx);
+                assert_eq!(c.settings.access, AccessMode::Supervised);
+                c.menu_choice("access:full-access", cx);
+                c.apply_model_pick(&ModelPicked(Kind::Claude, opus.clone()), cx);
+                assert_eq!(c.settings.access, AccessMode::Auto);
+                assert_eq!(c.supported_access(), AccessMode::Auto);
+                // Catalog absence only changes the displayed/running mode.
+                c.catalog.clear();
+                assert_eq!(c.supported_access(), AccessMode::AutoAcceptEdits);
+                c.apply_model_pick(&ModelPicked(Kind::Claude, haiku.clone()), cx);
+                assert_eq!(c.settings.access, AccessMode::FullAccess);
+                // Mono/mobile configuration uses the same memory as the classic picker.
+                c.mono_config(Kind::Claude, opus.clone(), Default::default(), cx)
+                    .unwrap();
+                assert_eq!(c.settings.access, AccessMode::Auto);
+                c.mono_access(AccessMode::ReadOnly, cx);
+                c.mono_config(Kind::Claude, haiku, Default::default(), cx)
+                    .unwrap();
+                assert_eq!(c.settings.access, AccessMode::FullAccess);
+                c.mono_config(Kind::Claude, opus.clone(), Default::default(), cx)
+                    .unwrap();
+                assert_eq!(c.settings.access, AccessMode::ReadOnly);
+                c.apply_model_pick(&ModelPicked(Kind::Claude, opus), cx);
+                assert_eq!(c.settings.access, AccessMode::ReadOnly);
+                c.apply_model_pick(
+                    &ModelPicked(Kind::Codex, Some("claude-haiku-4-5".into())),
+                    cx,
+                );
+                assert_eq!(c.settings.access, AccessMode::Supervised);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn model_access_preferences_survive_reload_without_inheriting_legacy_full_access(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let prefs = serde_json::from_str::<crate::settings::Preferences>(
+                r#"{"default_access":"full-access"}"#,
+            )
+            .unwrap();
+            cx.set_global(prefs);
+            assert_eq!(
+                preferred_access("claude", Some("opus"), cx),
+                AccessMode::Supervised
+            );
+            remember_access("claude", Some("claude:opus-5-5"), AccessMode::Auto, cx);
+            remember_access("claude", Some("haiku"), AccessMode::FullAccess, cx);
+            let encoded =
+                serde_json::to_string(cx.global::<crate::settings::Preferences>()).unwrap();
+            cx.set_global(serde_json::from_str::<crate::settings::Preferences>(&encoded).unwrap());
+            assert_eq!(
+                preferred_access("claude", Some("claude-opus-5-5"), cx),
+                AccessMode::Auto
+            );
+            assert_eq!(
+                preferred_access("claude", Some("haiku"), cx),
+                AccessMode::FullAccess
+            );
+            assert_eq!(
+                preferred_access("claude", Some("claude-opus-5"), cx),
+                AccessMode::Supervised
+            );
+            assert_eq!(
+                preferred_access("codex", Some("haiku"), cx),
+                AccessMode::Supervised
+            );
+        });
+    }
+
+    #[gpui::test]
     fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut TestAppContext) {
         let window = conversation(cx);
         window
@@ -4189,6 +4386,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 });
                 assert_eq!(view.model_label(), "GPT-6.1 Sol");
                 assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra High"));
@@ -4284,6 +4482,7 @@ mod menu_tests {
                         current: "1m".into(),
                         choices: vec![("1m".into(), "1M".into())],
                     }],
+                    supports_auto: None,
                 };
                 view.make_response_menu(
                     1,
@@ -4366,7 +4565,7 @@ mod menu_tests {
     }
 
     #[gpui::test]
-    fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
+    fn picked_access_becomes_the_models_default_for_new_chats(cx: &mut TestAppContext) {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let first = store.create("codex", "/work").unwrap();
         let second = store.create("codex", "/work").unwrap();
@@ -4385,12 +4584,7 @@ mod menu_tests {
             })
             .unwrap();
         cx.update(|cx| {
-            assert_eq!(
-                cx.global::<crate::settings::Preferences>()
-                    .default_access
-                    .as_deref(),
-                Some("auto")
-            );
+            assert_eq!(preferred_access("codex", None, cx), AccessMode::Auto);
             let next = cx.new(|cx| Conversation::new(second, store, cx));
             assert_eq!(next.read(cx).settings.access, AccessMode::Auto);
         });
@@ -4419,12 +4613,12 @@ mod menu_tests {
                     serde_json::from_str(&encoded).unwrap();
                 assert_eq!(restored.provider_efforts["claude"], "medium");
                 assert_eq!(restored.provider_efforts["codex"], "xhigh");
-                assert_eq!(restored.default_access.as_deref(), Some("auto"));
+                assert_eq!(restored.model_access["codex"]["gpt-6.1-sol"], "auto");
                 let store = Store::open(Path::new(":memory:")).unwrap();
                 let summary = store.create("codex", "/different/project").unwrap();
                 let next = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
                 assert_eq!(next.read(cx).settings.effort.as_deref(), Some("xhigh"));
-                assert_eq!(next.read(cx).settings.access, AccessMode::Auto);
+                assert_eq!(next.read(cx).settings.access, AccessMode::Supervised);
             })
             .unwrap();
     }

@@ -388,7 +388,8 @@ impl Shell {
         let model = choice
             .model
             .and_then(|model| monocode_core::store::native_model(&model, choice.kind.id()));
-        (choice.kind, model, crate::conversation::default_access(cx))
+        let access = crate::conversation::preferred_access(choice.kind.id(), model.as_deref(), cx);
+        (choice.kind, model, access)
     }
 
     fn mobile_catalog_sessions(&self, paths: &[String], cx: &App) -> Vec<CatalogEntry> {
@@ -1520,7 +1521,7 @@ impl Shell {
             let text = message_text(&params)?;
             let cwd =
                 self.mobile_project_path(&string(&params, "projectId").unwrap_or_default(), cx)?;
-            let (default_kind, default_model, default_access) = self.mobile_defaults(&cwd, cx);
+            let (default_kind, default_model, _) = self.mobile_defaults(&cwd, cx);
             let chosen = string(&params, "harness").as_deref().and_then(Kind::parse);
             let kind = chosen.unwrap_or(default_kind);
             let model = start_model(
@@ -1535,7 +1536,10 @@ impl Shell {
                 .filter(|mode| {
                     crate::conversation::mobile_access_modes().any(|(id, ..)| id == *mode)
                 })
-                .map_or(default_access, AccessMode::from_id);
+                .map_or_else(
+                    || crate::conversation::preferred_access(kind.id(), model.as_deref(), cx),
+                    AccessMode::from_id,
+                );
             let account = self.mobile_account(kind, &cwd, &params, cx)?;
             Ok::<_, String>((text, cwd, kind, model, access, account))
         })();
@@ -2438,12 +2442,16 @@ fn catalog_model(kind: Kind, model: monocode_core::catalog::Model) -> Value {
             "options": control.choices.iter().map(|(value, label)| json!({"value": value, "label": label})).collect::<Vec<_>>(),
         }));
     }
-    json!({
+    let mut row = json!({
         "id": mobile_catalog::model_id(kind, Some(&model.id)),
         "harness": kind.id(),
         "name": pickers::model_display_name(kind, &model.id, &model.name).to_string(),
         "settings": settings,
-    })
+    });
+    if let Some(supports) = model.supports_auto {
+        row["supportsAuto"] = supports.into();
+    }
+    row
 }
 
 /// The model a provider picked by the phone starts with: project, then Settings.
@@ -2635,6 +2643,7 @@ mod tests {
             default: true,
             tiers: vec![],
             controls: vec![],
+            supports_auto: None,
         };
         assert_eq!(
             mobile_catalog::current_model_id(Kind::Claude, None, std::slice::from_ref(&model)),
