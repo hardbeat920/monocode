@@ -1,5 +1,6 @@
 //! Source control for the Changes and History panes, ported from
 //! src-tauri/src/fs.rs. Synchronous: callers run these on a background executor.
+mod open_pr;
 mod review;
 pub(crate) mod shell;
 pub(crate) mod text;
@@ -14,6 +15,10 @@ use crate::files::remote as remote_workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub use open_pr::{
+    compose_pr_body, open_pull_request, parse_pr_command, pr_command_text, prepare_pull_request,
+    OpenedPr, PrCommand, PrDraft, PrPlan, PrRequest, PrTools, SystemPrTools,
+};
 pub use review::{
     commit_file_diff, commit_files, diff_files, file_diff, file_diff_versions, review_index,
     stage_contents, FileDiff, FileDiffVersion, MAX_TEXT_FILE_BYTES,
@@ -411,20 +416,23 @@ pub fn pr_create(
         ],
     );
     let _ = std::fs::remove_file(&body_path);
-    result.and_then(|output| {
-        output
-            .lines()
-            .rev()
-            .find(|line| line.starts_with("http://") || line.starts_with("https://"))
-            .map(|line| line.trim().to_string())
-            .ok_or_else(|| {
-                if output.trim().is_empty() {
-                    "gh returned no pull request URL".into()
-                } else {
-                    output
-                }
-            })
-    })
+    result.and_then(|output| pr_url_from_output(&output))
+}
+
+/// `gh pr create` prints the new pull request's URL last.
+fn pr_url_from_output(output: &str) -> Result<String, String> {
+    output
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("http://") || line.starts_with("https://"))
+        .map(|line| line.trim().to_string())
+        .ok_or_else(|| {
+            if output.trim().is_empty() {
+                "gh returned no pull request URL".into()
+            } else {
+                output.to_string()
+            }
+        })
 }
 
 fn diff_stats_for(root: &Path) -> DiffStats {
@@ -1092,6 +1100,15 @@ fn parse_gh_pr_list(json: &str) -> Option<Pr> {
 }
 
 fn gh_run(root: &Path, args: &[&str]) -> Result<String, String> {
+    let text = gh_exec(root, args)?;
+    if text.is_empty() {
+        return Err("gh returned no output".into());
+    }
+    Ok(text)
+}
+
+/// `gh`'s trimmed stdout, which may be empty; Err carries its own message.
+fn gh_exec(root: &Path, args: &[&str]) -> Result<String, String> {
     let program = shell::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
@@ -1111,11 +1128,7 @@ fn gh_run(root: &Path, args: &[&str]) -> Result<String, String> {
         }
     })?;
     if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() {
-            return Err("gh returned no output".into());
-        }
-        return Ok(text);
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1174,6 +1187,11 @@ fn git_cmd_for_args(args: &[&str]) -> Command {
 }
 
 fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
+    git_capture(root, args).map(|_| ())
+}
+
+/// Git's trimmed stdout, which may be empty; Err is its stderr.
+fn git_capture(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = git_cmd_for_args(args);
     let output = cmd
         .arg("--no-pager")
@@ -1184,7 +1202,7 @@ fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
     if output.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
