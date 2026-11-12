@@ -193,7 +193,7 @@ export function FilePreviewSearch({
     clearHighlights(ownerRef.current);
     requestAnimationFrame(() => {
       rootRef.current
-        ?.querySelector<HTMLElement>('[aria-label="Markdown preview"]')
+        ?.querySelector<HTMLElement>('[role="region"][tabindex]')
         ?.focus();
     });
   }, []);
