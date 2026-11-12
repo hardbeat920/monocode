@@ -1,14 +1,22 @@
 //! Permission requests use the queued-message shelf and its upward reveal.
 use super::*;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct State {
     current: RefCell<Option<String>>,
     motion: composer_shelf::Motion,
+    pub(super) saving: HashSet<String>,
+    pub(super) errors: HashMap<String, String>,
 }
 
 impl State {
+    pub(super) fn clear(&mut self) {
+        self.saving.clear();
+        self.errors.clear();
+    }
+
     fn sync(&self, id: Option<&str>, animate: bool) {
         let mut current = self.current.borrow_mut();
         if current.as_deref() != id {
@@ -36,10 +44,13 @@ impl Conversation {
         let deny_id = approval.id.clone();
         let session_id = approval.id.clone();
         let allow_id = approval.id.clone();
+        let always_id = approval.id.clone();
+        let saving = self.approval_ui.saving.contains(&approval.id);
         let actions = div()
             .flex_shrink_0()
             .flex()
             .items_center()
+            .when(saving, |d| d.opacity(0.5).cursor_default())
             .gap(px(6.))
             .child(
                 approval_button("approval-deny", "Deny")
@@ -56,6 +67,16 @@ impl Conversation {
                         .hover(|s| s.bg(content(0.1)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.decide_notification_request(&session_id, Decision::Session, cx);
+                        })),
+                )
+            })
+            .when(approval.remember_scope.is_some(), |d| {
+                d.child(
+                    approval_button("approval-always", "Always allow")
+                        .bg(content(0.06))
+                        .hover(|s| s.bg(content(0.1)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.decide_notification_request(&always_id, Decision::Always, cx);
                         })),
                 )
             })
@@ -90,6 +111,30 @@ impl Conversation {
                             .child(approval.title.clone()),
                     )
                     .child(actions),
+            )
+            .when_some(approval.remember_scope.clone(), |card, scope| {
+                card.child(
+                    div()
+                        .pb_1()
+                        .text_size(px(11.))
+                        .text_color(content(0.5))
+                        .child(scope),
+                )
+            })
+            .when_some(
+                self.approval_ui.errors.get(&approval.id).cloned(),
+                |card, error| {
+                    card.child(
+                        div()
+                            .id("approval-save-error")
+                            .debug_selector(|| "approval-save-error".into())
+                            .role(Role::Alert)
+                            .pb_1()
+                            .text_size(px(12.))
+                            .text_color(gpui::rgb(0xf87171))
+                            .child(error),
+                    )
+                },
             )
             .when(!approval.detail.is_empty(), |card| {
                 card.child(
@@ -172,6 +217,7 @@ mod tests {
             title: "Run a command?".into(),
             detail: "git status --short".into(),
             can_remember,
+            remember_scope: None,
         }
     }
 
@@ -244,6 +290,66 @@ mod tests {
         visual.refresh().unwrap();
         assert!(visual.debug_bounds("approval-shelf").unwrap().size.height > px(60.));
         assert_eq!(visual.debug_bounds("composer-box").unwrap(), input);
+    }
+
+    #[gpui::test]
+    fn always_allow_keeps_the_request_until_the_provider_confirms_saving(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (send, receive) = std::sync::mpsc::channel();
+        window
+            .update(cx, |view, _, cx| {
+                view.controls = Some(send);
+                let mut approval = request("remember", false);
+                approval.remember_scope =
+                    Some("Remember this exact confirmation in this project.".into());
+                view.approvals.push_back(approval);
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("approval-session").is_none());
+        let bounds = visual.debug_bounds("approval-always").unwrap();
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.refresh().unwrap();
+        let control = receive.try_recv().unwrap();
+        assert_eq!(control.id, "remember");
+        assert!(matches!(control.decision, Decision::Always));
+        let deny = visual.debug_bounds("approval-deny").unwrap();
+        visual.simulate_click(deny.center(), Default::default());
+        visual.refresh().unwrap();
+        assert!(receive.try_recv().is_err());
+        window
+            .read_with(visual, |view, _| {
+                assert_eq!(view.approvals.front().unwrap().id, "remember");
+                assert_eq!(view.status, "Saving permission…");
+            })
+            .unwrap();
+        window
+            .update(visual, |view, _, cx| {
+                view.approval_ui.saving.remove("remember");
+                view.approval_ui.errors.insert(
+                    "remember".into(),
+                    "Cannot save permission. Try again or allow once.".into(),
+                );
+                view.approvals.front_mut().unwrap().remember_scope = None;
+                assert!(!view.decide_notification_request("remember", Decision::Always, cx));
+                cx.notify();
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("approval-always").is_none());
+        assert!(visual.debug_bounds("approval-save-error").is_some());
+        assert!(receive.try_recv().is_err());
+        let deny = visual.debug_bounds("approval-deny").unwrap();
+        visual.simulate_click(deny.center(), Default::default());
+        visual.refresh().unwrap();
+        assert!(matches!(
+            receive.try_recv().unwrap().decision,
+            Decision::Deny
+        ));
+        assert!(visual.debug_bounds("approval-shelf").is_none());
     }
 
     #[gpui::test]

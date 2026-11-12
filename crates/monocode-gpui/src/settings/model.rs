@@ -13,6 +13,7 @@ pub(crate) enum Section {
     Chat,
     Providers,
     Mcp,
+    Permissions,
     Skills,
     Monos,
     Inbox,
@@ -36,6 +37,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Chat,
             Section::Providers,
             Section::Mcp,
+            Section::Permissions,
             Section::Skills,
             Section::Monos,
         ],
@@ -47,7 +49,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 12] = [
+    pub(crate) const ALL: [Section; 13] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
@@ -55,6 +57,7 @@ impl Section {
         Section::Chat,
         Section::Providers,
         Section::Mcp,
+        Section::Permissions,
         Section::Skills,
         Section::Monos,
         Section::Inbox,
@@ -70,6 +73,7 @@ impl Section {
             Section::Chat => "chat",
             Section::Providers => "providers",
             Section::Mcp => "mcp",
+            Section::Permissions => "permissions",
             Section::Skills => "skills",
             Section::Monos => "monos",
             Section::Inbox => "inbox",
@@ -86,6 +90,7 @@ impl Section {
             Section::Chat => "Chat",
             Section::Providers => "Providers",
             Section::Mcp => "MCP",
+            Section::Permissions => "Permissions",
             Section::Skills => "Skills",
             Section::Monos => "Monos",
             Section::Inbox => "Inbox",
@@ -112,6 +117,9 @@ impl Section {
                 "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with."
             }
             Section::Mcp => "Find MCP servers across providers and manage their connections.",
+            Section::Permissions => {
+                "Requests you chose to always allow, for each project and provider account."
+            }
             Section::Skills => {
                 "Discover and manage file skills from project, personal, and harness folders."
             }
@@ -140,6 +148,9 @@ impl Section {
             Section::Mcp => {
                 "tools servers connections oauth authenticate login claude codex cursor opencode"
             }
+            Section::Permissions => {
+                "always allow approval approve grant command tool edit fetch remember revoke saved"
+            }
             Section::Skills => "skill instructions prompt",
             Section::Monos => "mono resident agent mascot claim project title bar",
             Section::Inbox => {
@@ -159,6 +170,7 @@ impl Section {
             Section::Chat => "message-square",
             Section::Providers => "bot",
             Section::Mcp => "globe",
+            Section::Permissions => "square-lock",
             Section::Skills => "sparkles",
             Section::Monos => "ghost",
             Section::Inbox => "inbox-hi",
@@ -193,6 +205,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Mcp,
         "MCP servers",
         "claude tools connections oauth authenticate login add remove",
+    ),
+    (
+        "saved-permissions",
+        Section::Permissions,
+        "Saved permissions",
+        "always allow approval command tool edit fetch remove revoke",
     ),
     (
         "monos-enabled",

@@ -9,6 +9,7 @@ mod keybindings;
 mod mcp;
 mod mobile;
 mod monos;
+mod permissions;
 mod providers;
 mod skills;
 mod worktrees;
@@ -38,6 +39,7 @@ impl SettingsView {
             Section::Chat => self.chat_page(cx),
             Section::Providers => self.providers_page(cx),
             Section::Mcp => self.mcp_page(cx),
+            Section::Permissions => self.permissions_page(cx),
             Section::Skills => self.skills_page(cx),
             Section::Monos => self.monos_page(cx),
             Section::Inbox => self.inbox_page(cx),
