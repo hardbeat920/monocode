@@ -17,6 +17,7 @@ import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
 import { SyncTransfers } from "./sync-transfer";
+import { pipeline } from "node:stream/promises";
 import { browseHostDirectories } from "./browse";
 import {
   createHostBranch,
@@ -207,7 +208,7 @@ export function createHostServer(
         if (
           request.headers.origin ||
           request.method !== "POST" ||
-          request.url !== "/rpc"
+          (request.url !== "/rpc" && request.url !== "/download")
         ) {
           response
             .writeHead(403)
@@ -239,7 +240,7 @@ export function createHostServer(
         if (input.version !== HOST_PROTOCOL_VERSION)
           throw new Error("Incompatible protocol version");
         if (
-          input.method !== "environment.describe" &&
+          (request.url !== "/rpc" || input.method !== "environment.describe") &&
           input.environmentId !== engine.store.environmentId
         )
           throw new Error(
@@ -251,6 +252,23 @@ export function createHostServer(
           !Array.isArray(input.params)
             ? (input.params as Record<string, unknown>)
             : {};
+        if (request.url === "/download") {
+          const stream = await workspace.download(params.path);
+          if (!engine.store.authenticated(token)) {
+            stream.destroy();
+            response
+              .writeHead(401)
+              .end(
+                JSON.stringify({
+                  error: "Device credential is invalid or revoked",
+                }),
+              );
+            return;
+          }
+          response.setHeader("Content-Type", "application/octet-stream");
+          await pipeline(stream, response);
+          return;
+        }
         let result: unknown;
         switch (input.method) {
           case "environment.describe":
@@ -278,6 +296,7 @@ export function createHostServer(
                 "git.worktrees",
                 "git.worktreeCreate",
                 "files.read",
+                "files.download",
                 "files.list",
                 "files.index",
                 "workspace.run",
@@ -617,7 +636,8 @@ export function createHostServer(
         }
         response.end(JSON.stringify({ result }));
       } catch (error) {
-        if (!response.destroyed)
+        if (response.headersSent) response.destroy();
+        else if (!response.destroyed)
           response.writeHead(400).end(
             JSON.stringify({
               error:

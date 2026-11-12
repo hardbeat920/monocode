@@ -30,6 +30,19 @@ it("keeps local writes local when their content mentions a remote path", async (
   expect(remoteRequest).not.toHaveBeenCalled();
 });
 
+it("streams downloads through native HTTP with host and local paths kept separate", async () => {
+  await runRemoteCommand("download_file", {
+    path: "remote://env/home/me/large.mp4",
+    destination: "/downloads/large.mp4",
+  });
+  expect(invokeLocal).toHaveBeenCalledWith("remote_download", {
+    machineId: "machine",
+    path: "/home/me/large.mp4",
+    destination: "/downloads/large.mp4",
+  });
+  expect(remoteRequest).not.toHaveBeenCalled();
+});
+
 it("runs the same file command on the machine with host paths", async () => {
   remoteRequest.mockResolvedValue([
     { name: "src", path: "/home/me/repo/src", isDir: true, ignored: false },

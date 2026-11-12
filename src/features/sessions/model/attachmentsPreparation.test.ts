@@ -62,6 +62,15 @@ describe("file attachment preparation", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  it("still rejects pasted blobs above the attachment size limit", async () => {
+    const file = new File(["contents"], "large.pdf", {
+      type: "application/pdf",
+    });
+    Object.defineProperty(file, "size", { value: MAX_EMBED_BYTES + 1 });
+    expect(await attachmentsFromFiles([file])).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("retains the image path when byte loading fails", async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === "inspect_paths")
