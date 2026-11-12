@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
-use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindowBuilder, Window};
 
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
 
@@ -77,7 +77,7 @@ fn configure_session_window(config: &mut tauri::utils::config::WindowConfig, rev
     config.focus = reveal;
 }
 
-pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindow, String> {
+pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<Window, String> {
     let mut config = app
         .config()
         .app
@@ -111,7 +111,7 @@ pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindo
     let window = build()?;
 
     #[cfg(target_os = "macos")]
-    crate::macos::install(&window);
+    crate::macos::install(&window.as_ref().window());
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -122,7 +122,7 @@ pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindo
     if reveal {
         let _ = window.set_focus();
     }
-    Ok(window)
+    Ok(window.as_ref().window().clone())
 }
 
 /// The page colour to fill the window with when glass is off. Not a constant:
@@ -145,7 +145,7 @@ impl Rgb {
 /// Desktop blur goes on after the first UI paint and only in dark mode.
 #[tauri::command]
 pub fn set_window_glass_enabled(
-    window: WebviewWindow,
+    window: Window,
     enabled: bool,
     background: Rgb,
     opacity: Option<f64>,
@@ -160,7 +160,9 @@ pub fn set_window_glass_enabled(
             } else {
                 3
             };
-            let _ = window.set_background_color(Some(Color(0, 0, 0, alpha)));
+            if let Some(view) = window.get_webview(window.label()) {
+                let _ = view.set_background_color(Some(Color(0, 0, 0, alpha)));
+            }
             return crate::macos::enable_glass(&window, background, opacity);
         } else {
             crate::macos::disable_glass(&window, background.r, background.g, background.b);
@@ -168,6 +170,13 @@ pub fn set_window_glass_enabled(
     }
     #[cfg(target_os = "windows")]
     {
+        if let Some(view) = window.get_webview(window.label()) {
+            let _ = view.set_background_color(Some(if enabled {
+                Color(0, 0, 0, 0)
+            } else {
+                background.fill()
+            }));
+        }
         if enabled {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Acrylic).build());
@@ -199,14 +208,14 @@ pub fn set_window_glass_enabled(
 
 /// Close with a running chat hides the webview so the harness child keeps going.
 #[tauri::command]
-pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
+pub fn hide_window(window: Window) -> Result<(), String> {
     window.hide().map_err(|err| err.to_string())
 }
 
 /// Finish an idle close. `destroy` skips CloseRequested so the JS handler
 /// does not loop; `close` would fire it again.
 #[tauri::command]
-pub fn destroy_window(window: WebviewWindow) -> Result<(), String> {
+pub fn destroy_window(window: Window) -> Result<(), String> {
     window.destroy().map_err(|err| err.to_string())
 }
 
@@ -218,9 +227,9 @@ pub fn is_workspace_window(label: &str) -> bool {
 }
 
 /// Every workspace window, sorted by label.
-pub fn workspace_windows(app: &AppHandle) -> Vec<WebviewWindow> {
-    let mut windows: Vec<WebviewWindow> = app
-        .webview_windows()
+pub fn workspace_windows(app: &AppHandle) -> Vec<Window> {
+    let mut windows: Vec<Window> = app
+        .windows()
         .into_values()
         .filter(|window| is_workspace_window(window.label()))
         .collect();
@@ -375,7 +384,7 @@ fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
     }
 }
 
-/// Ask every window what it has running, then decide once for all of them.
+/// Ask every app window what it has running, then decide once for all of them.
 pub fn request_quit(app: &AppHandle) {
     let labels = workspace_labels(app);
     if labels.is_empty() {
@@ -396,7 +405,7 @@ pub fn request_quit(app: &AppHandle) {
 
 /// One window's live turn count, counted before anything is killed.
 #[tauri::command]
-pub fn quit_poll_reply(app: AppHandle, window: WebviewWindow, id: u32, in_flight: u32) {
+pub fn quit_poll_reply(app: AppHandle, window: Window, id: u32, in_flight: u32) {
     let next = record_reply(&mut QUIT_RUN.lock().unwrap(), id, window.label(), in_flight);
     if next == Next::Confirm {
         start_confirm(&app, id);
@@ -414,7 +423,7 @@ fn resurface_prompt(app: &AppHandle) {
         }
         run.prompt.clone()
     };
-    let Some(window) = label.and_then(|label| app.get_webview_window(&label)) else {
+    let Some(window) = label.and_then(|label| app.get_window(&label)) else {
         return;
     };
     let _ = window.unminimize();
@@ -424,7 +433,7 @@ fn resurface_prompt(app: &AppHandle) {
 
 /// The answer to the one dialog the whole app gets to show.
 #[tauri::command]
-pub fn quit_decision(app: AppHandle, window: WebviewWindow, id: u32, confirmed: bool) {
+pub fn quit_decision(app: AppHandle, window: Window, id: u32, confirmed: bool) {
     {
         let guard = QUIT_RUN.lock().unwrap();
         let Some(run) = guard.as_ref() else { return };
@@ -446,7 +455,7 @@ pub fn quit_decision(app: AppHandle, window: WebviewWindow, id: u32, confirmed: 
 /// One window has persisted. The last one out turns the lights off, so a slow
 /// window cannot lose its workspace to a faster window's exit.
 #[tauri::command]
-pub fn quit_ready(app: AppHandle, window: WebviewWindow, id: u32, persisted: bool) {
+pub fn quit_ready(app: AppHandle, window: Window, id: u32, persisted: bool) {
     // A window that could not save its workspace keeps the app open, the way a
     // failed persist did before the handshake existed. The windows that did
     // save are staying too, so take them back out of quitting.
@@ -545,7 +554,7 @@ fn start_commit(app: &AppHandle, id: u32) {
 /// listeners are live. A window still booting would swallow the dialog, and
 /// confirming has nothing to time out on.
 fn prompt_window(app: &AppHandle, replied: &HashSet<String>) -> Option<String> {
-    let windows = app.webview_windows();
+    let windows = app.windows();
     let labels = workspace_labels(app);
     let answered: Vec<String> = labels
         .iter()

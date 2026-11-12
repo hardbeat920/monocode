@@ -12,14 +12,14 @@ use std::sync::{Mutex, Once, OnceLock};
 
 use block2::RcBlock;
 use objc2_app_kit::{NSEvent, NSEventMask};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Window};
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static INSTALL: Once = Once::new();
 /// AppKit window number -> webview window label.
 static ENABLED: Mutex<Option<HashMap<isize, String>>> = Mutex::new(None);
 
-pub fn set_enabled(window: &WebviewWindow, enabled: bool) {
+pub fn set_enabled(window: &Window, enabled: bool) {
     let Some(ns_window) = crate::macos::ns_window(window) else {
         return;
     };

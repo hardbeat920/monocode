@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
@@ -168,6 +169,8 @@ type Props = {
   onDeleteTab?: (id: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
+  onOpenBrowser?: () => void;
+  browserOpen?: boolean;
   onPinFile?: (fileId: string) => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -777,6 +780,8 @@ function TitleBarComponent({
   onDeleteTab,
   onReorder,
   onPlaceOnPane,
+  onOpenBrowser,
+  browserOpen = false,
   onPinFile,
   recents = [],
   onSelectProject,
@@ -1054,6 +1059,7 @@ function TitleBarComponent({
   const changesDot = rightPanelDot && !rightPanelOff;
   const trailingControls =
     showTrailingActions ||
+    onOpenBrowser ||
     showRightPanelToggle ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
@@ -1115,6 +1121,17 @@ function TitleBarComponent({
             ) : null}
           </div>
         ) : null}
+        {onOpenBrowser && (
+          <div className="flex items-center pr-2 pl-0.5">
+            <IconButton
+              label={`${browserOpen ? "Close" : "Open"} browser split (${MOD}⇧B)`}
+              active={browserOpen}
+              onClick={onOpenBrowser}
+            >
+              <AppWindow className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          </div>
+        )}
         {!IS_MAC && !hideWindowControls ? <WindowControls /> : null}
       </div>
     ) : null;
