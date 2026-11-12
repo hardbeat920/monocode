@@ -46,6 +46,14 @@ export function liveAgentsFromSessions(
     .sort(compareLiveAgents);
 }
 
+/** Keep the rail card up while a working or unseen-finished chat is not the open session. */
+export function shouldShowLiveAgents(
+  agents: LiveAgent[],
+  activeSessionId?: string,
+): boolean {
+  return agents.some((agent) => agent.id !== activeSessionId);
+}
+
 export function formatLiveElapsed(startedAt: number, now: number): string {
   const seconds = Math.max(1, Math.round((now - startedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;

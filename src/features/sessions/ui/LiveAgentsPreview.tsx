@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
-import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
+import {
+  formatLiveElapsed,
+  shouldShowLiveAgents,
+  type LiveAgent,
+} from "../model/liveAgents";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import {
   loadTabGroupColors,
@@ -16,7 +20,6 @@ import { HarnessIcon } from "./HarnessIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { TerminalSpinner } from "./TerminalSpinner";
 
-const LIVE_AGENT_MIN = 2;
 const LIVE_AGENT_CAP = 4;
 
 type Props = {
@@ -51,8 +54,12 @@ export function LiveAgentsPreview({
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const lockList = useLockOverscroll<HTMLDivElement>();
+  const finishedCount = agents.filter((agent) => agent.done).length;
+  const workingCount = agents.length - finishedCount;
+  const hasWorkingAgents = workingCount > 0;
+  const visibleOnRail = shouldShowLiveAgents(agents, activeSessionId);
   const ticking =
-    agents.length >= LIVE_AGENT_MIN &&
+    visibleOnRail &&
     agents.some((agent) => !agent.done && agent.startedAt != null);
 
   useEffect(() => {
@@ -61,7 +68,7 @@ export function LiveAgentsPreview({
     return () => window.clearInterval(id);
   }, [ticking]);
 
-  if (agents.length < LIVE_AGENT_MIN) return null;
+  if (!visibleOnRail) return null;
 
   const extra = agents.length - LIVE_AGENT_CAP;
   const visible =
@@ -69,21 +76,29 @@ export function LiveAgentsPreview({
 
   return (
     <section
-      aria-label="Working agents"
+      aria-label={hasWorkingAgents ? "Working agents" : "Finished agents"}
       className={`shrink-0 px-2 ${bottomSpacing ? "pb-2" : ""}`}
       data-live-agents-preview="full"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {agents.length} working agents
+        {workingCount === 0
+          ? `${finishedCount} finished agent${finishedCount === 1 ? "" : "s"}`
+          : finishedCount === 0
+            ? `${workingCount} working agent${workingCount === 1 ? "" : "s"}`
+            : `${workingCount} working agent${workingCount === 1 ? "" : "s"}, ${finishedCount} finished agent${finishedCount === 1 ? "" : "s"}`}
       </span>
       <div className="overflow-hidden rounded-lg bg-content/5">
         <div className="flex items-center gap-2 px-3.5 py-1.5">
           <span
             aria-hidden
-            className="size-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] motion-safe:animate-pulse"
+            className={`size-1.5 shrink-0 rounded-full ${
+              hasWorkingAgents
+                ? "bg-accent shadow-[0_0_8px_var(--color-accent)] motion-safe:animate-pulse"
+                : "bg-content/35"
+            }`}
           />
           <span className="min-w-0 flex-1 truncate text-xs text-content/50">
-            Working
+            {hasWorkingAgents ? "Working" : "Finished"}
           </span>
           <span className="text-[11px] tabular-nums text-content/40">
             {agents.length}
