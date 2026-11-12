@@ -22,6 +22,21 @@ impl Store {
         Ok(Some(conn))
     }
 
+    /// A connection-local revision of writes to the transcript database.
+    // shortcut: unrelated and legacy marker writes trigger rescans, use a transcript-only revision if costly.
+    pub fn contribution_history_version(&self) -> Result<(u64, i64, u64), String> {
+        self.conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map(|version| {
+                (
+                    self.contribution_cache_id,
+                    version,
+                    self.conn.total_changes(),
+                )
+            })
+            .map_err(|e| e.to_string())
+    }
+
     /// Records a contribution once, keeping the first session's attribution.
     pub fn record_contribution(&self, item: &Contribution) -> Result<(), String> {
         let Some(conn) = self.contributions_db()? else {
@@ -200,6 +215,35 @@ mod tests {
             additions: 3,
             deletions: 1,
         }
+    }
+
+    #[test]
+    fn history_version_tracks_local_and_external_writes_and_new_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("monocode.db");
+        let mut first = Store::open_monocode(&path).unwrap();
+        let id = first.create("codex", "/tmp").unwrap().id;
+        let initial = first.contribution_history_version().unwrap();
+        let row = crate::transcript::Row {
+            role: "user".into(),
+            text: "one".into(),
+            first: true,
+            sent_at: None,
+        };
+        first.write_rows(id, 0, &[row]).unwrap();
+        let local = first.contribution_history_version().unwrap();
+        assert_ne!(initial, local);
+        let mut second = Store::open_monocode(&path).unwrap();
+        assert_ne!(local.0, second.contribution_history_version().unwrap().0);
+        let id = second.sessions().unwrap()[0].id;
+        let row = crate::transcript::Row {
+            role: "user".into(),
+            text: "two".into(),
+            first: true,
+            sent_at: None,
+        };
+        second.write_rows(id, 0, &[row]).unwrap();
+        assert_ne!(local, first.contribution_history_version().unwrap());
     }
 
     #[test]

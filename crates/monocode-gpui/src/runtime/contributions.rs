@@ -11,8 +11,13 @@ use std::sync::{
 static BOOT: LazyLock<String> = LazyLock::new(monocode_core::mono::new_id);
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn scan_version() -> String {
-    format!("{}-{}", *BOOT, EPOCH.load(Ordering::Relaxed))
+pub(crate) fn scan_version(store: &monocode_core::store::Store) -> Result<String, String> {
+    let (connection, revision, changes) = store.contribution_history_version()?;
+    Ok(format!(
+        "{}-{}-{connection}-{revision}-{changes}",
+        *BOOT,
+        EPOCH.load(Ordering::Relaxed)
+    ))
 }
 
 pub(crate) fn invalidate(store: &monocode_core::store::Store, session: i64) {

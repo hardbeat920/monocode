@@ -281,6 +281,8 @@ impl Store {
         let (extras, extras_db) = settings::open(path, read_only)?;
         let store = Self {
             conn,
+            contribution_cache_id: super::NEXT_STORE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             path: path.into(),
             shared: Some(Shared {
                 columns,

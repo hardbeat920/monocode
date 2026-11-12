@@ -50,8 +50,11 @@ pub struct Reminder {
     pub fired_at: Option<u64>,
 }
 
+static NEXT_STORE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub struct Store {
     conn: Connection,
+    contribution_cache_id: u64,
     path: std::path::PathBuf,
     shared: Option<shared::Shared>,
 }
@@ -177,6 +180,7 @@ impl Store {
         }
         Ok(Self {
             conn,
+            contribution_cache_id: NEXT_STORE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             path: path.into(),
             shared: None,
         })
@@ -584,6 +588,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(Some(Self {
             conn,
+            contribution_cache_id: NEXT_STORE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             path: self.path.clone(),
             shared: None,
         }))

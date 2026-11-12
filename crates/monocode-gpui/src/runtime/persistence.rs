@@ -243,7 +243,7 @@ mod tests {
         let db = Store::open_monocode(&path).unwrap();
         let id = db.create("codex", "/project").unwrap().id;
         let key = format!("{}{id}", monocode_core::contributions::SCANNED);
-        let version = super::super::contributions::scan_version();
+        let version = super::super::contributions::scan_version(&db).unwrap();
         db.save_setting(&key, &version).unwrap();
         let sidecar = rusqlite::Connection::open(dir.join("monocode.db.gpui.sqlite3")).unwrap();
         sidecar.execute_batch("CREATE TRIGGER fail_marker BEFORE UPDATE ON settings BEGIN SELECT RAISE(FAIL, 'test failure'); END;").unwrap();
@@ -271,7 +271,10 @@ mod tests {
             saved.setting(&key).unwrap().as_deref(),
             Some(version.as_str())
         );
-        assert_ne!(super::super::contributions::scan_version(), version);
+        assert_ne!(
+            super::super::contributions::scan_version(&saved).unwrap(),
+            version
+        );
         drop(saved);
         drop(store);
         drop(sidecar);
