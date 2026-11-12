@@ -5,6 +5,7 @@ import {
   isVideoPath,
   sniffDocumentImageMime,
   sniffImageMime,
+  tableDelimiterForPath,
   videoMimeForPath,
 } from "./filePreview";
 
@@ -25,6 +26,19 @@ describe("isImagePath", () => {
     expect(isImagePath("/w/spec.pdf")).toBe(false);
     expect(isImagePath("/w/LICENSE")).toBe(false);
     expect(isImagePath("/w/.png/notes.txt")).toBe(false);
+  });
+});
+
+describe("tableDelimiterForPath", () => {
+  it("gives CSV and TSV files a table preview", () => {
+    expect(tableDelimiterForPath("/w/data.csv")).toBe(",");
+    expect(tableDelimiterForPath("/w/Export.TSV")).toBe("\t");
+  });
+
+  it("leaves other files alone", () => {
+    expect(tableDelimiterForPath("/w/notes.txt")).toBeNull();
+    expect(tableDelimiterForPath("/w/csv")).toBeNull();
+    expect(tableDelimiterForPath("/w/.csv/notes.md")).toBeNull();
   });
 });
 
