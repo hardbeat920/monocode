@@ -4473,6 +4473,41 @@ impl TranscriptView {
             let (line, column) = location.unwrap_or((fence.start_line, 1));
             format!("{path}:{line}:{column}")
         });
+        let copy = icon_button_ink(
+            "copy-code",
+            if copied { "Copied" } else { "Copy code" },
+            if copied { "check" } else { "copy" },
+            0.8,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                code.strip_suffix("\r\n")
+                    .or_else(|| code.strip_suffix('\n'))
+                    .unwrap_or(&code)
+                    .to_owned(),
+            ));
+            this.copied = Some(key);
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1500))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.copied == Some(key) {
+                        this.copied = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }));
+        // Without a header the button sits on the code itself, so it needs its
+        // own solid backing, painted after the code, to stay readable.
+        let (header_copy, floating_copy) = if fence.label.is_empty() {
+            (None, first.then_some(copy))
+        } else {
+            (Some(copy), None)
+        };
         div()
             .relative()
             .w_full()
@@ -4485,20 +4520,17 @@ impl TranscriptView {
             .when(last, |d| d.border_b_1())
             .border_color(content(0.1))
             .bg(content(0.06))
-            .when(first, |d| {
+            .when(first && !fence.label.is_empty(), |d| {
                 d.child(
                     div()
-                        .when(!fence.label.is_empty(), |d| d.min_h(px(36.)))
-                        .when(fence.label.is_empty(), |d| {
-                            d.absolute().top(px(6.)).right(px(6.))
-                        })
+                        .min_h(px(36.))
                         .px(px(10.))
                         .flex()
                         .items_center()
                         .gap_2()
                         .text_size(px(12.))
                         .text_color(content(0.65))
-                        .when(!fence.label.is_empty(), |d| {
+                        .child({
                             let extension = match fence.language.as_str() {
                                 "rust" => "rs",
                                 "javascript" => "js",
@@ -4513,7 +4545,7 @@ impl TranscriptView {
                             } else {
                                 format!("code.{extension}")
                             };
-                            d.child(crate::activity::file_icon(&file, 16.))
+                            crate::activity::file_icon(&file, 16.)
                         })
                         .child(
                             div()
@@ -4551,37 +4583,7 @@ impl TranscriptView {
                                 })
                                 .child(fence.label.clone()),
                         )
-                        .child(
-                            icon_button(
-                                "copy-code",
-                                if copied { "Copied" } else { "Copy code" },
-                                if copied { "check" } else { "copy" },
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        code.strip_suffix("\r\n")
-                                            .or_else(|| code.strip_suffix('\n'))
-                                            .unwrap_or(&code)
-                                            .to_owned(),
-                                    ));
-                                    this.copied = Some(key);
-                                    cx.notify();
-                                    cx.spawn(async move |this, cx| {
-                                        cx.background_executor()
-                                            .timer(std::time::Duration::from_millis(1500))
-                                            .await;
-                                        let _ = this.update(cx, |this, cx| {
-                                            if this.copied == Some(key) {
-                                                this.copied = None;
-                                                cx.notify();
-                                            }
-                                        });
-                                    })
-                                    .detach();
-                                },
-                            )),
-                        ),
+                        .when_some(header_copy, |d, copy| d.child(copy)),
                 )
             })
             .child(
@@ -4610,6 +4612,19 @@ impl TranscriptView {
                         ),
                     )),
             )
+            .when_some(floating_copy, |d, copy| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(6.))
+                        .right(px(6.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.14))
+                        .bg(floating_fill())
+                        .child(copy),
+                )
+            })
             .into_any_element()
     }
     fn row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
