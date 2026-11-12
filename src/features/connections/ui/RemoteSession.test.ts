@@ -12,6 +12,7 @@ import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
 import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
+import { remoteSessionActions } from "../model/remoteSessionActions";
 import "../model/remoteCommands";
 import type {
   HostCommand,
@@ -116,6 +117,8 @@ let commands: HostCommand[];
 let projectKey: string;
 let syncDelay: Promise<void> | undefined;
 let dispatchDelay: Promise<void> | undefined;
+let dispatchRejection: string | undefined;
+let holdTurns: boolean;
 let branchFailure: string | undefined;
 let branchActionFailure: string | undefined;
 let currentBranch: string;
@@ -131,6 +134,8 @@ beforeEach(() => {
   host = undefined;
   syncDelay = undefined;
   dispatchDelay = undefined;
+  dispatchRejection = undefined;
+  holdTurns = false;
   branchFailure = undefined;
   branchActionFailure = undefined;
   currentBranch = "main";
@@ -243,6 +248,8 @@ beforeEach(() => {
       return { offset: (params as { size: number }).size };
     if (method === "commands.dispatch") {
       if (dispatchDelay) await dispatchDelay;
+      if (dispatchRejection && params.type === "send")
+        throw new Error(`Host rejected request: ${dispatchRejection}`);
       return dispatch(params);
     }
     if (method === "sessions.delete") {
@@ -307,9 +314,12 @@ function dispatch(command: HostCommand) {
             (block) => block.id !== command.draftBlockId,
           ),
           { id: command.commandId, role: "user", text: command.text },
-          { id: `${command.commandId}-reply`, role: "assistant", text: "Done" },
+          ...(holdTurns
+            ? []
+            : [{ id: `${command.commandId}-reply`, role: "assistant" as const, text: "Done" }]),
         ],
       },
+      ...(holdTurns ? { status: "running" as const, runId: "run" } : {}),
     };
   } else if (host && command.type === "draft") {
     host = {
@@ -781,6 +791,65 @@ it("keeps the first turn active while its accepted message awaits host sync", as
   await settle();
   expect(transcript()?.querySelectorAll("li")).toHaveLength(2);
   expect(transcript()?.getAttribute("data-busy")).toBe("false");
+});
+
+it("reports a first remote turn's outcome to a waiting caller", async () => {
+  await render();
+  const onSettled = vi.fn();
+  await act(async () => {
+    expect(remoteSessionActions("shell")!.submit("First", [], undefined, onSettled)).toBe(true);
+  });
+  await settle();
+  expect(commands.map((command) => command.type)).toEqual(["create", "send"]);
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({ status: "completed", text: "Done" });
+});
+
+it("reports a remote turn that settles after its pane unmounts", async () => {
+  await render();
+  await send("First");
+  holdTurns = true;
+  const onSettled = vi.fn();
+  await act(async () => {
+    remoteSessionActions("shell")!.submit("Second", [], undefined, onSettled);
+  });
+  await settle();
+  expect(commands.at(-1)).toMatchObject({ type: "send", text: "Second" });
+  expect(onSettled).not.toHaveBeenCalled();
+  await act(async () => root.render(createElement("div")));
+  expect(remoteSessionActions("shell")).toBeUndefined();
+  host = {
+    ...host!,
+    status: "idle",
+    revision: host!.revision + 1,
+    session: {
+      ...host!.session,
+      blocks: [
+        ...host!.session.blocks,
+        { id: "reply", role: "assistant", text: "Second done" },
+      ],
+    },
+  };
+  await new Promise((resolve) => setTimeout(resolve, 1_600));
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({
+    status: "completed",
+    text: "Second done",
+  });
+});
+
+it("reports the host's reason when it turns a message down", async () => {
+  await render();
+  await send("First");
+  dispatchRejection = "session is busy";
+  const onSettled = vi.fn();
+  await act(async () => {
+    remoteSessionActions("shell")!.submit("Second", [], undefined, onSettled);
+  });
+  await settle();
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({
+    status: "failed",
+    text: "",
+    error: "Host rejected request: session is busy",
+  });
 });
 
 it("starts a remote session in the worktree chosen before its first message", async () => {
