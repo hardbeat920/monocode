@@ -29,6 +29,7 @@ mod macos;
 mod macos_background;
 mod mcp;
 mod menu;
+mod menu_language;
 mod mobile_access;
 mod mobile_router;
 mod mono;
@@ -279,6 +280,8 @@ pub fn run() {
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
+        .manage(menu::MenuLanguage::default())
+        .manage(menu::MenuKeybindings::default())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
@@ -293,7 +296,7 @@ pub fn run() {
             {
                 quick_composer::init(app.handle())?;
                 mono_chat::init(app.handle())?;
-                macos::install_dock_menu(app.handle());
+                macos::install_dock_menu(app.handle(), menu::language(app.handle()));
                 if let Some(window) = app.get_webview_window("main") {
                     macos::install(&window);
                 }
@@ -341,6 +344,7 @@ pub fn run() {
             control::app_cli_path,
             default_cwd,
             home_dir,
+            menu::set_menu_language,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,
