@@ -372,6 +372,10 @@ function cachedSessions(project: string): HostSessionSummary[] {
     return [];
   }
 }
+export function cachedRemoteProjectSessions(project: string): HostSessionSummary[] {
+  return cachedSessions(project);
+}
+
 export function cachedRemoteSessionSummary(project: string, sessionId: string) {
   return cachedSessions(project).find((session) => session.id === sessionId);
 }

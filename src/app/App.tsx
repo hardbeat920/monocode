@@ -728,6 +728,7 @@ import {
   OPEN_CONNECTIONS_EVENT,
   OPEN_REMOTE_PROJECT_EVENT,
   REMOTE_HISTORY_UPDATED,
+  cachedRemoteProjectSessions,
   cachedRemoteSessionSummary,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
@@ -4761,7 +4762,10 @@ function Workspace({
   const ensureOpenSession = useCallback(
     async (sessionId: string): Promise<Session | null> => {
       const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
+        (session) =>
+          session.id === sessionId ||
+          (isRemoteProjectPath(session.cwd) &&
+            remoteSessionFor(session.id) === sessionId),
       );
       if (open) return open;
 
@@ -11320,7 +11324,10 @@ function Workspace({
                   prompt,
                   outcome,
                   session: sessionsRef.current.find(
-                    (session) => session.id === sessionId,
+                    (session) =>
+                      session.id === sessionId ||
+                      (isRemoteProjectPath(session.cwd) &&
+                        remoteSessionFor(session.id) === sessionId),
                   ),
                 }),
               ),
@@ -11433,6 +11440,19 @@ function Workspace({
                   archived: !!session.archived,
                 });
               }
+              if (isRemoteProjectPath(cwd)) {
+                for (const session of cachedRemoteProjectSessions(cwd)) {
+                  byId.set(session.id, {
+                    id: session.id,
+                    title: session.title,
+                    harness: session.harness,
+                    model: session.model ?? "",
+                    busy: session.status === "running",
+                    hasDraft: !!session.draft,
+                    archived: !!session.archived,
+                  });
+                }
+              }
               for (const session of sessionsRef.current) {
                 if (
                   session.orchestrationLeadId ||
@@ -11440,22 +11460,31 @@ function Workspace({
                   !sameProjectPath(session.cwd, cwd)
                 )
                   continue;
-                byId.set(session.id, {
-                  id: session.id,
-                  title: session.title,
-                  harness: session.harness,
-                  model: session.model,
+                const id =
+                  isRemoteProjectPath(session.cwd) && remoteSessionFor(session.id)
+                    ? remoteSessionFor(session.id)!
+                    : session.id;
+                const existing = byId.get(id);
+                byId.set(id, {
+                  id,
+                  title: existing?.title ?? session.title,
+                  harness: existing?.harness ?? session.harness,
+                  model: session.model || (existing?.model ?? ""),
                   busy: !!session.busy,
                   hasDraft: !!sessionDraftBlock(session),
-                  archived: byId.get(session.id)?.archived ?? false,
+                  archived: existing?.archived ?? false,
                 });
               }
               return [...byId.values()];
             },
             session: async (id) => {
               const target =
-                sessionsRef.current.find((session) => session.id === id) ??
-                (await getSession(id));
+                sessionsRef.current.find(
+                  (session) =>
+                    session.id === id ||
+                    (isRemoteProjectPath(session.cwd) &&
+                      remoteSessionFor(session.id) === id),
+                ) ?? (await getSession(id));
               return target &&
                 !target.orchestrationLeadId &&
                 canAccessProject(target.cwd)
@@ -11472,12 +11501,12 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                orchestrator.run(id)
+                orchestrator.run(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const rememberFollowUp = () => {
                 const current =
-                  sessionsRef.current.find((session) => session.id === id) ??
+                  sessionsRef.current.find((session) => session.id === target.id) ??
                   target;
                 rememberSession({
                   sessionId: id,
@@ -11518,7 +11547,7 @@ function Workspace({
               const accepted = onSettled
                 ? await submitWithSettlement({
                     submit: (onSettled) =>
-                      submitSessionRef.current(id, prompt, [], {
+                      submitSessionRef.current(target.id, prompt, [], {
                         appRequestId: requestId,
                         onSettled,
                       }),
@@ -11526,7 +11555,7 @@ function Workspace({
                     rejectionMessage:
                       "The monitored follow-up could not start.",
                   })
-                : await submitSessionRef.current(id, prompt, [], {
+                : await submitSessionRef.current(target.id, prompt, [], {
                     appRequestId: requestId,
                   });
               if (!accepted) {
@@ -11543,7 +11572,7 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                orchestrator.run(id)
+                orchestrator.run(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const previous = target.blocks.find(
@@ -11563,34 +11592,37 @@ function Workspace({
                   "Session already has a draft; send or remove it first",
                 );
               const saved = flushSync(() =>
-                saveDraftRef.current(id, prompt, [], requestId),
+                saveDraftRef.current(target.id, prompt, [], requestId),
               );
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
             stop: async (id) => {
-              if (
-                removingSessionIds.current.has(id) ||
-                switchingWorktrees.current.has(id)
-              )
-                throw new Error(
-                  "Session is being removed or changing worktrees",
-                );
               const target = sessionsRef.current.find(
-                (session) => session.id === id,
+                (session) =>
+                  session.id === id ||
+                  (isRemoteProjectPath(session.cwd) &&
+                    remoteSessionFor(session.id) === id),
               );
               if (!target) {
                 dismissCompletion(id);
                 return;
               }
               if (
+                removingSessionIds.current.has(target.id) ||
+                switchingWorktrees.current.has(target.id)
+              )
+                throw new Error(
+                  "Session is being removed or changing worktrees",
+                );
+              if (
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                isMonoSession(id) ||
-                isHabitRun(id)
+                isMonoSession(target.id) ||
+                isHabitRun(target.id)
               )
                 throw new Error("Session is unavailable in this project");
-              await flushSync(() => stopSessionRef.current(id));
+              await flushSync(() => stopSessionRef.current(target.id));
               flushHarnessEvents();
               dismissCompletion(id);
             },
@@ -11600,12 +11632,12 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                isMonoSession(id) ||
-                isHabitRun(id)
+                isMonoSession(target.id) ||
+                isHabitRun(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const removed = await removeSessionRef.current(
-                id,
+                target.id,
                 mode,
                 true,
                 "cli",
