@@ -898,6 +898,11 @@ impl VisualTestContext {
         self.cx.test_window(self.window).0.lock().title.clone()
     }
 
+    /// Hit-test the current mouse position as the native window does.
+    pub fn window_control_area(&mut self) -> Option<crate::WindowControlArea> {
+        self.update(|window, _| window.hit_test_window_control())
+    }
+
     /// Read the document path off the window (set by `Window#set_document_path`)
     pub fn document_path(&mut self) -> Option<std::path::PathBuf> {
         self.cx
