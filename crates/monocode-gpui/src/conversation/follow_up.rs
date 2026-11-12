@@ -285,7 +285,11 @@ impl Conversation {
         }
     }
     pub(super) fn pump_follow_ups(&mut self, cx: &mut Context<Self>) {
-        if self.editing_last_turn.pending() || self.stopping {
+        // A quit cancels running turns; the queue must survive it untouched.
+        if self.editing_last_turn.pending()
+            || self.stopping
+            || monocode_core::process::shutting_down()
+        {
             return;
         }
         if !self.history_ready() {

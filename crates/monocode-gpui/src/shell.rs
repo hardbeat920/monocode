@@ -12,6 +12,7 @@ mod github_star;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
+mod interrupted_turns;
 mod layout;
 mod live_agents;
 mod mobile_host;
@@ -1317,6 +1318,7 @@ impl Shell {
         this.apply_preferences(cx);
         this.poll_reminders(cx);
         this.initialize_automations(cx);
+        this.resume_interrupted_turns(cx);
         if this.workspace.active.is_none() {
             cx.spawn(async move |this, cx| {
                 let _ = this.update_in(cx, |this, window, cx| {
