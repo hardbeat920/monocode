@@ -1045,7 +1045,7 @@ describe("addCodexTurnUsage", () => {
     expect(
       addCodexTurnUsage(spent, reading(first, { totalTokens: 141_000 })),
     ).toEqual({
-      inputTokens: 40_000,
+      inputTokens: 10_000,
       outputTokens: 1_000,
       cacheReadTokens: 30_000,
       cacheHitPercent: 75,
@@ -1057,7 +1057,7 @@ describe("addCodexTurnUsage", () => {
     expect(
       addCodexTurnUsage(spent, reading(second, { totalTokens: 193_000 })),
     ).toEqual({
-      inputTokens: 90_000,
+      inputTokens: 60_000,
       outputTokens: 3_000,
       cacheReadTokens: 30_000,
       cacheHitPercent: (30_000 / 90_000) * 100,

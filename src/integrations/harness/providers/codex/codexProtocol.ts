@@ -588,8 +588,11 @@ export function addCodexTurnUsage(
   const outputTokens = numberField(spent.turn, "outputTokens");
   const cacheReported =
     "cachedInputTokens" in spent.turn || "cacheWriteInputTokens" in spent.turn;
+  // Codex counts cache reads inside `inputTokens`; other harnesses report
+  // them apart, so show only the uncached part as input.
+  const uncachedInputTokens = Math.max(0, inputTokens - cacheReadTokens);
   const metrics: TurnMetrics = {
-    ...(inputTokens ? { inputTokens } : {}),
+    ...(uncachedInputTokens ? { inputTokens: uncachedInputTokens } : {}),
     ...(outputTokens ? { outputTokens } : {}),
     ...(cacheReadTokens ? { cacheReadTokens } : {}),
     ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
