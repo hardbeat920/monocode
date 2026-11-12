@@ -228,7 +228,14 @@ fn glass_platform() -> bool {
 fn hyprland_blur_enabled(output: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(output)
         .ok()
-        .and_then(|value| value.get("bool").and_then(|enabled| enabled.as_bool()))
+        .and_then(|value| match value.get("bool") {
+            Some(enabled) => enabled.as_bool(),
+            None => match value.get("int").and_then(|enabled| enabled.as_i64()) {
+                Some(1) => Some(true),
+                Some(0) => Some(false),
+                _ => None,
+            },
+        })
         .unwrap_or(false)
 }
 pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
@@ -694,6 +701,12 @@ mod composer_tests {
     fn hyprland_blur_requires_an_enabled_option() {
         assert!(hyprland_blur_enabled(br#"{"bool":true}"#));
         assert!(!hyprland_blur_enabled(br#"{"bool":false}"#));
+        assert!(hyprland_blur_enabled(br#"{"int":1}"#));
+        assert!(!hyprland_blur_enabled(br#"{"int":0}"#));
+        assert!(!hyprland_blur_enabled(br#"{"int":2}"#));
+        assert!(!hyprland_blur_enabled(br#"{"int":"1"}"#));
+        assert!(!hyprland_blur_enabled(br#"{"bool":null,"int":1}"#));
+        assert!(!hyprland_blur_enabled(br#"{"bool":false,"int":1}"#));
         assert!(!hyprland_blur_enabled(br#"{}"#));
         assert!(!hyprland_blur_enabled(b"invalid"));
     }
