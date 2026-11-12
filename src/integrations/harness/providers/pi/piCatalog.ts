@@ -54,7 +54,7 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
   const { path } = await flavor.resolveBinary();
   const cwd = workingDirectory ?? (await homeDir());
   const probeId = `${flavor.probeChildId}-${crypto.randomUUID()}`;
-  const rpc = new PiRpc(probeId, () => undefined, flavor.label);
+  const rpc = new PiRpc(probeId, () => undefined, flavor);
   const models = new Map<string, AgentModel>();
   const collectedModels = () =>
     [...models.values()].sort((left, right) =>

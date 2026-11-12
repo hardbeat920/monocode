@@ -22,6 +22,12 @@ export type PiFlavor = {
   probeChildId: string;
   /** Child id for the shared one-shot text generator. */
   textChildId: string;
+  /**
+   * How long RPC requests wait for the `ready` frame that opens protocol
+   * negotiation. Unset when the CLI never sends `ready`, so requests go out
+   * immediately.
+   */
+  rpcReadyGraceMs?: number;
 };
 
 export const PI_FLAVOR: PiFlavor = {
@@ -49,4 +55,7 @@ export const OMP_FLAVOR: PiFlavor = {
   planTools: ["read", "grep", "glob", "lsp"],
   probeChildId: "monocode-omp-probe",
   textChildId: "monocode-omp-text",
+  // omp sends `ready` once its session has loaded, before answering any
+  // command; builds without it get held requests on protocol v1 after this.
+  rpcReadyGraceMs: 5_000,
 };
