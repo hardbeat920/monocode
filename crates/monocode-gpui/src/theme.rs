@@ -200,16 +200,43 @@ impl Tokens {
     }
 }
 
-/// Platforms whose compositor blurs the desktop behind the window: macOS
-/// vibrancy and Windows Acrylic. Linux blur is compositor-dependent, so it
-/// stays opaque rather than exposing the raw desktop.
-pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+fn glass_platform() -> bool {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        // shortcut: blur changes require an app restart, recheck when live compositor settings are supported.
+        return *ENABLED.get_or_init(|| {
+            std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+                && std::env::var_os("WAYLAND_DISPLAY").is_some()
+                && std::process::Command::new("hyprctl")
+                    .args(["-j", "getoption", "decoration:blur:enabled"])
+                    .output()
+                    .ok()
+                    .is_some_and(|output| {
+                        output.status.success() && hyprland_blur_enabled(&output.stdout)
+                    })
+        });
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn hyprland_blur_enabled(output: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(output)
+        .ok()
+        .and_then(|value| value.get("bool").and_then(|enabled| enabled.as_bool()))
+        .unwrap_or(false)
+}
 pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
-    GLASS_PLATFORM && p.theme != "light" && !(p.theme == "system" && system_light)
+    glass_platform() && p.theme != "light" && !(p.theme == "system" && system_light)
 }
 /// What the compositor puts behind a window that does or doesn't paint glass.
 pub(crate) fn window_backdrop(glass: bool) -> gpui::WindowBackgroundAppearance {
-    if glass && GLASS_PLATFORM {
+    if glass && glass_platform() {
         gpui::WindowBackgroundAppearance::Blurred
     } else {
         gpui::WindowBackgroundAppearance::Opaque
@@ -368,7 +395,7 @@ pub(crate) fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {
         return fill;
     }
-    if GLASS_PLATFORM {
+    if glass_platform() {
         // #0d0d0d at 80%, with the stylesheet's #ebebeb 5% wash above it.
         rgba(0x1b1b1bcf).into()
     } else {
@@ -379,7 +406,7 @@ pub(crate) fn pane_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.pane)) {
         return fill;
     }
-    if GLASS_PLATFORM {
+    if glass_platform() {
         rgba(0x06060666).into()
     } else {
         rgb(CHAT).into()
@@ -661,6 +688,15 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hyprland_blur_requires_an_enabled_option() {
+        assert!(hyprland_blur_enabled(br#"{"bool":true}"#));
+        assert!(!hyprland_blur_enabled(br#"{"bool":false}"#));
+        assert!(!hyprland_blur_enabled(br#"{}"#));
+        assert!(!hyprland_blur_enabled(b"invalid"));
+    }
 
     #[test]
     fn composer_surface_matches_react_dark_ink_and_solid_light_background() {
