@@ -46,6 +46,16 @@ export function antigravitySpawnCwd(binary: string, fallback: string): string {
   return separator >= 0 ? binary.slice(0, separator + 1) : fallback;
 }
 
+/** Read standard ACP mode IDs, preserving absent metadata as the legacy fallback signal. */
+export function readAvailableModeIds(raw: unknown): string[] | undefined {
+  const availableModes = asRecord(raw)?.availableModes;
+  if (!Array.isArray(availableModes)) return undefined;
+  return availableModes.flatMap((mode) => {
+    const id = asRecord(mode)?.id;
+    return typeof id === "string" && id.trim() ? [id] : [];
+  });
+}
+
 /** Map permissions to advertised ACP modes, falling back to the legacy server contract. */
 export function antigravityModeId(
   runtimeMode: RuntimeMode,

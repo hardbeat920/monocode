@@ -19,6 +19,7 @@ import {
   antigravitySpawnCwd,
   permissionOptionId,
   permissionRequestFromAcp,
+  readAvailableModeIds,
   readConfigOptions,
   resolveSettingConfigId,
   sessionIdFromResult,
@@ -35,6 +36,7 @@ type SessionSetupResult = {
   sessionId?: string;
   session_id?: string;
   configOptions?: unknown;
+  modes?: unknown;
 };
 
 type Live = {
@@ -48,6 +50,8 @@ type Live = {
   cwd: string;
   modelConfigId: string;
   configOptions: SessionConfigOption[];
+  /** Standard ACP mode IDs retained from new, resumed, or loaded session setup. */
+  availableModes?: string[];
   muteUpdates: boolean;
   cancelled: boolean;
   /** Server state is unknowable after a mid-prompt cancel; recycle before reuse. */
@@ -557,6 +561,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       cwd: input.cwd,
       modelConfigId: extractModelConfigId(configOptions),
       configOptions,
+      availableModes: readAvailableModeIds(setup?.modes),
       muteUpdates: didLoad,
       cancelled: false,
       stale: false,
@@ -637,9 +642,10 @@ async function applyRuntimeMode(
         modeId: antigravityModeId(
           runtimeMode,
           planning,
-          live.configOptions.find(
-            (option) => option.category === "mode" || option.id === "mode",
-          )?.choices,
+          live.availableModes ??
+            live.configOptions.find(
+              (option) => option.category === "mode" || option.id === "mode",
+            )?.choices,
         ),
       },
       CONTROL_TIMEOUT_MS,

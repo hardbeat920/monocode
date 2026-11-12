@@ -20,6 +20,16 @@ it("uses the workspace cwd for agy acp and sibling resources for standalone serv
   expect(antigravity.antigravitySpawnCwd("/tools/agy_acp_server.par", "/repo")).toBe("/tools/");
 });
 
+it("reads standard ACP modes and distinguishes absent metadata from an empty advertised list", () => {
+  for (const raw of [undefined, null, {}, { availableModes: null }, { availableModes: "plan" }]) {
+    expect(antigravity.readAvailableModeIds(raw)).toBeUndefined();
+  }
+  expect(antigravity.readAvailableModeIds({ availableModes: [] })).toEqual([]);
+  expect(antigravity.readAvailableModeIds({ availableModes: [
+    null, {}, { id: 42 }, { id: " " }, { id: "accept-edits" }, { id: "plan" },
+  ] })).toEqual(["accept-edits", "plan"]);
+});
+
 it("uses the current CLI's advertised modes and keeps full-access approvals on the client", () => {
   const modes = ["default", "accept-edits", "plan"];
   expect(antigravity.antigravityModeId("auto-accept-edits", false, modes)).toBe("accept-edits");
