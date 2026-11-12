@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod acp;
+mod antigravity;
 mod commands;
 pub use commands::{
     compact, discover_commands, native_invocation, native_prompt, prepare_prompt, supports_compact,
@@ -142,6 +143,7 @@ pub fn resolve(kind: Kind) -> Option<PathBuf> {
     }
     resolve_auto(kind)
 }
+/// Discover a provider from its environment override, GUI PATH, or standard install locations.
 pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
     let key = format!("MONOCODE_{}_BINARY", kind.id().to_uppercase());
     if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
@@ -208,6 +210,19 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
             .collect();
         candidates.extend(paths);
     }
+    if kind == Kind::Antigravity {
+        let local = if cfg!(windows) {
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+        } else {
+            None
+        };
+        antigravity::extend_candidates(&mut candidates, local.as_deref());
+    }
+    resolve_candidates(kind, candidates)
+}
+
+/// Choose the first executable matching the provider, including Windows launcher extensions.
+fn resolve_candidates(kind: Kind, candidates: Vec<PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find_map(|p| {
         #[cfg(windows)]
         for ext in ["exe", "cmd", "bat", "com"] {
@@ -1375,6 +1390,7 @@ fn run_process(
     run_operation(request, cancel, controls, probe, false, false, emit)
 }
 
+/// Drive a provider operation with isolated process I/O, cancellation, and streamed events.
 fn run_operation(
     request: Request,
     cancel: Arc<AtomicBool>,
@@ -1568,7 +1584,7 @@ fn run_operation(
     }
     command
         .current_dir(if request.kind == Kind::Antigravity {
-            request.binary.parent().unwrap_or(&request.cwd)
+            antigravity::spawn_cwd(&request.binary, &request.cwd)
         } else {
             &request.cwd
         })
