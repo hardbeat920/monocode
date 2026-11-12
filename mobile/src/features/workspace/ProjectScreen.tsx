@@ -39,6 +39,7 @@ import {
   useSessionErrorNotice,
 } from "@/features/sessions/sessionError";
 import { LiveSessions } from "@/features/sessions/LiveSessions";
+import { HandoffProvider } from "@/features/sessions/HandoffSheet";
 import { NativeTranscript } from "@/features/sessions/NativeTranscript";
 import { FileOpener } from "@/features/sessions/Markdown";
 import {
@@ -94,12 +95,15 @@ export function ProjectScreen({
   sessionId,
   sheet = false,
   title,
+  focusComposer = false,
 }: {
   project: Project;
   sessionId: string | undefined;
   sheet?: boolean;
   /** Its title until the session is in the catalog, which may leave it out. */
   title?: string;
+  /** Focus a freshly created handoff once the sheet has opened. */
+  focusComposer?: boolean;
 }) {
   const { startSession, sendMessage, stop } = useWorkspace();
   const [openAfterStarting] = useOpenSessionAfterStarting();
@@ -188,23 +192,25 @@ export function ProjectScreen({
           : project.branch);
 
   const harness =
-    chosen?.pick.harness ?? session?.harness ?? project.defaultHarness;
+    chosen?.pick.harness ?? session?.harness ?? catalog?.current.harness ?? project.defaultHarness;
   const model =
     chosen?.name ??
     session?.modelName ??
     session?.model ??
+    catalog?.models.find((entry) => entry.id === catalog.current.model && entry.harness === catalog.current.harness)?.name ??
+    catalog?.current.model ??
     project.defaultModelName ??
     project.defaultModel ??
     "";
   // The effort shown by the model's name, read from the desktop's models: for
   // a pick here or in Settings, else what the session or project runs with.
   const effortPick = chosen?.pick ?? catalog?.current;
-  const effort = effortPick
+  const effort = (effortPick
     ? effortLabel(
         catalog?.models.find((entry) => entry.id === effortPick.model),
         effortPick,
       )
-    : undefined;
+    : undefined) ?? chosen?.effort;
 
   // When opening a new session, the empty screen fades away and is back once
   // that session is closed again.
@@ -366,6 +372,7 @@ export function ProjectScreen({
           <Composer
             key={sessionId ?? project.id}
             active={focused && (sessionId != null || pages.view === "chat")}
+            autoFocus={focusComposer && pushedIn}
             notice={sessionNotice}
             context={project.name}
             branch={sessionId ? (session?.branch ?? project.branch) : branch}
@@ -487,7 +494,7 @@ export function ProjectScreen({
               <Timed id="project sessions page">
                 <SessionsPage
                   projectId={project.id}
-                  active={pages.view === "sessions"}
+                  active={focused && pages.view === "sessions"}
                   worktree={
                     workspace.mode === "existing" ? workspace.worktree : undefined
                   }
@@ -577,19 +584,21 @@ function SessionTranscript({
   // Mounted with the screen, ahead of the spinner over it, so its scroll
   // view is the one iOS finds to blur under the native header.
   return (
-    <FileOpener value={openFile}>
-      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
-        key={sessionId}
-        pushed
-        busy={busy}
-        turns={turns}
-        hasOlder={hasOlder}
-        loadOlder={loadOlder}
-      />}
-      {!hasNativeTranscript && turns.length === 0 && !failed ? (
-        <TranscriptLoading key={`loading:${sessionId}`} />
-      ) : null}
-    </FileOpener>
+    <HandoffProvider key={sessionId} conversationId={sessionId} projectId={projectId}>
+      <FileOpener value={openFile}>
+        {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
+          key={sessionId}
+          pushed
+          busy={busy}
+          turns={turns}
+          hasOlder={hasOlder}
+          loadOlder={loadOlder}
+        />}
+        {!hasNativeTranscript && turns.length === 0 && !failed ? (
+          <TranscriptLoading key={`loading:${sessionId}`} />
+        ) : null}
+      </FileOpener>
+    </HandoffProvider>
   );
 }
 

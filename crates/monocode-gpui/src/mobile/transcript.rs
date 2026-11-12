@@ -652,6 +652,7 @@ fn agent_turn(source: &Source, turn: &Turn, live: bool) -> Value {
     let mut out = object(json!({"id": turn.id(), "items": items}));
     if !live && responded {
         out.insert("footer".into(), true.into());
+        out.insert("handoffFrom".into(), harness(source, run).into());
         put(
             &mut out,
             "completedAt",
@@ -1023,6 +1024,7 @@ mod tests {
         assert_eq!(turn["footer"], true);
         assert_eq!(turn["completedAt"], 3_000);
         assert_eq!(turn["copyText"], "Hello!");
+        assert_eq!(turn["handoffFrom"], "codex");
         assert_eq!(turn["durationMs"], 2_000);
         assert!(turn.get("metrics").is_none());
         assert_eq!(
