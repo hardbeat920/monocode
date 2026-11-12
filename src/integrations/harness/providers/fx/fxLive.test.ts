@@ -22,7 +22,7 @@ vi.mock("../../core/child", () => ({
   },
 }));
 
-const { sendFxTurn, stopFxSession } = await import("./fx");
+const { bindFxSession, sendFxTurn, stopFxSession } = await import("./fx");
 import type { HarnessEvent } from "../../core/types";
 
 function reply(id: number, result: unknown) {
@@ -51,6 +51,36 @@ const waitFor = async (pred: () => boolean, label: string) => {
 describe("fx live turn sequence", () => {
   beforeEach(() => {
     sent.length = 0;
+  });
+
+  it("resumes a saved session with its cwd and MCP servers", async () => {
+    bindFxSession("t-resume", "S9", "/repo");
+    const turn = sendFxTurn({
+      sessionId: "t-resume",
+      cwd: "/repo",
+      model: "fx:zai/glm-5.2",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "hey",
+      attachments: [],
+      onEvent: () => undefined,
+    } as never);
+    turn.catch(() => undefined);
+    await waitFor(
+      () => parse().some((m) => m.method === "initialize"),
+      "initialize",
+    );
+    reply(parse().find((m) => m.method === "initialize")!.id, {
+      protocolVersion: 1,
+    });
+    await waitFor(
+      () => parse().some((m) => m.method === "session/resume"),
+      "session/resume",
+    );
+    const resume = parse().find((m) => m.method === "session/resume")!;
+    expect(resume.params).toMatchObject({ sessionId: "S9", cwd: "/repo" });
+    expect(Array.isArray(resume.params.mcpServers)).toBe(true);
+    await stopFxSession("t-resume");
   });
 
   it("auto-approves a permission request instead of blocking the turn", async () => {
