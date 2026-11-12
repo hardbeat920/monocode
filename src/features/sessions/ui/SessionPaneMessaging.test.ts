@@ -163,6 +163,21 @@ it("displays and clears current extension statuses", () => {
   expect(container.textContent).not.toContain("20 TPS");
 });
 
+it("announces underscore-delimited permission and mode keys without TPS updates", () => {
+  const pane = props();
+  render(pane);
+  const announcements = container.querySelector('[aria-live="polite"][aria-atomic="true"]')!;
+  for (const tps of ["20 TPS mode", "30 TPS mode"]) {
+    render({ ...pane, session: { ...pane.session, extensionStatuses: {
+      permission_level: "read-only", coding_mode: "enabled", TPS_status: tps,
+    } } });
+    expect(announcements.textContent).toContain("read-only");
+    expect(announcements.textContent).toContain("enabled");
+    expect(announcements.textContent).not.toContain(tps);
+    expect(container.textContent).toContain(tps);
+  }
+});
+
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");
   const pane = props();

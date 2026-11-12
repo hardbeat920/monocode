@@ -876,7 +876,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="sr-only" aria-live="polite" aria-atomic="true">
             {Object.entries(session.extensionStatuses ?? {})
-              .filter(([key, status]) => /\b(?:permission|mode)\b/i.test(`${key} ${status}`) && !/\btps\b/i.test(key))
+              .filter(([key, status]) => /(?:^|[\W_])(?:permission|mode)(?:$|[\W_])/i.test(`${key} ${status}`) && !/(?:^|[\W_])tps(?:$|[\W_])/i.test(key))
               .map(([, status]) => status).join(". ")}
           </div>
           {Object.keys(session.extensionStatuses ?? {}).length > 0 && (
