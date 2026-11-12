@@ -73,6 +73,28 @@ fn publish(
         std::thread::sleep(Duration::from_millis(4));
     }
 }
+/// Quitting is process-wide and one-way, so a test that quits runs alone in a
+/// fresh copy of the test binary. True in that copy; the parent checks its result.
+#[cfg(test)]
+pub(crate) fn runs_alone(test: &str) -> bool {
+    const ALONE: &str = "MONOCODE_QUIT_TEST_ALONE";
+    if std::env::var_os(ALONE).is_some() {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env(ALONE, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
 pub(crate) fn locked(store: &Database) -> Result<std::sync::MutexGuard<'_, Store>, String> {
     store
         .lock()
@@ -119,6 +141,7 @@ fn run_turn_using(
         prompt,
         mut settings,
     } = input;
+    let _registration = monocode_core::process::register_turn(cancel.clone());
     if settings.account.root.is_none() && settings.account.id != monocode_core::accounts::DEFAULT {
         settings.account.root = locked(&store)
             .ok()
@@ -151,6 +174,11 @@ fn run_turn_using(
         .unwrap_or_default();
     let mut usage_limit = None;
     let result = (|| {
+        // Launched just before the quit, this turn would only be cancelled, and
+        // saving its prompt would mark the message delivered. Leave it queued.
+        if settings.mono_message_id.is_some() && monocode_core::process::shutting_down() {
+            return Err("Stopped".into());
+        }
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
             return Err(reason);
         }
@@ -927,8 +955,12 @@ fn run_turn_using(
         }
         result
     })();
-    let cancelled =
-        cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    // A provider killed or cancelled by the quit was interrupted, not failed.
+    // A turn that completed while the app was quitting is simply done.
+    let quitting = monocode_core::process::shutting_down() && result.is_err();
+    let cancelled = quitting
+        || cancel.load(Ordering::Relaxed)
+        || result.as_ref().is_err_and(|error| error == "Stopped");
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -975,7 +1007,9 @@ fn run_turn_using(
                 monocode_core::tool::ToolState::Failed
             };
             if tool.output.is_empty() {
-                tool.output = if cancelled {
+                tool.output = if quitting {
+                    monocode_core::process::INTERRUPTED_BY_QUIT.into()
+                } else if cancelled {
                     "Cancelled".into()
                 } else {
                     result.as_ref().err().cloned().unwrap_or_else(|| {
