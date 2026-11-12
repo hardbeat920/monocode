@@ -79,6 +79,14 @@ export class OpenCodeClient {
     );
   }
 
+  async getAgents(): Promise<unknown> {
+    return this.request("GET", "/agent");
+  }
+
+  async getConfig(): Promise<unknown> {
+    return this.request("GET", "/config");
+  }
+
   async getMessages(sessionID: string): Promise<OpenCodeMessage[]> {
     const messages = await this.request<unknown[]>(
       "GET",
@@ -86,6 +94,18 @@ export class OpenCodeClient {
     );
     if (this.generation === "v1") return messages as OpenCodeMessage[];
     return messages.map(normalizeV2Message);
+  }
+
+  async sessionStatus(sessionID: string): Promise<string> {
+    const statuses = await this.request<Record<string, unknown>>(
+      "GET",
+      "/session/status",
+    );
+    // OpenCode v1 removes idle entries, so /session/status omits them.
+    // https://github.com/anomalyco/opencode/blob/v1.14.19/packages/opencode/src/session/status.ts#L74-L77
+    return typeof asRecord(statuses?.[sessionID])?.type === "string"
+      ? (asRecord(statuses[sessionID])!.type as string)
+      : "idle";
   }
 
   async createSession(input: {
@@ -182,7 +202,7 @@ export class OpenCodeClient {
         `/session/${enc(sessionID)}/${this.generation === "v2" ? "interrupt" : "abort"}`,
       ),
       this.generation === "v2" ? { query: { resume: "false" } } : { body: {} },
-    ).catch(() => undefined);
+    );
   }
 
   /** Drop a throwaway session. Interrupt only stops the run. */
@@ -242,6 +262,7 @@ export class OpenCodeClient {
   /** Resolves to the v2 inbox id of the admitted prompt, when reported. */
   async promptAsync(input: {
     sessionID: string;
+    messageID?: string;
     model: { providerID: string; modelID: string };
     agent?: string;
     variant?: string;
@@ -262,6 +283,7 @@ export class OpenCodeClient {
       `/session/${enc(input.sessionID)}/prompt_async`,
       {
         body: {
+          ...(input.messageID ? { messageID: input.messageID } : {}),
           model: input.model,
           ...(input.agent ? { agent: input.agent } : {}),
           ...(input.variant ? { variant: input.variant } : {}),

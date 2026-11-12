@@ -32,6 +32,7 @@ export type HarnessEvent =
   | { type: "background.updated"; tasks: string[] }
   | ({ type: "interjection"; text: string } & InterjectionMeta)
   | { type: "message.delta"; text: string }
+  | { type: "message.part"; partId: string; text: string; reasoning: boolean; streaming: boolean }
   | { type: "message.completed" }
   | {
       type: "image.generated";

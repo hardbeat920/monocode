@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,7 +114,14 @@ afterAll(async () => {
   store?.close();
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
-  if (directory) rmSync(directory, { recursive: true, force: true });
+  // Windows may retain a directory handle briefly after fixture processes exit.
+  if (directory)
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
 });
 
 it("runs an OpenCode 2.x session through the host service commands and bridge", async () => {

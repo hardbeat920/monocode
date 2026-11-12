@@ -125,12 +125,9 @@ pub async fn mcp_add(
                 }
                 let major = crate::harness::opencode_major_version(&cwd, binary_path.as_deref())?;
                 let override_path = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
-                let path = opencode_config_path(
-                    Path::new(&home),
-                    &project,
-                    &scope,
-                    override_path.as_deref(),
-                );
+                let config_root = opencode_global_config_dir(Path::new(&home));
+                let path =
+                    opencode_config_path(&config_root, &project, &scope, override_path.as_deref());
                 write_opencode_server(&path, &name, server, major)
             }
             "claude" | "codex" => crate::harness::add_mcp_via_cli(
@@ -148,8 +145,20 @@ pub async fn mcp_add(
     .map_err(|e| e.to_string())?
 }
 
+fn opencode_global_config_dir(home: &Path) -> PathBuf {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    opencode_config_dir(home, xdg.as_deref())
+}
+
+fn opencode_config_dir(home: &Path, xdg: Option<&Path>) -> PathBuf {
+    xdg.filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("opencode")
+}
+
 fn opencode_config_path(
-    home: &Path,
+    config_root: &Path,
     project: &Path,
     scope: &str,
     override_path: Option<&Path>,
@@ -160,7 +169,7 @@ fn opencode_config_path(
         }
     }
     let directory = if scope == "user" {
-        home.join(".config/opencode")
+        config_root.to_path_buf()
     } else {
         project.to_path_buf()
     };
@@ -445,6 +454,7 @@ pub async fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
             codex_home.as_deref(),
             &desktop_config,
             opencode_config.as_deref(),
+            &opencode_global_config_dir(Path::new(&home)),
         ))
     })
     .await
@@ -457,6 +467,7 @@ fn discover(
     codex_home_override: Option<&Path>,
     desktop_config: &Path,
     opencode_config: Option<&Path>,
+    opencode_config_root: &Path,
 ) -> Vec<McpConnection> {
     let mut connections = Vec::new();
     let claude = home.join(".claude.json");
@@ -504,7 +515,7 @@ fn discover(
             &mut connections,
             "opencode",
             "user",
-            &home.join(".config/opencode").join(file),
+            &opencode_config_root.join(file),
             "mcp",
         );
     }
@@ -668,7 +679,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 /// Remove JSONC comments and trailing commas without touching quoted text.
-fn strip_jsonc(raw: &str) -> String {
+pub(crate) fn strip_jsonc(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut clean = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -970,6 +981,43 @@ mod tests {
     }
 
     #[test]
+    fn uses_xdg_config_for_opencode_discovery_and_additions() {
+        let root =
+            std::env::temp_dir().join(format!("monocode-opencode-xdg-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let project = root.join("project");
+        let xdg = root.join("xdg");
+        std::fs::create_dir_all(&project).unwrap();
+        let config_root = opencode_config_dir(&home, Some(&xdg));
+        assert_eq!(config_root, xdg.join("opencode"));
+        let path = opencode_config_path(&config_root, &project, "user", None);
+        write_opencode_server(
+            &path,
+            "docs",
+            serde_json::json!({"url":"https://example.com/mcp"}),
+            1,
+        )
+        .unwrap();
+        let found = discover(
+            &home,
+            &project,
+            None,
+            &root.join("desktop.json"),
+            None,
+            &config_root,
+        );
+        assert!(found.iter().any(|row| row.provider == "opencode"
+            && row.name == "docs"
+            && row.config_path == path.to_string_lossy()));
+        assert!(!home.join(".config/opencode/opencode.json").exists());
+        assert_eq!(
+            opencode_config_dir(&home, None),
+            home.join(".config/opencode")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn concurrent_additions_keep_every_server() {
         let root = std::env::temp_dir().join(format!("monocode-mcp-lock-{}", uuid::Uuid::new_v4()));
         let path = root.join(".cursor/mcp.json");
@@ -1088,7 +1136,14 @@ mod tests {
         let codex_config: toml::Value = toml::from_str(&codex_raw).unwrap();
         assert!(codex_config.get("mcp_servers").is_some());
         std::fs::write(home.join(".config/opencode/opencode.jsonc"), "{\"mcp\": {\"servers\": {\"four\": {\"type\": \"remote\", \"url\": \"https://example.com\",},},}}").unwrap();
-        let found = discover(&home, &project, None, &desktop, None);
+        let found = discover(
+            &home,
+            &project,
+            None,
+            &desktop,
+            None,
+            &home.join(".config/opencode"),
+        );
         let names: Vec<_> = found
             .iter()
             .map(|entry| (entry.provider.as_str(), entry.name.as_str()))
@@ -1215,7 +1270,14 @@ mod tests {
             r#"{"mcpServers":{"servers":{"command":"npx"},"docs":{"command":"node"}}}"#,
         )
         .unwrap();
-        let found = discover(&root, &project, None, &root.join("desktop.json"), None);
+        let found = discover(
+            &root,
+            &project,
+            None,
+            &root.join("desktop.json"),
+            None,
+            &root.join(".config/opencode"),
+        );
         assert_eq!(found.len(), 2);
         assert!(found.iter().all(|server| server.scope == "user"));
         assert!(found.iter().any(|server| server.name == "servers"));
