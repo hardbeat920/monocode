@@ -214,6 +214,9 @@ describe("InboxDetail layout", () => {
     const merged = renderDetail(item({ kind: "pr", state: "merged" }));
     expect(merged).not.toContain("Reopen pull request");
     expect(merged).not.toContain('aria-label="Merge options"');
+    expect(merged).toContain("Delete branch");
+    expect(closed).not.toContain("Delete branch");
+    expect(draft).not.toContain("Delete branch");
   });
 
   it("does not show GitHub lifecycle actions for GitLab merge requests", () => {
@@ -229,6 +232,7 @@ describe("InboxDetail layout", () => {
     expect(markup).not.toContain('aria-label="Merge options"');
     expect(markup).not.toContain("Convert to draft");
     expect(markup).not.toContain("Close pull request");
+    expect(markup).not.toContain("Delete branch");
   });
 
   it("pins the linked-item identity above the panel scroller", () => {
