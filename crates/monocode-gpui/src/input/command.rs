@@ -9,7 +9,6 @@ const ICON_SLOT: &str = "\u{2003}\u{2002}";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
-    Draft,
     Plan,
     Operator,
     Orchestrator,
@@ -17,7 +16,6 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
-            "draft" => Some(Self::Draft),
             "plan" => Some(Self::Plan),
             "operator" => Some(Self::Operator),
             "orchestrator" => Some(Self::Orchestrator),
@@ -26,7 +24,6 @@ impl Command {
     }
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Self::Draft => "draft",
             Self::Plan => "plan",
             Self::Operator => "operator",
             Self::Orchestrator => "orchestrator",
@@ -34,19 +31,14 @@ impl Command {
     }
     pub(crate) fn icon(self) -> &'static str {
         match self {
-            Self::Draft => "circle-dashed-hi",
             Self::Plan => "ai-idea",
             Self::Operator => "cursor-magic",
             Self::Orchestrator => "share",
         }
     }
     pub(crate) fn color(self) -> Hsla {
-        if self == Self::Draft {
-            return crate::theme::content(0.6);
-        }
         let dark = crate::theme::content(1.).l > 0.5;
         let mut color: Hsla = rgb(match (self, dark) {
-            (Self::Draft, _) => unreachable!(),
             (Self::Plan, true) => 0xfff085,
             (Self::Plan, false) => 0xa65f00,
             (Self::Operator, true) => 0xb8e6fe,
