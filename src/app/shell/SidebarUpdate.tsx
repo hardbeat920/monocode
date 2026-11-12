@@ -1,9 +1,11 @@
 import { ArrowDownCircle, Loader } from "../../shared/ui/icons";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   installPendingUpdate,
-  probeForUpdate,
+  probeForUpdateThrottled,
   readAppVersion,
+  type UpdateCheckKind,
   type UpdaterSnapshot,
 } from "../model/updater";
 import type { InstalledUpdate } from "../model/updateNotice";
@@ -16,6 +18,8 @@ import { UpdateRailCard } from "./UpdateRailCard";
 export function isSidebarUpdateActionable(snapshot: UpdaterSnapshot): boolean {
   return snapshot.phase === "available" || snapshot.phase === "downloading";
 }
+
+const BACKGROUND_PROBE_TICK_MS = 15 * 60 * 1000;
 
 export function SidebarUpdateFooter({
   update,
@@ -31,38 +35,56 @@ export function SidebarUpdateFooter({
     currentVersion: "…",
   });
 
-  // The automatic probe runs on mount whether or not it ends up rendering
-  // anything, so a newly published version still surfaces on its own. The
-  // snapshot lives here rather than in SidebarUpdate so the footer can drop its
-  // padding entirely when neither child has anything to show.
+  // Automatic probes run on focus and on a timer (both throttled in
+  // probeForUpdateThrottled), whether or not they end up rendering anything, so
+  // a newly published version still surfaces on its own. The snapshot lives
+  // here rather than in SidebarUpdate so the footer can drop its padding
+  // entirely when neither child has anything to show.
   useEffect(() => {
     let cancelled = false;
+    let unlisten: (() => void) | undefined;
 
-    (async () => {
+    const probe = async (kind: UpdateCheckKind) => {
+      let update: Awaited<ReturnType<typeof probeForUpdateThrottled>>;
+      try {
+        update = await probeForUpdateThrottled(kind);
+      } catch {
+        return;
+      }
+      if (update === undefined) return;
       const currentVersion = await readAppVersion();
       if (cancelled) return;
-      setSnapshot({ phase: "checking", currentVersion });
+      const next: UpdaterSnapshot = update
+        ? { phase: "available", currentVersion, availableVersion: update.version }
+        : { phase: "current", currentVersion };
+      // A download started from the sidebar owns the row until it finishes.
+      setSnapshot((prev) => (prev.phase === "downloading" ? prev : next));
+    };
 
-      try {
-        const update = await probeForUpdate();
-        if (cancelled) return;
-        if (update) {
-          setSnapshot({
-            phase: "available",
-            currentVersion,
-            availableVersion: update.version,
-          });
-          return;
-        }
-        setSnapshot({ phase: "current", currentVersion });
-      } catch {
-        if (cancelled) return;
-        setSnapshot({ phase: "idle", currentVersion });
-      }
-    })();
+    void probe(document.hasFocus() ? "fg" : "bg");
+    // Ticks often and lets the throttle decide, so timer drift never skips a
+    // whole interval.
+    const timer = setInterval(() => void probe("bg"), BACKGROUND_PROBE_TICK_MS);
+    // getCurrentWindow throws outside the Tauri runtime (tests, plain browser);
+    // the timer still covers background checks there.
+    try {
+      void getCurrentWindow()
+        .onFocusChanged(({ payload: focused }) => {
+          if (focused) void probe("fg");
+        })
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlisten = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // No window to listen to.
+    }
 
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      unlisten?.();
     };
   }, []);
 
