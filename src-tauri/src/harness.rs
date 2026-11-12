@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -18,6 +18,9 @@ use crate::passwd_identity;
 const STDOUT_EVENT: &str = "harness-stdout";
 const STDERR_EVENT: &str = "harness-stderr";
 const EXIT_EVENT: &str = "harness-exit";
+const LOGIN_CHILD_PREFIX: &str = "monocode-provider-login-";
+const LOGIN_TREE_EXIT_WAIT: Duration = Duration::from_secs(2);
+const SHUTDOWN_CLEANUP_WAIT: Duration = Duration::from_secs(5);
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
 
@@ -155,6 +158,9 @@ fn antigravity_args() -> Vec<String> {
 struct LiveChild {
     cwd: PathBuf,
     stdin: Mutex<ChildStdin>,
+    // Hold the leader's PID until cancellation has sent its last group signal.
+    reap_guard: Mutex<()>,
+    stop_guard: Mutex<()>,
     pid: u32,
     identity: Option<String>,
     account: Option<HarnessAccount>,
@@ -165,16 +171,36 @@ struct LiveSse {
 }
 
 struct HarnessInner {
+    shutting_down: bool,
+    active_spawns: usize,
+    #[cfg(not(windows))]
+    rejected_inflight: usize,
     children: HashMap<String, Arc<LiveChild>>,
+    stopping: HashMap<String, Arc<LiveChild>>,
+    login_accounts: HashMap<String, String>,
+    #[cfg(not(windows))]
+    rejected: HashMap<String, RejectedChild>,
+    failed_stops: HashSet<String>,
+    completed_logins: HashMap<String, (u32, Option<i32>)>,
+    spawning: HashSet<String>,
+    uncertain: HashSet<String>,
+    login_lines: HashMap<String, String>,
     epochs: HashMap<String, u64>,
 }
 
 pub struct HarnessHost {
     inner: Mutex<HarnessInner>,
+    shutdown_guard: Mutex<()>,
     sse: Mutex<HashMap<String, Arc<LiveSse>>>,
     runtime_binary_paths: Mutex<Option<HashMap<String, String>>>,
     /// Bumped by `kill_all` so a spawn that started before quit cannot reinsert.
     kill_all_gen: AtomicU64,
+}
+
+#[cfg(not(windows))]
+struct RejectedChild {
+    pid: u32,
+    child: Option<Child>,
 }
 
 impl HarnessHost {
@@ -198,9 +224,23 @@ impl HarnessHost {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HarnessInner {
+                shutting_down: false,
+                active_spawns: 0,
+                #[cfg(not(windows))]
+                rejected_inflight: 0,
                 children: HashMap::new(),
+                stopping: HashMap::new(),
+                login_accounts: HashMap::new(),
+                #[cfg(not(windows))]
+                rejected: HashMap::new(),
+                failed_stops: HashSet::new(),
+                completed_logins: HashMap::new(),
+                spawning: HashSet::new(),
+                uncertain: HashSet::new(),
+                login_lines: HashMap::new(),
                 epochs: HashMap::new(),
             }),
+            shutdown_guard: Mutex::new(()),
             sse: Mutex::new(HashMap::new()),
             runtime_binary_paths: Mutex::new(None),
             kill_all_gen: AtomicU64::new(0),
@@ -213,6 +253,111 @@ impl HarnessHost {
 
     fn get(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         self.lock_inner().children.get(session_id).cloned()
+    }
+
+    #[cfg(not(windows))]
+    fn stop_session_with(
+        &self,
+        session_id: &str,
+        require_existing: bool,
+        stop: impl FnOnce(u32) -> Result<(), String>,
+    ) -> Result<LoginStopResult, String> {
+        let live = {
+            let inner = self.lock_inner();
+            inner
+                .stopping
+                .get(session_id)
+                .or_else(|| inner.children.get(session_id))
+                .cloned()
+        };
+        let _stop = live
+            .as_ref()
+            .map(|live| live.stop_guard.lock().unwrap_or_else(|e| e.into_inner()));
+        if self.lock_inner().uncertain.contains(session_id) {
+            let live = live
+                .as_ref()
+                .ok_or("Previous login process exit could not be confirmed")?;
+            wait_for_login_tree_exit(live.pid)?;
+            let mut inner = self.lock_inner();
+            if !inner
+                .stopping
+                .get(session_id)
+                .or_else(|| inner.children.get(session_id))
+                .is_some_and(|current| Arc::ptr_eq(current, live))
+            {
+                return Err("Previous login process changed during cleanup".into());
+            }
+            inner.uncertain.remove(session_id);
+            inner.stopping.remove(session_id);
+        }
+        {
+            let inner = self.lock_inner();
+            if let Some(&(pid, code)) = inner.completed_logins.get(session_id) {
+                return Ok(LoginStopResult {
+                    completed: true,
+                    code,
+                    pid: Some(pid),
+                });
+            }
+        }
+        if let Some(live) = live.as_ref() {
+            let _reap = live.reap_guard.lock().unwrap_or_else(|e| e.into_inner());
+            let mut inner = self.lock_inner();
+            if let Some(&(pid, code)) = inner.completed_logins.get(session_id) {
+                return Ok(LoginStopResult {
+                    completed: true,
+                    code,
+                    pid: Some(pid),
+                });
+            }
+            let current = inner
+                .stopping
+                .get(session_id)
+                .or_else(|| inner.children.get(session_id));
+            if !current.is_some_and(|current| Arc::ptr_eq(current, live)) {
+                inner.uncertain.insert(session_id.to_owned());
+                return Err("Previous login process exit could not be confirmed".into());
+            }
+            inner.stopping.insert(session_id.to_owned(), live.clone());
+            drop(inner);
+            let result = stop(live.pid);
+            #[cfg(unix)]
+            let leader_exited = result.is_err() && login_leader_exited(live.pid);
+            #[cfg(not(unix))]
+            let leader_exited = false;
+            let mut inner = self.lock_inner();
+            if result.is_err() && !leader_exited {
+                inner.failed_stops.insert(session_id.to_owned());
+            } else {
+                inner.failed_stops.remove(session_id);
+                inner.uncertain.insert(session_id.to_owned());
+            }
+            drop(inner);
+            drop(_reap);
+            if !leader_exited {
+                result?;
+            }
+            if let Err(error) = wait_for_login_tree_exit(live.pid) {
+                return Err(format!("Sign-in cleanup is unconfirmed: {error}"));
+            }
+            let mut inner = self.lock_inner();
+            inner.uncertain.remove(session_id);
+            if inner
+                .stopping
+                .get(session_id)
+                .is_some_and(|current| Arc::ptr_eq(current, live))
+            {
+                inner.stopping.remove(session_id);
+            }
+        } else if require_existing {
+            self.lock_inner().uncertain.insert(session_id.to_owned());
+            return Err("Previous login process exit could not be confirmed".into());
+        }
+        Ok(LoginStopResult {
+            completed: false,
+            code: None,
+            pid: None,
+        })
     }
 
     pub(crate) fn process_roots(&self) -> Vec<crate::resources::ProcessRoot> {
@@ -229,14 +374,146 @@ impl HarnessHost {
     }
 
     /// Stamp this spawn and drop any child already registered under the id.
-    fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
+    #[cfg(test)]
+    fn begin_spawn(&self, session_id: &str) -> Result<(u64, u64, Option<Arc<LiveChild>>), String> {
+        self.begin_spawn_for_account(session_id, None)
+    }
+
+    fn begin_spawn_for_account(
+        &self,
+        session_id: &str,
+        login_account: Option<&str>,
+    ) -> Result<(u64, u64, Option<Arc<LiveChild>>), String> {
         let mut inner = self.lock_inner();
+        if inner.shutting_down {
+            return Err("Harness is shutting down".into());
+        }
+        if inner.stopping.contains_key(session_id) {
+            return Err("Previous harness process has not exited".into());
+        }
+        if inner.completed_logins.contains_key(session_id) {
+            return Err("Previous login exit has not been acknowledged".into());
+        }
+        if inner.uncertain.contains(session_id) {
+            return Err(if cfg!(windows) {
+                "Previous login process exit could not be confirmed. Quit and relaunch MonoCode to clear its process job."
+            } else {
+                "Previous harness process exit could not be confirmed"
+            }.into());
+        }
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) && inner.children.contains_key(session_id) {
+            return Err(if cfg!(windows) {
+                "Sign-in for this account is already running in another window. Return there, or quit and relaunch MonoCode to start again."
+            } else {
+                "Previous harness process has not exited"
+            }.into());
+        }
+        if login_account.is_some_and(|account| {
+            inner
+                .login_accounts
+                .iter()
+                .any(|(id, current)| id != session_id && current == account)
+        }) {
+            return Err("Sign-in for this account is already running in another window".into());
+        }
+        if session_id.starts_with(LOGIN_CHILD_PREFIX)
+            && !inner.spawning.insert(session_id.to_owned())
+        {
+            return Err("Previous sign-in is still starting".into());
+        }
+        if let Some(account) = login_account {
+            inner
+                .login_accounts
+                .insert(session_id.to_owned(), account.to_owned());
+        }
         let kill_all = self.kill_all_gen.load(Ordering::SeqCst);
         let epoch = inner.epochs.entry(session_id.to_string()).or_insert(0);
         *epoch += 1;
         let epoch = *epoch;
         let prev = inner.children.remove(session_id);
-        (epoch, kill_all, prev)
+        inner.login_lines.remove(session_id);
+        Ok((epoch, kill_all, prev))
+    }
+
+    #[cfg(not(windows))]
+    fn recover_stopping_account(&self, account: &str, new_id: &str) -> Result<(), String> {
+        let ids: Vec<String> = {
+            let inner = self.lock_inner();
+            inner
+                .login_accounts
+                .iter()
+                .filter(|(id, key)| {
+                    *id != new_id && *key == account && inner.stopping.contains_key(*id)
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in ids {
+            self.stop_session_with(&id, true, signal_login_tree)?;
+            let pid = self
+                .lock_inner()
+                .completed_logins
+                .get(&id)
+                .map(|(pid, _)| *pid);
+            if let Some(pid) = pid {
+                self.acknowledge_login_exit(&id, pid)?;
+            } else if self.lock_inner().login_accounts.contains_key(&id) {
+                return Err("Previous sign-in exit is still pending".into());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn recover_rejected(&self, session_id: &str) -> Result<(), String> {
+        self.recover_rejected_with(session_id, signal_login_tree)
+    }
+
+    #[cfg(not(windows))]
+    fn recover_rejected_with(
+        &self,
+        session_id: &str,
+        signal: impl FnOnce(u32) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut rejected = {
+            let mut inner = self.lock_inner();
+            let Some(rejected) = inner.rejected.remove(session_id) else {
+                return Ok(());
+            };
+            inner.rejected_inflight += 1;
+            rejected
+        };
+        let _cleanup = RejectedCleanupReservation { host: self };
+        let result = cleanup_rejected_child(&mut rejected, signal);
+        let mut inner = self.lock_inner();
+        if let Err(error) = result {
+            inner.rejected.insert(session_id.to_owned(), rejected);
+            return Err(format!(
+                "Rejected harness process cleanup is unconfirmed: {error}"
+            ));
+        }
+        inner.uncertain.remove(session_id);
+        inner.login_accounts.remove(session_id);
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn recover_rejected_account(&self, account: &str, new_id: &str) -> Result<(), String> {
+        let ids: Vec<String> = {
+            let inner = self.lock_inner();
+            inner
+                .login_accounts
+                .iter()
+                .filter(|(id, key)| {
+                    *id != new_id && *key == account && inner.rejected.contains_key(*id)
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in ids {
+            self.recover_rejected(&id)?;
+        }
+        Ok(())
     }
 
     #[cfg(all(test, unix))]
@@ -278,7 +555,121 @@ impl HarnessHost {
         if inner.children.get(session_id).map(|live| live.pid) != Some(pid) {
             return None;
         }
+        inner.login_lines.remove(session_id);
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+            inner.login_accounts.remove(session_id);
+        }
         inner.children.remove(session_id)
+    }
+
+    #[cfg(not(windows))]
+    fn wait_for_login_exit(&self, session_id: &str, pid: u32, child: &mut Child) -> Option<i32> {
+        loop {
+            let live = {
+                let inner = self.lock_inner();
+                inner
+                    .stopping
+                    .get(session_id)
+                    .or_else(|| inner.children.get(session_id))
+                    .cloned()
+            };
+            let _reap = live
+                .as_ref()
+                .map(|live| live.reap_guard.lock().unwrap_or_else(|e| e.into_inner()));
+            let mut inner = self.lock_inner();
+            if inner.failed_stops.contains(session_id) {
+                drop(inner);
+                drop(_reap);
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // A stop arriving after reaping sees completion, never a reusable PID.
+                    let code = status.code();
+                    if inner.children.get(session_id).map(|live| live.pid) == Some(pid) {
+                        inner.children.remove(session_id);
+                        inner.login_lines.remove(session_id);
+                        inner
+                            .completed_logins
+                            .insert(session_id.to_owned(), (pid, code));
+                    }
+                    return code;
+                }
+                Ok(None) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    inner.uncertain.insert(session_id.to_owned());
+                    return None;
+                }
+            }
+            drop(inner);
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn acknowledge_login_exit(&self, session_id: &str, pid: u32) -> Result<(), String> {
+        let mut inner = self.lock_inner();
+        match inner.completed_logins.get(session_id) {
+            Some((current, _)) if *current == pid => {
+                inner.completed_logins.remove(session_id);
+                inner.login_accounts.remove(session_id);
+            }
+            Some(_) => return Err("Sign-in exit belongs to a different process".into()),
+            None => {}
+        }
+        Ok(())
+    }
+
+    fn publish_exit(&self, session_id: &str, pid: u32, emit: impl FnOnce()) {
+        self.publish_exit_with_mode(session_id, pid, emit, cfg!(windows));
+    }
+
+    fn publish_exit_with_mode(
+        &self,
+        session_id: &str,
+        pid: u32,
+        emit: impl FnOnce(),
+        detached_login: bool,
+    ) {
+        if session_id.starts_with(LOGIN_CHILD_PREFIX) && !detached_login {
+            emit();
+            return;
+        }
+        if self.remove_if_pid(session_id, pid).is_some() {
+            self.stop_sse(session_id);
+        }
+        emit();
+    }
+
+    #[cfg(any(windows, test))]
+    fn login_snapshot(&self, session_id: &str) -> Option<LoginSnapshot> {
+        if !session_id.starts_with(LOGIN_CHILD_PREFIX) {
+            return None;
+        }
+        let inner = self.lock_inner();
+        let live = inner.children.get(session_id)?;
+        Some(LoginSnapshot {
+            pid: live.pid,
+            line: inner.login_lines.get(session_id).cloned(),
+        })
+    }
+
+    #[cfg(any(windows, test))]
+    fn record_login_line(&self, session_id: &str, pid: u32, line: &str) {
+        if !line.contains("If the browser didn't open, visit: https://") {
+            return;
+        }
+        let mut inner = self.lock_inner();
+        if inner
+            .children
+            .get(session_id)
+            .is_some_and(|live| live.pid == pid)
+        {
+            inner
+                .login_lines
+                .insert(session_id.to_owned(), line.to_owned());
+        }
     }
 
     fn kill_account(&self, provider: &str, account_id: &str) {
@@ -289,8 +680,10 @@ impl HarnessHost {
                 .iter()
                 .filter_map(|(session_id, live)| {
                     let account = live.account.as_ref()?;
-                    (account.provider == provider && account.id == account_id)
-                        .then(|| session_id.clone())
+                    (account.provider == provider
+                        && account.id == account_id
+                        && (!cfg!(windows) || !session_id.starts_with(LOGIN_CHILD_PREFIX)))
+                    .then(|| session_id.clone())
                 })
                 .collect();
             session_ids
@@ -312,17 +705,272 @@ impl HarnessHost {
         terminate_all(&pids);
     }
 
-    pub(crate) fn kill_all(&self) {
-        let kids: Vec<Arc<LiveChild>> = {
+    fn has_login_account(&self, provider: &str, account_id: &str) -> bool {
+        let inner = self.lock_inner();
+        if inner
+            .login_accounts
+            .values()
+            .any(|key| key == &format!("{provider}:{account_id}"))
+        {
+            return true;
+        }
+        if inner
+            .spawning
+            .contains(&format!("{LOGIN_CHILD_PREFIX}{provider}-{account_id}"))
+        {
+            return true;
+        }
+        inner
+            .children
+            .iter()
+            .chain(&inner.stopping)
+            .any(|(id, live)| {
+                id.starts_with(LOGIN_CHILD_PREFIX)
+                    && live.account.as_ref().is_some_and(|account| {
+                        account.provider == provider && account.id == account_id
+                    })
+            })
+    }
+
+    pub(crate) fn kill_all(&self) -> Result<(), String> {
+        self.kill_all_mode(false)
+    }
+
+    pub(crate) fn kill_all_for_exit(&self) -> Result<(), String> {
+        self.kill_all_mode(true)
+    }
+
+    fn kill_all_mode(&self, final_exit: bool) -> Result<(), String> {
+        #[cfg(not(windows))]
+        {
+            self.kill_all_with(signal_login_tree, final_exit)
+        }
+        #[cfg(windows)]
+        {
+            self.kill_all_windows(final_exit)
+        }
+    }
+
+    fn wait_for_shutdown_cleanup(&self) -> Result<(), String> {
+        let deadline = Instant::now() + SHUTDOWN_CLEANUP_WAIT;
+        loop {
+            let inner = self.lock_inner();
+            let settled = inner.active_spawns == 0 && {
+                #[cfg(not(windows))]
+                {
+                    inner.rejected_inflight == 0
+                }
+                #[cfg(windows)]
+                {
+                    true
+                }
+            };
+            if settled {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("Harness shutdown could not confirm an in-flight spawn or process cleanup; retry quit after it settles".into());
+            }
+            drop(inner);
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn kill_all_with(
+        &self,
+        stop_login: impl Fn(u32) -> Result<(), String>,
+        final_exit: bool,
+    ) -> Result<(), String> {
+        let _shutdown = self
+            .shutdown_guard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (was_shutting_down, kids, logins) = {
             let mut inner = self.lock_inner();
+            let was_shutting_down = inner.shutting_down;
+            inner.shutting_down = true;
             self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
-            inner.children.drain().map(|(_, child)| child).collect()
+            let mut kids = Vec::new();
+            inner.children.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.clone());
+                    false
+                }
+            });
+            inner.stopping.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.clone());
+                    false
+                }
+            });
+            let logins: HashSet<_> = inner
+                .children
+                .keys()
+                .chain(inner.stopping.keys())
+                .cloned()
+                .collect();
+            inner.login_lines.retain(|id, _| logins.contains(id));
+            (was_shutting_down, kids, logins)
         };
+        let result = (|| {
+            self.stop_all_sse();
+            let pids: Vec<_> = kids.iter().map(|live| live.pid).collect();
+            drop(kids);
+            terminate_all(&pids);
+            let mut error = None;
+            for id in logins {
+                if let Err(reason) = self.stop_session_with(&id, false, &stop_login) {
+                    error.get_or_insert(reason);
+                }
+            }
+            self.wait_for_shutdown_cleanup()?;
+            let rejected: Vec<_> = self.lock_inner().rejected.keys().cloned().collect();
+            for id in rejected {
+                if let Err(reason) = self.recover_rejected(&id) {
+                    error.get_or_insert(reason);
+                }
+            }
+            self.wait_for_shutdown_cleanup()?;
+            let inner = self.lock_inner();
+            if !inner.rejected.is_empty() || !inner.uncertain.is_empty() {
+                return Err(
+                    error.unwrap_or_else(|| "Harness process cleanup is unconfirmed".into())
+                );
+            }
+            error.map_or(Ok(()), Err)
+        })();
+        if !final_exit || result.is_err() {
+            self.lock_inner().shutting_down = was_shutting_down;
+        }
+        result
+    }
+
+    #[cfg(windows)]
+    fn kill_all_windows(&self, final_exit: bool) -> Result<(), String> {
+        let _shutdown = self
+            .shutdown_guard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (was_shutting_down, kids): (bool, Vec<(String, Arc<LiveChild>)>) =
+            {
+                let mut inner = self.lock_inner();
+                let was_shutting_down = inner.shutting_down;
+                inner.shutting_down = true;
+                self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
+                let mut kids: Vec<_> = inner.children.drain().collect();
+                kids.extend(inner.stopping.drain());
+                inner.failed_stops.clear();
+                inner.completed_logins.clear();
+                inner.login_lines.clear();
+                #[cfg(windows)]
+                inner.uncertain.extend(kids.iter().filter_map(|(id, _)| {
+                    id.starts_with(LOGIN_CHILD_PREFIX).then_some(id.clone())
+                }));
+                (was_shutting_down, kids)
+            };
         self.stop_all_sse();
-        let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
+        let pids: Vec<u32> = kids
+            .iter()
+            .filter(|(id, _)| !cfg!(windows) || !id.starts_with(LOGIN_CHILD_PREFIX))
+            .map(|(_, live)| live.pid)
+            .collect();
         // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
         drop(kids);
         terminate_all(&pids);
+        let result = self.wait_for_shutdown_cleanup();
+        if !final_exit || result.is_err() {
+            self.lock_inner().shutting_down = was_shutting_down;
+        }
+        result
+    }
+
+    fn kill_non_login(&self) {
+        let mut kids = Vec::new();
+        {
+            let mut inner = self.lock_inner();
+            for (id, epoch) in &mut inner.epochs {
+                if !id.starts_with(LOGIN_CHILD_PREFIX) {
+                    *epoch += 1;
+                }
+            }
+            inner.children.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.pid);
+                    false
+                }
+            });
+            inner.stopping.retain(|id, live| {
+                if id.starts_with(LOGIN_CHILD_PREFIX) {
+                    true
+                } else {
+                    kids.push(live.pid);
+                    false
+                }
+            });
+        }
+        self.stop_all_sse();
+        terminate_all(&kids);
+    }
+
+    #[cfg(not(windows))]
+    fn stop_window_logins(&self, label: &str) -> Result<(), String> {
+        let label: String = label
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let prefix = format!("{LOGIN_CHILD_PREFIX}{label}-");
+        let ids: HashSet<String> = {
+            let mut inner = self.lock_inner();
+            let ids: HashSet<_> = inner
+                .children
+                .keys()
+                .chain(inner.stopping.keys())
+                .chain(inner.spawning.iter())
+                .chain(inner.completed_logins.keys())
+                .chain(inner.rejected.keys())
+                .filter(|id| id.starts_with(&prefix))
+                .cloned()
+                .collect();
+            for id in &ids {
+                *inner.epochs.entry(id.clone()).or_insert(0) += 1;
+            }
+            ids
+        };
+        let mut first_error = None;
+        for id in &ids {
+            let result = if self.lock_inner().rejected.contains_key(id) {
+                self.recover_rejected(id)
+            } else {
+                self.stop_session_with(id, false, signal_login_tree)
+                    .map(|_| ())
+            };
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
+        }
+        let mut inner = self.lock_inner();
+        for id in ids {
+            if !inner.stopping.contains_key(&id)
+                && !inner.uncertain.contains(&id)
+                && inner.completed_logins.remove(&id).is_some()
+            {
+                inner.login_accounts.remove(&id);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     fn insert_sse(&self, session_id: String, live: Arc<LiveSse>) -> Option<Arc<LiveSse>> {
@@ -354,9 +1002,67 @@ impl HarnessHost {
     }
 }
 
+struct LoginSpawnReservation<'a> {
+    host: &'a HarnessHost,
+    session_id: &'a str,
+    owns_spawn: bool,
+}
+
+#[cfg(not(windows))]
+struct RejectedCleanupReservation<'a> {
+    host: &'a HarnessHost,
+}
+
+#[cfg(not(windows))]
+impl Drop for RejectedCleanupReservation<'_> {
+    fn drop(&mut self) {
+        self.host.lock_inner().rejected_inflight -= 1;
+    }
+}
+
+impl<'a> LoginSpawnReservation<'a> {
+    fn new(host: &'a HarnessHost, session_id: &'a str) -> Self {
+        host.lock_inner().active_spawns += 1;
+        Self {
+            host,
+            session_id,
+            owns_spawn: false,
+        }
+    }
+
+    fn begin(
+        &mut self,
+        account: Option<&str>,
+    ) -> Result<(u64, u64, Option<Arc<LiveChild>>), String> {
+        let spawn = self
+            .host
+            .begin_spawn_for_account(self.session_id, account)?;
+        self.owns_spawn = true;
+        Ok(spawn)
+    }
+}
+
+impl Drop for LoginSpawnReservation<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.host.lock_inner();
+        inner.active_spawns -= 1;
+        if !self.owns_spawn {
+            return;
+        }
+        inner.spawning.remove(self.session_id);
+        if !inner.children.contains_key(self.session_id)
+            && !inner.stopping.contains_key(self.session_id)
+            && !inner.completed_logins.contains_key(self.session_id)
+            && !inner.uncertain.contains(self.session_id)
+        {
+            inner.login_accounts.remove(self.session_id);
+        }
+    }
+}
+
 impl Drop for HarnessHost {
     fn drop(&mut self) {
-        self.kill_all();
+        let _ = self.kill_all();
     }
 }
 
@@ -938,7 +1644,35 @@ pub fn harness_spawn(
     };
 
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
+    let login_account = if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        let provider = binary_provider
+            .as_deref()
+            .ok_or("Sign-in provider is required")?;
+        if account
+            .as_ref()
+            .is_some_and(|account| account.provider != provider)
+        {
+            return Err("Sign-in provider does not match the selected account".into());
+        }
+        Some(format!(
+            "{provider}:{}",
+            account
+                .as_ref()
+                .map(|account| account.id.as_str())
+                .unwrap_or(DEFAULT_PROVIDER_ACCOUNT_ID)
+        ))
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    if let Some(key) = login_account.as_deref() {
+        host.recover_rejected_account(key, &session_id)?;
+        host.recover_stopping_account(key, &session_id)?;
+    }
+    #[cfg(not(windows))]
+    host.recover_rejected(&session_id)?;
+    let mut login_spawn = LoginSpawnReservation::new(&host, &session_id);
+    let (epoch, kill_all, prev) = login_spawn.begin(login_account.as_deref())?;
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
@@ -980,22 +1714,24 @@ pub fn harness_spawn(
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
 
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to open harness stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to open harness stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to open harness stderr".to_string())?;
+    let Some(stdin) = child.stdin.take() else {
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
+        return Err("Failed to open harness stdin".into());
+    };
+    let Some(stdout) = child.stdout.take() else {
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
+        return Err("Failed to open harness stdout".into());
+    };
+    let Some(stderr) = child.stderr.take() else {
+        reap_rejected_spawn(&host, &session_id, child, pid)?;
+        return Err("Failed to open harness stderr".into());
+    };
 
     let live = Arc::new(LiveChild {
         cwd: workdir.clone(),
         stdin: Mutex::new(stdin),
+        reap_guard: Mutex::new(()),
+        stop_guard: Mutex::new(()),
         pid,
         identity: crate::resources::identity(pid),
         account,
@@ -1005,10 +1741,7 @@ pub fn harness_spawn(
         // Returning `Ok` here would hand the caller a dead pid to store as the
         // session's live child, and this child's stdout would be parsed as the
         // stream that replaced it. Reap it without emitting anything.
-        terminate(rejected.pid);
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
+        reap_rejected_spawn(&host, &session_id, child, rejected.pid)?;
         return Err(SPAWN_CANCELLED.to_string());
     }
 
@@ -1028,6 +1761,12 @@ pub fn harness_spawn(
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            #[cfg(windows)]
+            if stdout_id.starts_with(LOGIN_CHILD_PREFIX) {
+                if let Some(stdout_host) = stdout_app.try_state::<HarnessHost>() {
+                    stdout_host.record_login_line(&stdout_id, pid, &line);
+                }
+            }
             if let Some(store) = &stdout_store {
                 if line.contains("\"turn/completed\"")
                     || line.contains("\"item/started\"")
@@ -1058,28 +1797,40 @@ pub fn harness_spawn(
     });
 
     let wait_app = app.clone();
-    let wait_id = session_id;
+    let wait_id = session_id.clone();
     let wait_pid = pid;
     thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
+        #[cfg(not(windows))]
+        let code = if wait_id.starts_with(LOGIN_CHILD_PREFIX) {
+            let mut child = child;
+            if let Some(host) = wait_app.try_state::<HarnessHost>() {
+                host.wait_for_login_exit(&wait_id, wait_pid, &mut child)
+            } else {
+                wait_for_child_exit(child)
+            }
+        } else {
+            wait_for_child_exit(child)
+        };
+        #[cfg(windows)]
+        let code = wait_for_child_exit(child);
         // Deliver the final batched lines before the exit that follows them.
         let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
         if let Some(store) = wait_store {
             store.sync_auth();
         }
+        let exit = HarnessExit {
+            session_id: wait_id.clone(),
+            code,
+            pid: wait_pid,
+        };
+        let emit = || {
+            let _ = wait_app.emit(EXIT_EVENT, exit);
+        };
         if let Some(host) = wait_app.try_state::<HarnessHost>() {
-            if host.remove_if_pid(&wait_id, wait_pid).is_some() {
-                host.stop_sse(&wait_id);
-            }
+            host.publish_exit(&wait_id, wait_pid, emit);
+        } else {
+            emit();
         }
-        let _ = wait_app.emit(
-            EXIT_EVENT,
-            HarnessExit {
-                session_id: wait_id,
-                code,
-                pid: wait_pid,
-            },
-        );
     });
 
     Ok(pid)
@@ -1139,6 +1890,9 @@ pub fn provider_account_remove(
     account_id: String,
 ) -> Result<(), String> {
     let dir = provider_account_path(&app, &provider, &account_id)?;
+    if host.has_login_account(&provider, &account_id) {
+        return Err("Finish the active sign-in before removing this account".into());
+    }
     host.kill_account(&provider, &account_id);
 
     #[cfg(target_os = "macos")]
@@ -1231,18 +1985,318 @@ pub async fn harness_write(
 #[tauri::command(async)]
 pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
+    if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        return Err("Use sign-in cancellation to stop a login process".into());
+    }
+    #[cfg(not(windows))]
+    host.recover_rejected(&session_id)?;
     if let Some(live) = host.kill_session(&session_id) {
         terminate(live.pid);
     }
     Ok(())
 }
 
-/// Off the main thread: `kill_all` waits for the children to die before it
-/// returns, and a window close calls this while the app keeps running.
+/// Login cancellation keeps the child registered until its exit event. The
+/// ordinary kill command deliberately removes it and cannot confirm exit.
+#[tauri::command]
+pub fn harness_login_mode() -> &'static str {
+    if cfg!(windows) {
+        "detach"
+    } else {
+        "terminate"
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginSnapshot {
+    pid: u32,
+    line: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginStopResult {
+    completed: bool,
+    code: Option<i32>,
+    pid: Option<u32>,
+}
+
+#[tauri::command]
+pub fn harness_login_snapshot(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+) -> Option<LoginSnapshot> {
+    #[cfg(windows)]
+    {
+        host.login_snapshot(&session_id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (host, session_id);
+        None
+    }
+}
+
 #[tauri::command(async)]
-pub fn harness_kill_all(host: State<'_, HarnessHost>) -> Result<(), String> {
-    host.kill_all();
+pub fn harness_stop(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+    require_existing: Option<bool>,
+) -> Result<LoginStopResult, String> {
+    #[cfg(windows)]
+    {
+        let _ = (host, session_id, require_existing);
+        Err("Windows sign-in continues in the background; reopen its view to continue".into())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = require_existing;
+        host.stop_session_with(&session_id, false, signal_login_tree)
+    }
+}
+
+#[tauri::command]
+pub fn harness_ack_login_exit(
+    host: State<'_, HarnessHost>,
+    session_id: String,
+    pid: u32,
+) -> Result<(), String> {
+    host.acknowledge_login_exit(&session_id, pid)
+}
+
+#[cfg(not(windows))]
+fn signal_login_tree(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        signal_login_tree_with(pid, KILL_ALL_GRACE, |group, signal| {
+            if unsafe { libc::kill(group, signal) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        terminate_all(&[pid]);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn signal_login_tree_with(
+    pid: u32,
+    grace: Duration,
+    signal: impl Fn(i32, i32) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let group = -(pid as i32);
+    match signal(group, libc::SIGTERM) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+        Err(error) => return Err(format!("Could not signal sign-in process group: {error}")),
+    }
+    let deadline = Instant::now() + grace;
+    loop {
+        match signal(group, 0) {
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+            Err(error) if error.raw_os_error() != Some(libc::EPERM) => {
+                return Err(format!("Could not inspect sign-in process group: {error}"));
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    match signal(group, libc::SIGKILL) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Err(error) => Err(format!(
+            "Could not terminate sign-in process group: {error}"
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn login_leader_exited(pid: u32) -> bool {
+    let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            status.as_mut_ptr(),
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        ) == 0
+            && status.assume_init().si_pid() == pid as i32
+    }
+}
+
+#[cfg(all(test, unix))]
+fn stop_login_tree(pid: u32) -> Result<(), String> {
+    signal_login_tree(pid)?;
+    wait_for_login_tree_exit(pid)
+}
+
+fn wait_for_child_exit(mut child: Child) -> Option<i32> {
+    child.wait().ok().and_then(|status| status.code())
+}
+
+fn reap_rejected_spawn(
+    host: &HarnessHost,
+    session_id: &str,
+    child: Child,
+    pid: u32,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = pid;
+        reap_rejected_windows(host, session_id, child);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        reap_rejected_spawn_with(host, session_id, child, pid, signal_login_tree)
+    }
+}
+
+#[cfg(not(windows))]
+fn reap_rejected_spawn_with(
+    host: &HarnessHost,
+    session_id: &str,
+    child: Child,
+    pid: u32,
+    signal: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<(), String> {
+    host.lock_inner().rejected_inflight += 1;
+    let _cleanup = RejectedCleanupReservation { host };
+    let mut rejected = RejectedChild {
+        pid,
+        child: Some(child),
+    };
+    if let Err(error) = cleanup_rejected_child(&mut rejected, signal) {
+        let mut inner = host.lock_inner();
+        inner.uncertain.insert(session_id.to_owned());
+        inner.rejected.insert(session_id.to_owned(), rejected);
+        return Err(format!(
+            "Rejected harness process cleanup is unconfirmed: {error}"
+        ));
+    }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn cleanup_rejected_child(
+    rejected: &mut RejectedChild,
+    signal: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<(), String> {
+    if let Some(child) = rejected.child.as_mut() {
+        let result = signal(rejected.pid);
+        #[cfg(unix)]
+        let leader_exited = result.is_err() && login_leader_exited(rejected.pid);
+        #[cfg(not(unix))]
+        let leader_exited = false;
+        if !leader_exited {
+            result?;
+        }
+        let deadline = Instant::now() + LOGIN_TREE_EXIT_WAIT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    rejected.child = None;
+                    break;
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => return Err("Rejected harness process did not exit in time".into()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    if Instant::now() >= deadline {
+                        return Err("Rejected harness process exit was interrupted".into());
+                    }
+                }
+                Err(error) => {
+                    rejected.child = None;
+                    return Err(format!("Could not confirm rejected process exit: {error}"));
+                }
+            }
+        }
+    }
+    wait_for_login_tree_exit(rejected.pid)
+}
+
+#[cfg(any(windows, test))]
+fn reap_rejected_windows(host: &HarnessHost, session_id: &str, mut child: Child) {
+    if session_id.starts_with(LOGIN_CHILD_PREFIX) {
+        host.lock_inner().uncertain.insert(session_id.to_owned());
+    }
+    let _ = child.kill(); // Uses Child's handle, even if its PID has been reused.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_login_tree_exit(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        wait_for_login_tree_exit_with(pid, LOGIN_TREE_EXIT_WAIT, |group| {
+            if unsafe { libc::kill(group, 0) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_login_tree_exit_with(
+    pid: u32,
+    timeout: Duration,
+    probe: impl Fn(i32) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match probe(-(pid as i32)) {
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+            Err(error) if error.raw_os_error() != Some(libc::EPERM) => {
+                return Err(format!("Could not inspect sign-in process group: {error}"));
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "Sign-in process group exit could not be confirmed; retry after it exits".into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Window unload stops only its own Unix logins and keeps Windows logins
+/// available for reconnection. Full app exit still calls `kill_all`.
+#[tauri::command(async)]
+pub fn harness_kill_all(
+    host: State<'_, HarnessHost>,
+    window: tauri::WebviewWindow,
+    window_unload: Option<bool>,
+) -> Result<(), String> {
+    if window_unload == Some(true) {
+        host.kill_non_login();
+        #[cfg(not(windows))]
+        host.stop_window_logins(window.label())?;
+        return Ok(());
+    }
+    let _ = window;
+    host.kill_all()
 }
 
 #[tauri::command]
@@ -3160,6 +4214,11 @@ mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
 
+    #[test]
+    fn unix_login_mode_terminates() {
+        assert_eq!(harness_login_mode(), "terminate");
+    }
+
     fn spawn_group(script: &str) -> std::process::Child {
         Command::new("sh")
             .args(["-c", script])
@@ -3200,6 +4259,8 @@ mod tests {
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
+                reap_guard: Mutex::new(()),
+                stop_guard: Mutex::new(()),
                 pid,
                 identity: crate::resources::identity(pid),
                 account: None,
@@ -3216,7 +4277,7 @@ mod tests {
     #[test]
     fn install_spawn_keeps_a_child_nothing_cancelled() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         let (live, child) = live_child();
         let pid = live.pid;
         assert!(host
@@ -3229,7 +4290,7 @@ mod tests {
     #[test]
     fn install_spawn_rejects_a_child_killed_mid_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         host.kill_session("s1");
         let (live, child) = live_child();
         assert!(host
@@ -3242,8 +4303,8 @@ mod tests {
     #[test]
     fn install_spawn_rejects_a_child_after_kill_all() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
-        host.kill_all();
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
+        host.kill_all().unwrap();
         let (live, child) = live_child();
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
@@ -3255,7 +4316,7 @@ mod tests {
     #[test]
     fn kill_during_spawn_invalidates_the_stamp() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, prev) = host.begin_spawn("s1");
+        let (epoch, kill_all, prev) = host.begin_spawn("s1").unwrap();
         assert!(prev.is_none());
         assert!(host.spawn_stamp_current("s1", epoch, kill_all));
         host.kill_session("s1");
@@ -3265,8 +4326,8 @@ mod tests {
     #[test]
     fn overlapping_spawn_invalidates_the_earlier_one() {
         let host = HarnessHost::new();
-        let first = host.begin_spawn("s1");
-        let second = host.begin_spawn("s1");
+        let first = host.begin_spawn("s1").unwrap();
+        let second = host.begin_spawn("s1").unwrap();
         assert!(!host.spawn_stamp_current("s1", first.0, first.1));
         assert!(host.spawn_stamp_current("s1", second.0, second.1));
     }
@@ -3274,9 +4335,10 @@ mod tests {
     #[test]
     fn kill_all_rejects_an_in_flight_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
-        host.kill_all();
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
+        host.kill_all().unwrap();
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
+        assert!(host.begin_spawn("reopened-window").is_ok());
     }
 
     #[test]
@@ -3362,6 +4424,8 @@ mod tests {
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
+                reap_guard: Mutex::new(()),
+                stop_guard: Mutex::new(()),
                 pid,
                 identity: crate::resources::identity(pid),
                 account: None,
@@ -3371,9 +4435,79 @@ mod tests {
     }
 
     #[test]
+    fn window_cleanup_preserves_login_registration_and_link_until_exit() {
+        let host = HarnessHost::new();
+        let login_id = "monocode-provider-login-claude";
+        let (login, mut login_child) = live_group("sleep 30");
+        let (ordinary, mut ordinary_child) = live_group("sleep 30");
+        let ordinary_pid = ordinary.pid;
+        {
+            let mut inner = host.lock_inner();
+            inner.children.insert(login_id.into(), login.clone());
+            inner.children.insert("probe".into(), ordinary);
+            inner.login_lines.insert(
+                login_id.into(),
+                "If the browser didn't open, visit: https://claude.ai/example".into(),
+            );
+        }
+        let login_pid = login.pid;
+        let pending_id = "monocode-provider-login-codex";
+        let mut login_reservation = LoginSpawnReservation::new(&host, pending_id);
+        let (login_epoch, login_generation, _) = login_reservation.begin(None).unwrap();
+        let (probe_epoch, probe_generation, _) = host.begin_spawn("probe-starting").unwrap();
+        let login_waiter = thread::spawn(move || {
+            let _ = login_child.wait();
+        });
+        let ordinary_waiter = thread::spawn(move || {
+            let _ = ordinary_child.wait();
+        });
+        host.kill_non_login();
+        assert!(host.spawn_stamp_current(pending_id, login_epoch, login_generation));
+        assert!(!host.spawn_stamp_current("probe-starting", probe_epoch, probe_generation));
+        drop(login_reservation);
+        assert_eq!(host.get(login_id).map(|live| live.pid), Some(login_pid));
+        assert!(host.lock_inner().login_lines.contains_key(login_id));
+        assert!(host.get("probe").is_none());
+        assert!(!tree_alive(ordinary_pid));
+        assert!(host.begin_spawn(login_id).is_err());
+        host.kill_all().unwrap();
+        let _ = login_waiter.join();
+        let _ = ordinary_waiter.join();
+    }
+
+    #[test]
+    fn login_snapshot_keeps_only_the_current_child_link() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let (live, child) = live_child();
+        let pid = live.pid;
+        host.lock_inner().children.insert(id.into(), live);
+        host.record_login_line(
+            id,
+            pid + 1,
+            "If the browser didn't open, visit: https://claude.ai/stale",
+        );
+        assert!(host.login_snapshot(id).unwrap().line.is_none());
+        host.record_login_line(
+            id,
+            pid,
+            "If the browser didn't open, visit: https://claude.ai/current",
+        );
+        let snapshot = host.login_snapshot(id).unwrap();
+        assert_eq!(snapshot.pid, pid);
+        assert_eq!(
+            snapshot.line.as_deref(),
+            Some("If the browser didn't open, visit: https://claude.ai/current")
+        );
+        host.remove_if_pid(id, pid);
+        assert!(host.login_snapshot(id).is_none());
+        reap(child);
+    }
+
+    #[test]
     fn kill_all_reaps_term_ignoring_children_before_return() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = host.begin_spawn("s1").unwrap();
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
         // `harness_spawn` always leaves a thread owning the `Child`. Without one
@@ -3386,13 +4520,821 @@ mod tests {
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
             .is_none());
-        host.kill_all();
+        host.kill_all().unwrap();
         let alive = tree_alive(pid);
         let _ = waiter.join();
         assert!(
             !alive,
             "kill_all returned while the harness tree was still alive"
         );
+    }
+
+    #[test]
+    fn login_stop_confirms_exit_after_term_is_ignored() {
+        let (live, child) = live_group(
+            "trap 'exit 0' TERM; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait",
+        );
+        let pid = live.pid;
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        stop_login_tree(pid).unwrap();
+        let _ = waiter.join();
+        assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn successful_login_exit_does_not_wait_for_browser_descendant() {
+        let child = spawn_group("sleep 30 & exit 0");
+        let pid = child.id();
+        let (tx, rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _ = tx.send(wait_for_child_exit(child));
+        });
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        let descendant_alive = tree_alive(pid);
+        stop_login_tree(pid).unwrap();
+        waiter.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "successful login waited for its browser child"
+        );
+        assert!(descendant_alive, "test did not retain a browser descendant");
+    }
+
+    #[test]
+    fn completed_login_waits_for_frontend_ack_before_retry() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = reservation.begin(None).unwrap();
+        let (live, mut child) = live_group("sleep 30 & exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_none());
+        drop(reservation);
+        assert_eq!(host.wait_for_login_exit(id, pid, &mut child), Some(0));
+        assert!(tree_alive(pid));
+        let mut completed = None;
+        host.publish_exit(id, pid, || {
+            completed = Some(
+                host.stop_session_with(id, false, signal_login_tree)
+                    .unwrap(),
+            );
+            assert!(host.begin_spawn(id).is_err());
+        });
+        let completed = completed.unwrap();
+        assert!(completed.completed);
+        assert_eq!(completed.code, Some(0));
+        assert_eq!(completed.pid, Some(pid));
+        assert!(tree_alive(pid));
+        assert!(host.begin_spawn(id).is_err());
+        assert!(host.acknowledge_login_exit(id, pid + 1).is_err());
+        assert!(host.begin_spawn(id).is_err());
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+        stop_login_tree(pid).unwrap();
+    }
+
+    #[test]
+    fn active_login_stop_waits_for_tree_cleanup_before_ack_and_retry() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        thread::sleep(Duration::from_millis(100));
+        let stopped = host.stop_session_with(id, true, signal_login_tree).unwrap();
+        assert!(!stopped.completed);
+        assert_eq!(waiter.join().unwrap(), None);
+        assert!(!tree_alive(pid));
+        assert!(host.begin_spawn(id).is_err());
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn stop_keeps_leader_identity_until_its_group_signal_is_sent() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (signal_tx, signal_rx) = mpsc::channel();
+        let stop_host = host.clone();
+        let stopper = thread::spawn(move || {
+            stop_host.stop_session_with(id, true, |selected_pid| {
+                selected_tx.send(selected_pid).unwrap();
+                signal_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        let (second_tx, second_rx) = mpsc::channel();
+        let second_host = host.clone();
+        let second = thread::spawn(move || {
+            second_tx
+                .send(second_host.stop_session_with(id, true, |_| {
+                    panic!("second stop must not signal the selected PID")
+                }))
+                .unwrap();
+        });
+        assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(host.begin_spawn("monocode-provider-login-codex").is_ok());
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let still_owned = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                status.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            ) == 0
+        };
+        let not_reaped = !host.lock_inner().completed_logins.contains_key(id);
+        signal_tx.send(()).unwrap();
+        assert!(!stopper.join().unwrap().unwrap().completed);
+        assert!(
+            second_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .completed
+        );
+        second.join().unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(still_owned && not_reaped);
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn kill_all_keeps_login_identity_and_reservation_until_group_signal() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("sleep 30 & read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (signal_tx, signal_rx) = mpsc::channel();
+        let cleanup_host = host.clone();
+        let cleanup = thread::spawn(move || {
+            cleanup_host.kill_all_with(
+                |selected_pid| {
+                    selected_tx.send(selected_pid).unwrap();
+                    signal_rx.recv().unwrap();
+                    signal_login_tree(selected_pid)
+                },
+                false,
+            )
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        assert!(host.get(id).is_some());
+        assert!(host.begin_spawn(id).is_err());
+        assert!(host.begin_spawn("monocode-provider-login-codex").is_err());
+        signal_tx.send(()).unwrap();
+        cleanup.join().unwrap().unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(!tree_alive(pid));
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn window_unload_stops_only_its_login_and_keeps_other_window_running() {
+        let host = Arc::new(HarnessHost::new());
+        let own_id = "monocode-provider-login-main-claude";
+        let other_id = "monocode-provider-login-workspace-2-claude";
+        let (own, mut own_child) = live_group("sleep 30");
+        let (other, mut other_child) = live_group("sleep 30");
+        let other_pid = other.pid;
+        {
+            let mut inner = host.lock_inner();
+            inner.children.insert(own_id.into(), own.clone());
+            inner.children.insert(other_id.into(), other);
+        }
+        let own_host = host.clone();
+        let own_waiter =
+            thread::spawn(move || own_host.wait_for_login_exit(own_id, own.pid, &mut own_child));
+        let other_host = host.clone();
+        let other_waiter = thread::spawn(move || {
+            other_host.wait_for_login_exit(other_id, other_pid, &mut other_child)
+        });
+        host.stop_window_logins("main").unwrap();
+        assert!(host.begin_spawn(own_id).is_ok());
+        assert_eq!(host.get(other_id).map(|live| live.pid), Some(other_pid));
+        assert!(tree_alive(other_pid));
+        assert!(host.begin_spawn("unrelated").is_ok());
+        host.stop_session_with(other_id, false, signal_login_tree)
+            .unwrap();
+        assert_eq!(own_waiter.join().unwrap(), None);
+        assert_eq!(other_waiter.join().unwrap(), None);
+    }
+
+    #[test]
+    fn login_account_reservation_spans_windows_and_releases_after_ack() {
+        let host = Arc::new(HarnessHost::new());
+        let first = "monocode-provider-login-main-claude";
+        let second = "monocode-provider-login-workspace-2-claude";
+        let (epoch, generation, _) = host
+            .begin_spawn_for_account(first, Some("claude:default"))
+            .unwrap();
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:default"))
+            .is_err());
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:named"))
+            .is_ok());
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(first.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(first);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(first, pid, &mut child));
+        assert!(host
+            .begin_spawn_for_account("another-window-claude", Some("claude:default"))
+            .is_err());
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(host
+            .begin_spawn_for_account("another-window-claude", Some("claude:default"))
+            .is_err());
+        host.acknowledge_login_exit(first, pid).unwrap();
+        assert!(host
+            .begin_spawn_for_account("another-window-claude", Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn detached_login_exit_releases_only_its_matching_account_reservation() {
+        let host = HarnessHost::new();
+        let first = "monocode-provider-login-claude-named";
+        let second = "monocode-provider-login-workspace-2-claude-named";
+        let (epoch, generation, _) = host
+            .begin_spawn_for_account(first, Some("claude:named"))
+            .unwrap();
+        let (live, mut child) = live_group("exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(first.into(), epoch, generation, live)
+            .is_none());
+        host.lock_inner().spawning.remove(first);
+        assert!(child.wait().unwrap().success());
+        host.publish_exit_with_mode(first, pid + 1, || {}, true);
+        assert!(host.has_login_account("claude", "named"));
+        let mut emitted = false;
+        host.publish_exit_with_mode(
+            first,
+            pid,
+            || {
+                emitted = true;
+                assert!(!host.has_login_account("claude", "named"));
+            },
+            true,
+        );
+        assert!(emitted);
+        assert!(!host.has_login_account("claude", "named"));
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:named"))
+            .is_ok());
+    }
+
+    #[test]
+    fn window_unload_invalidates_its_pending_login_without_releasing_account_early() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let other = "monocode-provider-login-workspace-2-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = reservation.begin(Some("claude:default")).unwrap();
+        host.stop_window_logins("main").unwrap();
+        assert!(!host.spawn_stamp_current(id, epoch, generation));
+        assert!(host
+            .begin_spawn_for_account(other, Some("claude:default"))
+            .is_err());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account(other, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn login_group_syscall_errors_are_not_reported_as_exit() {
+        let denied = || std::io::Error::from_raw_os_error(libc::EPERM);
+        let absent = || std::io::Error::from_raw_os_error(libc::ESRCH);
+        assert!(signal_login_tree_with(42, Duration::ZERO, |_, _| Err(denied())).is_err());
+        assert!(signal_login_tree_with(42, Duration::ZERO, |_, _| Err(absent())).is_ok());
+        assert!(signal_login_tree_with(42, Duration::ZERO, |_, sig| {
+            if sig == libc::SIGKILL {
+                Err(denied())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        assert!(wait_for_login_tree_exit_with(42, Duration::ZERO, |_| Err(denied())).is_err());
+        assert!(wait_for_login_tree_exit_with(42, Duration::ZERO, |_| Err(absent())).is_ok());
+        assert!(wait_for_login_tree_exit_with(42, Duration::ZERO, |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn timed_out_login_cleanup_blocks_retry_until_group_exit_is_observed() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-main-claude";
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        host.lock_inner().children.insert(id.into(), live.clone());
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let started = Instant::now();
+        assert!(host.stop_session_with(id, true, |_| Ok(())).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(host.begin_spawn(id).is_err());
+        assert!(host.lock_inner().uncertain.contains(id));
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        assert!(
+            host.stop_session_with(id, true, |_| panic!("must not signal a stale PID"))
+                .unwrap()
+                .completed
+        );
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn failed_signal_keeps_leader_identity_for_a_safe_retry() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-claude";
+        let (epoch, generation, _) = host.begin_spawn(id).unwrap();
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live.clone())
+            .is_none());
+        host.lock_inner().spawning.remove(id);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        assert!(host
+            .stop_session_with(id, true, |_| Err("signal failed".into()))
+            .is_err());
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert!(!host.lock_inner().completed_logins.contains_key(id));
+        assert!(
+            !host
+                .stop_session_with(id, true, |_| Ok(()))
+                .unwrap()
+                .completed
+        );
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn failed_signal_after_leader_exit_recovers_without_signalling_reused_pid() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-main-claude";
+        let (live, mut child) = live_group("read _; exit 0");
+        let pid = live.pid;
+        host.lock_inner().children.insert(id.into(), live.clone());
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(id, pid, &mut child));
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let stop_host = host.clone();
+        let stopper = thread::spawn(move || {
+            stop_host.stop_session_with(id, true, |selected_pid| {
+                selected_tx.send(selected_pid).unwrap();
+                release_rx.recv().unwrap();
+                Err("permission denied".into())
+            })
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        live.stdin.lock().unwrap().write_all(b"done\n").unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        release_tx.send(()).unwrap();
+        assert!(!stopper.join().unwrap().unwrap().completed);
+        assert_eq!(waiter.join().unwrap(), Some(0));
+        host.acknowledge_login_exit(id, pid).unwrap();
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn another_window_recovers_only_an_already_stopping_account() {
+        let host = Arc::new(HarnessHost::new());
+        let first = "monocode-provider-login-main-claude";
+        let second = "monocode-provider-login-workspace-2-claude";
+        let (epoch, generation, _) = host
+            .begin_spawn_for_account(first, Some("claude:default"))
+            .unwrap();
+        let (live, mut child) = live_group("sleep 30");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(first.into(), epoch, generation, live)
+            .is_none());
+        host.lock_inner().spawning.remove(first);
+        let waiter_host = host.clone();
+        let waiter = thread::spawn(move || waiter_host.wait_for_login_exit(first, pid, &mut child));
+        host.recover_stopping_account("claude:default", second)
+            .unwrap();
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:default"))
+            .is_err());
+        assert!(host
+            .stop_session_with(first, true, |_| Err("transient signal failure".into()))
+            .is_err());
+        host.recover_stopping_account("claude:default", second)
+            .unwrap();
+        assert_eq!(waiter.join().unwrap(), None);
+        assert!(host
+            .begin_spawn_for_account(second, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn stopping_login_blocks_id_reuse_until_exit() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = host.begin_spawn("login").unwrap();
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("login".into(), epoch, kill_all, live.clone())
+            .is_none());
+        host.lock_inner().stopping.insert("login".into(), live);
+        assert!(host.begin_spawn("login").is_err());
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        stop_login_tree(pid).unwrap();
+        host.lock_inner().stopping.remove("login");
+        assert!(host.begin_spawn("login").is_ok());
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn failed_login_stop_retries_after_leader_mapping_is_removed() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = host.begin_spawn("login").unwrap();
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        assert!(host
+            .install_spawn("login".into(), epoch, kill_all, live)
+            .is_none());
+        assert!(host
+            .stop_session_with("login", true, |_| Err("taskkill failed".into()))
+            .is_err());
+        host.lock_inner().children.remove("login");
+        assert!(host.begin_spawn("login").is_err());
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        host.stop_session_with("login", true, signal_login_tree)
+            .unwrap();
+        assert!(host.begin_spawn("login").is_ok());
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn missing_windows_login_leader_cannot_confirm_exit_or_reuse_id() {
+        let host = HarnessHost::new();
+        assert!(host
+            .stop_session_with("login", true, |_| panic!("no process to stop"))
+            .is_err());
+        assert!(host.begin_spawn("login").is_err());
+    }
+
+    #[test]
+    fn rejected_spawn_is_reaped_before_reporting_failure() {
+        let (live, child) =
+            live_group("trap '' TERM; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait");
+        let pid = live.pid;
+        reap_rejected_spawn(&HarnessHost::new(), "login", child, pid).unwrap();
+        assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn rejected_login_signal_failure_retains_child_and_account_for_retry() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| {
+            Err("signal failed".into())
+        })
+        .is_err());
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_some());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.recover_rejected_account("claude:default", next)
+            .unwrap();
+        assert!(!tree_alive(pid));
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn rejected_login_cleanup_times_out_and_recovers_without_overlapping() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        let started = Instant::now();
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| Ok(())).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_some());
+        drop(reservation);
+        assert!(host.begin_spawn(id).is_err());
+        host.recover_rejected(id).unwrap();
+        assert!(!tree_alive(pid));
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn rejected_forked_child_keeps_reservation_until_descendant_exits() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
+        let (live, child) = live_group("sleep 3 & exit 0");
+        let pid = live.pid;
+        assert!(reap_rejected_spawn_with(&host, id, child, pid, |_| Ok(())).is_err());
+        assert!(host.lock_inner().rejected.get(id).unwrap().child.is_none());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.recover_rejected_account("claude:default", next)
+            .unwrap();
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn shutdown_waits_for_rejected_cleanup_removed_from_the_map() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-main-claude";
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        {
+            let mut inner = host.lock_inner();
+            inner.rejected.insert(
+                id.into(),
+                RejectedChild {
+                    pid,
+                    child: Some(child),
+                },
+            );
+            inner.uncertain.insert(id.into());
+            inner
+                .login_accounts
+                .insert(id.into(), "claude:default".into());
+        }
+        let (selected_tx, selected_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let recovery_host = host.clone();
+        let recovery = thread::spawn(move || {
+            recovery_host.recover_rejected_with(id, |selected| {
+                selected_tx.send(selected).unwrap();
+                release_rx.recv().unwrap();
+                Err("transient signal failure".into())
+            })
+        });
+        assert_eq!(
+            selected_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            pid
+        );
+        assert!(!host.lock_inner().rejected.contains_key(id));
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let shutdown_host = host.clone();
+        let shutdown = thread::spawn(move || {
+            finished_tx.send(shutdown_host.kill_all()).unwrap();
+        });
+        assert!(finished_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        release_tx.send(()).unwrap();
+        assert!(recovery.join().unwrap().is_err());
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        shutdown.join().unwrap();
+        assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn shutdown_waits_for_a_spawn_before_it_is_installed_or_rejected() {
+        let host = Arc::new(HarnessHost::new());
+        let id = "monocode-provider-login-main-claude";
+        let (reserved_tx, reserved_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let spawn_host = host.clone();
+        let spawn = thread::spawn(move || {
+            let mut reservation = LoginSpawnReservation::new(&spawn_host, id);
+            let (epoch, generation, _) = reservation.begin(Some("claude:default")).unwrap();
+            reserved_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let (live, child) = live_group("sleep 30 & wait");
+            let pid = live.pid;
+            assert!(spawn_host
+                .install_spawn(id.into(), epoch, generation, live)
+                .is_some());
+            reap_rejected_spawn(&spawn_host, id, child, pid).unwrap();
+            drop(reservation);
+            pid
+        });
+        reserved_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let shutdown_host = host.clone();
+        let shutdown = thread::spawn(move || {
+            finished_tx.send(shutdown_host.kill_all()).unwrap();
+        });
+        assert!(finished_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        release_tx.send(()).unwrap();
+        let pid = spawn.join().unwrap();
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        shutdown.join().unwrap();
+        assert!(!tree_alive(pid));
+    }
+
+    #[test]
+    fn shutdown_reports_a_pending_spawn_after_its_bound() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(Some("claude:default")).unwrap();
+        let started = Instant::now();
+        assert!(host.kill_all_for_exit().is_err());
+        assert!(started.elapsed() < Duration::from_secs(7));
+        assert!(host
+            .begin_spawn_for_account("another-window", Some("codex:default"))
+            .is_ok());
+        assert!(host
+            .begin_spawn_for_account("same-account", Some("claude:default"))
+            .is_err());
+        drop(reservation);
+        assert!(host
+            .begin_spawn_for_account("same-account", Some("claude:default"))
+            .is_ok());
+        host.kill_all_for_exit().unwrap();
+        assert!(host.begin_spawn("after-retried-quit").is_err());
+    }
+
+    #[test]
+    fn failed_same_id_login_start_cannot_release_the_first_spawn() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-main-claude";
+        let next = "monocode-provider-login-workspace-2-claude";
+        let mut first = LoginSpawnReservation::new(&host, id);
+        let (epoch, generation, _) = first.begin(Some("claude:default")).unwrap();
+        let mut second = LoginSpawnReservation::new(&host, id);
+        assert!(second.begin(Some("claude:default")).is_err());
+        drop(second);
+        assert!(host.lock_inner().spawning.contains(id));
+        assert_eq!(
+            host.lock_inner().login_accounts.get(id).map(String::as_str),
+            Some("claude:default")
+        );
+        assert_eq!(host.lock_inner().active_spawns, 1);
+        assert!(host
+            .begin_spawn_for_account(id, Some("claude:default"))
+            .is_err());
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_err());
+        host.stop_window_logins("main").unwrap();
+        let (live, child) = live_group("sleep 30 & wait");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn(id.into(), epoch, generation, live)
+            .is_some());
+        reap_rejected_spawn(&host, id, child, pid).unwrap();
+        drop(first);
+        assert!(!tree_alive(pid));
+        assert!(host
+            .begin_spawn_for_account(next, Some("claude:default"))
+            .is_ok());
+    }
+
+    #[test]
+    fn confirmed_quit_keeps_the_spawn_gate_closed() {
+        let host = HarnessHost::new();
+        host.kill_all_for_exit().unwrap();
+        assert!(host.begin_spawn("after-exit-confirmation").is_err());
+    }
+
+    #[test]
+    fn login_spawn_reservation_blocks_overlap_until_rejected_child_is_reaped() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let mut reservation = LoginSpawnReservation::new(&host, id);
+        reservation.begin(None).unwrap();
+        assert!(host.begin_spawn(id).is_err());
+        host.kill_session(id);
+        let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = live.pid;
+        reap_rejected_spawn(&host, id, child, pid).unwrap();
+        assert!(!tree_alive(pid));
+        assert!(host.begin_spawn(id).is_err());
+        drop(reservation);
+        assert!(host.begin_spawn(id).is_ok());
+    }
+
+    #[test]
+    fn rejected_windows_login_reaps_by_child_handle_and_blocks_reuse() {
+        let host = HarnessHost::new();
+        let id = "monocode-provider-login-claude";
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        reap_rejected_windows(&host, id, child);
+        assert_ne!(unsafe { libc::kill(pid as i32, 0) }, 0);
+        assert!(host.begin_spawn(id).is_err());
     }
 
     #[test]

@@ -59,8 +59,16 @@ function execArgsAllowed(provider: RemoteProvider, args: string[]): boolean {
 /** The user config file Devin itself reads. */
 function devinUserConfigPath(): string {
   if (process.platform === "win32")
-    return join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "devin", "config.json");
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "devin", "config.json");
+    return join(
+      process.env.APPDATA || join(homedir(), "AppData", "Roaming"),
+      "devin",
+      "config.json",
+    );
+  return join(
+    process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+    "devin",
+    "config.json",
+  );
 }
 
 /**
@@ -102,11 +110,28 @@ function loopbackUrl(value: unknown): string {
 export class HostChildBackend implements ChildBackend {
   private events = new EventEmitter();
   private children = new Map<string, ChildProcessWithoutNullStreams>();
+  private stopping = new Map<string, ChildProcessWithoutNullStreams>();
+  private stopPromises = new Map<string, Promise<void>>();
+  private closed = new WeakSet<ChildProcessWithoutNullStreams>();
   private streams = new Map<string, AbortController>();
   private closing = false;
 
   constructor(
     private readonly binaries: Partial<Record<RemoteProvider, string>> = {},
+    private readonly windowsStop = process.platform === "win32",
+    private readonly taskkillTree: (pid: number) => Promise<void> = async (
+      pid,
+    ) => {
+      await exec(
+        join(
+          process.env.SystemRoot ?? "C:\\Windows",
+          "System32",
+          "taskkill.exe",
+        ),
+        ["/PID", String(pid), "/T", "/F"],
+        { windowsHide: true, timeout: 10_000 },
+      );
+    },
   ) {
     this.events.setMaxListeners(0);
   }
@@ -147,6 +172,8 @@ export class HostChildBackend implements ChildBackend {
       } as T;
     }
     switch (command) {
+      case "harness_login_mode":
+        return (this.windowsStop ? "unsupported" : "terminate") as T;
       case "harness_exec": {
         const provider = args.binaryProvider;
         if (!isRemoteProvider(provider))
@@ -247,6 +274,9 @@ export class HostChildBackend implements ChildBackend {
       case "harness_kill":
         await this.kill(id);
         return undefined as T;
+      case "harness_stop":
+        await this.stopConfirmed(id, args.requireExisting === true);
+        return { completed: false, code: null, pid: null } as T;
       case "harness_kill_all":
         await this.close();
         return undefined as T;
@@ -323,6 +353,14 @@ export class HostChildBackend implements ChildBackend {
     args: Record<string, unknown>,
   ): Promise<number> {
     if (this.closing) throw new Error("Host is stopping");
+    if (this.windowsStop && id.startsWith("monocode-provider-login-"))
+      throw new Error(
+        "Interactive sign-in is unavailable on Windows hosts. Sign in with the provider CLI in a terminal on the host.",
+      );
+    if (this.stopping.has(id))
+      throw new Error("Previous harness process has not exited");
+    if (id.startsWith("monocode-provider-login-") && this.children.has(id))
+      throw new Error("Previous harness process has not exited");
     await this.kill(id);
     if (this.closing) throw new Error("Host is stopping");
     const account = args.account as { id?: string } | undefined;
@@ -355,7 +393,13 @@ export class HostChildBackend implements ChildBackend {
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
-        env: { ...process.env, MONOCODE_HOST: "1" },
+        env: {
+          ...process.env,
+          MONOCODE_HOST: "1",
+          MONOCODE_CONFIRM_EXIT: id.startsWith("monocode-provider-login-")
+            ? "1"
+            : "0",
+        },
       },
     );
     this.children.set(id, child);
@@ -365,6 +409,7 @@ export class HostChildBackend implements ChildBackend {
     this.lines(child, id, "stdout");
     this.lines(child, id, "stderr");
     child.on("close", (code) => {
+      this.closed.add(child);
       if (this.children.get(id) === child) this.children.delete(id);
       this.emit("harness-exit", { sessionId: id, code, pid: child.pid });
     });
@@ -415,6 +460,52 @@ export class HostChildBackend implements ChildBackend {
     } catch {
       /* already exited */
     }
+  }
+
+  private stopConfirmed(id: string, requireExisting: boolean): Promise<void> {
+    const pending = this.stopPromises.get(id);
+    if (pending) return pending;
+    const child = this.stopping.get(id) ?? this.children.get(id);
+    if (!child) {
+      if (this.windowsStop && requireExisting)
+        return Promise.reject(new Error("Windows host sign-in is unavailable"));
+      return Promise.resolve();
+    }
+    this.stopping.set(id, child);
+    const stop = (async () => {
+      if (this.windowsStop) {
+        if (!child.pid) throw new Error("Login process ID is unavailable");
+        await this.taskkillTree(child.pid);
+        if (!this.closed.has(child)) {
+          await new Promise<void>((resolve) =>
+            child.once("close", () => resolve()),
+          );
+        }
+      } else if (!this.closed.has(child)) {
+        const closed = new Promise<void>((resolve) =>
+          child.once("close", () => resolve()),
+        );
+        child.stdin.destroy();
+        this.signal(child, "SIGTERM");
+        await closed;
+      }
+      if (!this.windowsStop && child.pid) {
+        while (true) {
+          try {
+            process.kill(-child.pid, 0);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ESRCH") break;
+            throw error;
+          }
+        }
+      }
+      if (this.stopping.get(id) === child) this.stopping.delete(id);
+    })().finally(() => {
+      if (this.stopPromises.get(id) === stop) this.stopPromises.delete(id);
+    });
+    this.stopPromises.set(id, stop);
+    return stop;
   }
 
   async kill(id: string): Promise<void> {

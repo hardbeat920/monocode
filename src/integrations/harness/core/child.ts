@@ -107,7 +107,7 @@ type SsePayload =
 type SseEndPayload = { sessionId: string; error?: string | null };
 
 type LineHandler = (line: string) => void;
-type ExitHandler = (code: number | null) => void;
+type ExitHandler = (code: number | null, pid?: number) => void;
 type SseHandler = (data: string) => void;
 type SseEndHandler = (error?: string) => void;
 
@@ -203,7 +203,7 @@ function ensureBridge() {
         const currentPid = livePid.get(sessionId);
         if (isCurrentChildExit(currentPid, pid)) {
           livePid.delete(sessionId);
-          handler(code);
+          handler(code, pid);
           return;
         }
         if (currentPid != null) return;
@@ -382,7 +382,7 @@ export async function spawnChild(
   const exited = exits?.find((event) => event.pid === pid);
   if (!exited) return;
   livePid.delete(sessionId);
-  exitHandlers.get(sessionId)?.(exited.code);
+  exitHandlers.get(sessionId)?.(exited.code, exited.pid);
 }
 
 export function writeChild(sessionId: string, line: string): Promise<void> {
@@ -396,7 +396,49 @@ export function killChild(sessionId: string): Promise<void> {
   return invoke("harness_kill", { sessionId });
 }
 
-export function killAllChildren(): Promise<void> {
+/** Stop a login child while retaining its PID-matched exit watcher. */
+export function stopChild(
+  sessionId: string,
+  requireExisting = false,
+): Promise<{ completed: boolean; code: number | null; pid: number | null }> {
+  return invoke("harness_stop", { sessionId, requireExisting });
+}
+
+export function acknowledgeLoginExit(
+  sessionId: string,
+  pid: number,
+): Promise<void> {
+  if (backend) return Promise.resolve();
+  return invoke("harness_ack_login_exit", { sessionId, pid });
+}
+
+export function loginMode(): Promise<"terminate" | "detach" | "unsupported"> {
+  return invoke("harness_login_mode");
+}
+
+export async function attachLogin(
+  sessionId: string,
+): Promise<string | null | undefined> {
+  const release = await acquireHarnessBridge();
+  let active: { pid: number; line?: string | null } | null;
+  try {
+    active = await invoke("harness_login_snapshot", { sessionId });
+  } finally {
+    release();
+  }
+  if (!active) return undefined;
+  livePid.set(sessionId, active.pid);
+  const exits = pendingExit.get(sessionId);
+  pendingExit.delete(sessionId);
+  const exited = exits?.find((event) => event.pid === active.pid);
+  if (exited) {
+    livePid.delete(sessionId);
+    exitHandlers.get(sessionId)?.(exited.code, exited.pid);
+  }
+  return active.line ?? null;
+}
+
+export function killAllChildren(windowUnload = false): Promise<void> {
   lineHandlers.clear();
   exitHandlers.clear();
   lineBuffer.clear();
@@ -408,7 +450,7 @@ export function killAllChildren(): Promise<void> {
   ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
-  return invoke("harness_kill_all");
+  return invoke("harness_kill_all", { windowUnload });
 }
 
 type ResolvedHarnessBinary = { path: string; args?: string[] };

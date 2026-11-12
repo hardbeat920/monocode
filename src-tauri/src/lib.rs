@@ -510,6 +510,10 @@ pub fn run() {
             provider_session_transfer::provider_session_transfer,
             harness::harness_write,
             harness::harness_kill,
+            harness::harness_login_mode,
+            harness::harness_login_snapshot,
+            harness::harness_stop,
+            harness::harness_ack_login_exit,
             harness::harness_kill_all,
             harness::harness_http,
             harness::harness_sse_open,
@@ -716,7 +720,9 @@ pub fn run() {
 
 fn reap_harness_children(handle: &tauri::AppHandle) {
     if let Some(host) = handle.try_state::<harness::HarnessHost>() {
-        host.kill_all();
+        if let Err(error) = host.kill_all() {
+            eprintln!("Harness cleanup is unconfirmed: {error}");
+        }
     }
     if let Some(host) = handle.try_state::<pty::PtyHost>() {
         host.kill_all();

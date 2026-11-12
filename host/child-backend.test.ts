@@ -171,51 +171,185 @@ it("runs the resolved Claude version fallback in headless mode", async () => {
   }
 });
 
-it.each([false, true])("stops a provider tree (ignores SIGTERM: %s)", async (stubborn) => {
-  const directory = mkdtempSync(join(tmpdir(), "monocode-provider-tree-"));
-  const file = join(directory, "provider.cjs");
-  writeFileSync(
-    file,
-    `const { spawn } = require('node:child_process');
+it.each([false, true])(
+  "stops a provider tree (ignores SIGTERM: %s)",
+  async (stubborn) => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-provider-tree-"));
+    const file = join(directory, "provider.cjs");
+    writeFileSync(
+      file,
+      `const { spawn } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', ${JSON.stringify(`${stubborn ? "process.on('SIGTERM', () => {});" : ""} console.log('ready'); setInterval(() => {}, 1000)`)}], { stdio: ['ignore', 'pipe', 'ignore'] });
 child.stdout.once('data', () => console.log(JSON.stringify({ child: child.pid })));
 setInterval(() => {}, 1000);
 `,
-  );
-  const backend = new HostChildBackend();
-  let descendant: number | undefined;
-  const stopListening = await backend.listen<{ line: string }>(
-    "harness-stdout",
-    ({ payload }) => {
-      descendant = JSON.parse(payload.line).child;
-    },
-  );
-  try {
-    await backend.invoke("harness_spawn", {
-      sessionId: "tree",
-      command: file,
-      args: [],
-      cwd: directory,
-    });
-    await vi.waitFor(() => expect(descendant).toBeTruthy());
-    await backend.kill("tree");
-    await vi.waitFor(
-      () => expect(() => process.kill(descendant!, 0)).toThrow(),
-      { timeout: 5000 },
     );
-  } finally {
-    stopListening();
-    await backend.close();
-    if (descendant) {
-      try {
-        process.kill(descendant, "SIGKILL");
-      } catch {
-        /* gone */
+    const backend = new HostChildBackend();
+    let descendant: number | undefined;
+    const stopListening = await backend.listen<{ line: string }>(
+      "harness-stdout",
+      ({ payload }) => {
+        descendant = JSON.parse(payload.line).child;
+      },
+    );
+    try {
+      await backend.invoke("harness_spawn", {
+        sessionId: "tree",
+        command: file,
+        args: [],
+        cwd: directory,
+      });
+      await vi.waitFor(() => expect(descendant).toBeTruthy());
+      await backend.kill("tree");
+      await vi.waitFor(
+        () => expect(() => process.kill(descendant!, 0)).toThrow(),
+        { timeout: 5000 },
+      );
+    } finally {
+      stopListening();
+      await backend.close();
+      if (descendant) {
+        try {
+          process.kill(descendant, "SIGKILL");
+        } catch {
+          /* gone */
+        }
       }
+      rmSync(directory, { recursive: true, force: true });
     }
+  },
+  15_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "confirms a login stop only after the host emits process exit",
+  async () => {
+    const loginId = "monocode-provider-login-test-claude";
+    const directory = mkdtempSync(join(tmpdir(), "monocode-login-stop-test-"));
+    const file = join(directory, "provider.cjs");
+    writeFileSync(
+      file,
+      `const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
+child.stdout.once('data', () => console.log(child.pid));
+setInterval(() => {}, 1000);
+`,
+    );
+    const backend = new HostChildBackend();
+    let exited = false;
+    let descendant: number | undefined;
+    const unlisten = await backend.listen("harness-exit", () => {
+      exited = true;
+    });
+    const unlistenOutput = await backend.listen<{ line: string }>(
+      "harness-stdout",
+      ({ payload }) => {
+        descendant = Number(payload.line);
+      },
+    );
+    try {
+      const pid = await backend.invoke<number>("harness_spawn", {
+        sessionId: loginId,
+        command: file,
+        args: [],
+        cwd: directory,
+      });
+      await vi.waitFor(() => expect(descendant).toBeTruthy());
+      const stopping = backend.invoke("harness_stop", { sessionId: loginId });
+      await expect(
+        backend.invoke("harness_spawn", {
+          sessionId: loginId,
+          command: file,
+          args: [],
+          cwd: directory,
+        }),
+      ).rejects.toThrow("has not exited");
+      await stopping;
+      expect(exited).toBe(true);
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(() => process.kill(descendant!, 0)).toThrow();
+    } finally {
+      unlisten();
+      unlistenOutput();
+      await backend.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);
+
+it("refuses Windows host login before spawning or reserving an account", async () => {
+  const backend = new HostChildBackend({}, true);
+  const directory = mkdtempSync(join(tmpdir(), "monocode-windows-login-"));
+  const marker = join(directory, "spawned");
+  const provider = join(directory, "provider.cjs");
+  writeFileSync(
+    provider,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes');`,
+  );
+  const args = {
+    sessionId: "monocode-provider-login-windows-claude",
+    command: provider,
+    args: [],
+    cwd: directory,
+  };
+  try {
+    expect(await backend.invoke("harness_login_mode")).toBe("unsupported");
+    await expect(backend.invoke("harness_spawn", args)).rejects.toThrow(
+      "Sign in with the provider CLI in a terminal",
+    );
+    await expect(backend.invoke("harness_spawn", args)).rejects.toThrow(
+      "Sign in with the provider CLI in a terminal",
+    );
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    await backend.close();
     rmSync(directory, { recursive: true, force: true });
   }
-}, 15_000);
+});
+
+it("the Windows guard refuses login before launching its provider", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-guard-reject-"));
+  const marker = join(directory, "provider-started");
+  const provider = join(directory, "provider.cjs");
+  writeFileSync(
+    provider,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes');`,
+  );
+  const guard = spawn(
+    process.execPath,
+    [
+      "-e",
+      "Object.defineProperty(process, 'platform', { value: 'win32' }); const fs = require('node:fs'); const net = require('node:net'); fs.createReadStream = (_, options) => new net.Socket({ fd: options.fd, readable: true, writable: false }); require('node:module').syncBuiltinESMExports(); import(require('node:url').pathToFileURL(process.argv[1]).href);",
+      resolve("build/host/provider-guard.mjs"),
+      process.execPath,
+      provider,
+    ],
+    {
+      cwd: directory,
+      stdio: ["pipe", "ignore", "pipe", "pipe"],
+      env: { ...process.env, MONOCODE_CONFIRM_EXIT: "1" },
+    },
+  );
+  let stderr = "";
+  guard.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  try {
+    const code = await Promise.race([
+      new Promise<number | null>((resolve) => guard.once("exit", resolve)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("guard did not exit")), 3_000),
+      ),
+    ]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("unavailable on Windows hosts");
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    guard.kill("SIGKILL");
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 it("stops a provider tree when its host pipe closes unexpectedly", async () => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-provider-crash-"));
