@@ -125,8 +125,9 @@ export function saveMonoFile(
   file: MonoFile,
   text: string,
   expectedHash?: string,
+  requestId?: string,
 ): Promise<string> {
-  return writeAgentFile(monoId, FILE_PATH[file], text, expectedHash);
+  return writeAgentFile(monoId, FILE_PATH[file], text, expectedHash, requestId);
 }
 
 /** Reapply a small edit to the latest file, including after a concurrent save. */
@@ -161,6 +162,7 @@ export async function writeAgentFile(
   path: AgentFilePath,
   text: string,
   expectedHash?: string,
+  requestId?: string,
 ): Promise<string> {
   try {
     const hash = await invoke<string>("mono_save", {
@@ -168,6 +170,7 @@ export async function writeAgentFile(
       path,
       text,
       expectedHash: expectedHash ?? null,
+      ...(requestId ? { requestId } : {}),
     });
     window.dispatchEvent(new CustomEvent(FILES_CHANGED));
     return hash;

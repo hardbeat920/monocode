@@ -5,7 +5,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ImagePlus, MoreHorizontal, Plus, Trash2 } from "../../shared/ui/icons";
+import {
+  ImagePlus,
+  MoreHorizontal,
+  Plus,
+  Sparkles,
+  Trash2,
+} from "../../shared/ui/icons";
 import { Popover, type PopoverAnchor } from "../../shared/ui/Popover";
 import { Shimmer } from "../../shared/ui/Shimmer";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
@@ -48,6 +54,7 @@ export type MonoRailProps = {
   /** Creates a Mono, given these projects to start with. */
   onCreate: (projects?: readonly string[]) => void;
   onDelete: (monoId: string) => void;
+  onEditSoul: (monoId: string) => void;
 };
 
 const IDLE: MonoState = { status: "idle" };
@@ -73,6 +80,7 @@ export function MonoRailSection({
   onOpen,
   onCreate,
   onDelete,
+  onEditSoul,
   project,
 }: MonoRailProps & {
   /**
@@ -267,6 +275,10 @@ export function MonoRailSection({
             setMenu(undefined);
             setBackground(menu.id);
           }}
+          onEditSoul={() => {
+            setMenu(undefined);
+            onEditSoul(menu.id);
+          }}
           onDelete={() => {
             setMenu(undefined);
             onDelete(menu.id);
@@ -294,12 +306,14 @@ function MonoMenu({
   monoId,
   anchor,
   onBackground,
+  onEditSoul,
   onDelete,
   onClose,
 }: {
   monoId: string;
   anchor: PopoverAnchor;
   onBackground: () => void;
+  onEditSoul: () => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -377,6 +391,18 @@ function MonoMenu({
       >
         <ImagePlus className="size-3.5 shrink-0" strokeWidth={1.75} />
         Background image
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          commitName();
+          onEditSoul();
+        }}
+        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-content/85 hover:bg-content/8"
+      >
+        <Sparkles className="size-3.5 shrink-0" strokeWidth={1.75} />
+        Edit soul…
       </button>
       <button
         type="button"

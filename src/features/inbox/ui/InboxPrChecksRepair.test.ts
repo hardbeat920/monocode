@@ -1010,3 +1010,51 @@ it("keeps the selected failed job when another check changes", async () => {
     document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
   ).not.toBeNull();
 });
+
+it("keeps the repair form open when starting is cancelled", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const start = vi.fn().mockRejectedValue(new Error("Starting was cancelled"));
+  await act(async () =>
+    root.render(
+      createElement(InboxPrChecks, {
+        cwd: "/web",
+        repo: "acme/web",
+        onRefresh() {},
+        view: {
+          checks: {
+            headOid: "abc",
+            checks: [
+              {
+                name: "test",
+                state: "fail",
+                workflow: "CI",
+                url: null,
+                startedAt: null,
+                completedAt: null,
+              },
+            ],
+          },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+        repair: { number: 42, sessions: [], onStart: start },
+      }),
+    ),
+  );
+  const button = (text: string) =>
+    [...document.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === text || b.textContent === text,
+    )!;
+  await act(async () => button("Fix all failed").click());
+  await act(async () => button("Start fix").click());
+  expect(start).toHaveBeenCalledOnce();
+  expect(document.body.textContent).toContain("Starting was cancelled");
+  expect(button("Start fix")).toBeDefined();
+});

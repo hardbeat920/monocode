@@ -17,8 +17,10 @@
 //! that was a project's Mono passes that project along until its old folder
 //! has moved under its id.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,6 +46,71 @@ static INDEX_LOCK: Mutex<()> = Mutex::new(());
 /// All windows share this store. Keep initialization and hash-checked writes
 /// serialized so only one caller can save over a version of a file.
 static FILES_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Default)]
+struct SoulWrites {
+    active: HashMap<String, String>,
+    permits: HashMap<(String, String), Instant>,
+}
+
+static SOUL_WRITES: LazyLock<Mutex<SoulWrites>> =
+    LazyLock::new(|| Mutex::new(SoulWrites::default()));
+
+impl SoulWrites {
+    fn register(&mut self, mono: &str) -> Result<String, String> {
+        self.permits.retain(|_, expires| *expires > Instant::now());
+        if self.permits.len() >= 1024 {
+            return Err("Too many pending Soul saves; retry shortly".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        self.permits.insert(
+            (mono.to_ascii_lowercase(), id.clone()),
+            Instant::now() + Duration::from_secs(60),
+        );
+        Ok(id)
+    }
+
+    fn begin(&mut self, mono: &str, id: &str, registered: bool) -> Result<(), String> {
+        let mono = mono.to_ascii_lowercase();
+        if registered
+            && !self
+                .permits
+                .remove(&(mono.clone(), id.to_string()))
+                .is_some_and(|expires| expires > Instant::now())
+        {
+            return Err("Soul save permit expired or cancelled; retry".into());
+        }
+        if self.active.contains_key(&mono) {
+            return Err("A previous Soul save is still in progress".into());
+        }
+        self.active.insert(mono, id.to_string());
+        Ok(())
+    }
+
+    fn cancel(&mut self, mono: &str, id: &str) {
+        self.permits
+            .remove(&(mono.to_ascii_lowercase(), id.to_string()));
+    }
+
+    fn finish(&mut self, mono: &str, id: &str) {
+        let mono = mono.to_ascii_lowercase();
+        if self.active.get(&mono).is_some_and(|active| active == id) {
+            self.active.remove(&mono);
+        }
+    }
+}
+
+struct SoulWritePermit {
+    mono: String,
+    id: String,
+}
+impl Drop for SoulWritePermit {
+    fn drop(&mut self) {
+        if let Ok(mut writes) = SOUL_WRITES.lock() {
+            writes.finish(&self.mono, &self.id);
+        }
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct AgentIndex {
@@ -328,9 +395,28 @@ pub async fn mono_save(
     path: String,
     text: String,
     expected_hash: Option<String>,
+    request_id: Option<String>,
 ) -> Result<String, String> {
     let root = monos_root(&app)?;
+    let permit = if path == SOUL_FILE {
+        if !valid_id(&mono) {
+            return Err("Invalid Soul save request".into());
+        }
+        let registered = request_id.is_some();
+        let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        SOUL_WRITES
+            .lock()
+            .map_err(|e| e.to_string())?
+            .begin(&mono, &id, registered)?;
+        Some(SoulWritePermit {
+            mono: mono.clone(),
+            id,
+        })
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         save(
             &root,
             &mono,
@@ -344,6 +430,96 @@ pub async fn mono_save(
     .map_err(|e| e.to_string())?
 }
 
+/// Unused permits expire by becoming invalid, so late requests cannot write.
+#[tauri::command]
+pub fn mono_register_soul_save(mono: String) -> Result<String, String> {
+    if !valid_id(&mono) {
+        return Err("Invalid Soul save request".into());
+    }
+    SOUL_WRITES
+        .lock()
+        .map_err(|e| e.to_string())?
+        .register(&mono)
+}
+
+#[tauri::command]
+pub fn mono_cancel_soul_save(mono: String, request_id: String) -> Result<(), String> {
+    if !valid_id(&mono) {
+        return Err("Invalid Soul save request".into());
+    }
+    let request_id = uuid::Uuid::parse_str(&request_id)
+        .map_err(|_| "Invalid Soul save request")?
+        .to_string();
+    SOUL_WRITES
+        .lock()
+        .map_err(|e| e.to_string())?
+        .cancel(&mono, &request_id);
+    Ok(())
+}
+
+/// Recovery copies never touch the Mono file lock or overwrite an existing file.
+#[tauri::command]
+pub async fn mono_save_soul_recovery(
+    app: AppHandle,
+    mono: String,
+    text: String,
+) -> Result<String, String> {
+    if !valid_id(&mono) || text.len() > 8 * 1024 * 1024 {
+        return Err("Invalid Soul recovery draft".into());
+    }
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("soul-recovery");
+    tauri::async_runtime::spawn_blocking(move || save_soul_recovery(&root, &mono, &text))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_soul_recovery(root: &Path, mono: &str, text: &str) -> Result<String, String> {
+    use std::io::Write;
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    if std::fs::symlink_metadata(root)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("Recovery folder cannot be a symbolic link".into());
+    }
+    let path = root.join(format!("{mono}-{}.md", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    let result = file
+        .write_all(text.as_bytes())
+        .and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&path);
+        return Err(error.to_string());
+    }
+    #[cfg(unix)]
+    {
+        std::fs::File::open(root)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| e.to_string())?;
+        if let Some(parent) = root.parent() {
+            std::fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "Recovery path is not valid UTF-8".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +528,75 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mono-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn soul_permits_isolate_windows_and_reject_late_requests() {
+        let mut writes = SoulWrites::default();
+        let a = writes.register("a").unwrap();
+        let b = writes.register("b").unwrap();
+        writes.cancel("a", &a);
+        assert!(writes.begin("a", &a, true).is_err());
+        assert!(writes.begin("a", &b, true).is_err());
+        writes.begin("b", &b, true).unwrap();
+        writes.finish("b", &b);
+        assert!(writes.begin("b", &b, true).is_err());
+
+        let cancelled = writes.register("a").unwrap();
+        let unaffected = writes.register("a").unwrap();
+        writes.cancel("a", &cancelled);
+        writes.cancel("a", &cancelled);
+        writes.begin("a", &unaffected, true).unwrap();
+        writes.finish("a", &unaffected);
+
+        let first = writes.register("a").unwrap();
+        let second = writes.register("A").unwrap();
+        writes.begin("a", &first, true).unwrap();
+        writes.cancel("a", &first);
+        assert!(writes.begin("A", &second, true).is_err());
+        writes.finish("a", &first);
+        assert!(writes.begin("a", &first, true).is_err());
+        assert!(writes.begin("a", &second, true).is_err());
+        for _ in 0..1100 {
+            let id = writes.register("a").unwrap();
+            writes.cancel("a", &id);
+            assert!(writes.begin("a", &id, true).is_err());
+        }
+        for _ in 0..1024 {
+            writes.register("a").unwrap();
+        }
+        assert!(writes.register("a").is_err());
+        let expired = writes.permits.keys().next().unwrap().1.clone();
+        for until in writes.permits.values_mut() {
+            *until = Instant::now();
+        }
+        let fresh = writes.register("a").unwrap();
+        assert_eq!(writes.permits.len(), 1);
+        assert!(writes.begin("a", &expired, true).is_err());
+        assert!(writes.begin("a", &fresh, true).is_ok());
+    }
+
+    #[test]
+    fn recovery_copies_are_distinct_and_private() {
+        let root =
+            std::env::temp_dir().join(format!("monocode-soul-recovery-{}", uuid::Uuid::new_v4()));
+        let first = save_soul_recovery(&root, "mono", "private first").unwrap();
+        let second = save_soul_recovery(&root, "mono", "private second").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "private first");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "private second");
+        let larger = "x".repeat(FILE_MAX + 1);
+        let third = save_soul_recovery(&root, "mono", &larger).unwrap();
+        assert_eq!(std::fs::read_to_string(third).unwrap(), larger);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

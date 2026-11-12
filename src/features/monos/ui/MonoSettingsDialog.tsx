@@ -1,10 +1,12 @@
 import {
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -55,6 +57,9 @@ type Props = {
   runtimeMode: RuntimeMode;
   busy?: boolean;
   initialSection?: MonoSettingsSection;
+  leaveRef?: Ref<() => Promise<boolean>>;
+  frozen?: boolean;
+  onRecoverClose?: (path: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -71,18 +76,36 @@ export function MonoSettingsDialog({
   agent,
   status,
   initialSection = "general",
+  leaveRef,
+  frozen = false,
+  onRecoverClose,
   onClose,
   ...general
 }: Props) {
   const [section, setSection] = useState(initialSection);
   const files = useMonoFiles(monoId, status);
+  const saveSoul = useRef<() => Promise<boolean>>(null);
+  useImperativeHandle(
+    leaveRef,
+    () => () =>
+      section !== "soul" || !saveSoul.current
+        ? Promise.resolve(true)
+        : saveSoul.current(),
+  );
+  const leaveSoul = (action: () => void) => {
+    if (section !== "soul" || !saveSoul.current) action();
+    else
+      void saveSoul.current().then((saved) => {
+        if (saved) action();
+      });
+  };
   return (
     <Modal
       title={`${agent.name} settings`}
       size="lg"
       minimalHeader
       fitViewport
-      onClose={onClose}
+      onClose={() => leaveSoul(onClose)}
       // Centre the close button in the section header's 40px row.
       className="h-[min(680px,calc(100dvh-32px))] [&>.modal-panel>header]:top-1.5"
     >
@@ -91,6 +114,7 @@ export function MonoSettingsDialog({
         // Section headers leave room for the dialog's close button.
         style={{ "--mono-window-controls-width": "2rem" } as CSSProperties}
         data-mono-settings
+        inert={frozen || undefined}
       >
         <nav
           aria-label="Settings sections"
@@ -104,7 +128,7 @@ export function MonoSettingsDialog({
               key={id}
               type="button"
               aria-current={section === id ? "page" : undefined}
-              onClick={() => setSection(id)}
+              onClick={() => leaveSoul(() => setSection(id))}
               className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] ${
                 section === id
                   ? "bg-content/8 text-content"
@@ -120,7 +144,13 @@ export function MonoSettingsDialog({
           {section === "general" ? (
             <GeneralSection monoId={monoId} agent={agent} {...general} />
           ) : section === "soul" ? (
-            <SoulPage monoId={monoId} agent={agent} files={files} />
+            <SoulPage
+              monoId={monoId}
+              agent={agent}
+              files={files}
+              saveRef={saveSoul}
+              onRecoverClose={onRecoverClose ?? onClose}
+            />
           ) : (
             <MemoryPage monoId={monoId} files={files} />
           )}
