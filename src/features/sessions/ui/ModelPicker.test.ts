@@ -66,6 +66,7 @@ vi.mock("../../../shared/ui/Popover", () => ({
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import {
   resetHarnessModelOverlays,
+  saveFavoriteModels,
   saveRecentModelChoice,
   setHarnessModels,
 } from "../model/models";
@@ -1305,7 +1306,7 @@ describe("model picker", () => {
     contextMenu(trigger);
 
     const recentMenu = container.querySelector<HTMLElement>(
-      '[role="menu"][aria-label="Recently used models"]',
+      '[role="menu"][aria-label="Switch model"]',
     )!;
     expect(recentMenu.dataset.anchorElement).toBe("true");
     expect(recentMenu.dataset.side).toBe("top");
@@ -1342,7 +1343,7 @@ describe("model picker", () => {
     expect(onChange).toHaveBeenCalledWith("cursor", "cursor:composer-2.5");
     expect(
       container.querySelector(
-        '[role="menu"][aria-label="Recently used models"]',
+        '[role="menu"][aria-label="Switch model"]',
       ),
     ).toBeNull();
 
@@ -1358,11 +1359,49 @@ describe("model picker", () => {
     });
     expect(
       container.querySelector(
-        '[role="menu"][aria-label="Recently used models"]',
+        '[role="menu"][aria-label="Switch model"]',
       ),
     ).not.toBeNull();
     expect(
       container.querySelector('[role="menu"][aria-label="Model and settings"]'),
+    ).toBeNull();
+  });
+
+  it("lists favorite models above the current model", () => {
+    saveFavoriteModels(["cursor:composer-2.5", "claude:opus-5"]);
+    saveRecentModelChoice("grok", "grok:grok-4.5");
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "grok",
+          model: "grok:grok-4.6",
+          values: {},
+          hotkeys: true,
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("open_model_picker"));
+    });
+
+    const items = [
+      ...document
+        .querySelector('[role="menu"][aria-label="Switch model"]')!
+        .querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ];
+    const labels = items.map((item) => item.textContent ?? "");
+    expect(labels[0]).toContain("Composer 2.5");
+    expect(labels[1]).toContain("Opus 5");
+    expect(labels.findIndex((label) => label.includes("Grok 4.6"))).toBeGreaterThan(1);
+    expect(items[0].querySelector('[aria-label="Favorite"]')).not.toBeNull();
+    expect(items[1].querySelector('[aria-label="Favorite"]')).not.toBeNull();
+    expect(
+      items
+        .find((item) => item.textContent?.includes("Grok 4.6"))
+        ?.querySelector('[aria-label="Favorite"]'),
     ).toBeNull();
   });
 });

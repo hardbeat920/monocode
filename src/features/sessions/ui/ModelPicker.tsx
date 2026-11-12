@@ -246,12 +246,20 @@ function recentMenuModels(
   current: AgentModel,
   source: ModelSource,
 ): AgentModel[] {
-  const models = loadRecentModelChoices().flatMap((choice) => {
+  const seen = new Set<string>();
+  const models: AgentModel[] = [];
+  const add = (item: AgentModel | undefined) => {
+    if (!item || seen.has(item.id)) return;
+    seen.add(item.id);
+    models.push(item);
+  };
+  for (const id of loadFavoriteModels()) add(source.find(id));
+  for (const choice of loadRecentModelChoices()) {
     const item = source.find(choice.model);
-    return item?.harness === choice.harness ? [item] : [];
-  });
-  if (!models.some((item) => item.id === current.id)) models.push(current);
-  return models.slice(0, 6);
+    if (item?.harness === choice.harness) add(item);
+  }
+  add(current);
+  return models;
 }
 
 /** Harness tabs whose catalog names upstream providers list models under them. */
@@ -1024,15 +1032,16 @@ export function ModelPicker({
           autoFocus
           onDismiss={() => setRecentMenu(null)}
           role="menu"
-          aria-label="Recently used models"
+          aria-label="Switch model"
           aria-activedescendant={`${recentMenuId}-${recentActive}`}
           tabIndex={-1}
           onContextMenu={(event) => event.preventDefault()}
           data-model-picker
-          className="p-1 font-sans"
+          className="overflow-y-auto p-1 font-sans"
         >
           {recentMenu.models.map((item, index) => {
             const selected = item.id === current.id;
+            const favorited = favorites.includes(item.id);
             const highlighted = index === recentActive;
             const disabled = !source.available(item.harness);
             return (
@@ -1070,6 +1079,14 @@ export function ModelPicker({
                     {item.provider ? ` · ${item.provider.name}` : ""}
                   </span>
                 </span>
+                {favorited ? (
+                  <Star
+                    aria-label="Favorite"
+                    className="size-3.5 shrink-0 text-content/60"
+                    strokeWidth={1.75}
+                    fill="currentColor"
+                  />
+                ) : null}
                 {selected ? (
                   <Check
                     className="size-3.5 shrink-0 text-content/55"
