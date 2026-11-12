@@ -52,7 +52,8 @@ export type BlockRole =
   | "tasks"
   | "plan"
   | "system"
-  | "handoff";
+  | "handoff"
+  | "shell";
 
 /** A session created by a Mono during this conversation turn. */
 export type MonoSpawnedSession = {
@@ -303,6 +304,18 @@ export type TurnModel = {
   name: string;
 };
 
+/** A command the user ran with `!` from the composer; `text` is the command. */
+export type ShellCommandMeta = {
+  cwd: string;
+  status: "running" | "done" | "stopped" | "failed";
+  stdout?: string;
+  stderr?: string;
+  /** Missing while it runs, or when a signal ended it. */
+  exitCode?: number;
+  /** Output past the limit was dropped. */
+  truncated?: boolean;
+};
+
 /** Provider-reported token accounting for one user turn. */
 export type TurnMetrics = {
   inputTokens?: number;
@@ -376,6 +389,7 @@ export type Block = {
   /** Accepted session launches, kept on the originating user turn. */
   monoSpawnedSessions?: MonoSpawnedSession[];
   handoff?: HandoffMeta;
+  shell?: ShellCommandMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];

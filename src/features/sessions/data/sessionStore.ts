@@ -47,6 +47,7 @@ import type {
 } from "../model/session";
 
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+import { sanitizeShellCommand } from "../model/shellCommand";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
@@ -1042,6 +1043,11 @@ function sanitizeBlock(
   const handoff = sanitizeHandoff(block.handoff);
   if (handoff) next.handoff = handoff;
   else if (block.role === "handoff") return null;
+  if (block.role === "shell") {
+    const shell = sanitizeShellCommand(block.shell, options?.hydrate === true);
+    if (!shell) return null;
+    next.shell = shell;
+  }
   const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
   if (secondOpinion) next.secondOpinion = secondOpinion;
   if (block.role === "user") {

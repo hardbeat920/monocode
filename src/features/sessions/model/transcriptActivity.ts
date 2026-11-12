@@ -324,7 +324,7 @@ export function resolveToolCallDisplay(
 }
 
 /**
- * User turns, with handoffs and habit updates sitting on their own row. `managed` is for
+ * User turns, with handoffs, `!` commands and habit updates on their own row. `managed` is for
  * a worker's own transcript, where the app-written turns are the orchestrator
  * talking to it — the whole prompt side of that conversation, and the only
  * thing its replies are answering.
@@ -353,7 +353,7 @@ function groupTranscriptTurns(
       }
       continue;
     }
-    if (block.role === "handoff" || block.monoHabit) {
+    if (block.role === "handoff" || block.role === "shell" || block.monoHabit) {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
       current = [];

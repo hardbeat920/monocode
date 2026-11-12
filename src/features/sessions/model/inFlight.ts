@@ -1,6 +1,7 @@
 import { leafIds, newTab, type WorkspaceTab } from "../../workspace/model/layout";
 import type { DockSide, ProjectTerminalDock } from "../../projects/model/projectTerminal";
 import { sessionNeedsInput, type Session } from "./session";
+import { shellCommandRunning } from "./shellCommand";
 import { stopStreaming } from "../../../integrations/harness/core/apply";
 import type { ProjectReturnMemory } from "../../projects/model/projectReturn";
 
@@ -49,7 +50,13 @@ export function inFlightRefs(
 
   const push = (session: Session | undefined) => {
     if (!session || session.inboxAsk || seen.has(session.id)) return;
-    if (!isInFlightSession(session) || !canResumeAfterQuit(session)) return;
+    // A `!` command is not an agent turn: a quit has nothing to continue.
+    if (
+      !isInFlightSession(session) ||
+      shellCommandRunning(session) ||
+      !canResumeAfterQuit(session)
+    )
+      return;
     seen.add(session.id);
     refs.push({ sessionId: session.id, cwd: session.cwd });
   };
