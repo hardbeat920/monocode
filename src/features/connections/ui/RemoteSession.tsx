@@ -44,6 +44,7 @@ import {
   remoteModelControls,
   sameModelSettings,
 } from "../model/remoteModels";
+import type { RemoteChoice } from "../model/remoteSessionState";
 import {
   isRemoteProvider,
   REMOTE_PROVIDERS,
@@ -118,6 +119,7 @@ export function RemoteSession({
   shell,
   visible,
   onSnapshot,
+  onChoice,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -127,6 +129,7 @@ export function RemoteSession({
   shell: Session;
   visible: boolean;
   onSnapshot?: (shellId: string, snapshot?: HostSession) => void;
+  onChoice?: (shellId: string, choice: RemoteChoice) => void;
   onOpenFile: SessionPaneProps["onOpenFile"];
   onOpenDiff: SessionPaneProps["onOpenDiff"];
   onOpenPlan: SessionPaneProps["onOpenPlan"];
@@ -166,6 +169,7 @@ export function RemoteSession({
       shell={shell}
       visible={visible}
       onSnapshot={onSnapshot}
+      onChoice={onChoice}
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
       onOpenPlan={onOpenPlan}
@@ -180,6 +184,7 @@ function ConnectedRemoteSession({
   shell,
   visible,
   onSnapshot,
+  onChoice,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -190,6 +195,7 @@ function ConnectedRemoteSession({
   shell: Session;
   visible: boolean;
   onSnapshot?: (shellId: string, snapshot?: HostSession) => void;
+  onChoice?: (shellId: string, choice: RemoteChoice) => void;
   onOpenFile: SessionPaneProps["onOpenFile"];
   onOpenDiff: SessionPaneProps["onOpenDiff"];
   onOpenPlan: SessionPaneProps["onOpenPlan"];
@@ -300,6 +306,25 @@ function ConnectedRemoteSession({
     snapshot && snapshot.session.id === sessionId
       ? snapshot.session
       : undefined;
+  // The shell starts from this computer's defaults. It follows the host
+  // session, or before one exists the composer, so the tab shows the host's
+  // provider. While a bound session loads, the shell keeps what it has.
+  useEffect(() => {
+    if (hostSession)
+      onChoice?.(shell.id, {
+        harness: hostSession.harness,
+        model: hostSession.model,
+        modelSettings: hostSession.modelSettings ?? {},
+        runtimeMode: hostSession.runtimeMode,
+      });
+    else if (!sessionId)
+      onChoice?.(shell.id, {
+        harness: draft.harness,
+        model: draft.model,
+        modelSettings: draft.settings,
+        runtimeMode: draft.mode,
+      });
+  }, [onChoice, shell.id, sessionId, hostSession, draft]);
   useEffect(() => {
     if (hostSession) rememberRemotePendingWorktree(shell.id);
   }, [hostSession?.id, shell.id]);

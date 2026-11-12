@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -7,6 +7,7 @@ import {
   SessionPane,
   type SessionPaneProps,
 } from "../../sessions/ui/SessionPane";
+import { PaneTree } from "../../workspace/ui/PaneTree";
 import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
@@ -600,6 +601,61 @@ it("keeps a new session on its selected remote provider", async () => {
     harness: "cursor",
     model: cursor.id,
   });
+});
+
+it("gives a new tab the host's provider instead of this computer's default", async () => {
+  const onRemoteChoice = vi.fn();
+  // The shell's Claude default came from this computer; the host has only Codex.
+  await render(shell(), { onRemoteChoice });
+  expect(onRemoteChoice).toHaveBeenLastCalledWith(
+    "shell",
+    expect.objectContaining({ harness: "codex", model: gpt.id }),
+  );
+});
+
+it("gives a tab the provider of the host conversation it shows", async () => {
+  providers = ["codex", "cursor"];
+  catalog = { models: { codex: [gpt], cursor: [cursor] }, errors: {} };
+  dispatch({
+    type: "create",
+    commandId: "existing-session",
+    projectId: "project",
+    harness: "cursor",
+    model: cursor.id,
+    runtimeMode: "supervised",
+  });
+  rememberRemoteSession("shell", "host-session");
+  const onRemoteChoice = vi.fn();
+  await render(shell(), { onRemoteChoice });
+  expect(onRemoteChoice).toHaveBeenLastCalledWith(
+    "shell",
+    expect.objectContaining({ harness: "cursor", model: cursor.id }),
+  );
+});
+
+it("reports the host's provider from a workspace pane", async () => {
+  const onRemoteChoice = vi.fn();
+  const session = shell();
+  const props = {
+    visible: true,
+    layout: { type: "leaf", id: session.id },
+    sessions: [session],
+    editorPanes: [],
+    dirtyFileIds: new Set(),
+    fileErrorCounts: new Map(),
+    focusedId: session.id,
+    composerFocused: false,
+    recents: [],
+    onFocus: vi.fn(),
+    onClose: vi.fn(),
+    onRemoteChoice,
+  } as unknown as ComponentProps<typeof PaneTree>;
+  await act(async () => root.render(createElement(PaneTree, props)));
+  await settle();
+  expect(onRemoteChoice).toHaveBeenLastCalledWith(
+    "shell",
+    expect.objectContaining({ harness: "codex", model: gpt.id }),
+  );
 });
 
 it("drops settings from the tab that the host's model does not offer", async () => {
