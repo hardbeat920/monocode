@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { ClaudeContextUsage } from "./claudeContextUsage";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
@@ -176,6 +177,7 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  contextUsage: ClaudeContextUsage | null;
 };
 
 type Resume = {
@@ -359,6 +361,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
   liveByThread.delete(sessionId);
   if (live) {
     live.muteUpdates = true;
+    live.contextUsage?.dispose();
     for (const [, pending] of live.approvals) pending.resolve("deny");
     live.approvals.clear();
     for (const [, pending] of live.questions)
@@ -513,7 +516,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    contextUsage: null,
   };
+  live.contextUsage = new ClaudeContextUsage(
+    (request) => writeJson(input.sessionId, request),
+    (window) => {
+      if (!live.muteUpdates) {
+        live.onEvent({ type: "context", compactionWindow: window });
+      }
+    },
+  );
   liveRef.current = live;
 
   watchChild(
@@ -529,6 +541,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       if (!current?.muteUpdates) {
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
+      current?.contextUsage?.dispose();
       current?.turnFailed?.(new Error("Claude Code exited"));
       current?.initDone?.();
       if (current) {
@@ -566,6 +579,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       providerSessionId: live.claudeSessionId,
     });
     live.onEvent({ type: "session.started" });
+    live.onEvent({ type: "context", compactionWindow: null });
     return live;
   } catch (error) {
     await stopClaudeSession(input.sessionId);
@@ -583,6 +597,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
+  live.contextUsage?.refresh();
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.pendingAssistantBoundary = false;
@@ -695,6 +710,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   }
 
   if (type === "control_response") {
+    if (live.contextUsage?.handleResponse(rec)) return;
     markInitialized(live);
     return;
   }
@@ -724,6 +740,9 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   }
   if (type === "result") {
     handleResult(live, rec);
+    if (!isSubagentMessage(rec) && !isReplayedTaskNotificationResult(rec)) {
+      live.contextUsage?.refresh();
+    }
     return;
   }
   if (type === "rate_limit_event") {
@@ -1815,6 +1834,7 @@ function launchOptions(
 
 /** Exported for tests. */
 export function __claudeTestReset(): void {
+  for (const live of liveByThread.values()) live.contextUsage?.dispose();
   liveByThread.clear();
   resumeByThread.clear();
   tasksByThread.clear();

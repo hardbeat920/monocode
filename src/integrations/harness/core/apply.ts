@@ -140,6 +140,7 @@ export function applyHarnessEvent(
         context: mergeContextUsage(session.context, {
           used: event.used,
           window: event.window,
+          compactionWindow: event.compactionWindow,
         }),
       };
     case "turn.metrics":

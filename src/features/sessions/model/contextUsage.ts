@@ -11,6 +11,7 @@ export type ContextUsage = {
   used: number;
   /** Context window for the active model, when the harness reports one. */
   window?: number;
+  compactionWindow?: number;
 };
 
 /** Fraction of the window in use, or null when the window is unknown. */
@@ -18,6 +19,27 @@ export function contextRatio(usage: ContextUsage | undefined): number | null {
   if (!usage || !usage.window || usage.window <= 0) return null;
   if (!Number.isFinite(usage.used) || usage.used < 0) return null;
   return Math.min(1, usage.used / usage.window);
+}
+
+function isPositiveFinite(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+export function contextCompactionWindow(
+  usage: ContextUsage | undefined,
+): number | undefined {
+  if (!usage || !isPositiveFinite(usage.compactionWindow)) return undefined;
+  return isPositiveFinite(usage.window)
+    ? Math.min(usage.compactionWindow, usage.window)
+    : usage.compactionWindow;
+}
+
+export function contextMeterRatio(
+  usage: ContextUsage | undefined,
+): number | null {
+  const window = contextCompactionWindow(usage);
+  if (!usage || window === undefined) return contextRatio(usage);
+  return contextRatio({ used: usage.used, window });
 }
 
 /** Whole-percent context used, or null when the window is unknown. */
@@ -43,7 +65,22 @@ export function formatTokens(count: number): string {
 export function contextTooltip(usage: ContextUsage): {
   headline: string;
   detail: string;
+  capacity?: string;
 } {
+  const compactionWindow = contextCompactionWindow(usage);
+  if (compactionWindow !== undefined) {
+    const ratio = contextMeterRatio(usage);
+    return {
+      headline:
+        ratio === null
+          ? "Auto-compaction window"
+          : `${Math.round(ratio * 100)}% of auto-compaction window`,
+      detail: `${formatTokens(usage.used)} / ${formatTokens(compactionWindow)} tokens`,
+      ...(isPositiveFinite(usage.window)
+        ? { capacity: `Full model capacity: ${formatTokens(usage.window)} tokens` }
+        : {}),
+    };
+  }
   const percent = contextPercent(usage);
   return {
     headline:
@@ -63,11 +100,19 @@ export function contextTooltip(usage: ContextUsage): {
  */
 export function mergeContextUsage(
   previous: ContextUsage | undefined,
-  next: { used?: number; window?: number },
+  next: { used?: number; window?: number; compactionWindow?: number | null },
 ): ContextUsage {
   const used = next.used ?? previous?.used ?? 0;
   const window = next.window ?? previous?.window;
-  return window ? { used, window } : { used };
+  const compactionWindow =
+    next.compactionWindow === undefined
+      ? previous?.compactionWindow
+      : (next.compactionWindow ?? undefined);
+  return {
+    used,
+    ...(window ? { window } : {}),
+    ...(isPositiveFinite(compactionWindow) ? { compactionWindow } : {}),
+  };
 }
 
 /**

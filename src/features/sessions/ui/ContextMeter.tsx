@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import {
-  contextRatio,
+  contextMeterRatio,
   contextTooltip,
   type ContextUsage,
 } from "../model/contextUsage";
@@ -41,7 +41,7 @@ export function ContextMeter({
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const ratio = contextRatio(usage);
+  const ratio = contextMeterRatio(usage);
   if (!usage || ratio === null) {
     return empty ? (
       <span title="No context used yet" className="grid shrink-0">
@@ -50,7 +50,8 @@ export function ContextMeter({
     ) : null;
   }
 
-  const { headline, detail } = contextTooltip(usage);
+  const { headline, detail, capacity } = contextTooltip(usage);
+  const readable = [headline, detail, capacity].filter(Boolean).join(", ");
   const actionsOpen = open && onCompact != null;
 
   return (
@@ -64,7 +65,7 @@ export function ContextMeter({
         <button
           type="button"
           title="Context usage"
-          aria-label={`${headline}, ${detail}. Open context actions`}
+          aria-label={`${readable}. Open context actions`}
           aria-expanded={actionsOpen}
           onClick={() => setOpen((value) => !value)}
           className="-m-1 grid rounded-sm p-1 outline-none focus-visible:ring-1 focus-visible:ring-accent"
@@ -72,7 +73,7 @@ export function ContextMeter({
           <MeterRing ratio={ratio} />
         </button>
       ) : (
-        <MeterRing ratio={ratio} label={`${headline}, ${detail}`} />
+        <MeterRing ratio={ratio} label={readable} />
       )}
       {hovered || actionsOpen ? (
         <Popover
@@ -82,8 +83,17 @@ export function ContextMeter({
           onDismiss={onCompact ? () => setOpen(false) : undefined}
           className={`w-max px-2.5 py-1.5 ${actionsOpen ? "" : "pointer-events-none"}`}
         >
-          <div className="text-[12px] leading-4 text-content">{headline}</div>
-          <div className="text-[11px] leading-4 text-content/50">{detail}</div>
+          <div className="text-[12px] leading-4 text-content tabular-nums">
+            {headline}
+          </div>
+          <div className="text-[12px] leading-4 text-content/70 tabular-nums">
+            {detail}
+          </div>
+          {capacity ? (
+            <div className="text-[12px] leading-4 text-content/70 tabular-nums">
+              {capacity}
+            </div>
+          ) : null}
           {actionsOpen ? (
             <button
               type="button"

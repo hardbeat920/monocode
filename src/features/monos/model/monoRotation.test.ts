@@ -51,6 +51,22 @@ it.each([128_000, 200_000, 1_000_000])(
   },
 );
 
+it("rotates on full capacity, not the compaction window", () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(T0 + HOUR);
+    expect(
+      rotationReason({
+        providerSessionId: "native",
+        context: { used: 350_000, window: 1_000_000, compactionWindow: 400_000 },
+        blocks: turn("hi", "hello", T0),
+      }),
+    ).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it.each([45_000, 600_000])(
   "keeps a %i-token conversation in a large window across a long break",
   (used) => {

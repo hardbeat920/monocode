@@ -1261,6 +1261,35 @@ describe("applyHarnessEvent context", () => {
     expect(session.context).toEqual({ used: 12_000, window: 400_000 });
   });
 
+  it("keeps the compaction window beside the full capacity and clears on null", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 234_000,
+      window: 1_000_000,
+    });
+    session = applyHarnessEvent(session, {
+      type: "context",
+      compactionWindow: 400_000,
+    });
+    expect(session.context).toEqual({
+      used: 234_000,
+      window: 1_000_000,
+      compactionWindow: 400_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", used: 250_000 });
+    expect(session.context).toEqual({
+      used: 250_000,
+      window: 1_000_000,
+      compactionWindow: 400_000,
+    });
+    session = applyHarnessEvent(session, {
+      type: "context",
+      compactionWindow: null,
+    });
+    expect(session.context).toEqual({ used: 250_000, window: 1_000_000 });
+  });
+
   it("leaves blocks alone", () => {
     const session = applyHarnessEvent(newSession("codex", "/repo"), {
       type: "context",
