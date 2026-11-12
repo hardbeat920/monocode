@@ -187,6 +187,13 @@ impl Mono {
             _ => Err("This Mono has several projects; include project with its path".into()),
         }
     }
+    /// The `project` that lets `sessions.read` see a session in `cwd`: it
+    /// resolves the project like [`Self::project`], then needs an exact cwd match.
+    pub fn session_project(&self, cwd: &str) -> Option<String> {
+        self.project(Some(cwd))
+            .ok()
+            .filter(|project| project == cwd)
+    }
     pub fn normalize(&mut self) {
         self.name = self.name.trim().chars().take(40).collect();
         if !MASCOTS.contains(&self.mascot.as_str()) {

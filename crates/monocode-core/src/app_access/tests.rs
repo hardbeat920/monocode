@@ -213,6 +213,135 @@ fn conversation_pages_read_a_long_message_through_char_offsets() {
 }
 
 #[test]
+fn char_offsets_count_like_reports_and_say_when_they_overshoot() {
+    let blocks = vec![
+        json!({"id":"u1","role":"user","text":"Go"}),
+        json!({"id":"a1","role":"assistant","text":"  one\r\ntwo\rthree  "}),
+    ];
+    let page = conversation_page(&blocks, &json!({"limit":1,"maxChars":200})).unwrap();
+    assert_eq!(page["turns"][0]["assistant"]["text"], "one\ntwo\nthree");
+    let past = conversation_page(&blocks, &json!({"limit":1,"charOffset":50})).unwrap();
+    let past = &past["turns"][0]["assistant"];
+    assert_eq!(past["text"], "");
+    assert_eq!(past["totalChars"], 13);
+    assert_eq!(past["pastEnd"], true);
+    let at_end = conversation_page(&blocks, &json!({"limit":1,"charOffset":13})).unwrap();
+    assert_eq!(
+        at_end["turns"][0]["assistant"]["pastEnd"], true,
+        "nothing is left at the end"
+    );
+    let last = conversation_page(&blocks, &json!({"limit":1,"charOffset":12})).unwrap();
+    assert_eq!(last["turns"][0]["assistant"]["text"], "e");
+    assert!(last["turns"][0]["assistant"].get("pastEnd").is_none());
+}
+
+/// Calls written to #1341's instructions repeat a page's nextCharOffset
+/// without a limit; that keeps working, and reads on in the latest message.
+#[test]
+fn char_offsets_without_a_limit_read_on_in_the_latest_message() {
+    let long = "x".repeat(300);
+    let blocks = vec![
+        json!({"id":"u1","role":"user","text":"First"}),
+        json!({"id":"a1","role":"assistant","text":"Earlier answer"}),
+        json!({"id":"u2","role":"user","text":"Second"}),
+        json!({"id":"a2","role":"assistant","text":format!("{long}THE END")}),
+    ];
+    let first = conversation_page(&blocks, &json!({"maxChars":300})).unwrap();
+    assert_eq!(first["turns"].as_array().unwrap().len(), 2);
+    let next = first["turns"][1]["assistant"]["nextCharOffset"].clone();
+    assert_eq!(next, 300);
+    let page = conversation_page(&blocks, &json!({"maxChars":300,"charOffset":next})).unwrap();
+    assert_eq!(page["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(page["turns"][0]["turnId"], "u2");
+    assert_eq!(page["turns"][0]["assistant"]["text"], "THE END");
+    // An explicit limit still pages several exchanges, as it did before.
+    let both = conversation_page(&blocks, &json!({"limit":2,"charOffset":5})).unwrap();
+    assert_eq!(both["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(both["turns"][0]["assistant"]["text"], "er answer");
+}
+
+/// The completion report's suggested `sessions.read` call, run the way the
+/// host runs it, must return exactly the part the report cut.
+#[test]
+fn completion_report_read_calls_reach_the_cut_text_in_both_stores() {
+    use crate::response::{completion_report, read_call, TurnEnd};
+    let mono = crate::mono::Mono {
+        projects: vec!["/work/other".into(), "/work/repo".into()],
+        ..Default::default()
+    };
+    let answer = format!(
+        "Findings:\r\n{}THE CONCLUSION",
+        "line of detail\r\n".repeat(1500)
+    );
+    let expected = crate::response::normalized(&answer);
+    let tool = serde_json::to_string(&crate::tool::ToolCall {
+        state: crate::tool::ToolState::Completed,
+        ..crate::tool::ToolCall::new("t", "Read")
+    })
+    .unwrap();
+    let mut transcript = crate::transcript::Transcript::default();
+    for (role, text) in [
+        ("user", "Investigate"),
+        ("assistant", "Reading..."),
+        ("tool", tool.as_str()),
+        ("assistant", answer.as_str()),
+        ("assistant", "\n\n"),
+    ] {
+        transcript.begin(role);
+        transcript.append(text);
+    }
+    for shared in [false, true] {
+        let mut store = if shared {
+            Store::open_monocode(Path::new(":memory:")).unwrap()
+        } else {
+            Store::open(Path::new(":memory:")).unwrap()
+        };
+        let session = store.create("codex", "/work/repo").unwrap();
+        store.write_rows(session.id, 0, &transcript.rows).unwrap();
+        let rows = store.load(session.id).unwrap().rows;
+        let call = read_call(session.id, mono.session_project(&session.cwd).as_deref());
+        let report = completion_report(&rows, TurnEnd::Unknown, call.as_ref(), 12000);
+        assert!(report.chars().count() <= 12000);
+        let (marker, tail) = report.split_once("\n\n").unwrap();
+        assert!(expected.ends_with(tail) && tail.ends_with("THE CONCLUSION"));
+        let omitted = expected.chars().count() - tail.chars().count();
+        assert!(marker.starts_with(&format!(
+            "[the first {omitted} of {} characters",
+            expected.chars().count()
+        )));
+        let json = &marker[marker.find('{').unwrap()..=marker.find('}').unwrap()];
+        let mut input: Value = serde_json::from_str(json).unwrap();
+        // The host's path: validate, resolve the Mono project, filter by cwd.
+        crate::mono::api::validate("sessions.read", &input).unwrap();
+        let project = mono.project(input["project"].as_str()).unwrap();
+        assert!(store
+            .sessions()
+            .unwrap()
+            .iter()
+            .any(|s| s.id == session.id && s.cwd == project));
+        let mut read = String::new();
+        while read.chars().count() < omitted {
+            let page = store
+                .app_conversation(session.id, &input, false, false)
+                .unwrap();
+            let message = &page["turns"][0]["assistant"];
+            read.push_str(message["text"].as_str().unwrap());
+            input["charOffset"] = message["nextCharOffset"].clone();
+            crate::mono::api::validate("sessions.read", &input).unwrap();
+        }
+        let cut: String = read.chars().take(omitted).collect();
+        assert_eq!(format!("{cut}{tail}"), expected, "shared store: {shared}");
+    }
+    // A session outside the Mono's projects can't be read, so no call is offered.
+    assert_eq!(mono.session_project("/elsewhere"), None);
+    assert_eq!(
+        mono.session_project("repo"),
+        None,
+        "a name match isn't the session's cwd"
+    );
+}
+
+#[test]
 fn operator_notes_support_desktop_ids_partial_updates_empty_bodies_and_pagination() {
     let store = Store::open_monocode(Path::new(":memory:")).unwrap();
     let caller = store.create("codex", "/project").unwrap();

@@ -1503,11 +1503,15 @@ impl Conversation {
                             this.controls = None;
                             this.transcript.update(cx, |v, cx| v.streaming(false, cx));
                             let model_id = turn_model_id.clone();
+                            // The runtime saved the receipt's stop; settings save the
+                            // view's copy next, so it must agree.
+                            let stopped = stopping || this.notification_cancelled;
                             this.transcript.update(cx, |view, _| {
                                 if let Some(turn) = view.active_turn()
                                     && let Some(info) = view.turns.get_mut(&turn)
                                 {
                                     info.model_id = model_id;
+                                    info.stopped = stopped;
                                 }
                             });
                             if stopping {
