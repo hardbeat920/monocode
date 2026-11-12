@@ -583,6 +583,27 @@ describe("appendSteerUser", () => {
   });
 });
 
+describe("turns.sealed", () => {
+  it("drops every provider turn boundary so far", () => {
+    const started = applyHarnessEvent(
+      appendUser(
+        applyHarnessEvent(appendUser(newSession("claude", "/tmp"), "First"), {
+          type: "turn.started",
+          providerTurnId: "_p1",
+        }),
+        "Second",
+      ),
+      { type: "turn.started", providerTurnId: "a1_p2" },
+    );
+    const sealed = applyHarnessEvent(started, { type: "turns.sealed" });
+    expect(sealed.blocks.map((block) => block.providerTurnId)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(applyHarnessEvent(sealed, { type: "turns.sealed" })).toBe(sealed);
+  });
+});
+
 describe("usage limits", () => {
   it("records when a limited turn can resume", () => {
     const limited = applyHarnessEvent(newSession("codex", "/tmp"), {
