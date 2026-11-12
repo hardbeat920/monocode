@@ -1,5 +1,8 @@
 //! The current Omarchy palette, refreshed off the UI thread.
-use std::sync::{Mutex, OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
@@ -15,13 +18,20 @@ pub(crate) fn current() -> Option<Theme> {
     *CURRENT.get_or_init(|| Mutex::new(None)).lock().unwrap()
 }
 
+fn watch_root_at(home: &Path) -> Option<PathBuf> {
+    let root = home.join(".local/state/omarchy/current");
+    root.is_dir().then_some(root)
+}
+
+pub(crate) fn watch_root() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    watch_root_at(Path::new(&std::env::var_os("HOME")?))
+}
+
 pub(crate) fn available() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("HOME").is_some_and(|home| {
-            std::path::PathBuf::from(home)
-                .join(".local/state/omarchy/current/theme/colors.toml")
-                .is_file()
-        })
+    watch_root().is_some_and(|root| root.join("theme/colors.toml").is_file())
 }
 
 fn parse(output: &str) -> Option<Theme> {
@@ -75,6 +85,27 @@ pub(crate) fn refresh() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watches_for_palette_created_after_startup() {
+        let home =
+            std::env::temp_dir().join(format!("monocode-omarchy-watch-{}", std::process::id()));
+        let current = home.join(".local/state/omarchy/current");
+        std::fs::create_dir_all(&current).unwrap();
+        let root = watch_root_at(&home).expect("the stable directory enables discovery");
+        assert!(!root.join("theme/colors.toml").exists());
+        let (_watch, changes) = crate::fs_watch::watch(std::slice::from_ref(&root))
+            .expect("watch starts without a palette");
+        std::fs::create_dir(root.join("theme")).unwrap();
+        std::fs::write(root.join("theme/colors.toml"), "mode = 'dark'").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while changes.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!changes.is_empty(), "creating the palette wakes discovery");
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn reads_resolved_palette_and_rejects_invalid_colors() {

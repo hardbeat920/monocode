@@ -907,10 +907,8 @@ impl Shell {
                 }
             }
         });
-        let omarchy_watch = crate::omarchy_theme::available().then(|| {
+        let omarchy_watch = crate::omarchy_theme::watch_root().map(|root| {
             cx.spawn(async move |this, cx| {
-                let root = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
-                    .join(".local/state/omarchy/current");
                 let watch = cx
                     .background_executor()
                     .spawn(async move { crate::fs_watch::watch(&[root]) })

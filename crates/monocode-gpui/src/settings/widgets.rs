@@ -13,6 +13,7 @@ use gpui::{
 pub(super) const RED: u32 = 0xf87171;
 /// `text-[12px] leading-relaxed` and `text-[13px]` line boxes.
 const RELAXED_12: f32 = 19.5;
+type SelectOption = (String, SharedString, Option<(AnyElement, AnyElement)>);
 
 pub(super) fn red(alpha: f32) -> Hsla {
     let mut color: Hsla = rgb(RED).into();
@@ -551,7 +552,7 @@ impl SettingsView {
         id: &'static str,
         label: &'static str,
         value: &str,
-        options: Vec<(String, SharedString, Option<(AnyElement, AnyElement)>)>,
+        options: Vec<SelectOption>,
         width: Option<f32>,
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static,
