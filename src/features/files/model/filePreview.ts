@@ -40,6 +40,26 @@ export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extensionOf(path));
 }
 
+/** Mermaid sources stay text in the editor, with the diagram as their preview. */
+export function isMermaidPath(path: string): boolean {
+  const extension = extensionOf(path);
+  return extension === ".mmd" || extension === ".mermaid";
+}
+
+/**
+ * Wrap a Mermaid source in a fence so it renders through the Markdown
+ * preview, the same way a diagram in a reply does. The fence is longer than
+ * any backtick run in the source, so no line of it can close the fence early.
+ */
+export function mermaidPreviewMarkdown(source: string): string {
+  const longest = (source.match(/`+/g) ?? []).reduce(
+    (max, run) => Math.max(max, run.length),
+    0,
+  );
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}mermaid\n${source}\n${fence}\n`;
+}
+
 /** Route video containers to the player, which checks codec support on load. */
 export function isVideoPath(path: string): boolean {
   return videoMimeForPath(path) !== null;

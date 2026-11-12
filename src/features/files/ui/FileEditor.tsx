@@ -60,6 +60,8 @@ import { syncWatchedMtime, watchFile } from "../model/fileWatch";
 import { displayPath } from "../../../shared/lib/paths";
 import type { EditorNavigation } from "../../search/model/search";
 import { MarkdownDocumentPreview } from "../../sessions/ui/MarkdownDocumentPreview";
+import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
+import { isMermaidPath, mermaidPreviewMarkdown } from "../model/filePreview";
 import {
   DiffCommentComposer,
   type DiffCommentComposerTarget,
@@ -147,6 +149,7 @@ export function FileEditor({
   } | null>(null);
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
+  const diagram = isMermaidPath(path);
   // Diff tabs open as source: the git gutter only renders in the editor.
   const [mode, setMode] = useMarkdownMode(
     showDiff ? `review:${path}` : path,
@@ -156,13 +159,13 @@ export function FileEditor({
   useEffect(() => {
     if (
       !navigation ||
-      (!markdown && !svg) ||
+      (!markdown && !svg && !diagram) ||
       sourceNavigationToken.current === navigation.token
     )
       return;
     sourceNavigationToken.current = navigation.token;
     setMode("source");
-  }, [markdown, svg, navigation, setMode]);
+  }, [markdown, svg, diagram, navigation, setMode]);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
   const loadGeneration = useRef(0);
@@ -459,7 +462,7 @@ export function FileEditor({
           changes. Line breaks are normalized in this view.
         </p>
       )}
-      {markdown || svg ? (
+      {markdown || svg || diagram ? (
         <MarkdownViewShell
           mode={mode}
           onModeChange={(next) => {
@@ -480,6 +483,8 @@ export function FileEditor({
                   documentPath={path}
                 />
               </FilePreviewSearch>
+            ) : diagram ? (
+              <MarkdownPreview text={mermaidPreviewMarkdown(draft)} />
             ) : (
               <SvgPreview source={draft} />
             )
