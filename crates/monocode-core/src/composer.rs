@@ -56,6 +56,8 @@ mod quote_tests {
 pub enum Trigger {
     Skill,
     Mention,
+    /// `#` finds Inbox work items: issues and pull requests.
+    WorkItem,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
@@ -79,11 +81,14 @@ pub fn token_at(text: &str, cursor: usize) -> Option<Token> {
     let trigger = match fragment.chars().next()? {
         '/' => Trigger::Skill,
         '@' => Trigger::Mention,
+        '#' => Trigger::WorkItem,
         _ => return None,
     };
     let query = &fragment[1..];
     if query.contains(['@', '\n', '\r'])
-        || (trigger == Trigger::Skill && query.contains(['/', '.', '\\']))
+        || (trigger != Trigger::Mention && query.contains(['/', '.', '\\']))
+        // Markdown headings (`##`) and anchors stay text.
+        || (trigger == Trigger::WorkItem && query.contains('#'))
     {
         return None;
     }
@@ -334,8 +339,10 @@ pub fn highlight_ranges(
 ) -> Vec<Range<usize>> {
     static TOKENS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let pattern = TOKENS.get_or_init(|| {
-        regex::Regex::new(r#"(?m)(?:^|\s)(/[a-z0-9][a-z0-9:-]*|@"(?:\\.|[^"\r\n])*"|@[^\s]+)"#)
-            .expect("composer token pattern")
+        regex::Regex::new(
+            r#"(?m)(?:^|\s)(/[a-z0-9][a-z0-9:-]*|@"(?:\\.|[^"\r\n])*"|@[^\s]+|#[^\s]+)"#,
+        )
+        .expect("composer token pattern")
     });
     pattern
         .captures_iter(text)
@@ -411,6 +418,18 @@ mod tests {
         assert!(token_at("> /review", 9).is_none());
         assert!(token_at("/tmp/file", 9).is_none());
         assert_eq!(token_at("@src/ma", 7).unwrap().trigger, Trigger::Mention);
+    }
+    #[test]
+    fn hash_finds_work_items_but_not_headings() {
+        let token = token_at("fix #ENG-12", 11).unwrap();
+        assert_eq!(token.trigger, Trigger::WorkItem);
+        assert_eq!((token.range, token.query.as_str()), (4..11, "ENG-12"));
+        assert_eq!(token_at("#", 1).unwrap().query, "");
+        for text in ["##", "a#b", "#a.b", "> #12", "C#"] {
+            assert!(token_at(text, text.len()).is_none(), "{text}");
+        }
+        let known = ["#12".to_owned()].into_iter().collect();
+        assert_eq!(highlight_ranges("see #12 and #13", &known), vec![4..7]);
     }
     #[test]
     fn replacement_and_commands_have_exact_boundaries() {
