@@ -1,4 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeWorkspace as invoke } from "../../../platform/tauri/fs";
+import { invoke as invokeLocal } from "@tauri-apps/api/core";
+import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -272,17 +274,17 @@ export function inboxListIsFresh(
 }
 
 export function githubStatus(): Promise<GithubStatus> {
-  return invoke<GithubStatus>("git_github_status");
+  return invokeLocal<GithubStatus>("git_github_status");
 }
 
 /** Whether the active GitHub CLI account has starred MonoCode. */
 export function githubMonocodeStarStatus(): Promise<GithubStarStatus> {
-  return invoke<GithubStarStatus>("github_monocode_star_status");
+  return invokeLocal<GithubStarStatus>("github_monocode_star_status");
 }
 
 /** Star MonoCode for the active GitHub CLI account. */
 export function starMonocodeOnGithub(): Promise<void> {
-  return invoke<void>("github_star_monocode");
+  return invokeLocal<void>("github_star_monocode");
 }
 
 export async function githubRepo(cwd: string): Promise<string> {
@@ -331,16 +333,25 @@ function workItemLookupKey(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  cwd = "",
 ): string {
-  return `${repo.trim().toLowerCase()}:${kind}:${number}`;
+  return `${githubAccountScope(cwd)}${repo.trim().toLowerCase()}:${kind}:${number}`;
+}
+
+/** Remote hosts have independent gh accounts. Keep desktop cache keys intact. */
+function githubAccountScope(cwd: string): string {
+  return cwd.startsWith(REMOTE_PATH_PREFIX)
+    ? `${cwd.slice(0, cwd.indexOf("/", REMOTE_PATH_PREFIX.length))}:`
+    : "";
 }
 
 export function peekGithubWorkItem(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  cwd = "",
 ): GithubWorkItem | null {
-  return workItemByKey.get(workItemLookupKey(repo, kind, number)) ?? null;
+  return workItemByKey.get(workItemLookupKey(repo, kind, number, cwd)) ?? null;
 }
 
 /** Fetch one exact item after targeted Inbox navigation misses its list cache. */
@@ -351,7 +362,7 @@ export function githubWorkItem(
   number: number,
   options?: { force?: boolean },
 ): Promise<GithubWorkItem> {
-  const key = workItemLookupKey(repo, kind, number);
+  const key = workItemLookupKey(repo, kind, number, cwd);
   const cached = workItemByKey.get(key);
   if (cached && !options?.force) return Promise.resolve(cached);
   const pending = workItemInflight.get(key);
@@ -441,16 +452,18 @@ export function detailsCacheKey(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  cwd = "",
 ): string {
-  return workItemLookupKey(repo, kind, number);
+  return workItemLookupKey(repo, kind, number, cwd);
 }
 
 export function peekGithubWorkItemDetails(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  cwd = "",
 ): GithubWorkItemDetails | null {
-  return detailsByKey.get(detailsCacheKey(repo, kind, number)) ?? null;
+  return detailsByKey.get(detailsCacheKey(repo, kind, number, cwd)) ?? null;
 }
 
 export async function githubWorkItemDetails(
@@ -460,7 +473,7 @@ export async function githubWorkItemDetails(
   number: number,
   options?: { maxAgeMs?: number },
 ): Promise<GithubWorkItemDetails> {
-  const key = detailsCacheKey(repo, kind, number);
+  const key = detailsCacheKey(repo, kind, number, cwd);
   const cached = detailsByKey.get(key);
   if (cached && freshEnough(`details:${key}`, options?.maxAgeMs)) {
     return cached;
@@ -487,8 +500,9 @@ export function peekGithubWorkItemThread(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  cwd = "",
 ): GithubWorkItemThread | null {
-  return threadByKey.get(detailsCacheKey(repo, kind, number)) ?? null;
+  return threadByKey.get(detailsCacheKey(repo, kind, number, cwd)) ?? null;
 }
 
 export async function githubWorkItemThread(
@@ -498,7 +512,7 @@ export async function githubWorkItemThread(
   number: number,
   options?: { force?: boolean; maxAgeMs?: number },
 ): Promise<GithubWorkItemThread> {
-  const key = detailsCacheKey(repo, kind, number);
+  const key = detailsCacheKey(repo, kind, number, cwd);
   if (options?.force) {
     threadByKey.delete(key);
     threadInflight.delete(key);
@@ -543,7 +557,7 @@ export async function githubWorkItemComment(
     body: body.trim(),
     inReplyTo: options?.inReplyTo?.trim() ?? "",
   });
-  const key = detailsCacheKey(repo, kind, number);
+  const key = detailsCacheKey(repo, kind, number, cwd);
   threadByKey.delete(key);
   threadInflight.delete(key);
   recordInboxSelfActivity({ provider: "github", kind, number, repo });
@@ -563,7 +577,7 @@ export async function githubPrAction(
     number,
     action,
   });
-  const key = workItemLookupKey(repo, "pr", number);
+  const key = workItemLookupKey(repo, "pr", number, cwd);
   workItemByKey.set(key, item);
   if (inboxListCache) {
     inboxListCache = {
@@ -649,16 +663,18 @@ export function prDiffCacheKey(
   repo: string,
   number: number,
   fullContext = false,
+  cwd = "",
 ): string {
-  return `${repo.trim().toLowerCase()}:pr:${number}${fullContext ? ":full" : ""}`;
+  return `${workItemLookupKey(repo, "pr", number, cwd)}${fullContext ? ":full" : ""}`;
 }
 
 export function peekGithubPrDiff(
   repo: string,
   number: number,
   fullContext = false,
+  cwd = "",
 ): GithubPrDiff | null {
-  return prDiffByKey.get(prDiffCacheKey(repo, number, fullContext)) ?? null;
+  return prDiffByKey.get(prDiffCacheKey(repo, number, fullContext, cwd)) ?? null;
 }
 
 export async function githubPrDiff(
@@ -668,7 +684,7 @@ export async function githubPrDiff(
   options?: { fullContext?: boolean; maxAgeMs?: number },
 ): Promise<GithubPrDiff> {
   const fullContext = options?.fullContext === true;
-  const key = prDiffCacheKey(repo, number, fullContext);
+  const key = prDiffCacheKey(repo, number, fullContext, cwd);
   const cached = prDiffByKey.get(key);
   if (cached && freshEnough(`diff:${key}`, options?.maxAgeMs)) return cached;
   const pending = prDiffInflight.get(key);
@@ -747,7 +763,7 @@ async function fetchInboxItems(
       ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
       : [],
   );
-  const grouped = groupProjectsByRepo(resolved);
+  const grouped = groupProjectsByRepo(resolved, true);
   const githubJobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listGithubWorkItems(project.path, project.repo, {
@@ -1037,12 +1053,14 @@ export function uniqueInboxProjects(
 
 export function groupProjectsByRepo(
   resolved: readonly { path: string; repo: string }[],
+  separateGithubAccounts = false,
 ): { path: string; repo: string }[] {
   const seen = new Set<string>();
   const grouped: { path: string; repo: string }[] = [];
   for (const project of resolved) {
     const repo = project.repo.trim().toLowerCase();
-    const key = repo || `path:${normalizeProjectPath(project.path)}`;
+    const key = (separateGithubAccounts ? githubAccountScope(project.path) : "") +
+      (repo || `path:${normalizeProjectPath(project.path)}`);
     if (seen.has(key)) continue;
     seen.add(key);
     grouped.push({
