@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyHarnessEvent } from "../../core/apply";
+import { appendUser, applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
 import {
   foldableWork,
@@ -42,6 +42,7 @@ const {
   respondClaudeQuestion,
   restoreClaudeTaskLists,
   sendClaudeTurn,
+  stopClaudeBackgroundJob,
   stopClaudeSession,
   __claudeTestReset,
 } = await import("./claude");
@@ -2043,5 +2044,207 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+});
+
+describe("claude background jobs", () => {
+  const jobIds = (events: HarnessEvent[]) =>
+    events.flatMap((event) =>
+      event.type === "background.jobs" ? [event.jobs.map((job) => job.id)] : [],
+    );
+  const wakeAndIdle = (events: HarnessEvent[]) =>
+    events.flatMap((event) =>
+      event.type === "session.woke" || event.type === "session.idle"
+        ? [event.type]
+        : [],
+    );
+  const requests = () =>
+    parse().flatMap((m) => {
+      const request = m.request as Record<string, unknown> | undefined;
+      return request ? [request] : [];
+    });
+
+  async function finishTurn(turn: Promise<void>, text = "Done.") {
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: { content: [{ type: "text", text }] },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  }
+
+  /** Claude, woken after the turn, re-arms a watcher in the background. */
+  function emitWokenWatcher(taskId: string) {
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: `toolu_${taskId}`,
+            name: "Bash",
+            input: { command: "./heartbeat.sh", run_in_background: true },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [
+        { task_id: taskId, task_type: "local_bash", description: "Heartbeat" },
+      ],
+    });
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: taskId,
+      tool_use_id: `toolu_${taskId}`,
+      description: "Heartbeat",
+      task_type: "local_bash",
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: `toolu_${taskId}`,
+            content: `Command running in background with ID: ${taskId}`,
+          },
+        ],
+      },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: { content: [{ type: "text", text: "Watching again." }] },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+  }
+
+  it("lists a background command with its command until it ends", async () => {
+    const { events } = await startTurn("s1");
+    emitBackgroundBash();
+    await new Promise((r) => setTimeout(r, 10));
+    const listed = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    ).backgroundJobs;
+    expect(listed).toEqual([
+      {
+        id: "b1",
+        title: "Wait 30 seconds then print done",
+        command: "sleep 30 && echo done",
+        startedAt: expect.any(Number),
+      },
+    ]);
+
+    emitBashFinished();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(jobIds(events).at(-1)).toEqual([]);
+  });
+
+  it("shows Claude as busy when a task wakes it after the turn, until it yields with its work done", async () => {
+    const { events, turn } = await startTurn("s1");
+    await finishTurn(turn);
+    expect(wakeAndIdle(events)).toEqual([]);
+
+    emitWokenWatcher("b2");
+    await new Promise((r) => setTimeout(r, 10));
+    // It yielded, but the watcher it started is still running.
+    expect(wakeAndIdle(events)).toEqual(["session.woke"]);
+    expect(jobIds(events).at(-1)).toEqual(["b2"]);
+    const settled = { ...newSession("claude", "/repo"), busy: false };
+    expect(events.reduce(applyHarnessEvent, settled).busy).toBe(true);
+
+    emitBashFinished("b2");
+    emitFollowUpTurn("Heartbeat is fine.");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(wakeAndIdle(events)).toEqual(["session.woke", "session.idle"]);
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      appendUser(newSession("claude", "/repo"), "watch it"),
+    );
+    expect(session.busy).toBe(false);
+    expect(session.backgroundJobs).toBeUndefined();
+    expect(session.blocks.at(-1)?.text).toBe("Heartbeat is fine.");
+  });
+
+  it("keeps a task from an earlier turn listed after the next message, and Stop reaches it", async () => {
+    const first = await startTurn("s1");
+    await finishTurn(first.turn);
+    emitWokenWatcher("b3");
+    await new Promise((r) => setTimeout(r, 10));
+
+    const events: HarnessEvent[] = [];
+    const next = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "anything new?",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().filter((m) => m.type === "user").length === 2,
+      "second prompt",
+    );
+    expect(jobIds(events)).toEqual([]);
+
+    await cancelClaudeTurn("s1");
+    await next;
+    expect(requests()).toContainEqual({ subtype: "stop_task", task_id: "b3" });
+  });
+
+  it("stops one job without holding the turn for a follow-up", async () => {
+    const { events, turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBash("b4");
+
+    await stopClaudeBackgroundJob("s1", "b4");
+    expect(requests().at(-1)).toEqual({ subtype: "stop_task", task_id: "b4" });
+    expect(settled).toBe(false);
+
+    emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "b4",
+      tool_use_id: "toolu_bash",
+      status: "stopped",
+      summary: 'Background command "sleep 30 && echo done" was stopped',
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(true);
+    expect(jobIds(events).at(-1)).toEqual([]);
+  });
+
+  it("still holds for the follow-up when the stop never reached Claude", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBash("b5");
+
+    writeChild.mockRejectedValueOnce(new Error("pipe closed"));
+    await expect(stopClaudeBackgroundJob("s1", "b5")).rejects.toThrow(
+      "pipe closed",
+    );
+    // The task runs on and finishes; Claude will wake for it.
+    emitBashFinished("b5");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
   });
 });

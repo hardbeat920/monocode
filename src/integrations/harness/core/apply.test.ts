@@ -1627,3 +1627,31 @@ describe("subagent steps", () => {
     expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
   });
 });
+
+describe("background jobs", () => {
+  const job = { id: "b1", title: "Dev server", startedAt: 1 };
+
+  it("keeps the job list through a turn the agent wakes itself for", () => {
+    let session = applyHarnessEvent(newSession("claude", "/tmp"), {
+      type: "session.woke",
+    });
+    expect(session.busy).toBe(true);
+    session = applyHarnessEvent(session, {
+      type: "background.jobs",
+      jobs: [job],
+    });
+    expect(session.backgroundJobs).toEqual([job]);
+    session = applyHarnessEvent(session, { type: "background.jobs", jobs: [] });
+    session = applyHarnessEvent(session, { type: "session.idle" });
+    expect(session.busy).toBe(false);
+    expect(session.backgroundJobs).toBeUndefined();
+  });
+
+  it("drops the job list when the turn is stopped, which stops the jobs too", () => {
+    const session = applyHarnessEvent(
+      appendUser(newSession("claude", "/tmp"), "start the server"),
+      { type: "background.jobs", jobs: [job] },
+    );
+    expect(stopStreaming(session).backgroundJobs).toBeUndefined();
+  });
+});
