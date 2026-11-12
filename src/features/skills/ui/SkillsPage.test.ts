@@ -7,6 +7,7 @@ import { SkillsPage } from "./SkillsPage";
 import { SettingsView } from "../../settings/ui/SettingsView";
 import type { DiscoveredSkill } from "../../../platform/tauri/fs";
 import { loadDisabledSkillPaths, saveDisabledSkillPaths } from "../model/skills";
+import { translate } from "../../../shared/i18n/locale";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -85,6 +86,17 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const data = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => data.set(key, value),
+    removeItem: (key: string) => data.delete(key),
+    clear: () => data.clear(),
+    key: (index: number) => [...data.keys()][index] ?? null,
+    get length() {
+      return data.size;
+    },
+  });
   localStorage.clear();
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -119,7 +131,7 @@ describe("Settings skill preview", () => {
               // Observe committed DOM before passive effects clear stale state.
               onRender: () => {
                 const panel = container.querySelector(
-                  '[aria-label="Skill preview"]',
+                  `[aria-label="${translate("Skill preview")}"]`,
                 );
                 if (panel?.querySelector("h2")?.textContent === "Other guide") {
                   frames.push(panel.textContent ?? "");
@@ -143,34 +155,37 @@ describe("Settings skill preview", () => {
           ? "Previous document"
           : "Previous read failed";
       expect(
-        container.querySelector('[aria-label="Skill preview"]')?.textContent,
+        container.querySelector(`[aria-label="${translate("Skill preview")}"]`)?.textContent,
       ).toContain(previousText);
       vi.mocked(invoke).mockImplementationOnce(() => pending.promise);
       await click("Other guide");
       expect(frames.length).toBeGreaterThan(0);
       for (const frame of frames) {
         expect(frame).not.toContain(previousText);
-        expect(frame).toContain("Loading skill");
+        expect(frame).toContain(translate("Loading skill…"));
       }
       await act(async () => pending.resolve("# Selected document"));
       expect(
-        container.querySelector('[aria-label="Skill preview"] h1')?.textContent,
+        container.querySelector(`[aria-label="${translate("Skill preview")}"] h1`)?.textContent,
       ).toBe("Selected document");
     },
   );
 
-  it.each(["Project guide", "Preview skill Project guide"])(
+  it.each([
+    "Project guide",
+    translate("Preview skill {name}", { name: "Project guide" }),
+  ])(
     "restores focus to %s after refreshing the list",
     async (label) => {
       await render();
       const opener = await click(label);
       const reload = deferred<DiscoveredSkill[]>();
       vi.mocked(invoke).mockImplementationOnce(() => reload.promise);
-      await click("Refresh skills");
+      await click(translate("Refresh skills"));
       expect(opener.isConnected).toBe(false);
       await act(async () => reload.resolve(skills));
       const replacement = button(label);
-      await click("Close skill preview");
+      await click(translate("Close skill preview"));
       expect(document.activeElement === replacement).toBe(true);
     },
   );
@@ -179,10 +194,10 @@ describe("Settings skill preview", () => {
     await render();
     await click("Project guide");
     vi.mocked(invoke).mockResolvedValueOnce([skills[2]]);
-    await click("Refresh skills");
-    await click("Close skill preview");
+    await click(translate("Refresh skills"));
+    await click(translate("Close skill preview"));
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
-      "Filter skills",
+      translate("Filter skills"),
     );
   });
 
@@ -211,9 +226,9 @@ describe("Settings skill preview", () => {
       );
       if (preview) await click("Project guide");
       const previewPanel = container.querySelector(
-        '[aria-label="Skill preview"]',
+        `[aria-label="${translate("Skill preview")}"]`,
       );
-      await click("Add skill");
+      await click(translate("Add skill"));
       expect(document.activeElement?.getAttribute("aria-label")).toBe(
         "Skill name",
       );
@@ -248,15 +263,17 @@ describe("Settings skill preview", () => {
         );
       escape();
       expect(container.querySelector("form")).toBeNull();
-      expect(container.querySelector('[aria-label="Skill preview"]')).toBe(
+      expect(container.querySelector(`[aria-label="${translate("Skill preview")}"]`)).toBe(
         previewPanel,
       );
-      expect(document.activeElement === button("Add skill")).toBe(true);
+      expect(document.activeElement === button(translate("Add skill"))).toBe(
+        true,
+      );
       expect(closeSettings).not.toHaveBeenCalled();
       if (preview) {
         escape();
         expect(
-          container.querySelector('[aria-label="Skill preview"]'),
+          container.querySelector(`[aria-label="${translate("Skill preview")}"]`),
         ).toBeNull();
         expect(document.activeElement === button("Project guide")).toBe(true);
         expect(closeSettings).not.toHaveBeenCalled();
@@ -272,7 +289,7 @@ describe("Settings skill preview", () => {
     await render();
     vi.mocked(invoke).mockResolvedValueOnce(source);
     await click("Project guide");
-    const panel = container.querySelector('[aria-label="Skill preview"]')!;
+    const panel = container.querySelector(`[aria-label="${translate("Skill preview")}"]`)!;
     const metadata = panel.querySelector("details");
     expect(metadata).not.toBeNull();
     expect(metadata?.querySelector("summary")?.textContent).toBe(
@@ -298,16 +315,20 @@ describe("Settings skill preview", () => {
 
   it("opens an inline panel from an eye icon and switches skills without closing it", async () => {
     await render();
-    const opener = button("Preview skill Project guide");
+    const opener = button(
+      translate("Preview skill {name}", { name: "Project guide" }),
+    );
     expect(opener.textContent).toBe("");
     expect(opener.querySelector("svg")).not.toBeNull();
-    await click("Preview skill Project guide");
-    const panel = container.querySelector('[aria-label="Skill preview"]');
+    await click(
+      translate("Preview skill {name}", { name: "Project guide" }),
+    );
+    const panel = container.querySelector(`[aria-label="${translate("Skill preview")}"]`);
     expect(panel).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(opener.getAttribute("aria-expanded")).toBe("true");
     await click("Other guide");
-    expect(container.querySelector('[aria-label="Skill preview"]')).toBe(panel);
+    expect(container.querySelector(`[aria-label="${translate("Skill preview")}"]`)).toBe(panel);
     expect(panel?.textContent).toContain(skills[2].path);
     expect(opener.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(button("Other guide"));
@@ -345,9 +366,11 @@ describe("Settings skill preview", () => {
           }),
         ),
       );
-      expect(document.querySelector('[aria-label="Skill preview"]')).toBeNull();
+      expect(document.querySelector(`[aria-label="${translate("Skill preview")}"]`)).toBeNull();
       expect(closeSettings).not.toHaveBeenCalled();
-      expect(container.querySelector('[aria-label="Settings"]')).not.toBeNull();
+      expect(
+        container.querySelector(`[aria-label="${translate("Settings")}"]`),
+      ).not.toBeNull();
       act(() =>
         document.activeElement!.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -364,7 +387,7 @@ describe("Settings skill preview", () => {
   it("allows Tab to leave the preview and keeps the document keyboard-scrollable", async () => {
     await render();
     await click("Project guide");
-    const close = button("Close skill preview");
+    const close = button(translate("Close skill preview"));
     const preview = document.querySelector<HTMLElement>(
       '[aria-label="Markdown preview"]',
     );
@@ -387,12 +410,12 @@ describe("Settings skill preview", () => {
     await click("Preview");
   });
 
-  it.each(["Close skill preview", "Escape"])(
+  it.each([translate("Close skill preview"), "Escape"])(
     "closes with %s, restores opener focus and preserves the filter",
     async (action) => {
       await render();
       const filter = container.querySelector<HTMLInputElement>(
-        '[aria-label="Filter skills"]',
+        `[aria-label="${translate("Filter skills")}"]`,
       )!;
       act(() => {
         Object.getOwnPropertyDescriptor(
@@ -402,8 +425,11 @@ describe("Settings skill preview", () => {
         filter.dispatchEvent(new Event("input", { bubbles: true }));
       });
       const opener = await click("Project guide");
-      expect(document.activeElement).toBe(button("Close skill preview"));
-      if (action === "Close skill preview") await click("Close skill preview");
+      expect(document.activeElement).toBe(
+        button(translate("Close skill preview")),
+      );
+      if (action === translate("Close skill preview"))
+        await click(translate("Close skill preview"));
       else
         act(() =>
           document.activeElement!.dispatchEvent(
@@ -414,7 +440,7 @@ describe("Settings skill preview", () => {
             }),
           ),
         );
-      expect(document.querySelector('[aria-label="Skill preview"]')).toBeNull();
+      expect(document.querySelector(`[aria-label="${translate("Skill preview")}"]`)).toBeNull();
       expect(document.activeElement).toBe(opener);
       expect(filter.value).toBe("project");
       expect(container.querySelectorAll('[role="switch"]')).toHaveLength(1);
@@ -428,20 +454,22 @@ describe("Settings skill preview", () => {
       vi.mocked(invoke).mockRejectedValueOnce(error);
       await click("Project guide");
       const alert = document.querySelector(
-        '[aria-label="Skill preview"] [role="alert"]',
+        `[aria-label="${translate("Skill preview")}"] [role="alert"]`,
       );
-      expect(alert?.textContent).toContain("Could not read SKILL.md");
+      expect(alert?.textContent).toContain(
+        translate("Could not read SKILL.md. {error}", { error: "" }).trim(),
+      );
       expect(alert?.textContent).toContain(
         error instanceof Error ? error.message : error,
       );
       expect(document.querySelector('[role="status"]')).toBeNull();
-      await click("Close skill preview");
+      await click(translate("Close skill preview"));
       await click("Other guide");
       expect(
-        document.querySelector('[aria-label="Skill preview"] [role="alert"]'),
+        document.querySelector(`[aria-label="${translate("Skill preview")}"] [role="alert"]`),
       ).toBeNull();
       expect(
-        document.querySelector('[aria-label="Skill preview"] h1')?.textContent,
+        document.querySelector(`[aria-label="${translate("Skill preview")}"] h1`)?.textContent,
       ).toBe("Full instructions");
     },
   );
@@ -455,26 +483,26 @@ describe("Settings skill preview", () => {
       vi.mocked(invoke).mockImplementationOnce(() => previous.promise);
       await click("Project guide");
       expect(document.querySelector('[role="status"]')?.textContent).toContain(
-        "Loading skill",
+        translate("Loading skill…"),
       );
       vi.mocked(invoke).mockImplementationOnce(() => current.promise);
       await click("Other guide");
       await act(async () => current.resolve("# Current instructions"));
       expect(
-        document.querySelector('[aria-label="Skill preview"] h1')?.textContent,
+        document.querySelector(`[aria-label="${translate("Skill preview")}"] h1`)?.textContent,
       ).toBe("Current instructions");
       await act(async () => {
         if (outcome === "resolves") previous.resolve("# Old instructions");
         else previous.reject(new Error("Old read failed"));
       });
       expect(
-        document.querySelector('[aria-label="Skill preview"] h1')?.textContent,
+        document.querySelector(`[aria-label="${translate("Skill preview")}"] h1`)?.textContent,
       ).toBe("Current instructions");
       expect(
-        document.querySelector('[aria-label="Skill preview"]')?.textContent,
+        document.querySelector(`[aria-label="${translate("Skill preview")}"]`)?.textContent,
       ).not.toContain("Old instructions");
       expect(
-        document.querySelector('[aria-label="Skill preview"] [role="alert"]'),
+        document.querySelector(`[aria-label="${translate("Skill preview")}"] [role="alert"]`),
       ).toBeNull();
     },
   );
@@ -482,14 +510,14 @@ describe("Settings skill preview", () => {
   it("opens project and harness skills using Preview skill", async () => {
     await render();
     for (const skill of [skills[0], skills[2]]) {
-      await click(`Preview skill ${skill.name}`);
+      await click(translate("Preview skill {name}", { name: skill.name }));
       expect(
-        document.querySelector('[aria-label="Skill preview"]')?.textContent,
+        document.querySelector(`[aria-label="${translate("Skill preview")}"]`)?.textContent,
       ).toContain(skill.path);
       expect(invoke).toHaveBeenCalledWith("read_text_file", {
         path: skill.path,
       });
-      await click("Close skill preview");
+      await click(translate("Close skill preview"));
     }
   });
 
@@ -498,7 +526,7 @@ describe("Settings skill preview", () => {
     await render();
     await click("Personal guide");
 
-    const dialog = document.querySelector('[aria-label="Skill preview"]')!;
+    const dialog = document.querySelector(`[aria-label="${translate("Skill preview")}"]`)!;
     expect(dialog).not.toBeNull();
     expect(dialog.textContent).toContain(skills[1].path);
     expect(dialog.querySelector("h1")?.textContent).toBe("Full instructions");
@@ -514,11 +542,19 @@ describe("Settings skill preview", () => {
     expect(
       container
         .querySelector(
-          '[aria-label="Include Personal guide in MonoCode catalog"]',
+          `[aria-label="${translate("Include {name} in MonoCode catalog", { name: "Personal guide" })}"]`,
         )
         ?.getAttribute("aria-checked"),
     ).toBe("false");
-    expect(button("Copy path of Personal guide")).toBeDefined();
-    expect(button("Reveal Personal guide in file explorer")).toBeDefined();
+    expect(
+      button(translate("Copy path of {name}", { name: "Personal guide" })),
+    ).toBeDefined();
+    expect(
+      button(
+        translate("Reveal {name} in file explorer", {
+          name: "Personal guide",
+        }),
+      ),
+    ).toBeDefined();
   });
 });

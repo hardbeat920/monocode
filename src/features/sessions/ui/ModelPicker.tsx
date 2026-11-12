@@ -7,6 +7,8 @@ import {
   Star,
   Zap,
 } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import {
   Fragment,
   useEffect,
@@ -48,6 +50,10 @@ import { HARNESSES, HARNESS_TITLE, type HarnessId } from "../model/session";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { LAYER } from "../../../shared/lib/layers";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  UpstreamProviderIcon,
+  hasUpstreamProviderIcon,
+} from "./UpstreamProviderIcon";
 import { Popover } from "../../../shared/ui/Popover";
 import { MOD } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
@@ -221,7 +227,7 @@ function pillSettings(model: AgentModel): ModelSetting[] {
 
 function settingLabel(setting: ModelSetting): string {
   return setting.id === "effort" || setting.id === "reasoning"
-    ? "Effort"
+    ? translate("Effort")
     : setting.label;
 }
 
@@ -262,6 +268,25 @@ function groupsByProvider(tab: ModelPickerTab, models: AgentModel[]): boolean {
 /** Use the upstream provider when present, otherwise the model's harness. */
 function modelProvider(item: AgentModel): { id: string; name: string } {
   return item.provider ?? { id: item.harness, name: HARNESS_TITLE[item.harness] };
+}
+
+
+/** Prefer upstream brand mark (e.g. DeepSeek) over harness icon when available. */
+function ModelBrandIcon({
+  harness,
+  providerId,
+  className,
+}: {
+  harness: HarnessId;
+  providerId?: string | null;
+  className?: string;
+}) {
+  if (hasUpstreamProviderIcon(providerId)) {
+    return (
+      <UpstreamProviderIcon providerId={providerId!} className={className} />
+    );
+  }
+  return <HarnessIcon harness={harness} className={className} />;
 }
 
 /**
@@ -324,6 +349,7 @@ export function ModelPicker({
   onSettingsChange,
   onClose,
 }: Props) {
+  useLanguage();
   const source = useModelSource();
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
@@ -772,8 +798,9 @@ export function ModelPicker({
                 }`
         }
       >
-        <HarnessIcon
+        <ModelBrandIcon
           harness={current.harness}
+          providerId={current.provider?.id}
           className={`${variant === "pill" ? "size-4" : "size-3.5"} shrink-0`}
         />
         <span
@@ -829,7 +856,7 @@ export function ModelPicker({
             ignore={SELF}
             onDismiss={() => dismiss(false)}
             role="menu"
-            aria-label="Model and settings"
+            aria-label={translate("Model and settings")}
             tabIndex={-1}
             onKeyDown={onMenuKey}
             data-model-picker
@@ -861,8 +888,9 @@ export function ModelPicker({
                   >
                     <span className="min-w-0 flex-1">Model</span>
                     <span className="flex min-w-0 max-w-36 items-center gap-1 text-content/55">
-                      <HarnessIcon
+                      <ModelBrandIcon
                         harness={current.harness}
+                        providerId={current.provider?.id}
                         className="size-3.5 shrink-0"
                       />
                       <span className="min-w-0 truncate">{current.name}</span>
@@ -1024,7 +1052,7 @@ export function ModelPicker({
           autoFocus
           onDismiss={() => setRecentMenu(null)}
           role="menu"
-          aria-label="Recently used models"
+          aria-label={translate("Recently used models")}
           aria-activedescendant={`${recentMenuId}-${recentActive}`}
           tabIndex={-1}
           onContextMenu={(event) => event.preventDefault()}
@@ -1044,7 +1072,9 @@ export function ModelPicker({
                 aria-checked={selected}
                 disabled={disabled}
                 title={
-                  disabled ? harnessUnavailableHint(item.harness) : undefined
+                  disabled
+                    ? translate(harnessUnavailableHint(item.harness))
+                    : undefined
                 }
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setRecentActive(index)}
@@ -1057,8 +1087,9 @@ export function ModelPicker({
                       : "text-content hover:bg-content/5"
                 }`}
               >
-                <HarnessIcon
+                <ModelBrandIcon
                   harness={item.harness}
+                  providerId={item.provider?.id}
                   className="size-4 shrink-0"
                 />
                 <span className="min-w-0 flex-1">
@@ -1562,7 +1593,7 @@ function ModelFlyout({
       maxHeight={MODEL_MENU_FRAME_HEIGHT}
       layer={LAYER.submenu}
       role="dialog"
-      aria-label="Models"
+      aria-label={translate("Models")}
       onDismiss={onDismiss}
       onKeyDown={(event) => {
         // Keyboard nav once focus leaves the search field (which stops its
@@ -1602,12 +1633,12 @@ function ModelFlyout({
     >
       <nav
         role="tablist"
-        aria-label="Providers"
+        aria-label={translate("Providers")}
         aria-orientation="vertical"
         className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto overscroll-none border-r border-stroke p-1.5"
       >
         <ProviderTabButton
-          title="Favorites"
+          title={translate("Favorites")}
           selected={tab === "favorites"}
           onSelect={() => onSelectTab("favorites")}
         >
@@ -1636,8 +1667,8 @@ function ModelFlyout({
             ref={searchRef}
             type="text"
             value={query}
-            placeholder="Search models"
-            aria-label="Search models"
+            placeholder={translate("Search models")}
+            aria-label={translate("Search models")}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={onSearchKey}
@@ -1647,18 +1678,18 @@ function ModelFlyout({
         <div
           ref={lockOverscroll}
           role="listbox"
-          aria-label="Models"
+          aria-label={translate("Models")}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1"
         >
           {models.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-content/50">
               {tab === "favorites" && !query.trim()
-                ? "No favorite models"
+                ? translate("No favorite models")
                 : tab !== "favorites" && !source.available(tab)
-                  ? harnessUnavailableHint(tab)
+                  ? translate(harnessUnavailableHint(tab))
                   : tab === "codex" && !query.trim()
-                    ? "Loading Codex models…"
-                    : "No matching models"}
+                    ? translate("Loading Codex models…")
+                    : translate("No matching models")}
             </div>
           ) : (
             groups.map((group) => (
@@ -1668,7 +1699,13 @@ function ModelFlyout({
                 aria-label={group.name}
               >
                 {group.name ? (
-                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-content/40">
+                  <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-content/40">
+                    {hasUpstreamProviderIcon(group.id) ? (
+                      <UpstreamProviderIcon
+                        providerId={group.id}
+                        className="size-3 shrink-0"
+                      />
+                    ) : null}
                     {group.name}
                   </div>
                 ) : null}
@@ -1702,7 +1739,7 @@ function ModelFlyout({
                         disabled={disabled}
                         title={
                           disabled
-                            ? harnessUnavailableHint(item.harness)
+                            ? translate(harnessUnavailableHint(item.harness))
                             : undefined
                         }
                         onMouseDown={(event) => event.preventDefault()}
@@ -1722,13 +1759,13 @@ function ModelFlyout({
                         type="button"
                         title={
                           favorited
-                            ? "Remove from favorites"
-                            : "Add to favorites"
+                            ? translate("Remove from favorites")
+                            : translate("Add to favorites")
                         }
                         aria-label={
                           favorited
-                            ? "Remove from favorites"
-                            : "Add to favorites"
+                            ? translate("Remove from favorites")
+                            : translate("Add to favorites")
                         }
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={(event) => {

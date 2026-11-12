@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Copy, Eye, FolderOpen, RefreshCw, Search, X } from "../../../shared/ui/icons";
 import { CreateSkillForm } from "./SkillPicker";
@@ -34,6 +36,7 @@ export function SkillsPage({
   cwd: string;
   header?: ReactNode;
 }): ReactNode {
+  useLanguage();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const previewId = useId();
   const previewOpener = useRef<string | null>(null);
@@ -113,7 +116,9 @@ export function SkillsPage({
       .catch((err: unknown) => {
         if (!cancelled) {
           setPreviewError(
-            `Could not read SKILL.md. ${err instanceof Error ? err.message : String(err)}`,
+            translate("Could not read SKILL.md. {error}", {
+              error: err instanceof Error ? err.message : String(err),
+            }),
           );
         }
       });
@@ -169,7 +174,7 @@ export function SkillsPage({
       saveDisabledSkillPaths(next);
       setActionError(null);
     } catch {
-      setActionError("Could not save the skill preference. Try again.");
+      setActionError(translate("Could not save the skill preference. Try again."));
     }
   };
 
@@ -177,7 +182,9 @@ export function SkillsPage({
     setActionError(null);
     void revealItemInDir(path).catch((err: unknown) => {
       setActionError(
-        `Could not open the folder: ${err instanceof Error ? err.message : String(err)}`,
+        translate("Could not open the folder: {error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       );
     });
   };
@@ -185,7 +192,7 @@ export function SkillsPage({
   const onCopyPath = (path: string): void => {
     setActionError(null);
     void copyText(path).catch(() => {
-      setActionError("Could not copy the path to the clipboard.");
+      setActionError(translate("Could not copy the path to the clipboard."));
     });
   };
 
@@ -221,7 +228,10 @@ export function SkillsPage({
                 <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
                   {skills == null
                     ? "…"
-                    : `${filtered.length} ${filtered.length === 1 ? "skill" : "skills"}`}
+                    : translate(
+                        filtered.length === 1 ? "{count} skill" : "{count} skills",
+                        { count: filtered.length },
+                      )}
                 </span>
                 <label className="flex h-7 w-52 min-w-0 flex-1 items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
                   <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
@@ -229,8 +239,8 @@ export function SkillsPage({
                     ref={filterInput}
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Filter"
-                    aria-label="Filter skills"
+                    placeholder={translate("Filter")}
+                    aria-label={translate("Filter skills")}
                     spellCheck={false}
                     autoComplete="off"
                     className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -238,8 +248,8 @@ export function SkillsPage({
                 </label>
                 <button
                   type="button"
-                  aria-label="Refresh skills"
-                  title="Rescan skill folders"
+                  aria-label={translate("Refresh skills")}
+                  title={translate("Rescan skill folders")}
                   disabled={skills === null && !error}
                   onClick={() => {
                     invalidateSkills();
@@ -254,7 +264,9 @@ export function SkillsPage({
               <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  aria-label={adding ? "Close skill form" : "Add skill"}
+                  aria-label={
+                    adding ? translate("Close skill form") : translate("Add skill")
+                  }
                   ref={addSkillButton}
                   disabled={busy}
                   className="rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 hover:bg-content/10 disabled:opacity-40"
@@ -262,9 +274,9 @@ export function SkillsPage({
                     setAdding((value) => !value);
                     setCreateError(null);
                   }}
-                  title="Create a starter SKILL.md you can edit"
+                  title={translate("Create a starter SKILL.md you can edit")}
                 >
-                  {adding ? "Close" : "Add skill"}
+                  {adding ? translate("Close") : translate("Add skill")}
                 </button>
               </div>
             </div>
@@ -299,14 +311,18 @@ export function SkillsPage({
                 {error}
               </p>
             ) : skills == null ? (
-              <p className="text-[12px] text-content/45">Loading skills…</p>
+              <p className="text-[12px] text-content/45">
+                {translate("Loading skills…")}
+              </p>
             ) : (
               <div className="overflow-hidden rounded-lg border border-content/10">
                 {filtered.length === 0 ? (
                   <p className="px-3 py-3 text-[12px] text-content/45">
                     {skills.length === 0
-                      ? "No skills yet. Add skill creates a starter SKILL.md."
-                      : "No matching skills"}
+                      ? translate(
+                          "No skills yet. Add skill creates a starter SKILL.md.",
+                        )
+                      : translate("No matching skills")}
                   </p>
                 ) : (
                   filtered.map((skill) => {
@@ -322,7 +338,9 @@ export function SkillsPage({
                           <button
                             type="button"
                             className="mr-auto min-w-0 truncate rounded text-left font-sans text-[12px] text-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            title={`Preview ${skill.name}`}
+                            title={translate("Preview {name}", {
+                              name: skill.name,
+                            })}
                             ref={registerPreviewButton(`name:${skill.path}`)}
                             aria-controls={previewOpen ? previewId : undefined}
                             aria-expanded={previewSkill?.path === skill.path}
@@ -332,10 +350,10 @@ export function SkillsPage({
                           </button>
                           <span className="shrink-0 rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
                             {skill.scope === "user"
-                              ? "Personal"
+                              ? translate("Personal")
                               : skill.scope === "builtin"
                                 ? "MonoCode"
-                                : "Project"}
+                                : translate("Project")}
                           </span>
                           <span className="w-20 shrink-0 truncate text-right font-sans text-[11px] text-content/40">
                             {skill.source}
@@ -343,7 +361,10 @@ export function SkillsPage({
                           <button
                             type="button"
                             role="switch"
-                            aria-label={`Include ${skill.name} in MonoCode catalog`}
+                            aria-label={translate(
+                              "Include {name} in MonoCode catalog",
+                              { name: skill.name },
+                            )}
                             aria-checked={!disabled}
                             onClick={() => onToggle(skill.path, disabled)}
                             className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${disabled ? "bg-content/20" : "bg-accent"}`}
@@ -370,8 +391,10 @@ export function SkillsPage({
                           </p>
                           <button
                             type="button"
-                            aria-label={`Preview skill ${skill.name}`}
-                            title="Preview skill"
+                            aria-label={translate("Preview skill {name}", {
+                              name: skill.name,
+                            })}
+                            title={translate("Preview skill")}
                             ref={registerPreviewButton(`icon:${skill.path}`)}
                             aria-controls={previewOpen ? previewId : undefined}
                             aria-expanded={previewSkill?.path === skill.path}
@@ -386,8 +409,10 @@ export function SkillsPage({
                           </button>
                           <button
                             type="button"
-                            aria-label={`Copy path of ${skill.name}`}
-                            title="Copy path"
+                            aria-label={translate("Copy path of {name}", {
+                              name: skill.name,
+                            })}
+                            title={translate("Copy path")}
                             onClick={() => onCopyPath(skill.path)}
                             className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
                           >
@@ -395,8 +420,11 @@ export function SkillsPage({
                           </button>
                           <button
                             type="button"
-                            aria-label={`Reveal ${skill.name} in file explorer`}
-                            title="Reveal in file manager"
+                            aria-label={translate(
+                              "Reveal {name} in file explorer",
+                              { name: skill.name },
+                            )}
+                            title={translate("Reveal in file manager")}
                             onClick={() => onReveal(skill.path)}
                             className="grid size-5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
                           >
@@ -411,19 +439,16 @@ export function SkillsPage({
             )}
 
             <p className="pt-3 text-[12px] text-content/40">
-              Hidden skills stay on disk and are excluded from MonoCode's
-              file-skill catalog. Provider-managed skills and native commands
-              are unaffected. Skills live in{" "}
-              <span className="font-sans">.agents/skills</span> for this project
-              and <span className="font-sans">~/.agents/skills</span> for you
-              personally; harness folders are also picked up.
+              {translate(
+                "Hidden skills stay on disk and are excluded from MonoCode's file-skill catalog. Provider-managed skills and native commands are unaffected. Skills live in .agents/skills for this project and ~/.agents/skills for you personally; harness folders are also picked up.",
+              )}
             </p>
           </div>
         </div>
         {previewSkill ? (
           <aside
             id={previewId}
-            aria-label="Skill preview"
+            aria-label={translate("Skill preview")}
             className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-stroke @3xl/skills:max-w-[720px] @3xl/skills:border-t-0 @3xl/skills:border-l"
           >
             <header className="flex shrink-0 items-start gap-2 px-4 pt-4 pb-2">
@@ -433,8 +458,8 @@ export function SkillsPage({
               <button
                 ref={closePreview}
                 type="button"
-                aria-label="Close skill preview"
-                title="Close preview (Escape)"
+                aria-label={translate("Close skill preview")}
+                title={translate("Close preview (Escape)")}
                 onClick={() => setPreviewSkill(null)}
                 className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
@@ -468,7 +493,7 @@ export function SkillsPage({
                   role="status"
                   className="px-4 py-5 text-[12px] text-content/50"
                 >
-                  Loading skill…
+                  {translate("Loading skill…")}
                 </p>
               ) : previewMode === "preview" ? (
                 <SkillDocumentPreview text={previewText} />

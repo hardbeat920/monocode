@@ -1,3 +1,5 @@
+import { translate } from "../../shared/i18n/locale";
+import { useLanguage } from "../../shared/i18n/useTranslation";
 import {
   CheckCircle,
   ChevronLeft,
@@ -193,7 +195,7 @@ export function tabCopy(tab: Tab): {
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
   const sessions = sessionMeta(tab);
-  const untitled = "New session";
+  const untitled = translate("New session");
 
   let headline: string;
   const metaParts: string[] = [];
@@ -225,7 +227,7 @@ export function tabCopy(tab: Tab): {
   if (conversation) tooltipParts.push(conversation);
   tooltipParts.push(...tab.more);
   if (tab.files.length > 0) tooltipParts.push(tab.files.join(", "));
-  if (tab.dirty) tooltipParts.push("Unsaved changes");
+  if (tab.dirty) tooltipParts.push(translate("Unsaved changes"));
 
   return { headline, meta, tooltip: tooltipParts.join(" · ") };
 }
@@ -457,8 +459,8 @@ function TitleTabItem({
             {tab.dirty ? (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-content/70"
-                title="Unsaved changes"
-                aria-label="Unsaved changes"
+                title={translate("Unsaved changes")}
+                aria-label={translate("Unsaved changes")}
               />
             ) : null}
           </span>
@@ -472,7 +474,7 @@ function TitleTabItem({
       {closable ? (
         <button
           type="button"
-          title="Close Tab"
+          title={translate("Close Tab")}
           aria-label={`Close ${headline}`}
           data-no-drag
           data-tauri-drag-region="false"
@@ -497,7 +499,7 @@ function TabStripChevron({
   side: "left" | "right";
   onClick: () => void;
 }) {
-  const label = side === "left" ? "Scroll tabs left" : "Scroll tabs right";
+  const label = side === "left" ? translate("Scroll tabs left") : translate("Scroll tabs right");
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
   return (
     <button
@@ -589,10 +591,11 @@ export function IconButton({
 }
 
 export function DevModeLabel() {
+  useLanguage();
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
+      title={translate("Development build")}
       className="mr-1 min-w-0 truncate rounded-md bg-skill/15 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-skill"
     >
       Development
@@ -602,11 +605,12 @@ export function DevModeLabel() {
 
 /** The Development badge as an icon, for the inset title bar. */
 export function DevModeIcon() {
+  useLanguage();
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
-      aria-label="Development build"
+      title={translate("Development build")}
+      aria-label={translate("Development build")}
       role="img"
       className="grid size-6 shrink-0 place-items-center text-skill"
     >
@@ -631,7 +635,7 @@ export function TabVisitNav({
   onGoForward,
   onTogglePanel,
   panelActive = false,
-  panelLabel = "Toggle Projects",
+  panelLabel = translate("Toggle Projects"),
 }: {
   canGoBack?: boolean;
   canGoForward?: boolean;
@@ -641,17 +645,18 @@ export function TabVisitNav({
   panelActive?: boolean;
   panelLabel?: string;
 }) {
+  useLanguage();
   return (
     <div className="flex shrink-0 items-center">
       <IconButton
-        label={`Back (${MOD}[)`}
+        label={translate("Back ({shortcut})", { shortcut: `${MOD}[` })}
         disabled={!canGoBack}
         onClick={onGoBack}
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={`Forward (${MOD}])`}
+        label={translate("Forward ({shortcut})", { shortcut: `${MOD}]` })}
         disabled={!canGoForward}
         onClick={onGoForward}
       >
@@ -690,7 +695,7 @@ export function MonoViewActions({
         <button
           type="button"
           aria-pressed={overviewOpen}
-          title={overviewOpen ? "Hide overview" : "Show overview"}
+          title={overviewOpen ? translate("Hide overview") : translate("Show overview")}
           data-tauri-drag-region="false"
           onClick={onToggleOverview}
           className={`flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] ${
@@ -781,6 +786,7 @@ function TitleBarComponent({
   recents = [],
   onSelectProject,
 }: Props) {
+  useLanguage();
   const trafficLightsVisible = useTrafficLightsVisible();
   const tabIds = tabs.map((tab) => tab.id);
   const { displayed, tabNodeRef, finishMotion } = useTabCloseMotion(tabs);
@@ -939,7 +945,7 @@ function TitleBarComponent({
         {
           kind: "item",
           id: "close",
-          label: "Close Tab",
+          label: translate("Close Tab"),
           shortcut: `${MOD}W`,
           disabled: !titleTabClosable(contextTab, tabs.length),
         },
@@ -947,19 +953,19 @@ function TitleBarComponent({
         {
           kind: "item",
           id: "others",
-          label: "Close Other Tabs",
+          label: translate("Close Other Tabs"),
           disabled: contextCloseIds?.others.length === 0,
         },
         {
           kind: "item",
           id: "right",
-          label: "Close Tabs to the Right",
+          label: translate("Close Tabs to the Right"),
           disabled: contextCloseIds?.right.length === 0,
         },
         {
           kind: "item",
           id: "left",
-          label: "Close Tabs to the Left",
+          label: translate("Close Tabs to the Left"),
           disabled: contextCloseIds?.left.length === 0,
         },
         ...(onCloseAll
@@ -967,7 +973,7 @@ function TitleBarComponent({
               {
                 kind: "item" as const,
                 id: "all",
-                label: "Close All Tabs",
+                label: translate("Close All Tabs"),
                 shortcut: `${MOD}${SHIFT}W`,
                 disabled: !titleTabsCanCloseAll(tabs),
               },
@@ -981,7 +987,7 @@ function TitleBarComponent({
                     {
                       kind: "item" as const,
                       id: "archive",
-                      label: "Archive",
+                      label: translate("Archive"),
                       description:
                         contextTab.sessionCount > 1
                           ? `All ${contextTab.sessionCount} conversations in this tab`
@@ -994,7 +1000,7 @@ function TitleBarComponent({
                     {
                       kind: "item" as const,
                       id: "delete",
-                      label: "Delete",
+                      label: translate("Delete"),
                       description:
                         contextTab.sessionCount > 1
                           ? `Permanently delete all ${contextTab.sessionCount} conversations in this tab`
@@ -1099,12 +1105,12 @@ function TitleBarComponent({
         {showTrailingActions ? (
           <div className="flex items-center gap-0.5 px-2">
             {projectless && railClosed && onOpenInbox ? (
-              <IconButton label="Inbox" onClick={onOpenInbox}>
+              <IconButton label={translate("Inbox")} onClick={onOpenInbox}>
                 <Inbox className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
             {projectless && railClosed && onOpenNotes ? (
-              <IconButton label="Notes" onClick={onOpenNotes}>
+              <IconButton label={translate("Notes")} onClick={onOpenNotes}>
                 <StickyNote className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}

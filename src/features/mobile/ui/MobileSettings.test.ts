@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { MobileSettings } from "./MobileSettings";
+import { translate } from "../../../shared/i18n/locale";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("qrcode", () => ({
@@ -16,6 +17,12 @@ let enabled: boolean;
 let devices: { id: string; name: string; fingerprint: string }[];
 
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+  });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   enabled = false;
@@ -70,9 +77,11 @@ const settle = () => act(async () => void (await vi.advanceTimersByTimeAsync(0))
 it("turns on mobile access, shows the code, and closes it once a phone pairs", async () => {
   await act(async () => root.render(createElement(MobileSettings)));
   await settle();
-  expect(container.textContent).toContain("Pair your iPhone or Android phone");
+  expect(container.textContent).toContain(
+    translate("Pair your iPhone or Android phone to get started."),
+  );
 
-  await act(async () => button("Pair phone").click());
+  await act(async () => button(translate("Pair phone")).click());
   await settle();
   expect(invoke).toHaveBeenCalledWith(
     "mobile_configure",
@@ -80,12 +89,16 @@ it("turns on mobile access, shows the code, and closes it once a phone pairs", a
   );
   const dialog = document.body.querySelector('[role="dialog"]');
   expect(dialog?.querySelector("img")?.getAttribute("src")).toContain("qr");
-  expect(dialog?.textContent).toContain("Expires in 15:00");
+  expect(dialog?.textContent).toContain(
+    translate("Expires in {time}", { time: "15:00" }),
+  );
 
   devices = [{ id: "p1", name: "Nick’s iPhone", fingerprint: "f" }];
   await act(async () => void (await vi.advanceTimersByTimeAsync(2000)));
   expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-  expect(container.textContent).toContain("Nick’s iPhone is paired.");
+  expect(container.textContent).toContain(
+    translate("{name} is paired.", { name: "Nick’s iPhone" }),
+  );
 });
 
 it("asks before removing a paired phone", async () => {
@@ -96,12 +109,16 @@ it("asks before removing a paired phone", async () => {
 
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Remove Pixel"]')!
+      .querySelector<HTMLButtonElement>(
+        `[aria-label="${translate("Remove {name}", { name: "Pixel" })}"]`,
+      )!
       .click(),
   );
   expect(invoke).not.toHaveBeenCalledWith("mobile_revoke", expect.anything());
-  await act(async () => button("Remove phone").click());
+  await act(async () => button(translate("Remove phone")).click());
   await settle();
   expect(invoke).toHaveBeenCalledWith("mobile_revoke", { deviceId: "p1" });
-  expect(container.textContent).toContain("Pixel was removed.");
+  expect(container.textContent).toContain(
+    translate("{name} was removed.", { name: "Pixel" }),
+  );
 });

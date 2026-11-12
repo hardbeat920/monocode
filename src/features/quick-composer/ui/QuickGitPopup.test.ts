@@ -3,6 +3,7 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { gitCheckout, gitCreateBranch } from "../../../platform/tauri/fs";
+import { translate } from "../../../shared/i18n/locale";
 import { QuickGitPopupPicker } from "./QuickGitPopup";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import type { QuickGitRequest } from "../model/quickGitPopup";
@@ -107,7 +108,7 @@ afterEach(async () => {
 });
 
 it("selects a new worktree and base branch without checking out or creating anything yet", async () => {
-  await act(async () => button("New worktree").click());
+  await act(async () => button(translate("New worktree")).click());
   expect(selection).toMatchObject({ mode: "worktree", base: "main" });
   await render("base", selection);
   await act(async () => button("origin/develop").click());
@@ -122,7 +123,7 @@ it.each(["workspace", "base"] as const)(
     git.available = false;
     git.settled = false;
     await render(kind, { cwd: "/cold-repo", mode: "worktree" });
-    expect(container.textContent).toContain("Loading branches…");
+    expect(container.textContent).toContain(translate("Loading branches…"));
     expect(onFinish).not.toHaveBeenCalled();
 
     git.available = true;
@@ -130,7 +131,9 @@ it.each(["workspace", "base"] as const)(
     // Same request: no close/reopen to recover the initially empty cache.
     await act(async () => root.render(createElement(Harness)));
     await act(async () =>
-      button(kind === "workspace" ? "New worktree" : "origin/develop").click(),
+      button(
+        kind === "workspace" ? translate("New worktree") : "origin/develop",
+      ).click(),
     );
     expect(onFinish).toHaveBeenCalledTimes(1);
   },
@@ -139,22 +142,24 @@ it.each(["workspace", "base"] as const)(
 it("shows a dismissible message when the first branch lookup fails", async () => {
   git.available = false;
   await render("workspace");
-  expect(container.textContent).toContain("Couldn’t load branches");
-  await act(async () => button("Close").click());
+  expect(container.textContent).toContain(
+    translate("Couldn’t load branches for this project."),
+  );
+  await act(async () => button(translate("Close")).click());
   expect(onFinish).toHaveBeenCalledWith(request.id, undefined);
 });
 
 it("uses the main composer's branch checkout flow in the current working copy", async () => {
   await render("branch");
   const option = document.querySelector<HTMLButtonElement>(
-    '[role="listbox"][aria-label="Branches"] [role="option"]:last-child',
+    `[role="listbox"][aria-label="${translate("Branches")}"] [role="option"]:last-child`,
   )!;
   await act(async () => option.click());
   expect(gitCheckout).toHaveBeenCalledWith("/repo", "develop", "origin");
 });
 
 it("selects an existing working copy for the upcoming session", async () => {
-  await act(async () => button("Existing worktree…").click());
+  await act(async () => button(translate("Existing worktree…")).click());
   const tree = document.querySelector<HTMLButtonElement>(
     '[role="menuitem"][title="/repo-feature"]',
   )!;
@@ -179,10 +184,10 @@ it("dismisses with Escape without changing the selection", async () => {
 
 it("keeps branch creation inside the popup and finishes only after creating the branch", async () => {
   await render("branch");
-  await act(async () => button("New branch").click());
+  await act(async () => button(translate("New branch")).click());
   expect(onFinish).not.toHaveBeenCalled();
   const input = document.querySelector<HTMLInputElement>(
-    '[aria-label="Branch name"]',
+    `[aria-label="${translate("Branch name")}"]`,
   )!;
   expect(input).not.toBeNull();
   act(() => {
@@ -192,7 +197,7 @@ it("keeps branch creation inside the popup and finishes only after creating the 
     )!.set!.call(input, "feature/popup");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await act(async () => button("Create branch").click());
+  await act(async () => button(translate("Create branch")).click());
   expect(gitCreateBranch).toHaveBeenCalledWith("/repo", "feature/popup");
   expect(onFinish).toHaveBeenCalledTimes(1);
 });

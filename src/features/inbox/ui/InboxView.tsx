@@ -1,3 +1,5 @@
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
@@ -416,6 +418,7 @@ export function InboxView({
   target = null,
   onOpenIntegrations,
 }: Props) {
+  useLanguage();
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const listLock = useLockOverscroll<HTMLDivElement>();
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -942,7 +945,7 @@ export function InboxView({
         {visibleSources.length > 0 ? (
           <div
             role="tablist"
-            aria-label="Inbox source"
+            aria-label={translate("Inbox source")}
             className="flex min-w-0 basis-0 items-center gap-px"
             style={{ flexGrow: visibleSources.length }}
           >
@@ -960,10 +963,10 @@ export function InboxView({
           <button
             ref={connectButtonRef}
             type="button"
-            aria-label="Connect an inbox source"
+            aria-label={translate("Connect an inbox source")}
             aria-haspopup="menu"
             aria-expanded={connectMenuOpen}
-            title="Connect an inbox source"
+            title={translate("Connect an inbox source")}
             onClick={() => setConnectMenuOpen((open) => !open)}
             className={`flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
               connectMenuOpen
@@ -972,7 +975,7 @@ export function InboxView({
             }`}
           >
             <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">Add connection</span>
+            <span className="min-w-0 truncate">{translate("Add connection")}</span>
           </button>
         ) : null}
       </div>
@@ -983,8 +986,8 @@ export function InboxView({
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Filter inbox"
-              aria-label="Filter inbox"
+              placeholder={translate("Filter inbox")}
+              aria-label={translate("Filter inbox")}
               spellCheck={false}
               autoComplete="off"
               className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
@@ -992,8 +995,8 @@ export function InboxView({
           </div>
           <button
             type="button"
-            title="Filter inbox"
-            aria-label="Filter inbox"
+            title={translate("Filter inbox")}
+            aria-label={translate("Filter inbox")}
             aria-expanded={!!filterMenu}
             aria-haspopup="menu"
             onClick={onFilterButtonClick}
@@ -1005,8 +1008,8 @@ export function InboxView({
           </button>
           <button
             type="button"
-            title="Mark all as read"
-            aria-label="Mark all as read"
+            title={translate("Mark all as read")}
+            aria-label={translate("Mark all as read")}
             disabled={!sourceHasUnseen}
             onClick={() =>
               setReadStatusError(
@@ -1021,7 +1024,7 @@ export function InboxView({
           </button>
           <button
             type="button"
-            aria-label="Refresh"
+            aria-label={translate("Refresh")}
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1126,7 +1129,7 @@ export function InboxView({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize inbox list"
+        aria-label={translate("Resize inbox list")}
         className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
@@ -1168,7 +1171,7 @@ export function InboxView({
   return (
     <div
       role="region"
-      aria-label="Inbox"
+      aria-label={translate("Inbox")}
       data-app-inbox
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -1188,7 +1191,7 @@ export function InboxView({
               className="size-3.5 shrink-0 text-content/45"
               strokeWidth={1.75}
             />
-            <span className="min-w-0 truncate text-content">Inbox</span>
+            <span className="min-w-0 truncate text-content">{translate("Inbox")}</span>
           </div>
           {IS_MAC ? null : <WindowControls />}
         </div>
@@ -1468,7 +1471,7 @@ function InboxDetailBody({
     return (
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
         <Inbox className="mb-3 size-6 text-content/30" strokeWidth={1.75} />
-        <p className="text-[13px] text-content/45">Select an inbox item</p>
+        <p className="text-[13px] text-content/45">{translate("Select an inbox item")}</p>
       </div>
     );
   }
@@ -1663,27 +1666,29 @@ type GithubPrMergeAction = Extract<
   "merge" | "squash" | "rebase"
 >;
 
-const GITHUB_PR_MERGE_OPTIONS: Array<{
+function githubPrMergeOptions(): Array<{
   action: GithubPrMergeAction;
   label: string;
   description: string;
-}> = [
-  {
-    action: "merge",
-    label: "Create a merge commit",
-    description: "Add every commit to the base branch.",
-  },
-  {
-    action: "squash",
-    label: "Squash and merge",
-    description: "Combine the commits into one.",
-  },
-  {
-    action: "rebase",
-    label: "Rebase and merge",
-    description: "Add the commits without a merge commit.",
-  },
-];
+}> {
+  return [
+    {
+      action: "merge",
+      label: translate("Create a merge commit"),
+      description: translate("Add every commit to the base branch."),
+    },
+    {
+      action: "squash",
+      label: translate("Squash and merge"),
+      description: translate("Combine the commits into one."),
+    },
+    {
+      action: "rebase",
+      label: translate("Rebase and merge"),
+      description: translate("Add the commits without a merge commit."),
+    },
+  ];
+}
 
 const PR_ACTION_PRESS =
   "transition-transform duration-[120ms] ease-[var(--motion-ease-out)] active:scale-[0.97] motion-reduce:transition-none";
@@ -1774,8 +1779,8 @@ export function GithubPrActions({
   const [notice, setNotice] = useState<string | null>(null);
   const state = item.state.trim().toLowerCase();
   const selectedMerge =
-    GITHUB_PR_MERGE_OPTIONS.find((option) => option.action === mergeAction) ??
-    GITHUB_PR_MERGE_OPTIONS[0];
+    githubPrMergeOptions().find((option) => option.action === mergeAction) ??
+    githubPrMergeOptions()[0];
 
   const askToRun = (action: GithubPrAction, anchor: HTMLElement) => {
     setMergeMenuOpen(false);
@@ -1833,7 +1838,7 @@ export function GithubPrActions({
         <div
           ref={mergeGroup}
           role="group"
-          aria-label="Merge pull request"
+          aria-label={translate("Merge pull request")}
           className="inline-flex h-7 overflow-hidden rounded-md bg-content text-background-base"
         >
           <button
@@ -1849,8 +1854,8 @@ export function GithubPrActions({
           </button>
           <button
             type="button"
-            title="Merge options"
-            aria-label="Merge options"
+            title={translate("Merge options")}
+            aria-label={translate("Merge options")}
             aria-haspopup="menu"
             aria-expanded={mergeMenuOpen}
             disabled={busy}
@@ -1919,10 +1924,10 @@ export function GithubPrActions({
           onDismiss={() => setMergeMenuOpen(false)}
           role="menu"
           tabIndex={-1}
-          aria-label="Merge method"
+          aria-label={translate("Merge method")}
           className="p-1"
         >
-          {GITHUB_PR_MERGE_OPTIONS.map((option) => (
+          {githubPrMergeOptions().map((option) => (
             <button
               key={option.action}
               type="button"
@@ -2067,7 +2072,7 @@ export function InboxDetail({
     item.provider === "github" && (item.kind === "issue" || item.kind === "pr")
       ? item.kind
       : null;
-  const externalActionLabel =
+  const externalActionLabel = translate(
     item.kind === "pr"
       ? gitlab
         ? "Review on GitLab"
@@ -2082,7 +2087,8 @@ export function InboxDetail({
             ? "Open on GitLab"
             : azuredevops
               ? "Open on ADO"
-              : "Open on GitHub";
+              : "Open on GitHub",
+  );
   const gitlabKind =
     gitlab && (item.kind === "issue" || item.kind === "pr") ? item.kind : null;
   const azureDevOpsKind =
@@ -2751,7 +2757,7 @@ export function InboxDetail({
                         ))}
                       </span>
                     ) : (
-                      <span>Unassigned</span>
+                      <span>{translate("Unassigned")}</span>
                     )}
                   </>
                 ) : null}
@@ -2857,7 +2863,9 @@ export function InboxDetail({
                       }}
                       className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
                     >
-                      {starting ? "Sending..." : "Send to agent"}
+                      {starting
+                        ? translate("Sending...")
+                        : translate("Send to agent")}
                     </button>
                     {chooseStartProject ? (
                       <InboxProjectPicker
@@ -2937,7 +2945,7 @@ export function InboxDetail({
                 {tab === "code" && inboxShowsFullFileDiff(item) ? (
                   <div
                     role="group"
-                    aria-label="Diff context"
+                    aria-label={translate("Diff context")}
                     className="ml-auto flex items-center self-center rounded-md border border-content/10 bg-content/[0.03] p-0.5"
                   >
                     <button
@@ -3009,7 +3017,7 @@ export function InboxDetail({
                   focusPath={diffFocusPath}
                 />
               ) : (
-                <p className="text-[13px] text-content/45">No file changes</p>
+                <p className="text-[13px] text-content/45">{translate("No file changes")}</p>
               )
             ) : isPr && tab === "checks" ? (
               <InboxPrChecks
@@ -3059,7 +3067,7 @@ export function InboxDetail({
                     allowRemoteMedia
                   />
                 ) : (
-                  <p className="text-[13px] text-content/45">No description</p>
+                  <p className="text-[13px] text-content/45">{translate("No description")}</p>
                 )}
                 {panel && isPr ? (
                   <InboxPrChangesGlance
@@ -3244,7 +3252,7 @@ function InboxProjectPicker({
       >
         {selected ? <InboxProjectMark project={selected} /> : null}
         <span className="min-w-0 truncate">
-          {selected?.name ?? "Choose project"}
+          {selected?.name ?? translate("Choose project")}
         </span>
         <ChevronDown
           className="size-3 shrink-0 text-content/45"

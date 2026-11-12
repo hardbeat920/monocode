@@ -7,6 +7,7 @@ import {
   updateNotificationPreferences,
 } from "../model/notificationPreferences";
 import { NotificationMuteControl } from "./NotificationMuteControl";
+import { translate } from "../../../shared/i18n/locale";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -48,8 +49,8 @@ describe("NotificationMuteControl", () => {
         }),
       ),
     );
-    click("Mute notifications");
-    click("8 hours");
+    click(translate("Mute notifications"));
+    click(translate("{hours} hours", { hours: 8 }));
     expect(loadNotificationPreferences()).toEqual({
       private: { disabled: ["issues"], mutedUntil: 1_800_028_800_000 },
       personal: { disabled: [], mutedUntil: 1_800_028_800_000 },
@@ -66,11 +67,11 @@ describe("NotificationMuteControl", () => {
         createElement(NotificationMuteControl, { projectIds: ["private"] }),
       ),
     );
-    expect(container.textContent).toContain("Muted until resumed");
-    click("Resume notifications");
+    expect(container.textContent).toContain(translate("Muted until resumed"));
+    click(translate("Resume notifications"));
     expect(loadNotificationPreferences().private.disabled).toEqual(["issues"]);
     expect(loadNotificationPreferences().private.mutedUntil).toBeUndefined();
-    expect(container.textContent).not.toContain("Muted until resumed");
+    expect(container.textContent).not.toContain(translate("Muted until resumed"));
   });
 
   it("accepts a custom future time and rejects an expired one without saving", () => {
@@ -80,8 +81,8 @@ describe("NotificationMuteControl", () => {
         createElement(NotificationMuteControl, { projectIds: ["private"] }),
       ),
     );
-    click("Mute notifications");
-    click("Choose date and time");
+    click(translate("Mute notifications"));
+    click(translate("Choose date and time"));
     expect(
       [...document.querySelectorAll("button")].some(
         (button) => button.textContent === "1 hour",
@@ -113,7 +114,7 @@ describe("NotificationMuteControl", () => {
         input!.dispatchEvent(new Event("input", { bubbles: true }));
       });
     type("08:00");
-    click("Mute until then");
+    click(translate("Mute until then"));
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "future",
     );
@@ -127,13 +128,13 @@ describe("NotificationMuteControl", () => {
     const write = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("Storage full");
     });
-    click("Mute until then");
+    click(translate("Mute until then"));
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not save",
     );
     expect(input!.value).toBe("17:00");
     write.mockRestore();
-    click("Mute until then");
+    click(translate("Mute until then"));
     expect(loadNotificationPreferences().private.mutedUntil).toBe(
       new Date(2030, 0, 16, 17).getTime(),
     );

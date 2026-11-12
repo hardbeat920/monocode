@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { PrivateEmail } from "../../../shared/ui/PrivateEmail";
 import { clearInboxCache } from "../../inbox/model/githubTasks";
@@ -17,6 +19,7 @@ import {
 } from "../../inbox/model/jira";
 
 export function JiraSettings() {
+  useLanguage();
   const [status, setStatus] = useState<JiraStatus | null>(null);
   const [site, setSite] = useState("");
   const [email, setEmail] = useState("");
@@ -97,7 +100,9 @@ export function JiraSettings() {
   return (
     <div className="px-4 py-3.5">
       {checking ? (
-        <p className="text-[12px] text-content/45">Checking Jira connection…</p>
+        <p className="text-[12px] text-content/45">
+          {translate("Checking Jira connection…")}
+        </p>
       ) : status?.connected ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 text-[12px] text-content/65">
@@ -107,7 +112,7 @@ export function JiraSettings() {
             </p>
           </div>
           <SecondaryButton onClick={() => void disconnect()} disabled={busy}>
-            {busy ? "Disconnecting" : "Disconnect"}
+            {busy ? translate("Disconnecting") : translate("Disconnect")}
           </SecondaryButton>
         </div>
       ) : (
@@ -119,31 +124,32 @@ export function JiraSettings() {
           className="flex flex-col gap-3"
         >
           <p className="text-[12px] leading-relaxed text-content/45">
-            Connect your Jira Cloud site using your Atlassian email and an API
-            token without scopes. Disconnect deletes the saved credentials.
+            {translate(
+              "Connect your Jira Cloud site using your Atlassian email and an API token without scopes. Disconnect deletes the saved credentials.",
+            )}
           </p>
           {(
             [
               {
-                label: "Jira site",
+                label: translate("Jira site"),
                 value: site,
                 set: setSite,
                 type: "text",
                 placeholder: "yourteam.atlassian.net",
               },
               {
-                label: "Atlassian email",
+                label: translate("Atlassian email"),
                 value: email,
                 set: setEmail,
                 type: "email",
                 placeholder: "you@example.com",
               },
               {
-                label: "Jira API token",
+                label: translate("Jira API token"),
                 value: token,
                 set: setToken,
                 type: "password",
-                placeholder: "API token",
+                placeholder: translate("API token"),
               },
             ] as const
           ).map((field) => (
@@ -171,7 +177,7 @@ export function JiraSettings() {
               type="submit"
               disabled={busy || !site.trim() || !email.trim() || !token.trim()}
             >
-              {busy ? "Connecting" : "Connect"}
+              {busy ? translate("Connecting") : translate("Connect")}
             </SecondaryButton>
             <button
               type="button"
@@ -182,7 +188,7 @@ export function JiraSettings() {
               }
               className="text-[12px] text-content/65 hover:text-content"
             >
-              Create API token
+              {translate("Create API token")}
             </button>
           </div>
         </form>
@@ -196,17 +202,17 @@ export function JiraSettings() {
         <div className="mt-4 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-[13px] font-medium text-content">
-              Projects
+              {translate("Projects")}
             </span>
             <SecondaryButton
               disabled={busy || checking}
               onClick={() => void loadProjects()}
             >
-              Refresh projects
+              {translate("Refresh projects")}
             </SecondaryButton>
           </div>
           <p className="text-[12px] text-content/45">
-            Unchecked projects stay out of the inbox.
+            {translate("Unchecked projects stay out of the inbox.")}
           </p>
           {projects.map((project) => (
             <label

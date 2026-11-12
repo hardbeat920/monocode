@@ -2,6 +2,7 @@
 import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { translate } from "../../../shared/i18n/locale";
 import { QuickGitPopup } from "./QuickGitPopup";
 import { gitBranches, type GitBranches } from "../../../platform/tauri/fs";
 import type { QuickGitRequest } from "../model/quickGitPopup";
@@ -82,9 +83,11 @@ it.each(["workspace", "base", "branch"] as const)(
         ),
       ),
     );
-    expect(container.textContent).not.toContain("Loading branches");
+    expect(container.textContent).not.toContain(
+      translate("Loading branches…"),
+    );
     expect(container.textContent).toContain(
-      kind === "workspace" ? "New worktree" : "main",
+      kind === "workspace" ? translate("New worktree") : "main",
     );
     expect(gitBranches).toHaveBeenCalledWith(`/cold-${kind}`);
     // The carried snapshot does not disable normal Git refreshes.

@@ -162,6 +162,7 @@ describe("child bridge", () => {
               fx: "/opt/fx/bin/fx",
               hermes: "/opt/hermes/bin/hermes",
               antigravity: "/opt/antigravity/bin/agy_acp_server.par",
+              deepseek: "/opt/homebrew/bin/dsh",
             })
           : null,
     });
@@ -187,6 +188,7 @@ describe("child bridge", () => {
         "/opt/antigravity/bin/agy_acp_server.par",
         child.resolveAntigravityBinary,
       ],
+      ["deepseek", "/opt/homebrew/bin/dsh", child.resolveDeepseekBinary],
     ] as const) {
       await resolve();
       expect(mocks.invoke).toHaveBeenLastCalledWith(

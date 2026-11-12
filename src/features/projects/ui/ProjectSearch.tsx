@@ -22,6 +22,8 @@ import {
   type ProjectSearchResult,
 } from "../../search/model/search";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 
 type Props = {
   cwd: string;
@@ -51,6 +53,7 @@ export function ProjectSearch({
   onClose,
   search = searchProject,
 }: Props) {
+  useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -166,7 +169,9 @@ export function ProjectSearch({
 
   if (!cwd || cwd === "~") {
     return (
-      <p className="px-3 py-2 text-[12px] text-content/50">No project folder</p>
+      <p className="px-3 py-2 text-[12px] text-content/50">
+        {translate("No project folder")}
+      </p>
     );
   }
 
@@ -176,14 +181,14 @@ export function ProjectSearch({
         <button
           type="button"
           onClick={onClose}
-          title="Back to files"
-          aria-label="Back to files"
+          title={translate("Back to files")}
+          aria-label={translate("Back to files")}
           className="grid size-7 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content"
         >
           <ChevronLeft className="size-4" strokeWidth={1.75} />
         </button>
         <span className="min-w-0 flex-1 truncate text-[12px] text-content/55">
-          Search in files
+          {translate("Search in files")}
         </span>
       </div>
       <div className="shrink-0 space-y-2 border-b border-stroke p-2">
@@ -193,27 +198,27 @@ export function ProjectSearch({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search"
-            aria-label="Search"
+            placeholder={translate("Search")}
+            aria-label={translate("Search")}
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent py-1.5 text-[12px] text-content outline-none placeholder:text-content/35"
           />
           <Toggle
-            label="Match case"
+            label={translate("Match case")}
             active={caseSensitive}
             onClick={() => setCaseSensitive((value) => !value)}
           >
             <CaseSensitive className="size-3.5" strokeWidth={1.75} />
           </Toggle>
           <Toggle
-            label="Match whole word"
+            label={translate("Match whole word")}
             active={wholeWord}
             onClick={() => setWholeWord((value) => !value)}
           >
             <WholeWord className="size-3.5" strokeWidth={1.75} />
           </Toggle>
           <Toggle
-            label="Use regular expression"
+            label={translate("Use regular expression")}
             active={regex}
             onClick={() => setRegex((value) => !value)}
           >
@@ -223,16 +228,16 @@ export function ProjectSearch({
         <input
           value={include}
           onChange={(event) => setInclude(event.target.value)}
-          placeholder="files to include"
-          aria-label="files to include"
+          placeholder={translate("files to include")}
+          aria-label={translate("files to include")}
           spellCheck={false}
           className="w-full rounded-md border border-content/10 bg-content/5 px-2 py-1.5 text-[11px] text-content outline-none placeholder:text-content/35"
         />
         <input
           value={exclude}
           onChange={(event) => setExclude(event.target.value)}
-          placeholder="files to exclude"
-          aria-label="files to exclude"
+          placeholder={translate("files to exclude")}
+          aria-label={translate("files to exclude")}
           spellCheck={false}
           className="w-full rounded-md border border-content/10 bg-content/5 px-2 py-1.5 text-[11px] text-content outline-none placeholder:text-content/35"
         />
@@ -242,19 +247,27 @@ export function ProjectSearch({
         {loading ? (
           <>
             <LoaderCircle className="size-3 animate-spin" strokeWidth={1.75} />
-            <span>Searching…</span>
+            <span>{translate("Searching…")}</span>
           </>
         ) : error ? (
           <span className="text-red-400">{error}</span>
         ) : query.trim() ? (
           <span>
             {matchCount === 0
-              ? "No results"
-              : `${matchCount} result${matchCount === 1 ? "" : "s"} in ${fileCount} file${fileCount === 1 ? "" : "s"}`}
-            {truncated ? " (limited)" : ""}
+              ? translate("No results")
+              : matchCount === 1
+                ? translate("{count} result in {files} file", {
+                    count: matchCount,
+                    files: fileCount,
+                  })
+                : translate("{count} results in {files} files", {
+                    count: matchCount,
+                    files: fileCount,
+                  })}
+            {truncated ? translate(" (limited)") : ""}
           </span>
         ) : (
-          <span>Type to search across the project</span>
+          <span>{translate("Type to search across the project")}</span>
         )}
       </div>
 

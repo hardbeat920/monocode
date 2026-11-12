@@ -1,7 +1,9 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "../../../platform/tauri/fs";
+import { startDeepseekOfficialLogin } from "../../../features/providers/model/deepseekCredentials";
 import { supportsAccountProfiles } from "../../../features/providers/model/providerAccounts";
 import { HARNESS_TITLE, type HarnessId } from "../../../features/sessions/model/session";
+import { translate } from "../../../shared/i18n/locale";
 import * as child from "./child";
 import { harnessLoginArgs } from "./authSupport";
 
@@ -65,10 +67,25 @@ export function loginHarness(
   return run;
 }
 
+async function runDeepseekOwnedLogin(): Promise<void> {
+  const result = await startDeepseekOfficialLogin();
+  if (result.signedIn || result.status === "ok") return;
+  if (result.status === "cancelled") {
+    throw new Error(translate("DeepSeek sign-in was cancelled."));
+  }
+  throw new Error(
+    result.error?.trim() || translate("Official DeepSeek login failed"),
+  );
+}
+
 async function runHarnessLogin(
   harness: HarnessId,
   accountId?: string,
 ): Promise<void> {
+  if (harness === "deepseek") {
+    return runDeepseekOwnedLogin();
+  }
+
   const args = harnessLoginArgs(harness);
   const resolve = LOGIN_RESOLVERS[harness];
   if (!args || !resolve) {
