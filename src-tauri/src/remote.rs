@@ -391,6 +391,11 @@ fn supported_remote_method(method: &str) -> bool {
             | "git.index"
             | "git.fileDiff"
             | "git.action"
+            | "gitHosts.status"
+            | "gitHosts.repos"
+            | "gitHosts.checkoutPlan"
+            | "gitHosts.checkoutStart"
+            | "gitHosts.checkoutStatus"
     )
 }
 
@@ -687,6 +692,11 @@ mod tests {
             "git.worktreeCreate",
             "attachments.upload",
             "attachments.read",
+            "gitHosts.status",
+            "gitHosts.repos",
+            "gitHosts.checkoutPlan",
+            "gitHosts.checkoutStart",
+            "gitHosts.checkoutStatus",
         ] {
             assert!(supported_remote_method(method), "{method}");
         }
