@@ -25,7 +25,7 @@ function render(
 }
 
 describe("AgentTranscript running turn clock", () => {
-  it("times a message sent mid-turn from the turn it joined", () => {
+  it("times a message sent mid-turn from when it was sent", () => {
     vi.spyOn(Date, "now").mockReturnValue(100_000);
     try {
       const markup = render(
@@ -37,8 +37,30 @@ describe("AgentTranscript running turn clock", () => {
         ],
         true,
       );
-      // Started 90s ago; without the joined turn's start it read from mount.
-      expect(markup).toContain("Working for 1m 30s");
+      // Sent 5s ago. Not from the turn it joined (1m 30s), and not from
+      // mount (0s), which restarted the clock on every switch back.
+      expect(markup).toContain("Working for 5s");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does not stamp a day separator between messages sent mid-turn", () => {
+    vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      const markup = renderToStaticMarkup(
+        createElement(AgentTranscript, {
+          blocks: [
+            { id: "user", role: "user", text: "Go", startedAt: 10_000 },
+            tool("first"),
+            { id: "steer", role: "user", text: "Also", sentAt: 95_000 },
+            { id: "again", role: "user", text: "And this", sentAt: 97_000 },
+          ],
+          busy: true,
+          daySeparators: true,
+        }),
+      );
+      expect(markup.match(/data-day-separator/g)).toHaveLength(1);
     } finally {
       vi.restoreAllMocks();
     }
