@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::harness::{exec_output, is_resolved_harness_binary};
+use crate::harness::{
+    exec_output, exec_output_with_env, is_resolved_harness_binary, resolve_gui_binary,
+};
 
 const REGISTRY_URL: &str = "https://registry.npmjs.org";
 const USER_AGENT: &str = "MonoCode";
@@ -21,8 +23,10 @@ fn npm_package(provider: &str) -> Option<&'static str> {
     }
 }
 
-/// Each CLI's own updater, which knows how it was installed (native, npm,
-/// Homebrew) better than MonoCode could guess from the binary path.
+/// Each CLI's own updater. Native and npm installs apply it themselves.
+/// Homebrew, winget, mise, and apk installs print an upgrade command and
+/// exit 0 without installing anything; `package_manager_handoff` runs that
+/// command.
 fn update_args(provider: &str) -> Option<&'static [&'static str]> {
     match provider {
         "claude" => Some(&["update"]),
@@ -35,6 +39,11 @@ fn update_args(provider: &str) -> Option<&'static [&'static str]> {
 
 /// A download plus, for npm installs, a full dependency install.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Homebrew refreshes its formula index and then downloads the CLI. That is
+/// slower than the CLI's own updater, which for these installs only prints
+/// the command.
+const PACKAGE_MANAGER_TIMEOUT: Duration = Duration::from_secs(600);
 
 static LAUNCH_CHECK_CLAIMED: AtomicBool = AtomicBool::new(false);
 
@@ -69,7 +78,8 @@ pub async fn harness_latest_version(provider: String) -> Result<String, String> 
 
 /// Runs the harness's self-update against the binary MonoCode resolved for
 /// it. stdin is closed, so an updater that stops to ask fails instead of
-/// hanging.
+/// hanging. A package-manager install that only prints its upgrade command
+/// is then upgraded with that command.
 #[tauri::command]
 pub async fn harness_update(
     command: String,
@@ -87,12 +97,168 @@ pub async fn harness_update(
         }
         let output = exec_output(&command, &args, None, UPDATE_TIMEOUT)?;
         if output.status.success() {
-            return Ok(());
+            return apply_package_manager_handoff(&output.stdout, &output.stderr);
         }
         Err(update_failure(&output.stdout, &output.stderr))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// What an updater printed after exiting 0. `NotManaged` means it installed
+/// the update itself. `Upgrade` is a package-manager command it told the
+/// user to run. `Refused` is a command we will not execute.
+#[derive(Debug)]
+enum PackageManagerHandoff {
+    NotManaged,
+    Upgrade(PackageManagerCommand),
+    Refused(String),
+}
+
+#[derive(Debug)]
+struct PackageManagerCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl PackageManagerCommand {
+    fn display(&self) -> String {
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn apply_package_manager_handoff(stdout: &[u8], stderr: &[u8]) -> Result<(), String> {
+    let command = match package_manager_handoff(stdout, stderr) {
+        PackageManagerHandoff::NotManaged => return Ok(()),
+        PackageManagerHandoff::Refused(reason) => return Err(reason),
+        PackageManagerHandoff::Upgrade(command) => command,
+    };
+    let program = resolve_gui_binary(&command.program).ok_or_else(|| {
+        format!(
+            "Could not find {} on PATH. Run `{}` to finish the update.",
+            command.program,
+            command.display()
+        )
+    })?;
+    let program = program.to_string_lossy().into_owned();
+    let output = exec_output_with_env(
+        &program,
+        &command.args,
+        None,
+        PACKAGE_MANAGER_TIMEOUT,
+        &[("NONINTERACTIVE", "1")],
+    )?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(update_failure(&output.stdout, &output.stderr))
+}
+
+/// Claude Code, and the other CLIs that follow it, exit 0 after printing
+/// `To update, run:` for a Homebrew, winget, mise, or apk install. The
+/// command is allowlisted and run as argv, never through a shell, so a tip
+/// such as `brew uninstall && brew install` is not executed.
+fn package_manager_handoff(stdout: &[u8], stderr: &[u8]) -> PackageManagerHandoff {
+    let text = strip_ansi(&format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    ));
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        let header = line.trim();
+        if header != "To update, run:" && header != "To update manually, run:" {
+            continue;
+        }
+        let Some(command_line) = lines[index + 1..]
+            .iter()
+            .map(|line| line.trim())
+            .find(|line| !line.is_empty())
+        else {
+            return PackageManagerHandoff::Refused(
+                "Updater said to run a package-manager command, but did not print one.".to_string(),
+            );
+        };
+        return match parse_package_manager_command(command_line) {
+            Some(command) => PackageManagerHandoff::Upgrade(command),
+            None => PackageManagerHandoff::Refused(format!(
+                "Updater asked for a package-manager command MonoCode will not run: {command_line}"
+            )),
+        };
+    }
+    PackageManagerHandoff::NotManaged
+}
+
+fn parse_package_manager_command(line: &str) -> Option<PackageManagerCommand> {
+    if line.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                ';' | '|' | '&' | '`' | '$' | '<' | '>' | '(' | ')' | '{' | '}' | '"' | '\'' | '\\'
+            )
+    }) {
+        return None;
+    }
+    let tokens: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+    let (program, args) = tokens.split_first()?;
+    if !allowed_package_manager(program, args) {
+        return None;
+    }
+    Some(PackageManagerCommand {
+        program: program.clone(),
+        args: args.to_vec(),
+    })
+}
+
+fn allowed_package_manager(program: &str, args: &[String]) -> bool {
+    match program {
+        "brew" => match args {
+            [action, package] if action == "upgrade" && is_package_token(package) => true,
+            [action, flag, package]
+                if action == "upgrade" && flag == "--cask" && is_package_token(package) =>
+            {
+                true
+            }
+            _ => false,
+        },
+        "winget" | "mise" | "apk" => {
+            args.len() == 2 && args[0] == "upgrade" && is_package_token(&args[1])
+        }
+        _ => false,
+    }
+}
+
+fn is_package_token(token: &str) -> bool {
+    let mut chars = token.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    (1..=80).contains(&token.len())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '+' | '.' | '_' | '-'))
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Updaters print their reason to either stream; the last line is the one
@@ -147,6 +313,95 @@ mod tests {
         );
         assert_eq!(update_failure(b"no write access\n", b""), "no write access");
         assert_eq!(update_failure(b"", b""), "Update failed");
+    }
+
+    #[test]
+    fn runs_the_homebrew_upgrade_claude_prints_instead_of_installing() {
+        let stdout = b"Current version: 2.1.284\nChecking for updates to latest version...\n\nClaude is managed by Homebrew.\nUpdate available: 2.1.284 \xe2\x86\x92 2.1.285\n\nTo update, run:\n  brew upgrade claude-code@latest\n";
+        match package_manager_handoff(stdout, b"") {
+            PackageManagerHandoff::Upgrade(command) => {
+                assert_eq!(command.display(), "brew upgrade claude-code@latest");
+            }
+            other => panic!("expected the brew upgrade command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn leaves_a_native_update_that_did_not_ask_for_a_package_manager() {
+        let stdout = b"Successfully updated to version 2.1.285\n";
+        assert!(matches!(
+            package_manager_handoff(stdout, b""),
+            PackageManagerHandoff::NotManaged
+        ));
+        let up_to_date = b"Claude is managed by Homebrew.\nClaude is up to date!\n\nTip: For more frequent updates, use the claude-code@latest cask:\n  brew uninstall --cask claude-code && brew install --cask claude-code@latest\n";
+        assert!(matches!(
+            package_manager_handoff(up_to_date, b""),
+            PackageManagerHandoff::NotManaged
+        ));
+    }
+
+    #[test]
+    fn runs_winget_mise_and_apk_upgrade_commands() {
+        for (stdout, expected) in [
+            (
+                "To update, run:\n  winget upgrade Anthropic.ClaudeCode\n",
+                "winget upgrade Anthropic.ClaudeCode",
+            ),
+            (
+                "To update manually, run:\n  mise upgrade claude\n",
+                "mise upgrade claude",
+            ),
+            (
+                "To update, run:\n  apk upgrade claude-code\n",
+                "apk upgrade claude-code",
+            ),
+            (
+                "To update, run:\n  brew upgrade --cask claude-code\n",
+                "brew upgrade --cask claude-code",
+            ),
+        ] {
+            match package_manager_handoff(stdout.as_bytes(), b"") {
+                PackageManagerHandoff::Upgrade(command) => {
+                    assert_eq!(command.display(), expected);
+                }
+                other => panic!("expected {expected}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn reads_an_upgrade_command_wrapped_in_ansi_bold() {
+        let stdout = "To update, run:\n\u{1b}[1m  brew upgrade claude-code@latest\u{1b}[0m\n";
+        match package_manager_handoff(stdout.as_bytes(), b"") {
+            PackageManagerHandoff::Upgrade(command) => {
+                assert_eq!(command.program, "brew");
+                assert_eq!(
+                    command.args,
+                    vec!["upgrade".to_string(), "claude-code@latest".to_string()]
+                );
+            }
+            other => panic!("expected the brew upgrade command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refuses_package_manager_commands_that_are_not_a_plain_upgrade() {
+        for stdout in [
+            "To update, run:\n  brew uninstall --cask claude-code && brew install --cask claude-code@latest\n",
+            "To update, run:\n  brew upgrade claude-code; rm -rf /\n",
+            "To update, run:\n  brew upgrade ../../evil\n",
+            "To update, run:\n  sudo brew upgrade claude-code\n",
+            "To update, run:\n  brew upgrade claude-code --force\n",
+            "To update, run:\n\n",
+        ] {
+            assert!(
+                matches!(
+                    package_manager_handoff(stdout.as_bytes(), b""),
+                    PackageManagerHandoff::Refused(_)
+                ),
+                "{stdout}"
+            );
+        }
     }
 
     #[test]
