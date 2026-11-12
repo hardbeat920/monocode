@@ -1,6 +1,8 @@
 //! Native Markdown model for AgentMarkdown's Streamdown elements.
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use std::{iter::Peekable, ops::Range, sync::Arc};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
+};
+use std::{ops::Range, sync::Arc};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct InlineStyle {
@@ -430,7 +432,45 @@ fn mend_prose(source: &str) -> String {
     }
     text
 }
-type Events<'a> = Peekable<std::vec::IntoIter<Event<'a>>>;
+/// The events of one top-level block, with the source they were parsed from.
+struct Inline<'a> {
+    events: Vec<Option<(Event<'a>, Range<usize>)>>,
+    at: usize,
+    source: &'a str,
+    /// Where the last leaf or closed span ended. Container events span their
+    /// whole element, so a closing delimiter starts here.
+    leaf_end: usize,
+    /// The `leaf_end` before the event last taken.
+    before: usize,
+    /// Enclosing spans a bare link closed, and the source left after it.
+    close: usize,
+    spill: Option<Range<usize>>,
+}
+impl<'a> Inline<'a> {
+    fn new(events: Vec<(Event<'a>, Range<usize>)>, source: &'a str, start: usize) -> Self {
+        Self {
+            events: events.into_iter().map(Some).collect(),
+            at: 0,
+            source,
+            leaf_end: start,
+            before: start,
+            close: 0,
+            spill: None,
+        }
+    }
+    fn peek(&self) -> Option<&(Event<'a>, Range<usize>)> {
+        self.events.get(self.at)?.as_ref()
+    }
+    fn next(&mut self) -> Option<(Event<'a>, Range<usize>)> {
+        let (event, range) = self.events.get_mut(self.at)?.take()?;
+        self.at += 1;
+        if !matches!(event, Event::Start(_)) {
+            self.before = self.leaf_end;
+            self.leaf_end = range.end;
+        }
+        Some((event, range))
+    }
+}
 pub(crate) fn parse_full(text: &str) -> BlockTree {
     parse_with_breaks(text, false)
 }
@@ -465,15 +505,16 @@ fn parse_at(text: &str, base: usize, hard_breaks: bool) -> BlockTree {
             Event::End(_) => depth = depth.saturating_sub(1),
             _ => {}
         }
-        pending.push(if hard_breaks && matches!(event, Event::SoftBreak) {
+        let event = if hard_breaks && matches!(event, Event::SoftBreak) {
             Event::HardBreak
         } else {
             event
-        });
+        };
+        pending.push((event, range.clone()));
         if depth == 0 {
-            let mut events = std::mem::take(&mut pending).into_iter().peekable();
+            let mut inline = Inline::new(std::mem::take(&mut pending), text, start);
             tree.blocks
-                .extend(blocks(&mut events, None, 0).into_iter().map(|block| {
+                .extend(blocks(&mut inline, None, 0).into_iter().map(|block| {
                     Arc::new(TopBlock {
                         range: base + start..base + range.end,
                         block,
@@ -483,19 +524,32 @@ fn parse_at(text: &str, base: usize, hard_breaks: bool) -> BlockTree {
     }
     tree
 }
-fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<Block> {
+fn blocks(cx: &mut Inline<'_>, until: Option<TagEnd>, depth: usize) -> Vec<Block> {
     let mut out = Vec::new();
-    while let Some(event) = events.next() {
+    let style = InlineStyle::default();
+    while let Some((event, range)) = cx.next() {
         match event {
             Event::End(end) if until == Some(end) => break,
+            Event::Start(
+                tag @ (Tag::Strong
+                | Tag::Emphasis
+                | Tag::Strikethrough
+                | Tag::Link { .. }
+                | Tag::Image { .. }),
+            ) => {
+                let mut runs = Vec::new();
+                inline_span(cx, tag, style.clone(), true, &mut runs);
+                settle(cx, &style, &mut runs);
+                extend_paragraph(&mut out, runs);
+            }
             Event::Start(tag) if depth < 32 => match tag {
                 Tag::Paragraph => {
-                    if let Some(visual) = placed_visual(events) {
+                    if let Some(visual) = placed_visual(cx) {
                         out.push(visual);
                         continue;
                     }
                     out.push(Block::Paragraph {
-                        runs: inlines(events, TagEnd::Paragraph),
+                        runs: inlines(cx, TagEnd::Paragraph),
                     })
                 }
                 Tag::Heading { level, .. } => {
@@ -509,7 +563,7 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                     };
                     out.push(Block::Heading {
                         level: number,
-                        runs: inlines(events, TagEnd::Heading(level)),
+                        runs: inlines(cx, TagEnd::Heading(level)),
                     });
                 }
                 Tag::CodeBlock(kind) => {
@@ -518,7 +572,7 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                         _ => None,
                     };
                     let mut code = String::new();
-                    for event in events.by_ref() {
+                    while let Some((event, _)) = cx.next() {
                         match event {
                             Event::End(TagEnd::CodeBlock) => break,
                             Event::Text(text) => code.push_str(&text),
@@ -528,15 +582,15 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                     out.push(Block::CodeBlock { language, code });
                 }
                 Tag::BlockQuote(kind) => out.push(Block::BlockQuote {
-                    children: blocks(events, Some(TagEnd::BlockQuote(kind)), depth + 1),
+                    children: blocks(cx, Some(TagEnd::BlockQuote(kind)), depth + 1),
                 }),
                 Tag::List(start) => {
                     let mut items = Vec::new();
-                    while let Some(event) = events.next() {
+                    while let Some((event, _)) = cx.next() {
                         match event {
                             Event::End(TagEnd::List(_)) => break,
                             Event::Start(Tag::Item) => {
-                                items.push(blocks(events, Some(TagEnd::Item), depth + 1))
+                                items.push(blocks(cx, Some(TagEnd::Item), depth + 1))
                             }
                             _ => {}
                         }
@@ -559,12 +613,12 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                     let mut row = Vec::new();
                     let mut header = Vec::new();
                     let mut head = false;
-                    while let Some(event) = events.next() {
+                    while let Some((event, _)) = cx.next() {
                         match event {
                             Event::End(TagEnd::Table) => break,
                             Event::Start(Tag::TableHead) => head = true,
                             Event::Start(Tag::TableCell) => {
-                                row.push(inlines(events, TagEnd::TableCell))
+                                row.push(inlines(cx, TagEnd::TableCell))
                             }
                             Event::End(TagEnd::TableHead) => {
                                 header = std::mem::take(&mut row);
@@ -582,15 +636,6 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                         align,
                     });
                 }
-                tag @ (Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }) => {
-                    let mut runs = Vec::new();
-                    inline_span(events, tag, InlineStyle::default(), &mut runs);
-                    if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
-                        previous.extend(runs);
-                    } else {
-                        out.push(Block::Paragraph { runs });
-                    }
-                }
                 _ => {}
             },
             Event::Rule => out.push(Block::Rule),
@@ -605,54 +650,53 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
             | Event::HardBreak
             | Event::InlineMath(_)) => {
                 let mut runs = vec![];
-                append_run(&mut runs, event, InlineStyle::default());
-                while let Some(next) = events.peek() {
-                    if matches!(
+                append_event(cx, event, range, &style, true, &mut runs);
+                settle(cx, &style, &mut runs);
+                while let Some((next, _)) = cx.peek() {
+                    // A closing delimiter whose span a bare link opened stays text.
+                    let orphan = matches!(
                         next,
-                        Event::Start(
-                            Tag::List(_) | Tag::BlockQuote(_) | Tag::CodeBlock(_) | Tag::Paragraph
-                        ) | Event::End(TagEnd::Item)
-                    ) {
+                        Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough)
+                    );
+                    if !orphan
+                        && matches!(
+                            next,
+                            Event::Start(
+                                Tag::List(_)
+                                    | Tag::BlockQuote(_)
+                                    | Tag::CodeBlock(_)
+                                    | Tag::Paragraph
+                            ) | Event::End(_)
+                        )
+                    {
                         break;
                     }
-                    if matches!(next, Event::End(_)) {
-                        break;
-                    }
-                    let next = events.next().unwrap();
+                    let (next, range) = cx.next().unwrap();
                     match next {
-                        Event::Start(tag) => {
-                            inline_span(events, tag, InlineStyle::default(), &mut runs)
-                        }
-                        event => append_run(&mut runs, event, InlineStyle::default()),
+                        Event::Start(tag) => inline_span(cx, tag, style.clone(), true, &mut runs),
+                        event => append_event(cx, event, range, &style, true, &mut runs),
                     }
+                    settle(cx, &style, &mut runs);
                 }
-                if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
-                    previous.extend(runs);
-                } else {
-                    out.push(Block::Paragraph { runs });
-                }
-            }
-            Event::Start(
-                tag @ (Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }),
-            ) => {
-                let mut runs = vec![];
-                inline_span(events, tag, InlineStyle::default(), &mut runs);
-                if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
-                    previous.extend(runs);
-                } else {
-                    out.push(Block::Paragraph { runs });
-                }
+                extend_paragraph(&mut out, runs);
             }
             _ => {}
         }
     }
     out
 }
+fn extend_paragraph(out: &mut Vec<Block>, runs: Vec<InlineRun>) {
+    if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
+        previous.extend(runs);
+    } else {
+        out.push(Block::Paragraph { runs });
+    }
+}
 /// A paragraph that is only a `visual:` image places that visual. Consumes
 /// the paragraph when it matches; leaves the events untouched otherwise.
-fn placed_visual(events: &mut Events<'_>) -> Option<Block> {
-    let id = match events.peek()? {
-        Event::Start(Tag::Image { dest_url, .. }) => dest_url
+fn placed_visual(cx: &mut Inline<'_>) -> Option<Block> {
+    let id = match cx.peek()? {
+        (Event::Start(Tag::Image { dest_url, .. }), _) => dest_url
             .strip_prefix("visual:")
             .filter(|id| {
                 !id.is_empty()
@@ -664,9 +708,9 @@ fn placed_visual(events: &mut Events<'_>) -> Option<Block> {
             .to_owned(),
         _ => return None,
     };
-    events.next();
+    cx.next();
     let mut caption = String::new();
-    for event in events.by_ref() {
+    while let Some((event, _)) = cx.next() {
         match event {
             Event::End(TagEnd::Image) => break,
             Event::Text(text) | Event::Code(text) => caption.push_str(&text),
@@ -674,51 +718,94 @@ fn placed_visual(events: &mut Events<'_>) -> Option<Block> {
         }
     }
     // Anything after the image on the same line stays prose.
-    let rest = inlines(events, TagEnd::Paragraph);
+    let rest = inlines(cx, TagEnd::Paragraph);
     let rest: String = rest.iter().map(|r| r.text.as_str()).collect();
     if !rest.trim().is_empty() {
         caption = format!("{caption} {}", rest.trim()).trim().to_owned();
     }
     Some(Block::Visual { id, caption })
 }
-fn inlines(events: &mut Events<'_>, end: TagEnd) -> Vec<InlineRun> {
+fn inlines(cx: &mut Inline<'_>, end: TagEnd) -> Vec<InlineRun> {
+    let style = InlineStyle::default();
     let mut out = Vec::new();
-    while let Some(event) = events.next() {
+    while let Some((event, range)) = cx.next() {
         match event {
             Event::End(tag) if tag == end => break,
-            Event::Start(tag) => inline_span(events, tag, InlineStyle::default(), &mut out),
-            event => append_run(&mut out, event, InlineStyle::default()),
+            Event::Start(tag) => inline_span(cx, tag, style.clone(), true, &mut out),
+            event => append_event(cx, event, range, &style, true, &mut out),
         }
+        settle(cx, &style, &mut out);
     }
     out
 }
 fn inline_span(
-    events: &mut Events<'_>,
+    cx: &mut Inline<'_>,
     tag: Tag<'_>,
     mut style: InlineStyle,
+    autolink: bool,
     out: &mut Vec<InlineRun>,
 ) {
     let end = tag.to_end();
+    // Link text and image alt text never autolink.
+    let autolink = autolink && !matches!(tag, Tag::Link { .. } | Tag::Image { .. });
     match tag {
         Tag::Strong => style.bold = true,
         Tag::Emphasis => style.italic = true,
         Tag::Strikethrough => style.strikethrough = true,
+        Tag::Link {
+            link_type: LinkType::Email,
+            dest_url,
+            ..
+        } => style.link = Some(format!("mailto:{dest_url}")),
         Tag::Link { dest_url, .. } if dest_url.as_ref() != "streamdown:incomplete-link" => {
             style.link = Some(dest_url.into_string());
         }
         _ => {}
     }
-    while let Some(event) = events.next() {
+    while let Some((event, range)) = cx.next() {
         match event {
             Event::End(tag) if tag == end => break,
-            Event::Start(tag) => inline_span(events, tag, style.clone(), out),
-            event => append_run(out, event, style.clone()),
+            Event::Start(tag) => inline_span(cx, tag, style.clone(), autolink, out),
+            event => append_event(cx, event, range, &style, autolink, out),
+        }
+        if !settle(cx, &style, out) {
+            return;
         }
     }
 }
-fn append_run(out: &mut Vec<InlineRun>, event: Event<'_>, mut style: InlineStyle) {
+/// After an inline event: whether this span goes on. A bare link that ran
+/// past its closing delimiter ends it, and the source after such a link
+/// belongs to the span that remains open.
+fn settle(cx: &mut Inline<'_>, style: &InlineStyle, out: &mut Vec<InlineRun>) -> bool {
+    loop {
+        if cx.close > 0 {
+            cx.close -= 1;
+            return false;
+        }
+        let Some(rest) = cx.spill.take() else {
+            return true;
+        };
+        append_source(cx, rest, style, out);
+    }
+}
+fn append_event(
+    cx: &mut Inline<'_>,
+    event: Event<'_>,
+    range: Range<usize>,
+    style: &InlineStyle,
+    autolink: bool,
+    out: &mut Vec<InlineRun>,
+) {
+    let mut style = style.clone();
     let text = match event {
-        Event::Text(text) => text.into_string(),
+        Event::Text(text) => {
+            // Entities and escapes are decoded; bare links are found in
+            // text that reads as the source does.
+            if autolink && style.link.is_none() && text.as_ref() == &cx.source[range.clone()] {
+                return append_source(cx, range, &style, out);
+            }
+            text.into_string()
+        }
         Event::Code(text) => {
             style.code = true;
             text.into_string()
@@ -733,9 +820,593 @@ fn append_run(out: &mut Vec<InlineRun>, event: Event<'_>, mut style: InlineStyle
             style.math = true;
             text.into_string()
         }
+        // A span whose opening delimiter a bare link swallowed: its closing
+        // delimiter stays text, as GFM renders it.
+        Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
+            cx.source[cx.before..range.end].to_owned()
+        }
         _ => return,
     };
     out.push(InlineRun { text, style });
+}
+fn push_text(out: &mut Vec<InlineRun>, text: &str, style: &InlineStyle) {
+    if !text.is_empty() {
+        out.push(InlineRun {
+            text: text.to_owned(),
+            style: style.clone(),
+        });
+    }
+}
+/// What the next event is to a bare link running past the current text.
+enum Covered {
+    Opener,
+    Closer,
+    Text { verbatim: bool },
+    SpanEnd,
+    Leaf,
+}
+fn covered(event: &Event<'_>, range: &Range<usize>, source: &str) -> Covered {
+    match event {
+        Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough) => Covered::Opener,
+        Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => Covered::Closer,
+        Event::Text(text) => Covered::Text {
+            verbatim: text.as_ref() == &source[range.clone()],
+        },
+        Event::End(_) => Covered::SpanEnd,
+        _ => Covered::Leaf,
+    }
+}
+/// Where a bare link that runs past the current event (ending at `pos_end`)
+/// has to stop: before the first event it cannot take, or at `end`.
+fn link_end(cx: &Inline<'_>, mut end: usize, mut pos_end: usize) -> usize {
+    for slot in &cx.events[cx.at..] {
+        let Some((event, r)) = slot else { break };
+        match covered(event, r, cx.source) {
+            Covered::Opener => {
+                if r.start >= end {
+                    break;
+                }
+            }
+            Covered::Closer => {
+                if pos_end >= end {
+                    break;
+                }
+                if r.end > end {
+                    end = pos_end;
+                    break;
+                }
+                pos_end = r.end;
+            }
+            Covered::Text { verbatim } => {
+                if r.start >= end {
+                    break;
+                }
+                // An entity is not cut in half.
+                if r.end > end && !verbatim {
+                    end = r.start;
+                    break;
+                }
+                pos_end = r.end;
+                if r.end >= end {
+                    break;
+                }
+            }
+            Covered::SpanEnd => {
+                end = end.min(pos_end);
+                break;
+            }
+            Covered::Leaf => {
+                end = end.min(r.start);
+                break;
+            }
+        }
+    }
+    end
+}
+/// Appends verbatim source, linking bare URLs and emails like GFM's
+/// extended autolinks. The parser splits emphasis delimiters, entities and
+/// escapes out of the text around them, so a link found here follows the
+/// source past this event and takes the events it covers.
+fn append_source(
+    cx: &mut Inline<'_>,
+    mut range: Range<usize>,
+    style: &InlineStyle,
+    out: &mut Vec<InlineRun>,
+) {
+    let source = cx.source;
+    loop {
+        let Some(link) = bare_link(source, range.clone()) else {
+            push_text(out, &source[range], style);
+            return;
+        };
+        let start = link.range.start;
+        push_text(out, &source[range.start..start], style);
+        let mut end = link.range.end;
+        if end > range.end {
+            end = link_end(cx, end, range.end);
+            // Stopping short can leave sentence punctuation at the end.
+            if end < link.range.end {
+                end = trim_link_end(source, start, end);
+            }
+        }
+        if end <= start + link.prefix() {
+            // Nothing valid remains: the first character stays prose.
+            push_text(out, &source[start..start + 1], style);
+            range = start + 1..range.end;
+            continue;
+        }
+        // Take the events the link covers.
+        let mut rest = None;
+        let (mut close, mut depth) = (0, 0usize);
+        while let Some((event, r)) = cx.peek() {
+            let r = r.clone();
+            match covered(event, &r, source) {
+                Covered::Opener if r.start < end => {
+                    depth += 1;
+                    cx.next();
+                }
+                Covered::Closer if cx.leaf_end < end && r.end <= end => {
+                    if depth > 0 {
+                        depth -= 1;
+                    } else {
+                        close += 1;
+                    }
+                    cx.next();
+                }
+                Covered::Text { .. } if r.start < end => {
+                    cx.next();
+                    if r.end > end {
+                        rest = Some(end..r.end);
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let mut linked = style.clone();
+        linked.link = Some(link.target(&source[start..end]));
+        push_text(out, &source[start..end], &linked);
+        if rest.is_none() && end < range.end {
+            rest = Some(end..range.end);
+        }
+        if close > 0 {
+            cx.close = close;
+            cx.spill = rest;
+            return;
+        }
+        match rest {
+            Some(rest) => range = rest,
+            None => return,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum LinkKind {
+    Http { scheme: usize },
+    Www,
+    Email,
+}
+struct BareLink {
+    range: Range<usize>,
+    kind: LinkKind,
+}
+impl BareLink {
+    fn prefix(&self) -> usize {
+        match self.kind {
+            LinkKind::Http { scheme } => scheme,
+            LinkKind::Www => 4,
+            LinkKind::Email => 0,
+        }
+    }
+    fn target(&self, text: &str) -> String {
+        match self.kind {
+            LinkKind::Http { scheme } => {
+                format!("{}{}", text[..scheme].to_ascii_lowercase(), &text[scheme..])
+            }
+            LinkKind::Www => format!("http://{text}"),
+            LinkKind::Email => format!("mailto:{text}"),
+        }
+    }
+}
+/// The first bare link starting inside `range`. It may end past the range,
+/// where the parser moved the rest of it into other events.
+fn bare_link(source: &str, range: Range<usize>) -> Option<BareLink> {
+    let bytes = source.as_bytes();
+    let mut at = range.start;
+    while at < range.end {
+        at += bytes[at..range.end]
+            .iter()
+            .position(|b| matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'))?;
+        let link = if bytes[at] == b'@' {
+            email_at(source, range.start, at)
+        } else {
+            url_at(source, range.start, at)
+        };
+        if link.is_some() {
+            return link;
+        }
+        at += 1;
+    }
+    None
+}
+fn is_local(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._+".contains(c)
+}
+fn is_label(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-_.".contains(c)
+}
+/// An email around the `@` at `at`, with its local part no earlier than `from`.
+fn email_at(source: &str, from: usize, at: usize) -> Option<BareLink> {
+    let start = source[from..at]
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_local(*c))
+        .map_or(from, |(ix, c)| from + ix + c.len_utf8());
+    if start == at || source[..start].ends_with('/') {
+        return None;
+    }
+    // GFM: the domain has a dot, ends in a letter and stops before `..`.
+    let rest = &source[at + 1..];
+    let mut domain = &rest[..rest.find(|c| !is_label(c)).unwrap_or(rest.len())];
+    if let Some(ix) = domain.find("..") {
+        domain = &domain[..ix];
+    }
+    let domain = domain.trim_end_matches('.');
+    if !domain.contains('.') || !domain.ends_with(|c: char| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(BareLink {
+        range: start..at + 1 + domain.len(),
+        kind: LinkKind::Email,
+    })
+}
+/// A URL or www address starting at `at`.
+fn url_at(source: &str, from: usize, at: usize) -> Option<BareLink> {
+    let rest = &source[at..];
+    let has = |prefix: &str| {
+        rest.get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+    };
+    let kind = if has("https://") {
+        LinkKind::Http { scheme: 8 }
+    } else if has("http://") {
+        LinkKind::Http { scheme: 7 }
+    } else if has("www.") {
+        LinkKind::Www
+    } else {
+        return None;
+    };
+    let before = source[..at].chars().next_back();
+    let bounded = match kind {
+        LinkKind::Http { .. } => !before.is_some_and(|c| c.is_ascii_alphabetic()),
+        // GFM: a www address follows a line start, whitespace or `*_~([]`,
+        // so a path like `src/www.config.js` stays text.
+        _ => before.is_none_or(|c| c.is_whitespace() || "*_~([]".contains(c)),
+    };
+    if !bounded {
+        return None;
+    }
+    // `www.me@a.com` is an email.
+    let local_end = at + rest.find(|c| !is_local(c)).unwrap_or(rest.len());
+    if source[local_end..].starts_with('@')
+        && let Some(email) = email_at(source, from, local_end)
+        && email.range.start <= at
+    {
+        return Some(email);
+    }
+    let prefix = BareLink {
+        range: at..at,
+        kind,
+    }
+    .prefix();
+    let after = &source[at + prefix..];
+    let domain_len = after.find(|c| !is_label(c)).unwrap_or(after.len());
+    if domain_len == 0 {
+        return None;
+    }
+    // The path runs to whitespace or `<`. CJK punctuation ends it too, since
+    // prose in those scripts has no space before it.
+    let stop =
+        |c: char| c.is_whitespace() || c == '<' || "，。！？；：、（）「」《》【】".contains(c);
+    let path = &after[domain_len..];
+    let mut end = at + prefix + domain_len + path.find(stop).unwrap_or(path.len());
+    // Broken link syntax: `[https://a.com](https://b` is two links, not one.
+    if let Some(ix) = source[at..end].find("](") {
+        end = at + ix;
+    }
+    end = trim_link_end(source, at, end);
+    if end <= at + prefix {
+        return None;
+    }
+    // GFM: no underscore in the last two labels of the domain. A trimmed
+    // delimiter, as in `_www.a.com_`, is not part of it.
+    let domain = &source[at + prefix..(at + prefix + domain_len).min(end)];
+    if domain.rsplit('.').take(2).any(|label| label.contains('_')) {
+        return None;
+    }
+    Some(BareLink {
+        range: at..end,
+        kind,
+    })
+}
+/// Drops the sentence punctuation a URL runs into, as GFM does: trailing
+/// `?!.,:*_~'"]`, unbalanced `)` and a final entity reference.
+fn trim_link_end(source: &str, start: usize, mut end: usize) -> usize {
+    let (mut opens, mut closes) = (0, 0);
+    for b in source[start..end].bytes() {
+        match b {
+            b'(' => opens += 1,
+            b')' => closes += 1,
+            _ => {}
+        }
+    }
+    while let Some(last) = source[start..end].bytes().next_back() {
+        match last {
+            b'?' | b'!' | b'.' | b',' | b':' | b'*' | b'_' | b'~' | b'\'' | b'"' | b']' => end -= 1,
+            b')' if closes > opens => {
+                end -= 1;
+                closes -= 1;
+            }
+            b';' => {
+                let body = &source[start..end - 1];
+                end = match body.rfind('&') {
+                    Some(amp)
+                        if body.len() > amp + 1
+                            && body[amp + 1..].bytes().all(|b| b.is_ascii_alphanumeric()) =>
+                    {
+                        start + amp
+                    }
+                    _ => end - 1,
+                };
+            }
+            _ => break,
+        }
+    }
+    end
+}
+
+#[cfg(test)]
+mod bare_link_tests {
+    use super::*;
+
+    fn runs(text: &str) -> Vec<(String, Option<String>)> {
+        fn collect(block: &Block, out: &mut Vec<(String, Option<String>)>) {
+            let runs = |runs: &[InlineRun], out: &mut Vec<_>| {
+                out.extend(
+                    runs.iter()
+                        .map(|run| (run.text.clone(), run.style.link.clone())),
+                )
+            };
+            match block {
+                Block::Paragraph { runs: r } | Block::Heading { runs: r, .. } => runs(r, out),
+                Block::List { items, .. } => items.iter().flatten().for_each(|b| collect(b, out)),
+                Block::BlockQuote { children } => children.iter().for_each(|b| collect(b, out)),
+                Block::Table { header, rows, .. } => {
+                    header.iter().for_each(|cell| runs(cell, out));
+                    rows.iter().flatten().for_each(|cell| runs(cell, out));
+                }
+                _ => {}
+            }
+        }
+        let tree = parse_full(text);
+        let mut out = Vec::new();
+        for top in &tree.blocks {
+            collect(&top.block, &mut out);
+        }
+        out
+    }
+    fn links(text: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, link) in runs(text) {
+            if let Some(link) = link
+                && out.last() != Some(&link)
+            {
+                out.push(link);
+            }
+        }
+        out
+    }
+    fn text(text: &str) -> String {
+        runs(text).into_iter().map(|(text, _)| text).collect()
+    }
+
+    #[test]
+    fn bare_urls_become_links_and_keep_the_surrounding_text() {
+        let url = "https://github.com/hardbeat920/monocode/issues/1260";
+        assert_eq!(links(url), [url]);
+        assert_eq!(
+            runs(&format!("See {url} now")),
+            [
+                ("See ".into(), None),
+                (url.into(), Some(url.into())),
+                (" now".into(), None)
+            ]
+        );
+    }
+
+    #[test]
+    fn urls_keep_the_characters_the_parser_splits_them_at() {
+        for url in [
+            "https://github.com/x/y/blob/main/__init__.py",
+            "https://a.com/_x_/y",
+            "https://a.com/*x*/y",
+            "https://a.com/~me/[1]/x",
+            "http://example.com/wiki/Rust_(language)",
+            "https://example.com/a_b_c?x=1&y=2#z",
+            "https://a.com/x&amp;y=1",
+            "https://a.com/x\\_y",
+        ] {
+            assert_eq!(runs(&format!("go {url} here")).len(), 3, "{url}");
+            assert_eq!(links(&format!("go {url} here")), [url], "{url}");
+        }
+    }
+
+    #[test]
+    fn a_link_that_runs_through_a_delimiter_keeps_the_text_as_gfm_renders_it() {
+        // The `_` closes nothing once the link has its opener.
+        let source = "https://a.com/_x and more_";
+        assert_eq!(links(source), ["https://a.com/_x"]);
+        assert_eq!(text(source), source);
+        // The strong span ends inside the link; the remaining `**` are text.
+        let source = "**bold https://a.com/x**y** end";
+        assert_eq!(links(source), ["https://a.com/x**y"]);
+        assert_eq!(text(source), "bold https://a.com/x**y** end");
+        assert!(runs(source)[0].0 == "bold ");
+        let source = "- https://a.com/_x and more_";
+        assert_eq!(text(source), "https://a.com/_x and more_");
+        assert_eq!(links("*a https://x.com/*b* c*"), ["https://x.com/*b"]);
+    }
+
+    #[test]
+    fn a_link_stops_at_code_other_links_and_the_end_of_a_cell() {
+        assert_eq!(links("https://a.com/x`y`"), ["https://a.com/x"]);
+        assert_eq!(text("https://a.com/x`y`"), "https://a.com/xy");
+        assert_eq!(
+            links("[https://a.com/x](https://exa"),
+            ["https://a.com/x", "https://exa"]
+        );
+        assert_eq!(links("|h|\n|-|\n|https://a.com/x|y|"), ["https://a.com/x"]);
+        assert_eq!(links("# https://a.com/x #"), ["https://a.com/x"]);
+        assert_eq!(links("https://a.com/x\\\nnext"), ["https://a.com/x"]);
+        assert_eq!(links("https://a.com/x&amp;"), ["https://a.com/x"]);
+        assert_eq!(text("https://a.com/x&amp;"), "https://a.com/x&");
+    }
+
+    #[test]
+    fn urls_are_found_in_every_inline_context() {
+        let url = "https://example.com/x";
+        assert_eq!(links(&format!("- item {url}")), [url]);
+        assert_eq!(links(&format!("# title {url}")), [url]);
+        assert_eq!(links(&format!("**{url}**")), [url]);
+        assert_eq!(links(&format!("~~{url}~~")), [url]);
+        assert_eq!(links(&format!("> {url}")), [url]);
+        assert_eq!(links(&format!("|a|\n|-|\n|{url}|")), [url]);
+        assert_eq!(links(&format!("链接{url}，然后")), [url]);
+        assert_eq!(links(&format!("1{url}")), [url]);
+        assert_eq!(links(&format!("x{url}")), Vec::<String>::new());
+    }
+
+    #[test]
+    fn sentence_punctuation_stays_outside_the_link() {
+        let url = "https://example.com/x";
+        for text in [
+            format!("{url}."),
+            format!("({url})"),
+            format!("[{url}]"),
+            format!("\"{url}\","),
+            format!("{url}?!"),
+            format!("{url}_"),
+            format!("{url}*"),
+            format!("{url};"),
+            format!("{url}。"),
+        ] {
+            assert_eq!(links(&text), [url], "{text}");
+        }
+        assert_eq!(links("https://a.com/(x))"), ["https://a.com/(x)"]);
+        assert_eq!(links("https://a.com/x}"), ["https://a.com/x}"]);
+    }
+
+    #[test]
+    fn schemes_match_in_any_case_and_open_in_lowercase() {
+        assert_eq!(links("HTTPS://A.COM/x"), ["https://A.COM/x"]);
+        assert_eq!(text("HTTPS://A.COM/x"), "HTTPS://A.COM/x");
+        assert_eq!(links("Www.a.com/x"), ["http://Www.a.com/x"]);
+    }
+
+    #[test]
+    fn www_addresses_open_over_http_and_need_a_delimiter_before_them() {
+        assert_eq!(links("see www.a.com."), ["http://www.a.com"]);
+        assert_eq!(links("(www.a.com/x)"), ["http://www.a.com/x"]);
+        assert_eq!(links("*www.a.com*"), ["http://www.a.com"]);
+        assert_eq!(links("_www.a.com_"), ["http://www.a.com"]);
+        assert_eq!(text("www.a.com/x"), "www.a.com/x");
+        for text in [
+            "awww.a.com",
+            "www. alone",
+            "edit src/www.config.js",
+            "foo.www.bar.com",
+        ] {
+            assert!(links(text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn hostnames_follow_gfm_underscore_rules() {
+        assert_eq!(links("http://localhost:1420"), ["http://localhost:1420"]);
+        assert_eq!(
+            links("https://my_app.example.com/x"),
+            ["https://my_app.example.com/x"]
+        );
+        assert!(links("http://my_host:8080/x").is_empty());
+        assert!(links("https://_a.com/x").is_empty());
+    }
+
+    #[test]
+    fn emails_become_mailto_links() {
+        for email in [
+            "me@a.com",
+            "me.you+x@a.co.uk",
+            "me@www.a.com",
+            "www.me@a.com",
+            "me@mail.www.example.org",
+            "pkg@1.0.0-beta",
+        ] {
+            let target = format!("mailto:{email}");
+            assert_eq!(
+                links(&format!("write to {email}.")),
+                [target.as_str()],
+                "{email}"
+            );
+            assert_eq!(links(&format!("邮箱{email}")), [target.as_str()], "{email}");
+        }
+        assert_eq!(links("<me@a.com>"), ["mailto:me@a.com"]);
+        assert_eq!(
+            runs("mailto:me@a.com"),
+            [
+                ("mailto:".into(), None),
+                ("me@a.com".into(), Some("mailto:me@a.com".into()))
+            ]
+        );
+        assert_eq!(links("a&amp;b@c.com"), ["mailto:b@c.com"]);
+    }
+
+    #[test]
+    fn versions_handles_and_url_credentials_are_not_emails() {
+        for text in [
+            "react@18.2.0",
+            "@types/node",
+            "a@b",
+            "x/me@a.com",
+            "a@b..com",
+            "a@b.c-",
+        ] {
+            assert!(links(text).is_empty(), "{text}");
+        }
+        assert_eq!(links("https://me:pw@a.com/x"), ["https://me:pw@a.com/x"]);
+    }
+
+    #[test]
+    fn link_text_alt_text_and_code_never_autolink() {
+        assert!(links("![https://a.com/x](b.png)").is_empty());
+        assert!(links("- ![https://a.com/x](b.png)").is_empty());
+        assert_eq!(
+            links("[![https://a.com/x](b.png)](https://target.example)"),
+            ["https://target.example"]
+        );
+        assert_eq!(
+            links("[https://shown.example](https://target.example)"),
+            ["https://target.example"]
+        );
+        assert!(links("`https://example.com`").is_empty());
+        assert!(links("```\nhttps://example.com\n```").is_empty());
+        assert!(links("https:// and http and xhttps://example.com").is_empty());
+    }
+
+    #[test]
+    fn deep_nesting_treats_alt_text_the_same() {
+        let deep = format!("{}![https://a.com/x](b.png)", "> ".repeat(40));
+        assert!(links(&deep).is_empty());
+    }
 }
 
 #[cfg(test)]
