@@ -159,17 +159,27 @@ impl Conversation {
         }
         text
     }
-    pub(super) fn choose_attachments(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn choose_attachments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
             prompt: Some("Attach files".into()),
         });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = paths.await {
-                let _ = this.update(cx, |this, cx| this.add_attachments(paths, cx));
-            }
+        let before = window.focused(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let picked = paths.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Ok(Ok(Some(paths))) = picked {
+                    this.add_attachments(paths, cx);
+                }
+                // Hand focus back so typing continues, unless the user moved
+                // it elsewhere (another session) while the panel was open.
+                let now = window.focused(cx);
+                if now.is_none() || now == before {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                }
+            });
         })
         .detach();
     }
