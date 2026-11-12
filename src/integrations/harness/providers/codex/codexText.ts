@@ -129,7 +129,8 @@ async function promptOnLive(input: TextPromptInput): Promise<string> {
   session.output = "";
   session.collecting = true;
   session.onEvent = input.onEvent;
-  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeoutMs =
+    input.timeoutMs ?? (input.signal ? undefined : REQUEST_TIMEOUT_MS);
   let abortHandler: (() => void) | undefined;
   const abortPromise = input.signal
     ? new Promise<void>((_, reject) => {
@@ -150,6 +151,10 @@ async function promptOnLive(input: TextPromptInput): Promise<string> {
       session.turnFailed = reject;
     });
 
+    const startTimeout =
+      typeof timeoutMs === "number" && timeoutMs > 0
+        ? timeoutMs
+        : INIT_TIMEOUT_MS;
     const turnStart = session.rpc.request(
       "turn/start",
       buildTurnStartParams({
@@ -161,20 +166,29 @@ async function promptOnLive(input: TextPromptInput): Promise<string> {
         serviceTier: session.serviceTier,
         intent: input.intent,
       }),
-      timeoutMs,
+      startTimeout,
     );
     await Promise.race([turnStart, ...(abortPromise ? [abortPromise] : [])]);
 
-    await Promise.race([
-      turnPromise,
-      new Promise<void>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Codex text generation timed out")),
-          timeoutMs,
-        );
-      }),
-      ...(abortPromise ? [abortPromise] : []),
-    ]);
+    const racePromises: Promise<void>[] = [turnPromise];
+    if (abortPromise) racePromises.push(abortPromise);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (typeof timeoutMs === "number" && timeoutMs > 0) {
+      racePromises.push(
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Codex text generation timed out")),
+            timeoutMs,
+          );
+        }),
+      );
+    }
+
+    try {
+      await Promise.race(racePromises);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
 
     return session.output;
   } catch (error) {
