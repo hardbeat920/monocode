@@ -68,6 +68,8 @@ export const WORKSPACE_COMMANDS = [
   "git_sync",
   "git_pr_status",
   "git_pr_create",
+  "git_github_repo",
+  "git_github_repositories",
   "git_history",
   "git_commit_files",
   "git_commit_file_diff",
@@ -184,6 +186,10 @@ export class WorkspaceCommands {
         return this.gitPrStatus(input.cwd);
       case "git_pr_create":
         return this.gitPrCreate(input.cwd, input.title, input.body, input.base, input.head);
+      case "git_github_repo":
+        return this.gitGithubRepo(input.cwd);
+      case "git_github_repositories":
+        return this.gitGithubRepositories(input.cwd);
       case "git_history":
         return this.gitHistory(input.cwd, input.limit);
       case "git_commit_files":
@@ -605,6 +611,40 @@ export class WorkspaceCommands {
     if ([title, body, base, head].some((value) => typeof value !== "string" || value.length > 100_000))
       throw new Error("Invalid pull request");
     return this.ghCommand(cwd, ["pr", "create", "--title", title as string, "--body", body as string, "--base", base as string, "--head", head as string]);
+  }
+
+  private async gitGithubRepo(cwd: unknown): Promise<string> {
+    const repos = await this.gitGithubRepositories(cwd);
+    return repos[0]!;
+  }
+
+  private async gitGithubRepositories(cwd: unknown): Promise<string[]> {
+    const ghOutput = await this.ghCommand(cwd, ["repo", "view", "--json", "nameWithOwner,parent"])
+      .catch(() => "");
+    if (ghOutput) {
+      try {
+        const parsed = JSON.parse(ghOutput);
+        const slug = (parsed?.nameWithOwner ?? "").trim();
+        if (slug && slug.includes("/")) {
+          const repos = [slug];
+          if (parsed.parent?.owner?.login && parsed.parent?.name) {
+            const parent = `${parsed.parent.owner.login}/${parsed.parent.name}`;
+            if (parent.toLowerCase() !== slug.toLowerCase()) {
+              repos.push(parent);
+            }
+          }
+          return repos;
+        }
+      } catch {}
+    }
+
+    const url = await this.gitCommand(cwd, ["config", "--get", "remote.origin.url"])
+      .catch(() => "");
+    const match = /(?:github\.com[/:])([^/]+)\/([^/.]+)(?:\.git)?$/i.exec(url.trim());
+    if (match?.[1] && match?.[2]) {
+      return [`${match[1]}/${match[2]}`];
+    }
+    throw new Error("GitHub did not return a repository");
   }
 
   private gitSha(value: unknown): string {

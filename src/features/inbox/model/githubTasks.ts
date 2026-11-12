@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invokeWorkspace } from "../../../platform/tauri/fs";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -291,7 +292,7 @@ export async function githubRepo(cwd: string): Promise<string> {
   if (cached !== undefined) return cached;
   const repositories = repositoriesByPath.get(key);
   if (repositories?.[0]) return repositories[0];
-  const repo = await invoke<string>("git_github_repo", { cwd });
+  const repo = await invokeWorkspace<string>("git_github_repo", { cwd });
   repoByPath.set(key, repo);
   return repo;
 }
@@ -300,7 +301,7 @@ export async function githubRepositories(cwd: string): Promise<string[]> {
   const key = normalizeProjectPath(cwd);
   const cached = repositoriesByPath.get(key);
   if (cached) return cached;
-  const repositories = await invoke<string[]>("git_github_repositories", {
+  const repositories = await invokeWorkspace<string[]>("git_github_repositories", {
     cwd,
   });
   if (repositories.length === 0) {
