@@ -6,17 +6,33 @@ use serde_json::Value;
 use crate::harness::{exec_output, is_resolved_harness_binary};
 
 const REGISTRY_URL: &str = "https://registry.npmjs.org";
+const CURSOR_INSTALL_URL: &str = "https://cursor.com/install";
 const USER_AGENT: &str = "MonoCode";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Only harnesses whose releases are published to npm. The rest ship through
-/// their own installers with no public version feed to compare against.
-fn npm_package(provider: &str) -> Option<&'static str> {
+/// Where each harness publishes its latest release. Hermes updates to the
+/// newest commit rather than a release, and Antigravity's ACP server reports
+/// no version, so neither has anything to compare against.
+#[derive(Debug, PartialEq)]
+enum VersionFeed {
+    Npm(&'static str),
+    /// A plain-text file whose first line is the version.
+    Text(&'static str),
+    /// Cursor has no version file. Its install script downloads one pinned
+    /// build, and that build is the latest.
+    CursorInstallScript,
+}
+
+fn version_feed(provider: &str) -> Option<VersionFeed> {
     match provider {
-        "claude" => Some("@anthropic-ai/claude-code"),
-        "codex" => Some("@openai/codex"),
-        "opencode" => Some("opencode-ai"),
-        "pi" => Some("@earendil-works/pi-coding-agent"),
+        "claude" => Some(VersionFeed::Npm("@anthropic-ai/claude-code")),
+        "codex" => Some(VersionFeed::Npm("@openai/codex")),
+        "opencode" => Some(VersionFeed::Npm("opencode-ai")),
+        "pi" => Some(VersionFeed::Npm("@earendil-works/pi-coding-agent")),
+        "omp" => Some(VersionFeed::Npm("@oh-my-pi/pi-coding-agent")),
+        "cursor" => Some(VersionFeed::CursorInstallScript),
+        "grok" => Some(VersionFeed::Text("https://x.ai/cli/stable")),
+        "fx" => Some(VersionFeed::Text("https://releases.fx.sh/latest.txt")),
         _ => None,
     }
 }
@@ -29,6 +45,10 @@ fn update_args(provider: &str) -> Option<&'static [&'static str]> {
         "codex" => Some(&["update"]),
         "opencode" => Some(&["upgrade"]),
         "pi" => Some(&["update", "--self"]),
+        "omp" => Some(&["update"]),
+        "cursor" => Some(&["update"]),
+        "grok" => Some(&["update"]),
+        "fx" => Some(&["upgrade"]),
         _ => None,
     }
 }
@@ -47,24 +67,40 @@ pub fn harness_update_check_claim() -> bool {
 
 #[tauri::command]
 pub async fn harness_latest_version(provider: String) -> Result<String, String> {
-    let package =
-        npm_package(&provider).ok_or_else(|| format!("No update feed for harness: {provider}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
-        let text = agent
-            .get(&format!("{REGISTRY_URL}/{package}/latest"))
-            .set("User-Agent", USER_AGENT)
-            .set("Accept", "application/json")
-            .call()
-            .map_err(|error| format!("npm registry request failed: {error}"))?
-            .into_string()
-            .map_err(|error| format!("npm registry response unreadable: {error}"))?;
-        let body: Value = serde_json::from_str(&text)
-            .map_err(|error| format!("npm registry returned invalid JSON: {error}"))?;
-        latest_version(&body).ok_or_else(|| "npm registry returned no version".to_string())
+    let feed =
+        version_feed(&provider).ok_or_else(|| format!("No update feed for harness: {provider}"))?;
+    tauri::async_runtime::spawn_blocking(move || match feed {
+        VersionFeed::Npm(package) => {
+            let text = fetch_text(
+                &format!("{REGISTRY_URL}/{package}/latest"),
+                "application/json",
+            )?;
+            let body: Value = serde_json::from_str(&text)
+                .map_err(|error| format!("npm registry returned invalid JSON: {error}"))?;
+            latest_version(&body).ok_or_else(|| "npm registry returned no version".to_string())
+        }
+        VersionFeed::Text(url) => first_line_version(&fetch_text(url, "text/plain")?)
+            .ok_or_else(|| format!("{url} returned no version")),
+        VersionFeed::CursorInstallScript => {
+            cursor_script_version(&fetch_text(CURSOR_INSTALL_URL, "text/plain")?)
+                .ok_or_else(|| "Cursor install script names no build".to_string())
+        }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn fetch_text(url: &str, accept: &str) -> Result<String, String> {
+    ureq::AgentBuilder::new()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .get(url)
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", accept)
+        .call()
+        .map_err(|error| format!("{url} request failed: {error}"))?
+        .into_string()
+        .map_err(|error| format!("{url} response unreadable: {error}"))
 }
 
 /// Runs the harness's self-update against the binary MonoCode resolved for
@@ -116,24 +152,72 @@ fn latest_version(body: &Value) -> Option<String> {
     (!version.is_empty()).then(|| version.to_string())
 }
 
+fn first_line_version(text: &str) -> Option<String> {
+    let version = text.lines().next()?.trim();
+    version
+        .chars()
+        .any(|c| c.is_ascii_digit())
+        .then(|| version.to_string())
+}
+
+/// Reads the build from the download URL the script uses, such as
+/// `https://downloads.cursor.com/lab/2026.09.28-64d2043/${OS}/...`.
+fn cursor_script_version(script: &str) -> Option<String> {
+    const PREFIX: &str = "downloads.cursor.com/lab/";
+    let start = script.find(PREFIX)? + PREFIX.len();
+    let build = script[start..].split('/').next()?;
+    let valid = build.starts_with(|c: char| c.is_ascii_digit())
+        && build
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    valid.then(|| build.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
-    fn maps_only_npm_published_harnesses() {
-        assert_eq!(npm_package("claude"), Some("@anthropic-ai/claude-code"));
-        assert_eq!(npm_package("pi"), Some("@earendil-works/pi-coding-agent"));
-        assert_eq!(npm_package("cursor"), None);
-        assert_eq!(npm_package("../../evil"), None);
+    fn maps_only_harnesses_with_a_release_feed() {
+        assert_eq!(
+            version_feed("claude"),
+            Some(VersionFeed::Npm("@anthropic-ai/claude-code"))
+        );
+        assert_eq!(
+            version_feed("omp"),
+            Some(VersionFeed::Npm("@oh-my-pi/pi-coding-agent"))
+        );
+        assert_eq!(
+            version_feed("cursor"),
+            Some(VersionFeed::CursorInstallScript)
+        );
+        assert_eq!(
+            version_feed("fx"),
+            Some(VersionFeed::Text("https://releases.fx.sh/latest.txt"))
+        );
+        assert_eq!(version_feed("hermes"), None);
+        assert_eq!(version_feed("antigravity"), None);
+        assert_eq!(version_feed("../../evil"), None);
+    }
+
+    #[test]
+    fn every_feed_has_an_updater() {
+        for provider in [
+            "claude", "codex", "opencode", "pi", "omp", "cursor", "grok", "fx",
+        ] {
+            assert!(version_feed(provider).is_some(), "{provider} feed");
+            assert!(update_args(provider).is_some(), "{provider} updater");
+        }
     }
 
     #[test]
     fn updates_only_through_each_cli_own_updater() {
         assert_eq!(update_args("pi"), Some(&["update", "--self"][..]));
         assert_eq!(update_args("opencode"), Some(&["upgrade"][..]));
-        assert_eq!(update_args("cursor"), None);
+        assert_eq!(update_args("fx"), Some(&["upgrade"][..]));
+        assert_eq!(update_args("cursor"), Some(&["update"][..]));
+        assert_eq!(update_args("hermes"), None);
     }
 
     #[test]
@@ -157,5 +241,27 @@ mod tests {
         );
         assert_eq!(latest_version(&json!({ "version": " " })), None);
         assert_eq!(latest_version(&json!({})), None);
+    }
+
+    #[test]
+    fn reads_version_from_a_text_feed() {
+        assert_eq!(first_line_version("1.0.46\n"), Some("1.0.46".to_string()));
+        assert_eq!(first_line_version("v0.0.12"), Some("v0.0.12".to_string()));
+        assert_eq!(first_line_version("<html>"), None);
+        assert_eq!(first_line_version(""), None);
+    }
+
+    #[test]
+    fn reads_build_from_cursor_install_script() {
+        let script = "TEMP=x\nDOWNLOAD_URL=\"https://downloads.cursor.com/lab/2026.09.28-64d2043/${OS}/${ARCH}/agent-cli-package.tar.gz\"\n";
+        assert_eq!(
+            cursor_script_version(script),
+            Some("2026.09.28-64d2043".to_string())
+        );
+        assert_eq!(cursor_script_version("echo no download here"), None);
+        assert_eq!(
+            cursor_script_version("downloads.cursor.com/lab/$(evil)/x"),
+            None
+        );
     }
 }

@@ -1,35 +1,29 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 import { GlassBackdrop } from "../../../app/shell/GlassBackdrop";
-import {
-  isHarnessAvailable,
-  probeHarnessAvailability,
-} from "../../../integrations/harness/core/availability";
-import {
-  inspectHarnessBinary,
-  updateHarnessCli,
-} from "../../../integrations/harness/core/child";
-import {
-  compareSemver,
-  parseOpenCodeVersion,
-} from "../../../integrations/harness/providers/opencode/opencodeProtocol";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
 import { LAYER } from "../../../shared/lib/layers";
 import { Check, Loader, X } from "../../../shared/ui/icons";
 import { isPickerProviderVisible } from "../../sessions/model/models";
-import {
-  HARNESS_TITLE,
-  HARNESSES,
-  type HarnessId,
-} from "../../sessions/model/session";
+import { HARNESS_TITLE, type HarnessId } from "../../sessions/model/session";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
-  announceHarnessUpdated,
+  checkInstalledHarnessVersions,
+  getHarnessUpdateSnapshot,
+  runHarnessUpdate,
+  subscribeHarnessUpdates,
+  type HarnessUpdateRun,
+} from "../model/harnessUpdateActions";
+import {
   claimLaunchHarnessUpdateCheck,
-  fetchLatestHarnessVersion,
-  findHarnessUpdates,
   onHarnessUpdated,
-  UPDATABLE_HARNESSES,
+  pendingHarnessUpdates,
   type HarnessUpdate,
 } from "../model/harnessUpdates";
 
@@ -44,52 +38,16 @@ function checkForHarnessUpdates(): Promise<HarnessUpdate[]> {
   return launchCheck;
 }
 
+/**
+ * Unprompted, so a harness whose lookup failed is left out silently. Every
+ * installed harness is checked so Settings can list them all, but the toast
+ * offers only those shown in the model picker.
+ */
 async function runLaunchCheck(): Promise<HarnessUpdate[]> {
   if (!(await claimLaunchHarnessUpdateCheck())) return [];
-  await probeHarnessAvailability();
-  return findHarnessUpdates({
-    harnesses: HARNESSES.filter(
-      (id) =>
-        UPDATABLE_HARNESSES.has(id) &&
-        isHarnessAvailable(id) &&
-        isPickerProviderVisible(id),
-    ),
-    installedVersion: async (id) => (await inspectHarnessBinary(id)).version,
-    latestVersion: fetchLatestHarnessVersion,
-  });
-}
-
-type RowState =
-  | { status: "idle" }
-  | { status: "updating" }
-  | { status: "updated"; version: string }
-  | { status: "failed"; error: string };
-
-/**
- * Some updaters exit cleanly without installing anything, so success is the
- * version the CLI reports afterwards, not the exit code. Its models are
- * reloaded before the row says so, so the picker is current by then.
- */
-async function runUpdate(update: HarnessUpdate): Promise<RowState> {
-  try {
-    await updateHarnessCli(update.harness);
-    const after = await inspectHarnessBinary(update.harness);
-    const version = parseOpenCodeVersion(after.version ?? "");
-    if (version && compareSemver(version, update.latest) >= 0) {
-      await refreshHarnessCatalogs([update.harness], { force: true });
-      void announceHarnessUpdated(update.harness).catch(() => undefined);
-      return { status: "updated", version };
-    }
-    return {
-      status: "failed",
-      error: `Still on ${version ?? update.installed} after updating.`,
-    };
-  } catch (error) {
-    return {
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+  return pendingHarnessUpdates(await checkInstalledHarnessVersions()).filter(
+    (update) => isPickerProviderVisible(update.harness),
+  );
 }
 
 /** Checked once per app launch, in whichever window asks first. */
@@ -102,7 +60,11 @@ export function HarnessUpdateNotice({
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const [updates, setUpdates] = useState<HarnessUpdate[]>([]);
-  const [rows, setRows] = useState<Partial<Record<HarnessId, RowState>>>({});
+  const { runs } = useSyncExternalStore(
+    subscribeHarnessUpdates,
+    getHarnessUpdateSnapshot,
+    getHarnessUpdateSnapshot,
+  );
 
   // Mounted in every window, so the window that ran the update tells the
   // others to pick up the new CLI's models too.
@@ -140,8 +102,8 @@ export function HarnessUpdateNotice({
   }, [visible, onHeightChange]);
   if (!visible) return null;
 
-  const stateOf = (harness: HarnessId): RowState =>
-    rows[harness] ?? { status: "idle" };
+  const stateOf = (harness: HarnessId): HarnessUpdateRun =>
+    runs[harness] ?? { status: "idle" };
   const busy = updates.some(
     (update) => stateOf(update.harness).status === "updating",
   );
@@ -154,15 +116,7 @@ export function HarnessUpdateNotice({
   );
 
   const start = (targets: HarnessUpdate[]) => {
-    for (const update of targets) {
-      setRows((current) => ({
-        ...current,
-        [update.harness]: { status: "updating" },
-      }));
-      void runUpdate(update).then((result) =>
-        setRows((current) => ({ ...current, [update.harness]: result })),
-      );
-    }
+    for (const update of targets) void runHarnessUpdate(update);
   };
   const dismiss = () => {
     // Only for this run: the next launch checks and offers again.
@@ -232,7 +186,7 @@ function HarnessUpdateRow({
   onUpdate,
 }: {
   update: HarnessUpdate;
-  state: RowState;
+  state: HarnessUpdateRun;
   onUpdate: () => void;
 }) {
   return (
