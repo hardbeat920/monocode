@@ -543,6 +543,65 @@ pub struct Quad {
     pub border_widths: Edges<ScaledPixels>,
 }
 
+/// A vertical alpha mask around a group of scene primitives.
+///
+/// Paint equally sized marker quads before and after the group, with an opaque
+/// fill and this marker as their border color. Renderers ignore the fills and
+/// fade the group's pixels against the backdrop captured at its beginning.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EdgeFade {
+    /// Capture the backdrop. Ramp lengths are measured in device pixels.
+    Begin {
+        /// Height of the fade at the group's top edge.
+        top: f32,
+        /// Height of the fade at the group's bottom edge.
+        bottom: f32,
+    },
+    /// Composite the group using these device-pixel ramp lengths.
+    End {
+        /// Height of the fade at the group's top edge.
+        top: f32,
+        /// Height of the fade at the group's bottom edge.
+        bottom: f32,
+    },
+}
+
+impl EdgeFade {
+    const BEGIN: f32 = 0.271828;
+    const END: f32 = 0.314159;
+    const MAX: f32 = 4096.;
+
+    /// Encode the mask in a transparent border, preserving the primitive ABI
+    /// and the existing Metal renderer's marker format.
+    pub fn marker(self) -> Hsla {
+        let (h, top, bottom) = match self {
+            Self::Begin { top, bottom } => (Self::BEGIN, top, bottom),
+            Self::End { top, bottom } => (Self::END, top, bottom),
+        };
+        Hsla {
+            h,
+            s: (top / Self::MAX).clamp(0., 1.),
+            l: (bottom / Self::MAX).clamp(0., 1.),
+            a: 0.,
+        }
+    }
+
+    /// Decode a marker quad; ordinary colored borders are never masks.
+    pub fn from_quad(quad: &Quad) -> Option<Self> {
+        let color = quad.border_color;
+        if color.a != 0. {
+            return None;
+        }
+        let top = color.s * Self::MAX;
+        let bottom = color.l * Self::MAX;
+        match color.h {
+            Self::BEGIN => Some(Self::Begin { top, bottom }),
+            Self::END => Some(Self::End { top, bottom }),
+            _ => None,
+        }
+    }
+}
+
 impl From<Quad> for Primitive {
     fn from(quad: Quad) -> Self {
         Primitive::Quad(quad)
