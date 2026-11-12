@@ -21,6 +21,7 @@ mod dev_reload;
 mod diff_view;
 mod editor_analysis;
 mod editor_scrollbar;
+mod editor_search;
 mod editor_syntax;
 mod explorer;
 mod file_editor;

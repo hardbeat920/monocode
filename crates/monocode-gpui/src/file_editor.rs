@@ -148,8 +148,11 @@ pub(crate) struct FileEditor {
     whole_word: bool,
     regex: bool,
     search_invalid: bool,
+    search_timed_out: bool,
     search_task: Option<Task<()>>,
-    matches: Vec<crate::editor_analysis::SearchMatch>,
+    search_generation: u64,
+    search_snapshot: Option<search::SearchSnapshot>,
+    matches: Vec<crate::editor_search::SearchMatch>,
     autosave: Option<Task<()>>,
     formatting: Option<Task<()>>,
     pub show_diff: bool,
@@ -292,7 +295,10 @@ impl FileEditor {
             whole_word: false,
             regex: false,
             search_invalid: false,
+            search_timed_out: false,
             search_task: None,
+            search_generation: 0,
+            search_snapshot: None,
             autosave: None,
             formatting: None,
             show_diff: false,
@@ -854,102 +860,6 @@ impl FileEditor {
         window.focus(&self.focus_handle(cx), cx);
         cx.notify();
     }
-    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.is_none() {
-            return;
-        }
-        self.preview = false;
-        if !self.search_open {
-            let input = self.input.read(cx);
-            let selected = input.content[input.selection_range()].to_owned();
-            if !selected.is_empty() && !selected.contains('\n') {
-                self.search.update(cx, |i, cx| i.set_text(selected, cx));
-            }
-        }
-        self.search_open = true;
-        window.focus(&self.search.focus_handle(cx), cx);
-        cx.notify();
-    }
-    fn find_matches(&mut self, cx: &mut Context<Self>) {
-        let source = self.input.read(cx).content.clone();
-        let query = self.search.read(cx).content.clone();
-        let replacement = self.replacement.read(cx).content.clone();
-        let (case, word, regex) = (self.match_case, self.whole_word, self.regex);
-        let previous = self
-            .matches
-            .get(self.match_index)
-            .map(|m| m.from)
-            .unwrap_or(0);
-        self.matches.clear();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
-            let text = source.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    crate::editor_analysis::search(&text, &query, &replacement, case, word, regex)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.input.read(cx).content != source {
-                    return;
-                }
-                match result {
-                    Ok(result) => {
-                        this.matches = result.matches;
-                        this.search_invalid = result.invalid;
-                    }
-                    Err(_) => {
-                        this.matches.clear();
-                        this.search_invalid = true;
-                    }
-                }
-                this.match_index = this
-                    .matches
-                    .iter()
-                    .position(|m| m.from >= previous)
-                    .unwrap_or(0);
-                let ranges = this.matches.iter().map(|m| m.from..m.to).collect();
-                this.input
-                    .update(cx, |i, cx| i.set_search_matches(ranges, cx));
-                if let Some(m) = this.matches.get(this.match_index) {
-                    this.input
-                        .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-    fn step_match(&mut self, backwards: bool, cx: &mut Context<Self>) {
-        if self.matches.is_empty() {
-            return;
-        }
-        self.match_index = (self.match_index as isize + if backwards { -1 } else { 1 })
-            .rem_euclid(self.matches.len() as isize) as usize;
-        let m = &self.matches[self.match_index];
-        self.input
-            .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-        cx.notify();
-    }
-    fn replace_matches(&mut self, all: bool, cx: &mut Context<Self>) {
-        if self.input.read(cx).is_composing() || self.matches.is_empty() {
-            return;
-        }
-        let mut text = self.input.read(cx).content.to_string();
-        let cursor = if all {
-            for m in self.matches.iter().rev() {
-                text.replace_range(m.from..m.to, &m.insert);
-            }
-            0
-        } else {
-            let m = &self.matches[self.match_index];
-            text.replace_range(m.from..m.to, &m.insert);
-            m.from + m.insert.len()
-        };
-        self.input.update(cx, |i, cx| {
-            i.replace_bytes(0..i.content.len(), &text, cursor, cx)
-        });
-    }
     fn step_change(&mut self, backwards: bool, cx: &mut Context<Self>) {
         let changes = &self.input.read(cx).editor_analysis().changes;
         if changes.is_empty() {
@@ -967,18 +877,6 @@ impl FileEditor {
     }
     fn revert_change(&mut self, cx: &mut Context<Self>) {
         self.apply_change(false, cx);
-    }
-    fn dismiss_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_open {
-            self.search_open = false;
-            self.search_task = None;
-            self.input
-                .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
-            window.focus(&self.input.focus_handle(cx), cx);
-            cx.notify();
-        } else {
-            cx.propagate();
-        }
     }
 }
 impl gpui::Render for FileEditor {
