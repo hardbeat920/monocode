@@ -2,6 +2,9 @@
 //! commits, and pull requests it opened, merged or reviewed. Each is told
 //! apart by its commit or pull request, so seeing a call twice counts once.
 use crate::tool::{ToolCall, ToolState};
+
+/// Backfill marker version; unresolved commits keep the scan retryable.
+pub const SCANNED: &str = "contributions-scanned-v2:";
 use regex::Regex;
 use std::{
     path::{Path, PathBuf},
@@ -50,8 +53,6 @@ pub struct Found {
     pub kind: Kind,
     /// A commit's id as printed, or a pull request as `owner/repo#123`.
     pub reference: String,
-    /// The commit replaced the session's previous one.
-    pub amend: bool,
     /// Checkouts used by commit commands, relative to the session unless absolute.
     pub checkouts: Vec<PathBuf>,
 }
@@ -105,11 +106,9 @@ pub fn found(tool: &ToolCall) -> Vec<Found> {
     };
     let mut found = Vec::new();
     if let Some(checkouts) = commit_checkouts(tool, &command) {
-        let amend = command.contains("--amend");
         found.extend(COMMIT_LINE.captures_iter(&tool.output).map(|c| Found {
             kind: Kind::Commit,
             reference: c[1].to_owned(),
-            amend,
             checkouts: checkouts.clone(),
         }));
     }
@@ -128,7 +127,6 @@ pub fn found(tool: &ToolCall) -> Vec<Found> {
             found.push(Found {
                 kind,
                 reference: review_reference(kind, pr, &tool.id),
-                amend: false,
                 checkouts: Vec::new(),
             });
         }
@@ -244,14 +242,13 @@ fn github_tool(tool: &ToolCall) -> Option<Found> {
     Some(Found {
         kind,
         reference: review_reference(kind, pr, &tool.id),
-        amend: false,
         checkouts: Vec::new(),
     })
 }
 
-/// A commit's full id, time and line counts, from the repository it was made
-/// in. A commit Git no longer has still counts, without its lines.
-pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> Contribution {
+/// A commit's full ID, time and line counts. The boolean is false when Git
+/// cannot resolve it; callers can retry without storing an ambiguous short ID.
+pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> (Contribution, bool) {
     let mut contribution = Contribution {
         session,
         kind: found.kind,
@@ -261,18 +258,21 @@ pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> Contribution
         deletions: 0,
     };
     if found.kind != Kind::Commit {
-        return contribution;
+        return (contribution, true);
     }
     let checkouts = if found.checkouts.is_empty() {
         vec![cwd.to_path_buf()]
     } else {
         found.checkouts.iter().map(|path| cwd.join(path)).collect()
     };
-    // A batched command can commit in several checkouts. The confirmed hash
-    // identifies which one contains each commit, even if another command failed.
-    let Some(out) = checkouts.iter().find_map(|checkout| {
-        crate::git::git(
-            checkout,
+    // A short ID cannot identify which checkout produced a batched output.
+    if checkouts.len() > 1 && found.reference.len() < 40 {
+        return (contribution, false);
+    }
+    let mut output = None;
+    for checkout in checkouts {
+        if let Ok(out) = crate::git::git(
+            &checkout,
             &[
                 "show",
                 "--numstat",
@@ -281,17 +281,39 @@ pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> Contribution
                 &found.reference,
                 "--",
             ],
-        )
-        .ok()
-    }) else {
-        return contribution;
+        ) {
+            let Ok(candidates) = crate::git::git(
+                &checkout,
+                &["rev-parse", &format!("--disambiguate={}", found.reference)],
+            ) else {
+                return (contribution, false);
+            };
+            let mut ids = candidates.lines();
+            if ids.next() != out.split_whitespace().next() || ids.next().is_some() {
+                return (contribution, false);
+            }
+            if !same_commit_output(output.as_deref(), &out) {
+                return (contribution, false);
+            }
+            output = Some(out);
+        }
+    }
+    let Some(out) = output else {
+        return (contribution, false);
     };
     let mut lines = out.lines();
-    if let Some((id, time)) = lines.next().and_then(|l| l.split_once(' ')) {
-        contribution.reference = id.to_owned();
-        if let Ok(seconds) = time.trim().parse::<u64>() {
-            contribution.at = seconds * 1000;
-        }
+    let Some((id, time)) = lines.next().and_then(|l| l.split_once(' ')) else {
+        return (contribution, false);
+    };
+    if !matches!(id.len(), 40 | 64)
+        || !id.bytes().all(|b| b.is_ascii_hexdigit())
+        || !id.starts_with(&found.reference)
+    {
+        return (contribution, false);
+    }
+    contribution.reference = id.to_owned();
+    if let Ok(seconds) = time.trim().parse::<u64>() {
+        contribution.at = seconds.saturating_mul(1000);
     }
     for line in lines {
         let mut parts = line.split('\t');
@@ -301,7 +323,12 @@ pub fn resolve(found: &Found, session: i64, cwd: &Path, at: u64) -> Contribution
             contribution.deletions += d.parse::<u64>().unwrap_or(0);
         }
     }
-    contribution
+    (contribution, true)
+}
+
+fn same_commit_output(previous: Option<&str>, next: &str) -> bool {
+    let id = |s: &str| s.split_whitespace().next().map(str::to_owned);
+    previous.is_none_or(|previous| id(previous) == id(next))
 }
 
 /// When a pull request named `owner/repo#123` merged, if it has (Unix ms).
@@ -364,15 +391,44 @@ mod tests {
             [Found {
                 kind: Kind::Commit,
                 reference: "3f2a91c".into(),
-                amend: false,
                 checkouts: vec![PathBuf::new()],
             }]
         );
         let root = run("git commit -m init", "[main (root-commit) 0a1b2c3] init");
         assert_eq!(root[0].reference, "0a1b2c3");
-        assert!(run("git commit --amend --no-edit", "[main 9e8d7c6] Fix")[0].amend);
+        assert_eq!(
+            run("git commit --amend --no-edit", "[main 9e8d7c6] Fix").len(),
+            1
+        );
         assert!(run("git commit -m x", "nothing to commit, working tree clean").is_empty());
         assert!(run("git status", "[main 3f2a91c] Fix login").is_empty());
+    }
+
+    #[test]
+    fn ambiguous_checkout_hashes_are_not_resolved() {
+        assert!(same_commit_output(
+            Some("abc1234aaa 123\n"),
+            "abc1234aaa 123\n"
+        ));
+        assert!(!same_commit_output(
+            Some("abc1234aaa 123\n"),
+            "abc1234bbb 123\n"
+        ));
+    }
+
+    #[test]
+    fn batch_with_amend_preserves_each_commit() {
+        let found = run(
+            "git commit -m one && git commit --amend --no-edit",
+            "[main 1111111] one\n[main 2222222] two",
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.reference.as_str())
+                .collect::<Vec<_>>(),
+            ["1111111", "2222222"]
+        );
     }
 
     #[test]
@@ -425,7 +481,6 @@ mod tests {
             [Found {
                 kind: Kind::Review,
                 reference: "acme/app#7@call-2".into(),
-                amend: false,
                 checkouts: Vec::new(),
             }]
         );
@@ -511,7 +566,8 @@ mod tests {
             tool.state = ToolState::Completed;
             let commits = found(&tool);
             assert_eq!(commits.len(), 1, "{input}");
-            let resolved = resolve(&commits[0], 3, &session, 0);
+            let (resolved, ok) = resolve(&commits[0], 3, &session, 0);
+            assert!(ok);
             assert_eq!(resolved.reference, id, "{input}");
             assert_eq!((resolved.additions, resolved.deletions), (2, 0), "{input}");
             assert!(resolved.at > 0);
@@ -545,10 +601,90 @@ mod tests {
         let commits = run(&commands.join(" && "), &output);
         assert_eq!(commits.len(), 2);
         for (found, (id, lines)) in commits.iter().zip(expected) {
-            let resolved = resolve(found, 3, root.path(), 0);
-            assert_eq!(resolved.reference, id);
-            assert_eq!((resolved.additions, resolved.deletions), (lines, 0));
+            let (resolved, ok) = resolve(found, 3, root.path(), 0);
+            assert!(
+                !ok,
+                "{id} with {lines} lines has ambiguous checkout provenance"
+            );
+            assert_eq!(resolved.reference, found.reference);
         }
+    }
+
+    #[test]
+    fn hash_named_tag_cannot_choose_between_colliding_objects() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+        git(&["init", "-q", "--object-format=sha1"]);
+        assert_eq!(
+            git(&["mktree"]).trim(),
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        );
+        let commit = |message: u32| {
+            let raw = format!("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@b> 1000000000 +0000\ncommitter A <a@b> 1000000000 +0000\n\n{message}\n");
+            let mut child = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(raw.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let first = commit(12421);
+        let second = commit(30739);
+        assert_ne!(first, second);
+        assert_eq!(&first[..7], &second[..7]);
+        let reference = &first[..7];
+        git(&["tag", reference, &second]);
+        assert_eq!(
+            git(&["show", "-s", "--format=%H", reference]).trim(),
+            second
+        );
+        let found = run(
+            "git commit -m Initial",
+            &format!("[main {reference}] Initial"),
+        );
+        assert!(!resolve(&found[0], 1, dir.path(), 5).1);
+    }
+
+    #[test]
+    fn hash_named_tag_cannot_resolve_to_an_unrelated_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "mono@example.com"]);
+        git(&["config", "user.name", "Mono"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        git(&["add", "a.txt"]);
+        let output = git(&["commit", "-m", "Initial"]);
+        let id = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let found = run("git commit -m Initial", &output).remove(0);
+        git(&["commit", "--allow-empty", "-m", "Unrelated"]);
+        let other = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        assert!(!other.starts_with(&found.reference));
+        git(&["tag", &found.reference]);
+        assert_eq!(
+            git(&["show", "-s", "--format=%H", &found.reference]).trim(),
+            other
+        );
+        let (item, resolved) = resolve(&found, 1, dir.path(), 5);
+        assert!(!resolved);
+        assert_eq!(item.reference, found.reference);
+        git(&["tag", "-d", &found.reference]);
+        let (item, resolved) = resolve(&found, 1, dir.path(), 5);
+        assert!(resolved);
+        assert_eq!(item.reference, id);
+        assert_eq!((item.additions, item.deletions), (2, 0));
     }
 
     #[test]
@@ -565,15 +701,15 @@ mod tests {
         let found = Found {
             kind: Kind::Commit,
             reference: id[..7].into(),
-            amend: false,
             checkouts: Vec::new(),
         };
-        let resolved = resolve(&found, 3, dir.path(), 0);
+        let (resolved, ok) = resolve(&found, 3, dir.path(), 0);
+        assert!(ok);
         assert_eq!(resolved.reference, id);
         assert_eq!((resolved.additions, resolved.deletions), (2, 0));
         assert!(resolved.at > 0);
-        // A commit the repository lost still counts.
-        let lost = resolve(
+        // An unavailable commit remains retryable.
+        let (lost, ok) = resolve(
             &Found {
                 reference: "deadbee".into(),
                 ..found
@@ -582,6 +718,7 @@ mod tests {
             dir.path(),
             5,
         );
+        assert!(!ok);
         assert_eq!((lost.reference.as_str(), lost.at), ("deadbee", 5));
     }
 }

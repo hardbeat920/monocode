@@ -52,8 +52,8 @@ const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 const FRESH: std::time::Duration = std::time::Duration::from_secs(30);
 /// How often opened pull requests are checked on GitHub for merging.
 const LANDED_EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-/// The marker a session's saved history has been scanned under.
-const SCANNED: &str = "contributions-scanned:";
+
+static SCAN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A Mono's contributions as the Overview shows them.
 pub(super) struct Loaded {
@@ -115,27 +115,49 @@ const MENTIONS: [&str; 4] = ["git commit", "git -C", "gh pr", "pull_request"];
 /// are recorded as its turns run. Sessions that never ran a matching command
 /// are ruled out by SQLite and never loaded.
 fn scan(store: &Database, session: i64) {
-    let key = format!("{SCANNED}{session}");
-    let (rows, cwd, at) = {
+    let key = format!("{}{session}", contributions::SCANNED);
+    let (rows, cwd, at, scan_id, version) = {
         let Ok(store) = locked(store) else { return };
-        if store.setting(&key).ok().flatten().is_some() {
-            return;
-        }
-        if !store.session_mentions(session, &MENTIONS).unwrap_or(true) {
-            let _ = store.save_setting(&key, "1");
-            return;
-        }
-        let Some(summary) = store.mono_session(session).ok().flatten() else {
-            let _ = store.save_setting(&key, "1");
+        let Ok(marker) = store.setting(&key) else {
             return;
         };
-        let mut rows = store.load(session).map(|t| t.rows).unwrap_or_default();
-        if let Ok(Some(before)) = store.history_before(session)
-            && let Ok(page) = store.load_before(session, before, true)
-        {
+        let Ok(version) = crate::runtime::contributions::scan_version(&store) else {
+            return;
+        };
+        if marker.as_deref() == Some(&version) {
+            return;
+        }
+        let scan_id = format!(
+            "scanning-{version}-{}",
+            SCAN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        if store.save_setting(&key, &scan_id).is_err() {
+            return;
+        }
+        let Ok(mentions) = store.session_mentions(session, &MENTIONS) else {
+            return;
+        };
+        if !mentions {
+            let _ = store.complete_contribution_scan(session, &scan_id, &version);
+            return;
+        }
+        let Ok(Some(summary)) = store.mono_session(session) else {
+            return;
+        };
+        let Ok(transcript) = store.load(session) else {
+            return;
+        };
+        let mut rows = transcript.rows;
+        let Ok(before) = store.history_before(session) else {
+            return;
+        };
+        if let Some(before) = before {
+            let Ok(page) = store.load_before(session, before, true) else {
+                return;
+            };
             rows.splice(0..0, page.rows);
         }
-        (rows, summary.cwd, summary.updated_at)
+        (rows, summary.cwd, summary.updated_at, scan_id, version)
     };
     // Git runs without the store lock.
     let resolved: Vec<_> = rows
@@ -145,15 +167,27 @@ fn scan(store: &Database, session: i64) {
         .filter_map(|row| serde_json::from_str::<monocode_core::tool::ToolCall>(&row.text).ok())
         .flat_map(|tool| contributions::found(&tool))
         .map(|found| {
-            let item = contributions::resolve(&found, session, std::path::Path::new(&cwd), at);
-            (item, found.amend)
+            let (item, resolved) =
+                contributions::resolve(&found, session, std::path::Path::new(&cwd), at);
+            (item, resolved)
         })
         .collect();
     if let Ok(store) = locked(store) {
-        for (item, amend) in resolved {
-            let _ = store.record_contribution(&item, amend);
+        let mut complete = true;
+        for (item, resolved) in resolved {
+            complete &= resolved;
+            if resolved && store.record_contribution(&item).is_err() {
+                return;
+            }
         }
-        let _ = store.save_setting(&key, "1");
+        if complete
+            && crate::runtime::contributions::scan_version(&store)
+                .ok()
+                .as_deref()
+                == Some(&version)
+        {
+            let _ = store.complete_contribution_scan(session, &scan_id, &version);
+        }
     }
 }
 
@@ -181,7 +215,7 @@ fn check_landed(store: &Database, sessions: &[i64]) {
                 ..opened.clone()
             };
             if let Ok(store) = locked(store) {
-                let _ = store.record_contribution(&landed, false);
+                let _ = store.record_contribution(&landed);
             }
         }
     }
@@ -1005,6 +1039,184 @@ mod tests {
             additions: 10,
             deletions: 2,
         }
+    }
+
+    #[test]
+    fn contribution_writer_process() {
+        let Ok(dir) = std::env::var("MONOCODE_CONTRIBUTION_WRITER") else {
+            return;
+        };
+        let dir = std::path::Path::new(&dir);
+        let mut store =
+            monocode_core::store::Store::open_monocode(&dir.join("monocode.db")).unwrap();
+        let session = store.sessions().unwrap()[0].id;
+        let key = format!("{}{session}", contributions::SCANNED);
+        store.save_setting(&key, "0").unwrap();
+        std::fs::write(dir.join("writer-ready"), "").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !dir.join("writer-go").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let mut rows = store.load(session).unwrap().rows;
+        let mut tool = monocode_core::tool::ToolCall::new("t", "Bash");
+        tool.input = serde_json::json!({"command":"git commit --allow-empty -m one"}).to_string();
+        tool.output = std::fs::read_to_string(dir.join("commit-output")).unwrap();
+        tool.state = monocode_core::tool::ToolState::Completed;
+        rows.push(monocode_core::transcript::Row {
+            role: "tool".into(),
+            text: serde_json::to_string(&tool).unwrap(),
+            first: true,
+            sent_at: None,
+        });
+        store.write_rows(session, 0, &rows).unwrap();
+        // Simulate a writer exiting after the transcript commit, before invalidation.
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn writer_exit_after_transcript_commit_cannot_hide_new_contribution() {
+        let dir =
+            std::env::temp_dir().join(format!("monocode-scan-{}", monocode_core::mono::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "mono@example.com"]);
+        git(&["config", "user.name", "Mono"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(
+            dir.join("commit-output"),
+            git(&["commit", "--allow-empty", "-m", "one"]),
+        )
+        .unwrap();
+        let id = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let mut db = monocode_core::store::Store::open_monocode(&dir.join("monocode.db")).unwrap();
+        let session = db.create("codex", repo.to_str().unwrap()).unwrap().id;
+        let row = monocode_core::transcript::Row {
+            role: "user".into(),
+            text: "Prompt".into(),
+            first: true,
+            sent_at: None,
+        };
+        db.write_rows(session, 0, &[row]).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(db));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "monos::dashboard::tests::contribution_writer_process",
+                "--nocapture",
+            ])
+            .env("MONOCODE_CONTRIBUTION_WRITER", &dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !dir.join("writer-ready").exists() {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "writer exited before its barrier"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "writer did not reach its barrier"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        scan(&store, session);
+        {
+            let reader = locked(&store).unwrap();
+            let key = format!("{}{session}", contributions::SCANNED);
+            assert_eq!(
+                reader.setting(&key).unwrap(),
+                Some(crate::runtime::contributions::scan_version(&reader).unwrap())
+            );
+        }
+        std::fs::write(dir.join("writer-go"), "").unwrap();
+        assert!(child.wait().unwrap().success());
+        scan(&store, session);
+        let items = locked(&store)
+            .unwrap()
+            .contributions(&[session], 0)
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reference, id);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unresolved_commit_is_retried_after_repository_returns() {
+        let dir =
+            std::env::temp_dir().join(format!("monocode-test-{}", monocode_core::mono::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "mono@example.com"]);
+        git(&["config", "user.name", "Mono"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        let output = git(&["commit", "--allow-empty", "-m", "one"]);
+        let id = git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let mut db = monocode_core::store::Store::open_monocode(&dir.join("monocode.db")).unwrap();
+        let session = db.create("codex", repo.to_str().unwrap()).unwrap().id;
+        let mut tool = monocode_core::tool::ToolCall::new("t", "Bash");
+        tool.input = serde_json::json!({"command":"git commit --allow-empty -m one"}).to_string();
+        tool.output = output;
+        tool.state = monocode_core::tool::ToolState::Completed;
+        let row = monocode_core::transcript::Row {
+            role: "tool".into(),
+            text: serde_json::to_string(&tool).unwrap(),
+            first: true,
+            sent_at: None,
+        };
+        db.write_rows(session, 0, &[row]).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(db));
+        std::fs::rename(repo.join(".git"), repo.join(".git-hidden")).unwrap();
+        scan(&store, session);
+        assert!(
+            locked(&store)
+                .unwrap()
+                .contributions(&[session], 0)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::rename(repo.join(".git-hidden"), repo.join(".git")).unwrap();
+        scan(&store, session);
+        let items = locked(&store)
+            .unwrap()
+            .contributions(&[session], 0)
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reference, id);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

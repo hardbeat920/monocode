@@ -281,6 +281,8 @@ impl Store {
         let (extras, extras_db) = settings::open(path, read_only)?;
         let store = Self {
             conn,
+            contribution_cache_id: super::NEXT_STORE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             path: path.into(),
             shared: Some(Shared {
                 columns,
@@ -456,6 +458,15 @@ impl Store {
         Ok(())
     }
     pub(super) fn shared_setting(&self, key: &str) -> Result<Option<String>, String> {
+        if key.starts_with(crate::contributions::SCANNED) {
+            if let Some(conn) = self.shared.as_ref().unwrap().extras_db.as_ref() {
+                return sql(conn
+                    .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                        row.get(0)
+                    })
+                    .optional());
+            }
+        }
         if let Some((id, message)) = key
             .strip_prefix("mono-delivered:")
             .and_then(|v| v.split_once(':'))
@@ -478,11 +489,12 @@ impl Store {
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
-        if shared
-            .extras
-            .borrow()
-            .get(key)
-            .is_some_and(|old| old == value)
+        if !key.starts_with(crate::contributions::SCANNED)
+            && shared
+                .extras
+                .borrow()
+                .get(key)
+                .is_some_and(|old| old == value)
         {
             return Ok(());
         }
