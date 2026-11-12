@@ -1195,7 +1195,16 @@ export function contextFromResult(
   const usage = asRecord(rec.usage);
   const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
   const last = asRecord(iterations[iterations.length - 1]);
-  const used = contextUsedFromUsage(last ?? usage);
+  // Some CLI versions send `iterations: []`, so top-level usage is the only
+  // reading left, and it sums every API call of the turn (a long agentic turn
+  // reads millions of cached tokens). It is the real level only for a one-call
+  // turn; otherwise the last main `assistant` message already reported it.
+  const singleCall = numberField(rec, "num_turns") <= 1;
+  const used = last
+    ? contextUsedFromUsage(last)
+    : singleCall
+      ? contextUsedFromUsage(usage)
+      : 0;
 
   let window: number | undefined;
   const modelUsage = asRecord(rec.modelUsage);
