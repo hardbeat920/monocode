@@ -870,3 +870,59 @@ fn observer_reports_a_host_title_change_once_and_never_writes_it_back() {
         "Named by the host"
     );
 }
+
+#[test]
+fn additional_folders_are_rejected_before_remote_binding_or_connection() {
+    let directory = Directory::new();
+    let store = directory.store();
+    let mut summary = locked(&store)
+        .unwrap()
+        .create("codex", directory.0.to_str().unwrap())
+        .unwrap();
+    summary.cwd = "remote://unknown/project".into();
+    let folders = monocode_core::project_folders::ProjectFolders {
+        additional: vec!["/extra".into()],
+    };
+    locked(&store)
+        .unwrap()
+        .save_setting(
+            &format!("project-folders:{}", summary.cwd),
+            &serde_json::to_string(&folders).unwrap(),
+        )
+        .unwrap();
+    for direct in [false, true] {
+        let (tx, rx) = async_channel::bounded(64);
+        let (_controls, control_rx) = std::sync::mpsc::channel();
+        if direct {
+            run_with_client(
+                Arc::new(Connections::new(&directory.0)),
+                summary.clone(),
+                "Inspect".into(),
+                Settings::default(),
+                control_rx,
+                store.clone(),
+                Arc::new(AtomicBool::new(false)),
+                tx,
+            );
+        } else {
+            run(
+                summary.clone(),
+                "Inspect".into(),
+                Settings::default(),
+                control_rx,
+                store.clone(),
+                Arc::new(AtomicBool::new(false)),
+                tx,
+            );
+        }
+        let final_update = rx.recv_blocking().unwrap();
+        assert!(final_update.finished);
+        assert!(
+            final_update
+                .status
+                .contains("Additional folders are not supported"),
+            "{}",
+            final_update.status
+        );
+    }
+}

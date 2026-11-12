@@ -22,6 +22,10 @@ For interactive visuals, use `/visualize` in an idle local desktop conversation
 or ask a Mono directly. See [session visuals](visuals.md) and the
 [preview release notes](preview-release-notes.md).
 
+## Multiple local folders
+
+To connect folders to a local Codex conversation, see [Use multiple local folders](project-folders.md).
+
 ## Monos
 
 A Mono's **Overview** tab brings together its current activity, a contribution

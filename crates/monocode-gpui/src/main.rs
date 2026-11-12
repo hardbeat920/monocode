@@ -60,6 +60,7 @@ mod phase_tile;
 mod pickers;
 mod popover;
 mod project_background;
+mod project_folders;
 mod project_search;
 mod project_settings;
 mod project_tabs;

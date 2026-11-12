@@ -2,6 +2,7 @@
 //! external editor (useProjectMenu.tsx and App.tsx's onRemoveProject).
 use super::*;
 use monocode_core::external_editor::{self, ExternalEditor};
+use monocode_core::project_folders::ProjectFolders;
 
 impl Shell {
     /// Finds installed editors once, off the main thread; the first lookup
@@ -112,6 +113,16 @@ impl Shell {
         .detach();
     }
     fn delete_project(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let reset_folders = serde_json::to_string(&ProjectFolders::default())
+            .map_err(|error| error.to_string())
+            .and_then(|folders| {
+                locked(&self.store)?.save_setting(&format!("project-folders:{path}"), &folders)
+            });
+        if let Err(error) = reset_folders {
+            self.error = Some(format!("Could not delete the project: {error}"));
+            cx.notify();
+            return;
+        }
         let sessions = self.project_sessions(path);
         self.leave_project(path, window, cx);
         self.workspace.archived_projects.retain(|p| p != path);
@@ -183,5 +194,139 @@ impl Shell {
             }
             self.select_project(next, window, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::tests::window;
+    use gpui::TestAppContext;
+
+    const PROJECT: &str = "/work/monocode";
+
+    fn save_folders(shell: &Shell) -> ProjectFolders {
+        let folders = ProjectFolders {
+            additional: vec!["/work/extra".into()],
+        };
+        locked(&shell.store)
+            .unwrap()
+            .save_setting(
+                &format!("project-folders:{PROJECT}"),
+                &serde_json::to_string(&folders).unwrap(),
+            )
+            .unwrap();
+        folders
+    }
+
+    #[gpui::test]
+    fn deleting_and_reopening_a_project_clears_additional_folders(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                save_folders(shell);
+                shell.delete_project(PROJECT, window, cx);
+                assert!(!shell.workspace.projects.iter().any(|path| path == PROJECT));
+                assert_eq!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .project_folders(PROJECT)
+                        .unwrap(),
+                    ProjectFolders::default()
+                );
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.unarchive_project(PROJECT, cx);
+                shell.select_project(PROJECT.into(), window, cx);
+                assert_eq!(shell.workspace.project, PROJECT);
+                assert_eq!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .project_folders(PROJECT)
+                        .unwrap(),
+                    ProjectFolders::default()
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn archiving_and_reopening_a_project_preserves_additional_folders(cx: &mut TestAppContext) {
+        let (window, _, session) = window(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                let folders = save_folders(shell);
+                shell.archive_project(PROJECT, window, cx);
+                assert!(
+                    shell
+                        .workspace
+                        .archived_projects
+                        .iter()
+                        .any(|path| path == PROJECT)
+                );
+                assert!(shell.session_summaries.contains_key(&session));
+                shell.unarchive_project(PROJECT, cx);
+                shell.select_project(PROJECT.into(), window, cx);
+                assert_eq!(shell.workspace.project, PROJECT);
+                assert_eq!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .project_folders(PROJECT)
+                        .unwrap(),
+                    folders
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn failed_folder_reset_keeps_the_project_and_its_conversations(cx: &mut TestAppContext) {
+        let database = "file:project-removal-failure?mode=memory&cache=shared";
+        let store = monocode_core::store::Store::open(std::path::Path::new(database)).unwrap();
+        let session = store.create("codex", PROJECT).unwrap();
+        let id = session.id;
+        let store = Arc::new(Mutex::new(store));
+        let connection = rusqlite::Connection::open(database).unwrap();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Shell::new(store, vec![session], PROJECT.into(), None, cx))
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                let folders = save_folders(shell);
+                connection
+                    .execute_batch(
+                        "CREATE TRIGGER reject_folder_reset BEFORE UPDATE ON native_settings
+                        WHEN OLD.key = 'project-folders:/work/monocode'
+                        BEGIN SELECT RAISE(ABORT, '폴더 설정 저장 실패'); END;",
+                    )
+                    .unwrap();
+                let workspace = serde_json::to_string(&shell.workspace).unwrap();
+                shell.delete_project(PROJECT, window, cx);
+                assert_eq!(serde_json::to_string(&shell.workspace).unwrap(), workspace);
+                assert!(shell.session_summaries.contains_key(&id));
+                assert!(shell.deleting.is_empty());
+                assert!(
+                    shell
+                        .error
+                        .as_deref()
+                        .unwrap()
+                        .contains("폴더 설정 저장 실패")
+                );
+                let store = locked(&shell.store).unwrap();
+                assert_eq!(store.project_folders(PROJECT).unwrap(), folders);
+                assert!(
+                    store
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .any(|session| session.id == id)
+                );
+            })
+            .unwrap();
     }
 }

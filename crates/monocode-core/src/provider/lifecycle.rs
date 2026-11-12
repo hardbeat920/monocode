@@ -165,6 +165,11 @@ impl Protocol {
         {
             sandbox_policy["networkAccess"] = true.into();
         }
+        if sandbox_policy["type"] == "workspaceWrite"
+            && self.request.settings.additional_folders.is_some()
+        {
+            sandbox_policy["writableRoots"] = self.request.runtime_workspace_roots();
+        }
         (policy, sandbox, sandbox_policy, reviewer)
     }
 }

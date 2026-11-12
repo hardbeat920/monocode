@@ -71,6 +71,14 @@ pub struct Request {
     pub settings: Settings,
 }
 
+impl Request {
+    fn runtime_workspace_roots(&self) -> Value {
+        let mut roots = vec![self.cwd.clone()];
+        roots.extend(self.settings.additional_folders.iter().flatten().cloned());
+        json!(roots)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Ready,
@@ -122,6 +130,18 @@ pub struct BackgroundTask {
     pub command: Option<String>,
     /// Unix milliseconds.
     pub started_at: u64,
+}
+
+fn require_folder_capability(user_agent: Option<&str>) -> Result<(), String> {
+    let version = user_agent
+        .and_then(|agent| agent.split_whitespace().next())
+        .and_then(|agent| agent.split_once('/'))
+        .and_then(|(_, version)| semver::Version::parse(version).ok());
+    if version.is_some_and(|version| version >= semver::Version::new(0, 167, 1)) {
+        Ok(())
+    } else {
+        Err("Additional folders require Codex CLI 0.167.1 or newer with runtime workspace roots support. Update Codex CLI before continuing this managed project.".into())
+    }
 }
 
 fn codex_error(error: &Value, fallback: &str) -> String {
@@ -255,6 +275,7 @@ fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
 /// State machine is deliberately testable without spawning a provider.
 struct Protocol {
     initialized: bool,
+    codex_folder_capability: bool,
     compact: bool,
     command_probe: bool,
     compact_confirmed: bool,
@@ -296,6 +317,7 @@ impl Protocol {
         Self {
             request,
             initialized: false,
+            codex_folder_capability: false,
             compact: false,
             command_probe: false,
             compact_confirmed: false,
@@ -502,13 +524,32 @@ impl Protocol {
                 }
                 match v["id"].as_u64() {
                     Some(1) if v.get("result").is_some() => {
+                        if self.request.settings.additional_folders.is_some()
+                            && !self.codex_folder_capability
+                        {
+                            require_folder_capability(v["result"]["userAgent"].as_str())?;
+                            self.codex_folder_capability = true;
+                        }
                         if !self.initialized {
                             write_json(stdin, json!({"method":"initialized"}))?;
                             self.initialized = true;
                         }
                         let (policy, sandbox, sandbox_policy, reviewer) = self.codex_access();
-                        let mut params = json!({"cwd":self.request.cwd,"approvalPolicy":policy,"sandbox":sandbox,"sandboxPolicy":sandbox_policy,"approvalsReviewer":reviewer,
+                        let mut params = json!({"cwd":self.request.cwd,"approvalPolicy":policy,"sandbox":sandbox,"approvalsReviewer":reviewer,
                             "developerInstructions":format!("You are the coding agent in Monocode. Use the available tools to inspect and work in the supplied cwd. Do not ask the user to paste files or git output you can inspect yourself. Respect the selected access policy and request approval when required. {}", if self.request.settings.plan { "This is a planning turn: inspect and propose a plan without changing files." } else { "" })});
+                        if self.request.settings.additional_folders.is_some() {
+                            params["runtimeWorkspaceRoots"] =
+                                self.request.runtime_workspace_roots();
+                        }
+                        if self.request.settings.additional_folders.is_some()
+                            && sandbox_policy["type"] == "workspaceWrite"
+                            && !self.request.settings.plan
+                        {
+                            params["config"] = json!({"sandbox_workspace_write.writable_roots": sandbox_policy["writableRoots"]});
+                        }
+                        if self.request.settings.additional_folders.is_some() {
+                            params["developerInstructions"] = format!("{}\nAdditional project folders (JSON paths, reference context only; selected access policy still applies): {}", params["developerInstructions"].as_str().unwrap_or_default(), serde_json::to_string(&self.request.settings.additional_folders).map_err(|e| e.to_string())?).into();
+                        }
                         if let Some(instructions) = crate::visual_bridge::instructions(
                             &self.request.settings.environment,
                             false,
@@ -578,6 +619,10 @@ impl Protocol {
                         let (policy, _, sandbox, reviewer) = self.codex_access();
                         let mut params = json!({"threadId":id,"input":self.request.codex_input(),
                             "approvalPolicy":policy,"sandboxPolicy":sandbox,"approvalsReviewer":reviewer});
+                        if self.request.settings.additional_folders.is_some() {
+                            params["runtimeWorkspaceRoots"] =
+                                self.request.runtime_workspace_roots();
+                        }
                         if let Some(effort) = &self.request.settings.effort {
                             params["effort"] = effort.clone().into();
                         }
@@ -1376,7 +1421,7 @@ fn run_process(
 }
 
 fn run_operation(
-    request: Request,
+    mut request: Request,
     cancel: Arc<AtomicBool>,
     controls: Option<mpsc::Receiver<Control>>,
     probe: bool,
@@ -1384,6 +1429,14 @@ fn run_operation(
     command_probe: bool,
     mut emit: impl FnMut(Vec<Event>) -> Result<(), String>,
 ) -> Result<Option<Value>, String> {
+    if request.settings.text_only {
+        request.settings.additional_folders = None;
+    }
+    if let Some(additional) = request.settings.additional_folders.take() {
+        let folders = crate::project_folders::ProjectFolders { additional };
+        folders.validate_support(request.kind, &request.cwd.to_string_lossy())?;
+        request.settings.additional_folders = Some(folders.for_execution(&request.cwd)?);
+    }
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
@@ -1585,6 +1638,7 @@ fn run_operation(
         .flatten();
     let (mut wire, mut protocol, warm) = if let Some(cached) = cached {
         let mut protocol = Protocol::new(request);
+        protocol.codex_folder_capability = cached.protocol.codex_folder_capability;
         protocol.acp = cached.protocol.acp;
         protocol.pi = cached.protocol.pi;
         protocol.previous_turn = cached.protocol.active_turn;
@@ -1890,6 +1944,140 @@ mod tests {
             model: None,
             settings: Default::default(),
         })
+    }
+    #[test]
+    fn managed_folders_require_supported_codex_but_unmanaged_threads_keep_existing_protocol() {
+        for agent in [
+            None,
+            Some("unknown"),
+            Some("Monocode/0.166.0 (Mac OS)"),
+            Some("Monocode/garbage"),
+        ] {
+            assert!(require_folder_capability(agent).is_err());
+        }
+        assert!(require_folder_capability(Some("Monocode/0.167.1 (Mac OS; arm64)")).is_ok());
+        let mut p = protocol(Kind::Codex);
+        let mut out = Vec::new();
+        p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
+        assert!(!String::from_utf8_lossy(&out).contains("runtimeWorkspaceRoots"));
+        p.request.settings.additional_folders = Some(Vec::new());
+        assert!(p
+            .frame(json!({"id":1,"result":{}}), &mut Vec::new())
+            .unwrap_err()
+            .contains("0.167.1"));
+    }
+    #[test]
+    fn validated_folder_capability_survives_recoverable_resume_fallback() {
+        let mut p = protocol(Kind::Codex);
+        p.request.provider_id = Some("missing-thread".into());
+        p.request.settings.additional_folders = Some(Vec::new());
+        let mut out = Vec::new();
+        p.frame(
+            json!({"id":1,"result":{"userAgent":"Monocode/0.167.1"}}),
+            &mut out,
+        )
+        .unwrap();
+        assert!(p.codex_folder_capability);
+        out.clear();
+        p.frame(
+            json!({"id":2,"error":{"message":"thread not found"}}),
+            &mut out,
+        )
+        .unwrap();
+        let frames: Vec<Value> = String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(frames.iter().any(|frame| frame["method"] == "thread/start"));
+        assert!(p.request.provider_id.is_none());
+    }
+    #[test]
+    fn additional_folders_preserve_access_policy_and_refresh_resumed_context() {
+        for access in [
+            AccessMode::ReadOnly,
+            AccessMode::Supervised,
+            AccessMode::AutoAcceptEdits,
+            AccessMode::Auto,
+            AccessMode::FullAccess,
+        ] {
+            for plan in [false, true] {
+                let mut p = protocol(Kind::Codex);
+                p.request.settings.access = access;
+                p.request.settings.plan = plan;
+                p.request.settings.operator_enabled = true;
+                p.request.settings.additional_folders = Some(vec!["/extra/quote\"\nfolder".into()]);
+                p.request.cwd = "/worktree".into();
+                p.request.provider_id = Some("same-thread".into());
+                let original = p.codex_access();
+                let before = parked::key(&p.request);
+                let mut out = Vec::new();
+                p.frame(
+                    json!({"id":1,"result":{"userAgent":"codex/0.167.1"}}),
+                    &mut out,
+                )
+                .unwrap();
+                p.frame(
+                    json!({"id":2,"result":{"thread":{"id":"same-thread"}}}),
+                    &mut out,
+                )
+                .unwrap();
+                let frames: Vec<Value> = String::from_utf8_lossy(&out)
+                    .lines()
+                    .map(|s| serde_json::from_str(s).unwrap())
+                    .collect();
+                let resumed = frames
+                    .iter()
+                    .find(|v| v["method"] == "thread/resume")
+                    .unwrap();
+                assert_eq!(resumed["params"]["threadId"], "same-thread");
+                assert_eq!(
+                    resumed["params"]["runtimeWorkspaceRoots"],
+                    json!(["/worktree", "/extra/quote\"\nfolder"])
+                );
+                assert!(resumed["params"].get("sandboxPolicy").is_none());
+                assert!(resumed["params"]["developerInstructions"]
+                    .as_str()
+                    .unwrap()
+                    .contains(r#"/extra/quote\"\nfolder"#));
+                let turn = frames.iter().find(|v| v["method"] == "turn/start").unwrap();
+                assert_eq!(turn["params"]["approvalsReviewer"], original.3);
+                assert_eq!(
+                    turn["params"]["runtimeWorkspaceRoots"],
+                    resumed["params"]["runtimeWorkspaceRoots"]
+                );
+                if !plan && original.2["type"] == "workspaceWrite" {
+                    assert_eq!(
+                        turn["params"]["sandboxPolicy"]["writableRoots"],
+                        json!(["/worktree", "/extra/quote\"\nfolder"])
+                    );
+                    assert_eq!(
+                        resumed["params"]["config"]["sandbox_workspace_write.writable_roots"],
+                        turn["params"]["sandboxPolicy"]["writableRoots"]
+                    );
+                } else {
+                    assert!(turn["params"]["sandboxPolicy"]
+                        .get("writableRoots")
+                        .is_none());
+                }
+                assert_eq!(
+                    turn["params"]["sandboxPolicy"]["networkAccess"],
+                    if access == AccessMode::FullAccess && !plan {
+                        Value::Null
+                    } else {
+                        json!(true)
+                    }
+                );
+                p.request.settings.additional_folders = Some(Vec::new());
+                assert_ne!(before, parked::key(&p.request));
+                let mut removed = Vec::new();
+                p.frame(
+                    json!({"id":1,"result":{"userAgent":"codex/0.167.1"}}),
+                    &mut removed,
+                )
+                .unwrap();
+                assert!(!String::from_utf8_lossy(&removed).contains("/extra/quote"));
+            }
+        }
     }
     #[test]
     fn codex_file_changes_retain_every_edited_path() {

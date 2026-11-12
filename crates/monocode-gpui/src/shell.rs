@@ -5815,6 +5815,9 @@ impl Shell {
                         .icon("folder-open")
                         .into(),
                     self.external_editor_menu(path).into(),
+                    MenuAction::new("project-folders", "Additional folders")
+                        .icon("folder-open")
+                        .into(),
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
@@ -5942,6 +5945,8 @@ impl Shell {
                     } else {
                         cx.reveal_path(std::path::Path::new(&path));
                     }
+                } else if action == "project-folders" {
+                    self.open_project_folders(path, window, cx);
                 } else if action == "project-theme" {
                     self.open_project_theme(path, window, cx);
                 } else if action == "background" {

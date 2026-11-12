@@ -21,6 +21,8 @@ for line in sys.stdin:
         assert value['params']['approvalPolicy'] == 'never'
         assert 'Do not call tools' in value['params']['developerInstructions']
         assert os.getenv('MONOCODE_TEST_CAPABILITY') is None
+        assert 'runtimeWorkspaceRoots' not in value['params']
+        assert 'Additional project folders' not in value['params']['developerInstructions']
         send({{'id':2,'result':{{'thread':{{'id':'fresh-text-thread'}}}}}})
     elif value.get('id') == 3:
         assert value['params']['threadId'] == 'fresh-text-thread'
@@ -48,6 +50,7 @@ for line in sys.stdin:
         model: None,
         settings: Settings {
             access: AccessMode::FullAccess,
+            additional_folders: Some(vec!["/must-not-inherit".into()]),
             environment: [("MONOCODE_TEST_CAPABILITY".into(), "private".into())].into(),
             attachments: vec![dir.path().join("private-file")],
             ..Default::default()
