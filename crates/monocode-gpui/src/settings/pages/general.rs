@@ -10,7 +10,7 @@ use gpui::{AnyElement, Context, FontWeight, div, prelude::*, px};
 impl SettingsView {
     pub(super) fn general_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();
-        let alerts = vec![
+        let mut alerts = vec![
             self.row(
                 Some("sounds"),
                 true,
@@ -46,6 +46,22 @@ impl SettingsView {
                 },
             ),
         ];
+        if cfg!(target_os = "linux") {
+            alerts.push(self.row(
+                Some("harness-update-notifications"),
+                false,
+                "Harness update notifications",
+                Some("Check for harness updates at startup. Turn off for CLIs managed by your Linux distribution or project. You can still check manually below.".into()),
+                vec![self.toggle(
+                    "harness-update-notifications",
+                    "Harness update notifications",
+                    p.harness_update_notifications,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.harness_update_notifications = on),
+                )],
+            ));
+        }
         let mut workspace = vec![
             self.row(
                 Some("file-tabs"),

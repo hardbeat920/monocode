@@ -251,6 +251,7 @@ impl SettingsView {
                 id,
                 "sounds"
                     | "notifications"
+                    | "harness-update-notifications"
                     | "tab-animations"
                     | "notes"
                     | "quick-composer"
