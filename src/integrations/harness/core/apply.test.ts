@@ -570,6 +570,56 @@ describe("appendSteerUser", () => {
     expect(session.busy).toBe(true);
   });
 
+  it("keeps writing the reply in flight above a mid-turn message", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "hi");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Hi! The draft waits for you, so no bi",
+    });
+    session = appendSteerUser(session, "hi");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "os yet.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Hi again!",
+    });
+
+    expect(session.blocks.map(({ role, text }) => [role, text])).toEqual([
+      ["user", "hi"],
+      ["assistant", "Hi! The draft waits for you, so no bios yet."],
+      ["user", "hi"],
+      ["assistant", "Hi again!"],
+    ]);
+    expect(session.blocks[1]?.streaming).toBe(false);
+  });
+
+  it("seals the reply in flight when a tool starts after a mid-turn message", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "build it");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Reading the file",
+    });
+    session = appendSteerUser(session, "focus on tests");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "read",
+      title: "Read a.ts",
+      kind: "read",
+      status: "in_progress",
+    });
+
+    expect(session.blocks.map(({ role }) => role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "tool",
+    ]);
+    expect(session.blocks[1]?.streaming).toBe(false);
+  });
+
   it("keeps a note card on a steered user turn", () => {
     let session = appendUser(newSession("cursor", "/tmp"), "build it");
     session = appendSteerUser(session, "hi", [], {
