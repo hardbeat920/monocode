@@ -20,6 +20,8 @@ export const REMOTE_PROVIDERS = [
 export type RemoteProvider = (typeof REMOTE_PROVIDERS)[number];
 export type HostDescriptor = {
   protocolVersion: number;
+  /** Absent on older hosts; the desktop can probe their SSH launcher. */
+  hostVersion?: string;
   environmentId: string;
   name: string;
   providers: RemoteProvider[];

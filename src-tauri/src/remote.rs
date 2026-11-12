@@ -347,14 +347,53 @@ pub fn remote_request(
             state.tunnels.invalidate(&machine.id, lease);
         }
     }
-    let result = response?;
+    let mut result = response?;
     if method == "environment.describe"
         && result.get("environmentId").and_then(Value::as_str)
             != Some(machine.environment_id.as_str())
     {
         return Err("Host identity changed. Add this machine again before continuing.".into());
     }
+    if method == "environment.describe" && host_version(&result).is_none() {
+        if let (Some(target), Some(lease)) = (&machine.ssh, &tunnel_lease) {
+            let platform = result
+                .get("platform")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let version = state.tunnels.host_version(&machine.id, lease, || {
+                remote_ssh::probe_host_version(target, platform.as_deref())
+            })?;
+            add_host_version(&mut result, || version);
+        }
+    }
     Ok(result)
+}
+
+fn host_version(descriptor: &Value) -> Option<&str> {
+    descriptor
+        .get("hostVersion")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+}
+
+fn add_host_version(descriptor: &mut Value, fallback: impl FnOnce() -> Option<String>) {
+    if host_version(descriptor).is_none() {
+        if let Some(version) = fallback() {
+            descriptor["hostVersion"] = Value::String(version);
+        }
+    }
+}
+
+fn verify_updated_host(descriptor: &Value) -> Result<(), String> {
+    // A new runtime-path/launcher alone does not prove the service restarted.
+    // Only the running RPC server can confirm the package it actually loaded.
+    if host_version(descriptor) != Some(env!("CARGO_PKG_VERSION")) {
+        return Err(format!(
+            "The host service did not restart with MonoCode Host {} (running version: {}). Reconnect and try updating again.",
+            env!("CARGO_PKG_VERSION"), host_version(descriptor).unwrap_or("unknown"),
+        ));
+    }
+    Ok(())
 }
 
 fn supported_remote_method(method: &str) -> bool {
@@ -418,7 +457,7 @@ fn start_ssh_job(
         jobs.insert(id.clone(), job.clone());
     }
     std::thread::spawn(move || {
-        let prepared = (|| -> Result<(StoredMachine, Tunnel), String> {
+        let prepared = (|| -> Result<(StoredMachine, Tunnel, Option<String>), String> {
             let askpass = job.askpass()?;
             let mut target = target;
             let mut machine = if let Some(mut existing) = existing {
@@ -500,7 +539,7 @@ fn start_ssh_job(
             };
             job.message("Opening the secure connection…");
             let tunnel = Tunnel::start(&target, Some(&job), Some(&askpass))?;
-            let descriptor = rpc(
+            let mut descriptor = rpc(
                 &format!("http://127.0.0.1:{}", tunnel.port),
                 &machine.token,
                 Some(&machine.environment_id),
@@ -519,6 +558,7 @@ fn start_ssh_job(
                 );
             }
             if upgrade {
+                verify_updated_host(&descriptor)?;
                 let capabilities = descriptor.get("capabilities").and_then(Value::as_array);
                 let supports = |name: &str| {
                     capabilities.is_some_and(|entries| {
@@ -529,10 +569,34 @@ fn start_ssh_job(
                     || !supports("files.list")
                     || !supports("files.create")
                     || !supports("files.searchContent")
+                    || !supports("workspace.run")
+                    || !supports("git.worktreeCreate")
                 {
                     return Err("The installed host package still lacks Explorer and Changes. Install a newer MonoCode release with updated host packages.".into());
                 }
             }
+            let reported_platform = descriptor
+                .get("platform")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            add_host_version(&mut descriptor, || {
+                // Explicit setup/reconnect can ask for SSH credentials, unlike
+                // background checks. This also supports password-only hosts.
+                let platform = match reported_platform.as_deref() {
+                    Some("win32") => remote_ssh::HostPlatform::Windows,
+                    Some("linux" | "darwin") => remote_ssh::HostPlatform::Unix,
+                    _ => remote_ssh::detect_platform(&target, &job, &askpass).ok()?,
+                };
+                let output = remote_ssh::run_script(
+                    &target,
+                    platform,
+                    remote_ssh::version_script(platform),
+                    &job,
+                    &askpass,
+                )
+                .ok()?;
+                remote_ssh::parse_host_version(&output)
+            });
             if machine.name.trim().is_empty() {
                 machine.name = descriptor
                     .get("name")
@@ -542,10 +606,14 @@ fn start_ssh_job(
                     .take(100)
                     .collect();
             }
-            Ok((machine, tunnel))
+            Ok((
+                machine,
+                tunnel,
+                host_version(&descriptor).map(str::to_owned),
+            ))
         })();
         job.complete(|| {
-            let (mut machine, tunnel) = prepared?;
+            let (mut machine, tunnel, host_version) = prepared?;
             let state = app.state::<RemoteConnections>();
             let _guard = state
                 .store
@@ -562,7 +630,9 @@ fn start_ssh_job(
             machines.retain(|m| m.id != machine.id);
             machines.push(machine.clone());
             write(&path, &machines)?;
-            state.tunnels.insert(machine.id.clone(), tunnel);
+            state
+                .tunnels
+                .insert(machine.id.clone(), tunnel, host_version);
             Ok(machine.public())
         });
     });
@@ -650,6 +720,29 @@ pub fn remote_ssh_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn older_descriptors_use_ssh_version_without_changing_protocol_or_capabilities() {
+        let mut descriptor = json!({"protocolVersion": 1, "capabilities": ["sessions"]});
+        add_host_version(&mut descriptor, || Some("0.7.1".into()));
+        assert_eq!(descriptor["hostVersion"], "0.7.1");
+        assert_eq!(descriptor["protocolVersion"], 1);
+        assert_eq!(descriptor["capabilities"], json!(["sessions"]));
+        add_host_version(&mut descriptor, || panic!("Must prefer the RPC version"));
+
+        let mut unknown = json!({"protocolVersion": 1});
+        add_host_version(&mut unknown, || None);
+        assert!(unknown.get("hostVersion").is_none());
+    }
+
+    #[test]
+    fn an_upgrade_requires_the_running_server_to_report_the_installed_version() {
+        for version in [None, Some("0.7.1"), Some("99.0.0")] {
+            let descriptor = json!({"hostVersion": version});
+            assert!(verify_updated_host(&descriptor).is_err());
+        }
+        assert!(verify_updated_host(&json!({"hostVersion": env!("CARGO_PKG_VERSION")})).is_ok());
+    }
+
     #[test]
     fn a_slow_host_does_not_look_like_a_dead_tunnel() {
         use std::{net::TcpListener, thread, time::Duration};

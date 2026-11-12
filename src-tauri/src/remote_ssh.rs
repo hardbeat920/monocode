@@ -268,7 +268,7 @@ pub fn detect_platform(
         target,
         String::new(),
         job,
-        askpass,
+        Some(askpass),
         command(target, true),
         PLATFORM_PROBE,
     )?;
@@ -301,7 +301,7 @@ pub fn run_script(
             target,
             script,
             job,
-            askpass,
+            Some(askpass),
             command(target, true),
             &[
                 "powershell.exe",
@@ -324,21 +324,30 @@ fn run_script_with_command(
     askpass: &Askpass,
     command: Command,
 ) -> Result<String, String> {
-    run_remote_command(target, script, job, askpass, command, &["sh", "-l", "-s"])
+    run_remote_command(
+        target,
+        script,
+        job,
+        Some(askpass),
+        command,
+        &["sh", "-l", "-s"],
+    )
 }
 
 fn run_remote_command(
     target: &SshTarget,
     script: String,
     job: &Arc<Job>,
-    askpass: &Askpass,
+    askpass: Option<&Askpass>,
     mut command: Command,
     remote: &[&str],
 ) -> Result<String, String> {
     if job.cancelled.load(Ordering::Relaxed) {
         return Err("Connection cancelled".into());
     }
-    askpass.configure(&mut command)?;
+    if let Some(askpass) = askpass {
+        askpass.configure(&mut command)?;
+    }
     command.args(["--", &target.target]).args(remote);
     let mut child = command
         .spawn()
@@ -347,7 +356,7 @@ fn run_remote_command(
     let stderr = capture(child.stderr.take().unwrap());
     let mut stdin = child.stdin.take().unwrap();
     let writer = std::thread::spawn(move || stdin.write_all(script.as_bytes()));
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(if askpass.is_some() { 300 } else { 10 });
     let result = loop {
         if job.cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
             let _ = child.kill();
@@ -422,6 +431,54 @@ pub fn upgrade_script(platform: HostPlatform, port: u16) -> String {
             "$env:MONOCODE_HOST_FORCE_UPGRADE = '1'\n$env:MONOCODE_HOST_PORT = '{port}'\n{script}"
         ),
     }
+}
+
+pub fn version_script(platform: HostPlatform) -> String {
+    match platform {
+        HostPlatform::Unix => "set -eu\n\"$HOME/.monocode-host/bin/monocode-host\" --version\n".into(),
+        HostPlatform::Windows => "$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.monocode-host'\n& (Join-Path $base 'bin/monocode-host.cmd') --version\nif ($LASTEXITCODE -ne 0) { throw 'Host version check failed.' }\n".into(),
+    }
+}
+
+pub fn parse_host_version(output: &str) -> Option<String> {
+    // SSH login shells may print a banner before the launcher's one-line answer.
+    let version = output.trim().lines().last()?.trim();
+    (!version.is_empty()
+        && version.len() <= 100
+        && version
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".+-".contains(&c)))
+    .then(|| version.to_string())
+}
+
+/// A background descriptor check must never open a password/trust prompt or
+/// install anything. Failure leaves the version unknown, not the host offline.
+pub fn probe_host_version(target: &SshTarget, platform: Option<&str>) -> Option<String> {
+    let job = Job::new();
+    let probe = |remote: &[&str], script: String| {
+        run_remote_command(target, script, &job, None, command(target, false), remote).ok()
+    };
+    let platform = match platform {
+        Some("win32") => HostPlatform::Windows,
+        Some("linux" | "darwin") => HostPlatform::Unix,
+        _ => parse_platform(&probe(PLATFORM_PROBE, String::new())?).ok()?,
+    };
+    let script = version_script(platform);
+    let output = match platform {
+        HostPlatform::Unix => probe(&["sh", "-l", "-s"], script)?,
+        HostPlatform::Windows => probe(
+            &[
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                &powershell_reader(),
+            ],
+            script,
+        )?,
+    };
+    parse_host_version(&output)
 }
 
 pub fn pairing_script(platform: HostPlatform, name: &str) -> String {
@@ -532,12 +589,49 @@ struct Slot {
     tunnel: Option<Tunnel>,
     failure: Option<(Instant, String)>,
     generation: u64,
+    // None: not checked yet; Some(None): probe failed. Retry on a new tunnel.
+    host_version: Option<Option<String>>,
+    host_version_probe: Arc<Mutex<()>>,
 }
 
 pub struct TunnelLease {
     pub endpoint: String,
     slot: Arc<Mutex<Slot>>,
     generation: u64,
+}
+
+impl TunnelLease {
+    /// Serialize version probes without blocking tunnel lookup or invalidation.
+    pub fn host_version(&self, probe: impl FnOnce() -> Option<String>) -> Option<String> {
+        let probe_lock = {
+            let slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if slot.generation != self.generation {
+                return None;
+            }
+            if let Some(cached) = &slot.host_version {
+                return cached.clone();
+            }
+            Arc::clone(&slot.host_version_probe)
+        };
+        let _probe_guard = probe_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        {
+            // Another caller may have filled the cache or replaced the tunnel
+            // while this caller waited for the previous probe.
+            let slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if slot.generation != self.generation {
+                return None;
+            }
+            if let Some(cached) = &slot.host_version {
+                return cached.clone();
+            }
+        }
+        let value = probe();
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.generation != self.generation {
+            return None;
+        }
+        slot.host_version.get_or_insert(value).clone()
+    }
 }
 
 /// Each machine has its own lock: restarting one machine's tunnel (up to
@@ -550,13 +644,42 @@ impl Tunnels {
     fn slots(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Mutex<Slot>>>> {
         self.slots.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    pub fn insert(&self, id: String, tunnel: Tunnel) {
+    /// Only return a version while the lease still belongs to this machine's tunnel.
+    pub fn host_version(
+        &self,
+        id: &str,
+        lease: &TunnelLease,
+        probe: impl FnOnce() -> Option<String>,
+    ) -> Result<Option<String>, String> {
+        self.require_current_lease(id, lease)?;
+        let version = lease.host_version(probe);
+        self.require_current_lease(id, lease)?;
+        Ok(version)
+    }
+    fn require_current_lease(&self, id: &str, lease: &TunnelLease) -> Result<(), String> {
+        // Check the registry while holding the slot lock, but never hold the
+        // registry lock while waiting for a possibly reconnecting slot.
+        let current = lease.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if current.generation == lease.generation
+            && self
+                .slots()
+                .get(id)
+                .is_some_and(|slot| Arc::ptr_eq(slot, &lease.slot))
+        {
+            Ok(())
+        } else {
+            Err("Connection changed while checking the host version. Try again.".into())
+        }
+    }
+    pub fn insert(&self, id: String, tunnel: Tunnel, host_version: Option<String>) {
         // A fresh slot never waits for a reconnect in progress; that attempt's
         // tunnel is dropped with the replaced slot.
         let slot = Slot {
             tunnel: Some(tunnel),
             failure: None,
             generation: 1,
+            host_version: Some(host_version),
+            host_version_probe: Arc::default(),
         };
         let old = self.slots().insert(id, Arc::new(Mutex::new(slot)));
         drop(old);
@@ -578,6 +701,7 @@ impl Tunnels {
             }
         }
         current.tunnel = None;
+        current.host_version = None;
         if let Some((when, error)) = &current.failure {
             if when.elapsed() < Duration::from_secs(10) {
                 return Err(error.clone());
@@ -660,6 +784,251 @@ mod tests {
     use super::*;
 
     #[test]
+    fn launcher_version_parsing_tolerates_login_banners_but_not_multiline_garbage() {
+        assert_eq!(
+            parse_host_version("Welcome\n0.7.1\r\n"),
+            Some("0.7.1".into())
+        );
+        assert_eq!(
+            parse_host_version("0.13.0-rc.1+build.2\n"),
+            Some("0.13.0-rc.1+build.2".into())
+        );
+        assert_eq!(parse_host_version(""), None);
+        assert_eq!(parse_host_version("No such file or directory"), None);
+        assert!(version_script(HostPlatform::Unix)
+            .contains("\"$HOME/.monocode-host/bin/monocode-host\" --version"));
+        assert!(
+            version_script(HostPlatform::Windows).contains("'bin/monocode-host.cmd') --version")
+        );
+        for platform in [HostPlatform::Unix, HostPlatform::Windows] {
+            let script = version_script(platform);
+            assert!(!script.contains("service"));
+            assert!(!script.contains("install"));
+        }
+    }
+
+    #[test]
+    fn legacy_versions_are_probed_once_per_tunnel_including_failed_probes() {
+        let lease = TunnelLease {
+            endpoint: String::new(),
+            slot: Arc::new(Mutex::new(Slot::default())),
+            generation: 0,
+        };
+        assert_eq!(
+            lease.host_version(|| Some("0.7.1".into())),
+            Some("0.7.1".into())
+        );
+        assert_eq!(
+            lease.host_version(|| panic!("Already checked")),
+            Some("0.7.1".into())
+        );
+        {
+            let mut slot = lease.slot.lock().unwrap();
+            slot.generation = 1;
+            slot.host_version = None;
+        }
+        assert_eq!(lease.host_version(|| panic!("Stale connection")), None);
+        let next = TunnelLease {
+            generation: 1,
+            ..lease
+        };
+        assert_eq!(next.host_version(|| None), None);
+        assert_eq!(
+            next.host_version(|| panic!("Failed checks are cached too")),
+            None
+        );
+    }
+
+    #[test]
+    fn host_version_probe_leaves_the_tunnel_slot_available() {
+        let lease = TunnelLease {
+            endpoint: String::new(),
+            slot: Arc::new(Mutex::new(Slot::default())),
+            generation: 0,
+        };
+        assert_eq!(
+            lease.host_version(|| {
+                // Endpoint lookup and invalidation need this same mutex while
+                // a potentially slow SSH probe is in progress.
+                let _slot = lease
+                    .slot
+                    .try_lock()
+                    .expect("Version probing must not lock out tunnel requests");
+                Some("0.7.1".into())
+            }),
+            Some("0.7.1".into())
+        );
+    }
+
+    #[test]
+    fn concurrent_host_version_requests_share_successful_and_failed_probes() {
+        use std::sync::{atomic::AtomicUsize, Barrier};
+
+        for result in [Some("0.7.1".to_string()), None] {
+            let lease = TunnelLease {
+                endpoint: String::new(),
+                slot: Arc::new(Mutex::new(Slot::default())),
+                generation: 0,
+            };
+            let calls = AtomicUsize::new(0);
+            let start = Barrier::new(8);
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            lease.host_version(|| {
+                                calls.fetch_add(1, Ordering::Relaxed);
+                                // Keep the probe in flight while the other
+                                // callers contend for the same missing value.
+                                std::thread::sleep(Duration::from_millis(20));
+                                result.clone()
+                            })
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    assert_eq!(worker.join().unwrap(), result);
+                }
+            });
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[test]
+    fn a_probe_finishing_after_reconnect_cannot_return_or_cache_a_stale_version() {
+        for cached in [None, Some(Some("0.13.0".to_string()))] {
+            let lease = TunnelLease {
+                endpoint: String::new(),
+                slot: Arc::new(Mutex::new(Slot::default())),
+                generation: 0,
+            };
+            assert_eq!(
+                lease.host_version(|| {
+                    let mut slot = lease.slot.try_lock().unwrap();
+                    slot.generation = 1;
+                    slot.host_version = cached.clone();
+                    Some("0.7.1".into())
+                }),
+                None
+            );
+            assert_eq!(lease.slot.lock().unwrap().host_version, cached);
+            let next = TunnelLease {
+                generation: 1,
+                ..lease
+            };
+            assert_eq!(
+                next.host_version(|| {
+                    assert!(cached.is_none(), "Keep the new tunnel's cached version");
+                    Some("0.13.0".into())
+                }),
+                Some("0.13.0".into())
+            );
+        }
+    }
+
+    #[test]
+    fn replaced_or_removed_tunnels_reject_in_flight_host_version_results() {
+        for change in ["replace", "remove", "clear", "generation"] {
+            let tunnels = Tunnels::default();
+            let slot = Arc::new(Mutex::new(Slot::default()));
+            let replacement = Arc::new(Mutex::new(Slot {
+                // A fresh slot can have the same generation as the old lease.
+                host_version: Some(Some("0.13.0".into())),
+                ..Slot::default()
+            }));
+            let lease = TunnelLease {
+                endpoint: String::new(),
+                slot: slot.clone(),
+                generation: 0,
+            };
+            tunnels.slots().insert("host".into(), slot.clone());
+            let result = tunnels.host_version("host", &lease, || {
+                match change {
+                    "replace" => {
+                        tunnels.slots().insert("host".into(), replacement.clone());
+                    }
+                    "remove" => tunnels.remove("host"),
+                    "clear" => tunnels.clear(),
+                    "generation" => slot.lock().unwrap().generation += 1,
+                    _ => unreachable!(),
+                }
+                Some("0.7.1".into())
+            });
+            assert!(result.is_err(), "Must reject the result after {change}");
+            assert!(tunnels
+                .host_version("host", &lease, || panic!("Do not probe stale leases"))
+                .is_err());
+            if change == "replace" {
+                let current = TunnelLease {
+                    slot: replacement,
+                    ..lease
+                };
+                assert_eq!(
+                    tunnels.host_version("host", &current, || panic!("Keep the new cache")),
+                    Ok(Some("0.13.0".into()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn current_tunnels_keep_successful_and_failed_host_version_results() {
+        for version in [Some("0.7.1".to_string()), None] {
+            let tunnels = Tunnels::default();
+            let slot = Arc::new(Mutex::new(Slot::default()));
+            let lease = TunnelLease {
+                endpoint: String::new(),
+                slot: slot.clone(),
+                generation: 0,
+            };
+            tunnels.slots().insert("host".into(), slot);
+            assert_eq!(
+                tunnels.host_version("host", &lease, || version.clone()),
+                Ok(version.clone())
+            );
+            assert_eq!(
+                tunnels.host_version("host", &lease, || panic!("Use the cached result")),
+                Ok(version)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_version_transport_uses_batch_mode_without_an_askpass_prompt() {
+        // Substitute a local shell for SSH. Never contact a real machine.
+        let target = SshTarget {
+            target: "example.invalid".into(),
+            port: None,
+            remote_port: 3774,
+        };
+        let args: Vec<_> = command(&target, false)
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"BatchMode=yes".into()));
+        let mut fake_ssh = Command::new("sh");
+        fake_ssh
+            .args(["-c", "cat >/dev/null; printf 'Welcome\\n0.7.1\\n'"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let job = Job::new();
+        let output = run_remote_command(
+            &target,
+            version_script(HostPlatform::Unix),
+            &job,
+            None,
+            fake_ssh,
+            &["sh", "-l", "-s"],
+        )
+        .unwrap();
+        assert_eq!(parse_host_version(&output), Some("0.7.1".into()));
+        assert!(job.view().prompt.is_none());
+    }
+
+    #[test]
     fn stale_requests_cannot_invalidate_a_newer_tunnel() {
         let tunnels = Tunnels::default();
         let slot = |generation| {
@@ -667,6 +1036,8 @@ mod tests {
                 tunnel: None,
                 failure: Some((Instant::now(), "keep".into())),
                 generation,
+                host_version: None,
+                host_version_probe: Arc::default(),
             }))
         };
         let old = slot(1);
@@ -730,7 +1101,7 @@ mod tests {
             &target,
             String::new(),
             &job,
-            &askpass,
+            Some(&askpass),
             make_command(),
             PLATFORM_PROBE,
         )

@@ -3,18 +3,24 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { version } from "../../../../package.json";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import {
   REMOTE_PROVIDERS,
+  type HostDescriptor,
   type RemoteMachine,
   type SshSetup,
 } from "../model/protocol";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 let container: HTMLDivElement;
 let root: Root;
 let state: SshSetup;
 let machines: RemoteMachine[];
+let descriptor: Partial<HostDescriptor>;
+let sessions: Record<string, { id: string; status: string; needsInput?: boolean }[]>;
 const machine: RemoteMachine = {
   id: "machine",
   name: "Home Mac",
@@ -26,15 +32,23 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   machines = [];
+  descriptor = { environmentId: "env", providers: ["codex"] };
+  sessions = { visible: [], unopened: [] };
+  vi.mocked(ask).mockReset().mockResolvedValue(true);
   state = { id: "setup", message: "Installing host…", done: false };
   vi.mocked(invoke).mockReset();
-  vi.mocked(invoke).mockImplementation(async (command) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "remote_machines") return [...machines];
     if (command === "remote_ssh_begin" || command === "remote_ssh_reconnect")
       return "setup";
     if (command === "remote_ssh_poll") return { ...state };
-    if (command === "remote_request")
-      return { environmentId: "env", providers: ["codex"] };
+    if (command === "remote_request") {
+      const { method, params } = args as { method: string; params: { projectId: string } };
+      if (method === "projects.list")
+        return Object.keys(sessions).map((id) => ({ id, cwd: `/${id}`, name: id }));
+      if (method === "sessions.list") return sessions[params.projectId];
+      return descriptor;
+    }
     if (command === "remote_disconnect") {
       machines = [];
       return;
@@ -182,6 +196,101 @@ it("offers an explicit host update for an SSH machine missing workspace methods"
     machineId: machine.id,
     upgrade: true,
   });
+  expect(ask).not.toHaveBeenCalled();
+});
+
+it("offers a version upgrade even when all workspace capabilities are present, and clears it after updating", async () => {
+  machines = [machine];
+  descriptor = {
+    ...descriptor, hostVersion: "0.7.1",
+    capabilities: ["workspace.run", "git.worktreeCreate"],
+  };
+  await render();
+  expect(container.textContent).toContain("Host update available (0.7.1)");
+  expect(button("Update Host")).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", expect.anything());
+  await act(async () => button("Update Host").click());
+  descriptor.hostVersion = version;
+  state = { ...state, done: true, machine };
+  await poll();
+  expect(container.textContent).toContain("Home Mac was updated and reconnected");
+  expect(button("Update Host")).toBeUndefined();
+});
+
+it.each([version, "99.0.0", undefined, "unknown"])(
+  "does not offer a version upgrade for %s when capabilities are supported",
+  async (hostVersion) => {
+    machines = [machine];
+    descriptor = { ...descriptor, hostVersion, capabilities: ["workspace.run", "git.worktreeCreate"] };
+    await render();
+    expect(button("Update Host")).toBeUndefined();
+  },
+);
+
+it("counts running sessions across the target machine, including unopened projects and input waits, before asking", async () => {
+  machines = [machine, { ...machine, id: "other", name: "Other machine" }];
+  sessions.visible = [{ id: "idle", status: "idle" }];
+  sessions.unopened = [
+    { id: "running", status: "running" },
+    { id: "approval", status: "running", needsInput: true },
+    { id: "interrupted", status: "interrupted" },
+  ];
+  let decide: (answer: boolean) => void = () => {};
+  vi.mocked(ask).mockImplementation(() => new Promise((resolve) => { decide = resolve; }));
+  await render();
+  await act(async () => button("Update Host").click());
+  expect(ask).toHaveBeenCalledWith(
+    expect.stringContaining("2 sessions are still running on Home Mac"),
+    { title: "Update MonoCode Host", kind: "warning", okLabel: "Update Host", cancelLabel: "Later" },
+  );
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", expect.anything());
+  const checks = vi.mocked(invoke).mock.calls.filter(([command, args]) =>
+    command === "remote_request" &&
+    ["projects.list", "sessions.list"].includes((args as { method: string }).method),
+  );
+  expect(checks).toHaveLength(3);
+  expect(checks.every(([, args]) => (args as { machineId: string }).machineId === "machine")).toBe(true);
+  await act(async () => decide(true));
+  expect(invoke).toHaveBeenCalledWith("remote_ssh_reconnect", { machineId: "machine", upgrade: true });
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", { machineId: "other", upgrade: true });
+});
+
+it("Later cancels before any host mutation and allows retry", async () => {
+  machines = [machine];
+  sessions.unopened = [{ id: "running", status: "running" }];
+  vi.mocked(ask).mockResolvedValueOnce(false);
+  await render();
+  await act(async () => button("Update Host").click());
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", expect.anything());
+  expect(button("Update Host").disabled).toBe(false);
+  await act(async () => button("Update Host").click());
+  expect(ask).toHaveBeenCalledTimes(2);
+  expect(invoke).toHaveBeenCalledWith("remote_ssh_reconnect", { machineId: "machine", upgrade: true });
+});
+
+it.each(["projects.list", "sessions.list"])("does not update when %s fails", async (method) => {
+  machines = [machine];
+  const fallback = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "remote_request" && (args as { method: string }).method === method)
+      throw new Error("Offline");
+    return fallback(command, args);
+  });
+  await render();
+  await act(async () => button("Update Host").click());
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", expect.anything());
+  expect(container.textContent).toContain("Could not check running sessions on Home Mac");
+  expect(button("Update Host").disabled).toBe(false);
+});
+
+it("does not update if the confirmation dialog fails", async () => {
+  machines = [machine];
+  sessions.unopened = [{ id: "running", status: "running" }];
+  vi.mocked(ask).mockRejectedValueOnce(new Error("Dialog unavailable"));
+  await render();
+  await act(async () => button("Update Host").click());
+  expect(invoke).not.toHaveBeenCalledWith("remote_ssh_reconnect", expect.anything());
+  expect(container.textContent).toContain("Dialog unavailable");
 });
 
 it("advertises every supported provider when checking a host", async () => {

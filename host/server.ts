@@ -7,6 +7,7 @@ import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
+import { version } from "../package.json";
 import {
   HOST_PROTOCOL_VERSION,
   type HostModelCatalog,
@@ -256,6 +257,7 @@ export function createHostServer(
           case "environment.describe":
             result = {
               protocolVersion: HOST_PROTOCOL_VERSION,
+              hostVersion: version,
               environmentId: engine.store.environmentId,
               name: hostname(),
               platform: process.platform,
