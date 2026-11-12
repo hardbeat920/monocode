@@ -753,16 +753,13 @@ function AgentTranscriptComponent({
   }, [visible, pinTranscript, rememberScroll, setShowJump]);
 
   useLayoutEffect(() => {
-    if (!visible || !stickToBottom.current) return;
-    const el = scroller.current;
-    syncTranscriptViewport(el);
-    followTranscript(el);
-  }, [blocks, busy, followTranscript, visible]);
-
-  useLayoutEffect(() => {
     const el = scrollerEl;
     const inner = el?.firstElementChild;
     if (!visible || !el || !inner) return;
+    // Streamdown commits its output separately from the session update.
+    // Sync viewport padding and size after layout changes rather than also
+    // forcing this calculation in every token's layout effect. Scroll/motion
+    // handling keeps its own measurements; it does not need this duplicate.
     const onResize = () => {
       // A parked transcript's scroller is detached and measures zero.
       if (!el.isConnected) return;
@@ -879,8 +876,8 @@ function AgentTranscriptComponent({
   // Top up before painting until the viewport is covered.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (!el || el.clientHeight === 0) return;
     if (visibleTurnCount >= Math.min(initialTurns, turns.length)) return;
+    if (!el || el.clientHeight === 0) return;
     if (el.scrollHeight > el.clientHeight) return;
     setVisibleTurnCount((count) =>
       Math.min(initialTurns, count + FIRST_PAINT_TURNS),

@@ -61,6 +61,46 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("does not recalculate the transcript viewport for every streamed token", () => {
+  const blocks: Block[] = [
+    { id: "prompt", role: "user", text: "Explain the result" },
+    { id: "reply", role: "assistant", text: "First", streaming: true },
+  ];
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(100);
+  const styles = vi.spyOn(window, "getComputedStyle");
+  act(() =>
+    root.render(createElement(AgentTranscript, { blocks, busy: true })),
+  );
+  const scroller = host.querySelector<HTMLElement>(".agent-transcript")!;
+  let height = 200;
+  Object.defineProperty(scroller, "scrollHeight", { get: () => height });
+  const observer = observers.find((entry) => entry.target === scroller)!;
+  act(() => observer.resize());
+  const previousTop = scroller.scrollTop;
+  styles.mockClear();
+
+  act(() =>
+    root.render(
+      createElement(AgentTranscript, {
+        blocks: [blocks[0], { ...blocks[1], text: "First and second" }],
+        busy: true,
+      }),
+    ),
+  );
+  expect(host.textContent).toContain("First and second");
+  const inner = scroller.querySelector("[data-transcript-content]");
+  expect(
+    styles.mock.calls.filter(([element]) => element === inner),
+  ).toHaveLength(0);
+  expect(scroller.scrollTop).toBe(previousTop);
+
+  // ResizeObserver delivers the actual Markdown growth after browser layout.
+  height = 300;
+  act(() => observer.resize());
+  expect(styles.mock.calls.some(([element]) => element === inner)).toBe(true);
+  expect(scroller.scrollTop).toBeGreaterThan(previousTop);
+});
+
 it("regroups only the changing live turn, including after a tab revisit", async () => {
   vi.useFakeTimers();
   const blocks: Block[] = Array.from({ length: 20 }, (_, index): Block[] => [
