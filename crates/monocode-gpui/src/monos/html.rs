@@ -49,7 +49,7 @@ define_class!(
     #[unsafe(super(NSObject))]
     #[name = "MonocodeArtifactNavigation"]
     #[thread_kind=MainThreadOnly]
-    #[ivars=gpui::AsyncApp]
+    #[ivars=(gpui::AsyncApp, gpui::WeakEntity<super::Monos>)]
     struct NavigationGuard;
     unsafe impl NSObjectProtocol for NavigationGuard {}
     unsafe impl WKNavigationDelegate for NavigationGuard {
@@ -67,7 +67,15 @@ define_class!(
                     || url.to_string().starts_with("http://"))
             {
                 let url = url.to_string();
-                self.ivars().clone().update(|cx| cx.open_url(&url));
+                let (app, monos) = self.ivars().clone();
+                app.update(|cx| {
+                    let shown = monos
+                        .update(cx, |monos, cx| monos.open_work_item(&url, cx))
+                        .unwrap_or(false);
+                    if !shown {
+                        cx.open_url(&url);
+                    }
+                });
             }
             let allowed = url.is_none_or(|url| {
                 let s = url.to_string();
@@ -96,6 +104,8 @@ struct Markup {
 }
 pub(super) struct Html {
     body: String,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    monos: gpui::WeakEntity<super::Monos>,
     interactive: bool,
     #[cfg(target_os = "macos")]
     markup: Option<Markup>,
@@ -136,9 +146,10 @@ fn sandbox(body: &str) -> String {
     )
 }
 impl Html {
-    pub(super) fn new(body: String) -> Self {
+    pub(super) fn new(body: String, monos: gpui::WeakEntity<super::Monos>) -> Self {
         Self {
             body,
+            monos,
             interactive: true,
             #[cfg(target_os = "macos")]
             markup: None,
@@ -182,6 +193,7 @@ impl gpui::Render for Html {
             let view = self.view.clone();
             let html = self.markup();
             let app = cx.to_async();
+            let monos = self.monos.clone();
             let interactive = self.interactive;
             canvas(
                 |_, _, _| {},
@@ -255,7 +267,8 @@ impl gpui::Render for Html {
                                 web_rect,
                                 &config,
                             );
-                            let guard = NavigationGuard::alloc(mtm).set_ivars(app.clone());
+                            let guard =
+                                NavigationGuard::alloc(mtm).set_ivars((app.clone(), monos.clone()));
                             let guard: Retained<NavigationGuard> = msg_send![super(guard), init];
                             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*guard)));
                             web.loadHTMLString_baseURL(&NSString::from_str(&html), None);
