@@ -11,6 +11,7 @@ const MAX_RESPONSE_BYTES: u64 = 1 << 20;
 /// The phone's Android channel for session alerts.
 const CHANNEL: &str = "sessions";
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
     pub title: String,
     /// Under the title on iOS, as the project a session is in.

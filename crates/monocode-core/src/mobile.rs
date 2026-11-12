@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod host;
 pub mod notify;
+mod presence;
 mod router;
 pub mod watch;
 
@@ -11,3 +12,4 @@ pub use host::{
     Device, Event, Invite, MobileHost, Push, PushRegistration, Request, Status, WatchStart,
 };
 pub use monocode_mobile_link::Address;
+pub use presence::{Attendance, Report};
