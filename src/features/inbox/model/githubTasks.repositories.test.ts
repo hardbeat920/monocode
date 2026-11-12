@@ -76,7 +76,8 @@ describe("GitHub fork repositories", () => {
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||
-        command === "azure_devops_status"
+        command === "azure_devops_status" ||
+        command === "bitbucket_status"
       ) {
         return { connected: false } as never;
       }
@@ -115,7 +116,8 @@ describe("GitHub fork repositories", () => {
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||
-        command === "azure_devops_status"
+        command === "azure_devops_status" ||
+        command === "bitbucket_status"
       ) {
         return { connected: false } as never;
       }
