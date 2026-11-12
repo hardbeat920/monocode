@@ -302,6 +302,19 @@ describe("rankSkills", () => {
     expect(ranked[0]?.name).toBe("review-pr");
   });
 
+  it("matches descriptions by whole words, not scattered letters", () => {
+    const longProse: Skill = {
+      kind: "native",
+      name: "code-review",
+      description:
+        "Review the current diff for correctness bugs at the given effort level, then post findings.",
+      invocation: "code-review",
+      source: "claude",
+    };
+    expect(rankSkills([longProse, review], "compact")).toEqual([]);
+    expect(rankSkills([longProse, review], "findings")).toEqual([longProse]);
+  });
+
   it("ranks native Pi rows with project skills", () => {
     const ranked = rankSkills([review, piNative, piFile], "");
     expect(ranked.map((skill) => skill.name)).toEqual([
