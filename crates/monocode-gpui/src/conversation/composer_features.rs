@@ -292,6 +292,13 @@ impl Conversation {
         self.add_attachments(pending, cx);
         cx.notify();
     }
+    /// Take the draft's attachments for sending. The attachment error only
+    /// describes the draft, so clear it too. Code that moves the draft aside
+    /// for another message must keep the error with the draft.
+    pub(super) fn take_attachments(&mut self) -> Vec<PathBuf> {
+        self.attachment_error = None;
+        std::mem::take(&mut self.attachments)
+    }
     pub(super) fn attachment_chips(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Removed chips release their thumbnail sprites with the entity.
         let attachments = &self.attachments;
@@ -359,6 +366,7 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                this.attachment_error = None;
                                 cx.notify();
                             }
                         }));

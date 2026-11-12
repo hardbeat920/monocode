@@ -120,7 +120,7 @@ impl Conversation {
         invert: bool,
         cx: &mut Context<Self>,
     ) {
-        let attachments = std::mem::take(&mut self.attachments);
+        let attachments = self.take_attachments();
         let mut message = self.message(prompt, attachments, mode, cx);
         message.steer = message.can_steer() && self.steers_follow_up(invert, cx);
         if invert && self.busy && message.steer {
@@ -159,7 +159,7 @@ impl Conversation {
             return;
         }
         self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        let attachments = std::mem::take(&mut self.attachments);
+        let attachments = self.take_attachments();
         let mut message = self.message(text, attachments, None, cx);
         message.at = self.transcript.read(cx).source_rows().len();
         if self.summary.title.starts_with("New ") {
@@ -399,12 +399,14 @@ impl Conversation {
         self.orchestration_plan = None;
         self.orchestration_error = None;
         let composer_attachments = std::mem::take(&mut self.attachments);
+        let composer_error = self.attachment_error.take();
         self.settings.attachments = message.attachments;
         let previous_prepared = self.settings.prepared_prompt.take();
         self.settings.prepared_prompt = message.prepared_prompt;
         self.launch_prompt(message.text, cx);
         self.settings.prepared_prompt = previous_prepared;
         self.attachments = composer_attachments;
+        self.attachment_error = composer_error;
         self.settings.attachments.clear();
         (
             self.settings.plan,
