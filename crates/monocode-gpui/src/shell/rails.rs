@@ -374,7 +374,7 @@ impl Shell {
             .line_height(px(17.875))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(content(1.))
-            .child(crate::particle_text::particle_text(session.display_title()));
+            .child(self.session_title_text(id, session.display_title()));
         let body = div()
             .w_full()
             .min_w_0()
