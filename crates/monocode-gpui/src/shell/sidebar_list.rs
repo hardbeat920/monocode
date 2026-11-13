@@ -268,14 +268,15 @@ impl Shell {
 
     fn sidebar_scope(&self) -> String {
         format!(
-            "{}\0{}\0{}\0{:?}\0{}\0{}\0{}",
+            "{}\0{}\0{}\0{:?}\0{}\0{}\0{}\0{}",
             self.workspace.project,
             self.working_copy(),
             self.query,
             self.workspace.session_filters,
             self.workspace.preferences.show_archived,
             self.workspace.boxy_layout(),
-            self.workspace.classic_layout
+            self.workspace.classic_layout,
+            self.tab_strip_visible()
         )
     }
 
@@ -287,6 +288,17 @@ impl Shell {
         let groups = self.project_groups();
         let now = monocode_core::time::now_ms();
         let mut rows = vec![Row::Navigation, Row::Monos];
+        let fresh: Vec<i64> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Session(id) if self.is_fresh_session(*id, cx) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        if !fresh.is_empty() {
+            rows.extend(fresh.iter().map(|id| Row::Session(*id)));
+            rows.push(Row::Gap);
+        }
         let mut folders = false;
         for entry in entries {
             let (members, collapsed) = match entry {
@@ -348,7 +360,7 @@ impl Shell {
             let Entry::Session(id) = entry else {
                 continue;
             };
-            if self.rails.children.contains(id) {
+            if fresh.contains(id) || self.rails.children.contains(id) {
                 continue;
             }
             let label = age_label(self.session_metadata(*id, cx).summary.updated_at, now);

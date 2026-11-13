@@ -4351,6 +4351,18 @@ impl Shell {
         }
     }
     fn cycle(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tab_strip_visible() {
+            // The sidebar is the only list on screen, so tab stepping walks it.
+            let ids = self.sidebar_navigation_ids(cx);
+            let current = self.workspace.active.filter(|_| {
+                self.active_title_tab(cx)
+                    .is_some_and(|t| t.session().is_some())
+            });
+            if let Some(next) = adjacent(&ids, current.as_ref(), step) {
+                self.open(next, window, cx);
+            }
+            return;
+        }
         let tabs = self.visible_tabs(cx);
         if tabs.is_empty() {
             return;
@@ -5034,13 +5046,18 @@ impl Shell {
             } else {
                 self.navigation(cx).into_any_element()
             })
-            .child(
-                self.tabs_frame.clone().cached(
-                    StyleRefinement::default()
-                        .w(tabs_width)
-                        .h(px(TITLE_BAR_HEIGHT)),
-                ),
-            )
+            .child(if self.tab_strip_visible() {
+                self.tabs_frame
+                    .clone()
+                    .cached(
+                        StyleRefinement::default()
+                            .w(tabs_width)
+                            .h(px(TITLE_BAR_HEIGHT)),
+                    )
+                    .into_any_element()
+            } else {
+                self.hidden_strip(tabs_width, cx)
+            })
             .child(if classic {
                 // The toggle holds the window's corner (classic_body); the
                 // strip keeps only the part an open panel leaves uncovered.
@@ -6650,7 +6667,7 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|m| m.read(cx).hidden_session(id))
                 && s.summary.cwd == self.workspace.project
-                && s.summary.has_messages
+                && (s.summary.has_messages || self.is_fresh_session(id, cx))
                 && !self.orchestration_worker(id)
                 && self.in_sidebar_worktree_scope(id, cx)
         };
@@ -6769,6 +6786,19 @@ impl Shell {
         self.close_title_tabs(&tabs, Some(active), window, cx);
     }
     fn activate_tab(&mut self, slot: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tab_strip_visible() {
+            // ⌘1–9 open the sidebar's rows, ⌘9 the last.
+            let ids = self.sidebar_navigation_ids(cx);
+            let index = if slot < 0 {
+                ids.len().saturating_sub(1)
+            } else {
+                slot as usize
+            };
+            if let Some(id) = ids.get(index) {
+                self.open(*id, window, cx);
+            }
+            return;
+        }
         let tabs = self.visible_tabs(cx);
         let index = if slot < 0 {
             tabs.len().saturating_sub(1)

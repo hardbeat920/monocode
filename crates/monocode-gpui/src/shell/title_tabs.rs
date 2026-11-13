@@ -1,5 +1,6 @@
 //! All title-strip commands operate on the same visible, ordered snapshot.
 use super::*;
+use crate::settings::TitleBarMode;
 use crate::workspace::TitleTab;
 use monocode_core::files::path_key;
 
@@ -56,6 +57,54 @@ impl Shell {
             project: self.workspace.project.clone(),
             worktree: self.working_copy().into(),
         }
+    }
+
+    pub(super) fn tab_strip_visible(&self) -> bool {
+        self.workspace.preferences.title_bar == TitleBarMode::Tabs
+    }
+
+    /// With the strip hidden, an open chat that has no messages yet would be
+    /// invisible, so the sidebar lists it at its top.
+    pub(super) fn is_fresh_session(&self, id: i64, cx: &App) -> bool {
+        !self.tab_strip_visible()
+            && self.workspace.tab_of(id).is_some()
+            && !self.session_metadata(id, cx).summary.has_messages
+    }
+
+    pub(super) fn is_open_without_strip(&self, id: i64) -> bool {
+        !self.tab_strip_visible() && self.workspace.tab_of(id).is_some()
+    }
+
+    /// With the strip hidden, its room stays a drag area that names the
+    /// open session, left-aligned like a header.
+    pub(super) fn hidden_strip(&self, width: Pixels, cx: &App) -> AnyElement {
+        let title = self
+            .active_title_tab(cx)
+            .and_then(|tab| tab.session())
+            .filter(|id| self.session_summaries.contains_key(id))
+            .map(|id| self.tab_copy(id, cx).headline);
+        titlebar_drag_area()
+            .id("hidden-tab-strip")
+            .debug_selector(|| "hidden-tab-strip".into())
+            .w(width)
+            .h(px(TITLE_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .px_3()
+            .children(title.map(|title| {
+                // The sidebar rows' title animation: the new glyphs reveal
+                // while the old ones drift away.
+                div()
+                    .debug_selector(|| "hidden-tab-strip-title".into())
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(20.))
+                    .text_size(px(13.))
+                    .text_color(content(0.6))
+                    .child(crate::particle_text::particle_text(title))
+            }))
+            .into_any_element()
     }
 
     /// Every tab this scope shows, pinned ones first in pin order, then the
@@ -319,6 +368,25 @@ impl Shell {
         }
         let active = self.active_title_tab(cx);
         let replace = active.as_ref().is_some_and(|tab| closing.contains(tab));
+        // With the strip hidden, "next" means the next open chat down the
+        // sidebar; tabs the sidebar does not list follow in their own order.
+        let neighbours = if self.tab_strip_visible() {
+            before.clone()
+        } else {
+            let mut ordered: Vec<TitleTab> = self
+                .sidebar_navigation_ids(cx)
+                .into_iter()
+                .filter_map(|id| self.workspace.tab_of(id))
+                .map(TitleTab::Session)
+                .filter(|tab| before.contains(tab))
+                .collect();
+            for tab in &before {
+                if !ordered.contains(tab) {
+                    ordered.push(tab.clone());
+                }
+            }
+            ordered
+        };
         // Pins never close on their own, so the strip keeps one tab beside
         // them: closing its last falls back to a blank session, not a pin.
         let strip_left = before
@@ -333,11 +401,13 @@ impl Shell {
             preferred
                 .filter(|tab| before.contains(tab) && !closing.contains(tab))
                 .or_else(|| {
-                    let index = before.iter().position(|tab| Some(tab) == active.as_ref())?;
-                    // Browsers select the next tab to the right, then the one to the left.
-                    before[index + 1..]
+                    let index = neighbours
                         .iter()
-                        .chain(before[..index].iter().rev())
+                        .position(|tab| Some(tab) == active.as_ref())?;
+                    // Browsers select the next tab to the right, then the one to the left.
+                    neighbours[index + 1..]
+                        .iter()
+                        .chain(neighbours[..index].iter().rev())
                         .find(|tab| !closing.contains(*tab))
                         .cloned()
                 })
@@ -943,5 +1013,74 @@ mod interaction_tests {
                 assert!(!shell.mono_active(cx));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn hidden_tab_bar_keys_follow_the_sidebar_and_new_chats_lead_it(cx: &mut TestAppContext) {
+        let (window, older, blank) = window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&older].update(cx, |view, _| {
+                    view.summary.cwd = "/work/monocode".into();
+                    view.summary.has_messages = true;
+                });
+                assert!(
+                    !shell.sidebar_navigation_ids(cx).contains(&blank),
+                    "a chat with no messages is not listed while the strip shows its tab"
+                );
+                shell.workspace.preferences.title_bar = TitleBarMode::SessionTitle;
+                shell.persist(cx);
+                cx.notify();
+                assert_eq!(shell.sidebar_navigation_ids(cx), [blank, older]);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        assert!(visual.debug_bounds("hidden-tab-strip").is_some());
+        assert!(visual.debug_bounds("new-tab").is_none());
+        window
+            .update(visual, |shell, w, cx| {
+                shell.activate_tab(1, w, cx);
+                assert_eq!(shell.workspace.active, Some(older));
+                shell.activate_tab(0, w, cx);
+                assert_eq!(shell.workspace.active, Some(blank));
+                shell.cycle(1, w, cx);
+                assert_eq!(shell.workspace.active, Some(older));
+                shell.cycle(1, w, cx);
+                assert_eq!(shell.workspace.active, Some(blank));
+                shell.activate_tab(-1, w, cx);
+                assert_eq!(shell.workspace.active, Some(older));
+                shell.workspace.preferences.title_bar = TitleBarMode::Tabs;
+                shell.persist(cx);
+                assert_eq!(shell.sidebar_navigation_ids(cx), [older]);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn session_title_replaces_the_tabs_in_both_layouts(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        for classic in [true, false] {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.workspace.classic_layout = classic;
+                    shell.workspace.preferences.title_bar = TitleBarMode::SessionTitle;
+                    shell.persist(cx);
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual.debug_bounds("hidden-tab-strip").is_some(),
+                "classic_layout {classic}"
+            );
+            assert!(
+                visual.debug_bounds("new-tab").is_none(),
+                "classic_layout {classic}"
+            );
+        }
     }
 }
