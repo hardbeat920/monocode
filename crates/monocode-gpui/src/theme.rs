@@ -203,14 +203,19 @@ impl Tokens {
 /// Platforms whose compositor blurs the desktop behind the window: macOS
 /// vibrancy and Windows Acrylic. Linux blur is compositor-dependent, so it
 /// stays opaque rather than exposing the raw desktop.
-pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows", target_os = "linux"));
 pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
     GLASS_PLATFORM && p.theme != "light" && !(p.theme == "system" && system_light)
 }
 /// What the compositor puts behind a window that does or doesn't paint glass.
 pub(crate) fn window_backdrop(glass: bool) -> gpui::WindowBackgroundAppearance {
     if glass && GLASS_PLATFORM {
-        gpui::WindowBackgroundAppearance::Blurred
+        // Linux: let the compositor (Hyprland/hyprglass) do the blur.
+        if cfg!(target_os = "linux") {
+            gpui::WindowBackgroundAppearance::Transparent
+        } else {
+            gpui::WindowBackgroundAppearance::Blurred
+        }
     } else {
         gpui::WindowBackgroundAppearance::Opaque
     }
