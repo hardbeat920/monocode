@@ -267,6 +267,25 @@ impl Shell {
                 session_opacity: p.chat_background_session.clamp(5, 65) as f32 / 100.,
             });
         }
+        // Fork: with no background chosen, show the live Omarchy wallpaper
+        // dithered. Canonicalized so a wallpaper change gives a new texture key.
+        #[cfg(target_os = "linux")]
+        if appearance.background.is_none() {
+            use monocode_core::project_appearance::{Background, Effect, Scope};
+            let link = std::env::var_os("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/state/omarchy/current/background"));
+            if let Some(real) = link.and_then(|l| std::fs::canonicalize(l).ok()) {
+                appearance.background = Some(Background {
+                    path: real.to_string_lossy().into_owned(),
+                    // Same effect everywhere so one texture serves both;
+                    // chats just draw it dimmer.
+                    effect: Effect::Dither,
+                    scope: Scope::All,
+                    empty_opacity: 0.4,
+                    session_opacity: 0.15,
+                });
+            }
+        }
         let classic = self.workspace.boxy_layout();
         chat.update(cx, |session, cx| {
             session.set_project_appearance(appearance.clone(), cx);

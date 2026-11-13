@@ -87,6 +87,13 @@ async fn prepare_texture(
     request: TextureRequest,
     screen: (u32, u32),
 ) -> Result<Arc<RenderImage>, String> {
+    let cache = disk_cache_path(&request, screen);
+    if let Some(mut pixels) = cache.as_ref().and_then(|c| read_image(c).ok()) {
+        for pixel in pixels.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        return Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])));
+    }
     let source = read_image(Path::new(&request.key.path))?;
     #[cfg(target_os = "macos")]
     let mut pixels = background_texture(source, request.key.effect);
@@ -111,10 +118,38 @@ async fn prepare_texture(
             image::imageops::FilterType::Triangle,
         );
     }
+    if let Some(cache) = cache {
+        if let Some(dir) = cache.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = pixels.save(&cache);
+    }
     for pixel in pixels.pixels_mut() {
         pixel.0.swap(0, 2);
     }
     Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
+}
+/// Fork: the Omarchy wallpaper fills the whole view, no bottom fade.
+fn is_wallpaper(path: &str) -> bool {
+    path.contains("/.local/state/omarchy/")
+}
+/// Fork: processed wallpaper textures are kept on disk so later launches
+/// skip the effect pass. Keyed by path, mtime, effect and screen size.
+fn disk_cache_path(request: &TextureRequest, screen: (u32, u32)) -> Option<std::path::PathBuf> {
+    if !is_wallpaper(&request.key.path) {
+        return None;
+    }
+    let mtime = std::fs::metadata(&request.key.path).ok()?.modified().ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    request.key.hash(&mut h);
+    mtime.hash(&mut h);
+    screen.hash(&mut h);
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".cache/monocode-fork/backgrounds")
+            .join(format!("{:016x}.png", h.finish())),
+    )
 }
 #[derive(Default)]
 pub(crate) struct ProjectBackground {
@@ -230,6 +265,7 @@ impl ProjectBackground {
         let preview = self.preview;
         let empty = self.empty;
         let haze = settings.effect == Effect::GradientBlur;
+        let full = is_wallpaper(&settings.path);
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -250,7 +286,15 @@ impl ProjectBackground {
                         )),
                 );
                 #[cfg(not(target_os = "macos"))]
-                if !begin {
+                if !begin && full {
+                    // Fork: an even scrim over the whole wallpaper instead of
+                    // the top-to-bottom fade; keeps the composer readable.
+                    let mut color: gpui::Hsla = gpui::rgb(crate::theme::CHAT).into();
+                    color.a = 0.6;
+                    window.paint_quad(gpui::fill(bounds, color));
+                }
+                #[cfg(not(target_os = "macos"))]
+                if !begin && !full {
                     // Other backends have an opaque chat surface. Reveal that
                     // surface with the same view-relative stops while it resizes.
                     use crate::theme::CHAT;
