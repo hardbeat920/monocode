@@ -364,9 +364,23 @@ impl Render for ProjectBackground {
         if self.key.as_ref() != Some(&key) || self.loading {
             self.prepare(key, window, cx);
         }
-        let opacity = settings.opacity(self.empty) * self.faded(window);
+        let full = is_wallpaper(&settings.path);
+        // Fork: the wallpaper never fades in; that would flash the raw desktop
+        // through the transparent window. Cover with the dark surface until the
+        // texture is ready instead.
+        let opacity = if full {
+            self.fade = None;
+            settings.opacity(self.empty)
+        } else {
+            settings.opacity(self.empty) * self.faded(window)
+        };
         div()
             .id("project-chat-background")
+            .when(full && self.image.is_none(), |d| {
+                let mut color: gpui::Hsla = gpui::rgb(crate::theme::CHAT).into();
+                color.a = 0.9;
+                d.bg(color)
+            })
             .debug_selector(|| "project-chat-background".into())
             .role(Role::Image)
             .aria_label("Project background")
