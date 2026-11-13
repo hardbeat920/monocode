@@ -39,7 +39,8 @@ impl HarnessUpdates {
         this
     }
     pub(crate) fn is_visible(&self) -> bool {
-        !self.updates.is_empty()
+        // Fork: harness versions are managed by mise; never nag.
+        false
     }
     fn busy(&self) -> bool {
         self.rows.values().any(|s| matches!(s, RowState::Updating))
