@@ -247,6 +247,12 @@ pub(crate) fn composer_fill() -> Hsla {
         let mut background = shell_fill();
         background.a = 1.;
         background
+    } else if cfg!(target_os = "linux") {
+        // Fork: no backdrop blur on Linux, so the wallpaper would show through
+        // a 3% wash. Use a near-solid chat surface instead.
+        let mut fill: Hsla = rgb(CHAT).into();
+        fill.a = 0.94;
+        fill
     } else {
         content(0.03)
     }
