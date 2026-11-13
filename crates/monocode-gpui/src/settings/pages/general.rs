@@ -1,7 +1,7 @@
 //! GeneralPage and UpdateRow.
 use crate::notifications::updater::{self, Action};
 use crate::settings::{
-    SettingsView,
+    SettingsView, TitleBarMode,
     widgets::{primary_button, secondary_button},
 };
 use crate::theme::*;
@@ -149,6 +149,20 @@ impl SettingsView {
                 false,
                 cx,
                 |this, on, cx| this.update(cx, |p| p.working_agents = on),
+            )],
+        ));
+        workspace.push(self.row(
+            Some("title-bar"),
+            false,
+            "Title bar",
+            Some("What the top bar shows for the open chat. With Session title, switch sessions from the sidebar: ⌘1–9 follow its order and new sessions appear at its top.".into()),
+            vec![self.segmented(
+                "title-bar",
+                "Title bar",
+                p.title_bar.key(),
+                &[("tabs", "Tabs"), ("session-title", "Session title")],
+                cx,
+                |this, key, cx| this.update(cx, |p| p.title_bar = TitleBarMode::from_key(key)),
             )],
         ));
         workspace.push(self.row(

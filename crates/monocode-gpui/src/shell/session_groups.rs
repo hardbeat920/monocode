@@ -333,12 +333,21 @@ impl Shell {
             .iter()
             .map(|r| (r.session_id, r.due_at))
             .collect();
-        build_list(
-            ids,
-            |id| self.session_metadata(id, cx).summary.pinned,
-            &self.project_groups(),
-            &reminders,
-        )
+        // Chats without messages lead the list, above pins and folders.
+        let (fresh, rest): (Vec<i64>, Vec<i64>) = ids
+            .iter()
+            .copied()
+            .partition(|id| self.is_fresh_session(*id, cx));
+        fresh
+            .into_iter()
+            .map(Entry::Session)
+            .chain(build_list(
+                &rest,
+                |id| self.session_metadata(id, cx).summary.pinned,
+                &self.project_groups(),
+                &reminders,
+            ))
+            .collect()
     }
     /// The sessions in the order the sidebar shows them, for stepping.
     pub(super) fn sidebar_navigation_ids(&self, cx: &App) -> Vec<i64> {
@@ -441,6 +450,14 @@ impl Shell {
         }
         items.push(MenuAction::new("pin", if all_pinned { "Unpin" } else { "Pin" }).into());
         if !multiple {
+            // The sidebar is the only place left to close a hidden tab.
+            if self.is_open_without_strip(id) {
+                items.push(
+                    MenuAction::new("close-tab", "Close tab")
+                        .disabled(!self.tab_can_close(id, cx))
+                        .into(),
+                );
+            }
             items.extend([
                 MenuAction::new("rename", "Rename").shortcut("F2").into(),
                 MenuAction::new("copy-session-id", "Copy session ID")
@@ -551,6 +568,7 @@ impl Shell {
                 self.store_write("pin the session", cx, move |s| s.set_pinned(&ids, pinned));
                 self.invalidate_chrome(cx);
             }
+            "close-tab" => self.close(id, window, cx),
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
             "link-work-item" => self.open_link_dialog(id, window, cx),
             "reminder:cancel" => {

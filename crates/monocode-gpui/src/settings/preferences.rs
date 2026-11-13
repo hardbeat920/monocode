@@ -21,6 +21,8 @@ pub(crate) struct Preferences {
     /// Global search floats as a command panel instead of opening a page.
     pub search_panel: bool,
     pub working_agents: bool,
+    /// What the title strip shows for the open chat.
+    pub title_bar: TitleBarMode,
     pub close_to_tray: bool,
     /// Running an action shows the terminal it runs in.
     pub action_opens_terminal: bool,
@@ -126,6 +128,7 @@ impl Default for Preferences {
             quick_composer: true,
             search_panel: false,
             working_agents: true,
+            title_bar: TitleBarMode::Tabs,
             close_to_tray: true,
             action_opens_terminal: true,
             terminal_in_panel: false,
@@ -255,6 +258,33 @@ impl Preferences {
         self.chat_background = d.chat_background;
         self.ui_scale = d.ui_scale;
         self.collapsed_project_rail = d.collapsed_project_rail;
+    }
+}
+
+/// What the title strip shows. With the session title, the sidebar is the
+/// session list: ⌘1–9 and tab stepping follow its order, and new sessions
+/// appear at its top.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum TitleBarMode {
+    #[default]
+    Tabs,
+    SessionTitle,
+}
+
+impl TitleBarMode {
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Tabs => "tabs",
+            Self::SessionTitle => "session-title",
+        }
+    }
+
+    pub(crate) fn from_key(key: &str) -> Self {
+        match key {
+            "session-title" => Self::SessionTitle,
+            _ => Self::Tabs,
+        }
     }
 }
 
