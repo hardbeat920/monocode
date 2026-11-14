@@ -738,6 +738,10 @@ impl Input {
     fn range8(&self, r: Range<usize>) -> Range<usize> {
         self.clip_range(self.from16(r.start)..self.from16(r.end))
     }
+    #[cfg(test)]
+    pub(crate) fn diagnostic_geometry(&self) -> (Option<Bounds<Pixels>>, Pixels) {
+        (self.bounds, self.scroll_y)
+    }
     fn line_height(&self) -> Pixels {
         px(if self.single_line {
             self.height
@@ -1646,12 +1650,10 @@ impl Element for InputElement {
             base += line.len() + 1;
             y += line.size(line_height).height;
         }
-        // Single-line fields never wrap or scroll vertically. In particular,
-        // a line taller than its viewport used to alternate between 0 and 2 px
-        // on every repaint, making even the empty placeholder visibly jump.
+        // A line taller than its viewport cannot fit, so anchor its top to avoid oscillation.
         let scroll_y = if i.manual_scroll {
             i.scroll_y
-        } else if i.single_line || caret.y < i.scroll_y {
+        } else if i.single_line || bounds.size.height < line_height || caret.y < i.scroll_y {
             caret.y
         } else if caret.y + line_height > i.scroll_y + bounds.size.height {
             caret.y + line_height - bounds.size.height
@@ -2397,6 +2399,24 @@ mod native_input_tests {
             last_visual_line.ends_with("selection.")
                 && last_visual_line.len() < input.read_with(cx, |i, _| i.content.len())
         );
+    }
+
+    #[gpui::test]
+    fn composer_placeholder_stays_still_in_short_viewport(cx: &mut TestAppContext) {
+        let window = field(cx, false);
+        window
+            .update(cx, |input, _, cx| {
+                input.height = 20.;
+                cx.notify();
+            })
+            .unwrap();
+        for _ in 0..12 {
+            cx.refresh().unwrap();
+            assert_eq!(
+                window.update(cx, |input, _, _| input.scroll_y).unwrap(),
+                px(0.)
+            );
+        }
     }
 
     #[gpui::test]

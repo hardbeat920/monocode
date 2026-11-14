@@ -24,6 +24,13 @@ pub(crate) const BINDINGS: &[Binding] = &[
         when: "Always",
         fixed: false,
     },
+    #[cfg(target_os = "macos")]
+    Binding {
+        command: "App: Focus Prompt",
+        keys: "⌘L",
+        when: "Active chat or session",
+        fixed: false,
+    },
     Binding {
         command: "App: Go to File",
         keys: "⌘P",

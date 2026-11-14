@@ -4,6 +4,7 @@ pub(crate) struct MonoSession {
     pub id: i64,
     pub title: String,
     pub cwd: String,
+    /// Running, waiting on Mono input, or still settling a stop.
     pub busy: bool,
     pub has_messages: bool,
     pub archived: bool,
@@ -69,7 +70,8 @@ impl Shell {
                     id,
                     title: metadata.summary.title.clone(),
                     cwd: metadata.summary.cwd.clone(),
-                    busy: metadata.busy || live.is_some_and(|v| v.mono_external_pending()),
+                    busy: metadata.busy
+                        || live.is_some_and(|v| v.mono_external_pending() || v.mono_stopping()),
                     has_messages: metadata.summary.has_messages,
                     archived: metadata.summary.archived,
                     updated_at: metadata.summary.updated_at,
