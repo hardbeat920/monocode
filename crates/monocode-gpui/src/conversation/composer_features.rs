@@ -328,6 +328,7 @@ impl Conversation {
                     let image = monocode_core::composer::image_mime(path).is_some();
                     let remove = div()
                         .id(("remove-attachment", ix))
+                        .debug_selector(move || format!("remove-attachment-{ix}"))
                         .role(Role::Button)
                         .aria_label(format!("Remove {label}"))
                         .cursor_pointer()
@@ -359,6 +360,9 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                if this.attachments.is_empty() {
+                                    cx.emit(SessionChanged);
+                                }
                                 cx.notify();
                             }
                         }));
@@ -457,6 +461,29 @@ impl Conversation {
             monocode_core::response::limit(&format!("{}\n{}", self.status, text), 12_000),
         )
     }
+    pub(crate) fn worker_outcome(&self) -> Option<monocode_core::store::WorkerOutcome> {
+        use monocode_core::store::WorkerOutcome;
+        if self.busy || !self.history_loaded() {
+            return None;
+        }
+        if self.notification_cancelled {
+            return Some(WorkerOutcome::Stopped);
+        }
+        // A saved app launch can be idle briefly before its queue starts the turn.
+        if self.external_submission_pending()
+            || self.follow_ups.requested.is_some()
+            || self.follow_ups.sending.is_some()
+        {
+            return None;
+        }
+        if self.status != "Ready" {
+            Some(WorkerOutcome::Failed)
+        } else if self.summary.has_messages {
+            Some(WorkerOutcome::Completed)
+        } else {
+            None
+        }
+    }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         self.history_ready()
             && !self.editing_last_turn.pending()
@@ -495,6 +522,17 @@ impl Conversation {
             && self.follow_ups.state.messages.is_empty()
             && self.follow_ups.state.draft.is_none()
             && !self.settings.worktree_removed
+    }
+    pub(crate) fn ready_for_coordinator_report(&self, cx: &gpui::App) -> bool {
+        self.ready_for_external(cx)
+            && self.available_for_managed_run(cx)
+            && (self.settings.account.id == monocode_core::accounts::DEFAULT
+                || crate::accounts::get(cx).is_none_or(|center| {
+                    center.read(cx).book.exists(
+                        Kind::from_id(&self.summary.provider),
+                        &self.settings.account.id,
+                    )
+                }))
     }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
         if !self.history_ready() || self.stopping {

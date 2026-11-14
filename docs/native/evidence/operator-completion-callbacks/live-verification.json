@@ -1,0 +1,50 @@
+{
+  "source_commit": "d228183861a00f1a512fef0d99df7d76b9603e05",
+  "origin": 644034936161313,
+  "subscriptions": [
+    {
+      "session": 4302116823790921,
+      "title": "Granular A",
+      "group": {
+        "Label": "granular-alpha"
+      },
+      "outcome": "completed",
+      "delivered": true
+    },
+    {
+      "session": 1891232876805701,
+      "title": "Granular B",
+      "group": {
+        "Label": "granular-beta"
+      },
+      "outcome": "completed",
+      "delivered": true
+    }
+  ],
+  "children": [
+    {
+      "session": 4302116823790921,
+      "title": "Granular A",
+      "operator_enabled": false
+    },
+    {
+      "session": 1891232876805701,
+      "title": "Granular B",
+      "operator_enabled": false
+    }
+  ],
+  "app_tool_calls": {
+    "sessions.start": 2,
+    "polling": 0
+  },
+  "automatic_reports": [
+    "[Delegated work completed]\nWorker completion is not verification: inspect the results, verify as needed, then tell the user.\n\nSession 4302116823790921: Granular A\nOutcome: completed\nReady\nGRANULAR_ALPHA\n\nOther reports pending:\nSession 1891232876805701: Granular B\nMore reports will follow.",
+    "[Delegated work completed]\nWorker completion is not verification: inspect the results, verify as needed, then tell the user.\n\nSession 1891232876805701: Granular B\nOutcome: completed\nReady\nI\u2019ll run `sleep 60` without changing any files.\n\nGRANULAR_BETA"
+  ],
+  "assistant_replies": [
+    "I\u2019ll start the two workers with separate callback groups.",
+    "Workers started. Waiting for separate callbacks.",
+    "PARTIAL_CALLBACK: A completed. B report pending.",
+    "FINAL_CALLBACK: B completed. Both reports received separately."
+  ]
+}
