@@ -1507,6 +1507,7 @@ impl Render for Btw {
             .when(open, |d| {
                 d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             })
+            .child(crate::draft::float(px(SHEET_RADIUS)))
             .child(body_in(self.header(cx)))
             .child(
                 body_in(div().flex_1().min_h_0()).child(

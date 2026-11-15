@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Controls kit</title>
+<style>
+body{margin:0;padding:20px 22px 28px;background:var(--background);color:var(--foreground);font:13px/1.45 -apple-system,system-ui,sans-serif;display:flex;flex-direction:column;gap:22px}
+h2{margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.audit{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.audit .mc-card{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.audit ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.audit li{position:relative;padding-left:13px}
+.audit li::before{content:"";position:absolute;left:0;top:.55em;width:5px;height:5px;border-radius:99px;background:var(--border)}
+.audit .have li::before{background:var(--success)}
+.audit .gap li::before{background:var(--warning)}
+.audit .pain li::before{background:var(--destructive)}
+code{font:12px var(--font-mono);background:color-mix(in srgb,var(--foreground) 6%,transparent);padding:1px 5px;border-radius:5px}
+pre{margin:0;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font:12px/1.55 var(--font-mono);overflow:auto;white-space:pre-wrap}
+.k{color:var(--muted-foreground)}
+
+/* --- the page being controlled --- */
+.subject{position:relative;width:100%;display:grid;place-items:center;padding:8px 0 56px}
+.plan{width:250px;padding:calc(var(--s-pad,16)*1px);display:flex;flex-direction:column;gap:calc(var(--s-pad,16)*.6px);background:var(--card);border:1px solid var(--border);border-radius:calc(var(--s-radius,12)*1px);box-shadow:0 calc(var(--s-lift,0)*1px) calc(var(--s-lift,0)*3px) -6px rgb(0 0 0/.35);transition:border-radius .15s,box-shadow .15s}
+html[data-s-glow=on] .plan{box-shadow:0 0 0 1px var(--s-tone),0 10px 40px -12px var(--s-tone)}
+.plan h3{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.plan .price{font-size:30px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.plan .price small{font-size:12px;font-weight:400;color:var(--muted-foreground);letter-spacing:0}
+.plan ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px;color:var(--muted-foreground)}
+.plan li{display:flex;gap:7px;align-items:center}
+.plan li .mc-icon{width:13px;height:13px;color:var(--s-tone)}
+.plan .cta{height:30px;border:0;border-radius:calc(var(--s-radius,12)*.6px);background:var(--s-tone);color:#fff;font-weight:500}
+.tag{align-self:flex-start;font-size:11px;font-weight:500;padding:1px 8px;border-radius:99px;background:color-mix(in srgb,var(--s-tone) 18%,transparent);color:var(--foreground)}
+.readout{margin-top:6px}
+</style>
+<body>
+<div>
+  <h2>1 · Audit of the kit today</h2>
+  <div class="audit">
+    <div class="mc-card have"><b>Controls that exist</b><ul>
+      <li><code>mc-button</code> variants, icon, small</li>
+      <li><code>mc-input</code> single-line only</li>
+      <li><code>mc.slider</code> + <code>mc-range</code></li>
+      <li><code>mc.toggle</code> + <code>mc-switch</code></li>
+      <li><code>mc.tabs</code>, <code>mc.scrub</code></li>
+      <li><code>variants {controls}</code> slot</li></ul></div>
+    <div class="mc-card gap"><b>Gaps</b><ul>
+      <li>No select, segmented, stepper, textarea, checkbox, radio, swatch</li>
+      <li>No labelled field wrapper or groups</li>
+      <li>Slider fixed at 110px, value inline, no rail layout</li>
+      <li>Switch and range have no focus ring</li>
+      <li>No place for controls: only the demo bar</li></ul></div>
+    <div class="mc-card pain"><b>What hurts</b><ul>
+      <li>Every page hand-wires <code>onInput</code> to a re-render</li>
+      <li>State lives in closures, so the agent cannot see what the person set</li>
+      <li>Control values are lost on <code>variants</code> tab switch</li>
+      <li>Pure-CSS pages still need JS to bind a slider</li></ul></div>
+  </div>
+</div>
+
+<div>
+  <h2>2 · <code>mc.state</code> + <code>mc.controls</code> (optional, built)</h2>
+  <div id="live"></div>
+</div>
+
+<div>
+  <h2>3 · How a page uses it</h2>
+<pre><span class="k">// Optional. Nothing else in the kit depends on it.</span>
+const s = mc.state({ title: 'Pro', radius: 12, pad: 16, lift: 4, tone: '#4f5bd5', billing: 'monthly' })
+
+mc.controls('#panel', [
+  { key: 'title',   type: 'text' },
+  { key: 'radius',  type: 'slider',    min: 0, max: 28, unit: 'px' },
+  { key: 'billing', type: 'segmented', options: ['monthly', 'yearly'] },
+  { key: 'tone',    type: 'swatch',    options: ['#4f5bd5', '#2fb67c', '#e2683c'] },
+  { type: 'button',  label: 'Reset', onClick: s.reset },
+], { state: s, layout: 'rail' })           <span class="k">// 'rail' | 'bar' | 'dock'</span>
+
+s.on(render)                               <span class="k">// or: no JS at all, read var(--s-radius) in CSS</span>
+</pre>
+</div>
+
+<script>
+const {h, icon} = mc;
+
+/* ---------- the page being controlled ---------- */
+const s = mc.state({title: 'Pro', radius: 12, pad: 16, lift: 4, glow: false, tone: '#4f5bd5', billing: 'monthly', seats: 3});
+const SPEC = [
+  {key: 'title', type: 'text'},
+  {key: 'billing', type: 'segmented', options: ['monthly', 'yearly']},
+  {key: 'seats', type: 'stepper', min: 1, max: 99},
+  {type: 'sep'},
+  {key: 'radius', type: 'slider', min: 0, max: 28, unit: 'px'},
+  {key: 'pad', type: 'slider', min: 8, max: 28, unit: 'px', label: 'Padding'},
+  {key: 'lift', type: 'slider', min: 0, max: 20, label: 'Shadow'},
+  {key: 'tone', type: 'swatch', options: ['#4f5bd5', '#2fb67c', '#e2683c', '#c25bd6']},
+  {key: 'glow', type: 'toggle', label: 'Glow'},
+  {type: 'button', label: 'Reset', icon: 'replay', onClick: () => s.reset()},
+];
+const BAR = [SPEC[0], SPEC[1], SPEC[2], SPEC[4], SPEC[7], SPEC[8], SPEC[9]];
+const DOCK = [SPEC[1], SPEC[4], SPEC[7], SPEC[8], SPEC[9]];
+
+function subject(parent){
+  const plan = h('div', {class: 'plan'});
+  parent.append(h('div', {class: 'subject'}, plan));
+  const off = s.on(v => {
+    const per = v.billing === 'yearly' ? 9 : 12;
+    plan.replaceChildren(
+      h('span', {class: 'tag'}, v.billing === 'yearly' ? 'Save 25%' : 'Popular'),
+      h('h3', null, v.title || 'Untitled'),
+      h('div', {class: 'price'}, '$' + per * v.seats, h('small', null, ' / month · ' + v.seats + (v.seats === 1 ? ' seat' : ' seats'))),
+      h('ul', null, ['Unlimited threads', 'Live drafts', 'Priority models'].map(t => h('li', null, icon('check'), t))),
+      h('button', {class: 'cta'}, 'Choose ' + (v.title || 'plan')));
+  });
+  return {plan, off};
+}
+
+mc.variants('#live', [
+  {name: 'Rail', note: 'Beside the content. Best when there are many controls.', render(stage){
+    stage.style.cssText += 'display:flex;gap:22px;place-items:unset;align-items:flex-start;justify-content:center';
+    const left = h('div', {style: {flex: 1, minWidth: 0}}); stage.append(left, h('div', {class: 'mc-ctl-sep', style: {alignSelf: 'stretch'}}));
+    const sub = subject(left), ctl = mc.controls(stage, SPEC, {state: s, layout: 'rail', title: 'Plan card'});
+    return () => { sub.off(); ctl.destroy(); };
+  }},
+  {name: 'Bar', note: 'Above the content. Reads like a toolbar; good for 3 to 6 controls.', render(stage){
+    stage.style.cssText += 'display:flex;flex-direction:column;gap:14px;place-items:unset;align-items:stretch';
+    const ctl = mc.controls(stage, BAR, {state: s, layout: 'bar'}), sub = subject(stage);
+    return () => { sub.off(); ctl.destroy(); };
+  }},
+  {name: 'Dock', note: 'Floats over the content, so the page keeps its full size.', render(stage){
+    const sub = subject(stage), ctl = mc.controls(stage, DOCK, {state: s, layout: 'dock'});
+    return () => { sub.off(); ctl.destroy(); };
+  }},
+], {stageHeight: 400, replay: false, controls: h('span', {class: 'mc-muted'}, 'State is shared: switch layouts and the values stay.')});
+
+</script>

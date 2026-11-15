@@ -13,6 +13,7 @@ mod mascot;
 mod measurements;
 mod mono_divider;
 mod outline;
+pub(crate) mod pages;
 mod perf_scroll;
 pub(crate) mod phases;
 mod provider_switch;
@@ -148,6 +149,8 @@ enum Body {
     /// A dithered break between text replies in one Mono turn.
     MonoDivider,
     Visual(Arc<monocode_core::visual::VisualDocument>),
+    /// A live page the agent opened here.
+    Draft(Arc<monocode_core::visual_bridge::DraftCard>),
     Plain(SharedString),
     Interjection(monocode_core::transcript::Interjection),
     MonoCard(serde_json::Value),
@@ -753,6 +756,10 @@ pub(crate) struct TranscriptView {
     document: bool,
     side_question: bool,
     pub(crate) file_link_base: Option<String>,
+    /// The conversation shown, so a draft card can open its saved page.
+    pub(crate) draft_session: Option<i64>,
+    /// Redraws draft cards when their page opens, resizes or closes.
+    draft_watch: Option<gpui::Subscription>,
     expanded: HashSet<usize>,
     agent_panels: tasks::AgentPanels,
     /// User messages opened past their four-line clamp, by start.
@@ -2525,6 +2532,8 @@ impl TranscriptView {
             document: false,
             side_question: false,
             file_link_base: None,
+            draft_session: None,
+            draft_watch: None,
             expanded: HashSet::new(),
             agent_panels: Default::default(),
             expanded_prompts: HashSet::new(),
@@ -3490,6 +3499,26 @@ impl TranscriptView {
                         Some(document) => Body::Visual(Arc::new(document)),
                         None => Body::Plain("This visual could not be loaded.".into()),
                     };
+                    self.rows.push(UiRow {
+                        key: (0, 0),
+                        body,
+                        message,
+                        first: false,
+                        last: false,
+                        work: false,
+                        work_tail: false,
+                        thought_phase: None,
+                    });
+                }
+            } else if role == monocode_core::visual_bridge::DRAFT_ROLE {
+                let body =
+                    match serde_json::from_str::<monocode_core::visual_bridge::DraftCard>(&text) {
+                        // One card per draft: the page is a single native view.
+                        Ok(card) if self.shows_draft(&card.draft) => None,
+                        Ok(card) => Some(Body::Draft(Arc::new(card))),
+                        Err(_) => Some(Body::Plain("This draft could not be loaded.".into())),
+                    };
+                if let Some(body) = body {
                     self.rows.push(UiRow {
                         key: (0, 0),
                         body,
@@ -4793,6 +4822,7 @@ impl TranscriptView {
             Body::GitAction(card) => self.git_card_row(&card, message_start, cx),
             Body::RemotePlan(plan) => self.remote_plan_card(&plan, cx),
             Body::Visual(document) => self.visual_row(message_start, document, cx),
+            Body::Draft(card) => self.draft_row(&card, cx),
             Body::Interjection(ref note) => {
                 let open = self.expanded.contains(&message_start);
                 let long = note.text.lines().count() > 4 || note.text.len() > 300;

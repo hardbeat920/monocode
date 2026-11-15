@@ -563,6 +563,7 @@ impl Conversation {
             let mut view = TranscriptView::new();
             view.identity(&summary.provider, Kind::from_id(&summary.provider).label());
             view.file_link_base = Some(summary.cwd.clone());
+            view.draft_session = Some(summary.id);
             view
         });
         let account = crate::accounts::get(cx)

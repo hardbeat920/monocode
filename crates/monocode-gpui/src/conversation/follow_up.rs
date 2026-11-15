@@ -134,6 +134,31 @@ impl Conversation {
         self.follow_ups.state.messages.push(message);
         self.save_follow_ups(cx);
     }
+    /// Notes the person sent from a draft's page while the agent was not
+    /// waiting for them: a new turn, or a message steering the running one
+    /// where the provider can take it. The composer is left alone.
+    pub(crate) fn send_draft_feedback(&mut self, prompt: String, cx: &mut Context<Self>) {
+        if self.is_remote() {
+            return;
+        }
+        if !self.responding() {
+            if !self.history_ready() {
+                self.defer_history_action(move |this, cx| this.send_draft_feedback(prompt, cx), cx);
+                return;
+            }
+            self.launch_prompt(prompt, cx);
+            return;
+        }
+        let mut message = self.message(prompt, Vec::new(), None, cx);
+        message.steer = Kind::from_id(&self.summary.provider).can_steer() && message.can_steer();
+        self.follow_ups.motion.insert(
+            &message.id,
+            self.follow_ups.state.messages.is_empty(),
+            !cx.reduce_motion(),
+        );
+        self.follow_ups.state.messages.push(message);
+        self.save_follow_ups(cx);
+    }
     pub(super) fn save_message_draft(&mut self, cx: &mut Context<Self>) {
         if self.is_remote() {
             self.remote_save_draft(cx);

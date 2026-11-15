@@ -251,7 +251,13 @@ impl Shell {
                 ));
         let mut dim: gpui::Hsla = rgba(0x000000ff).into();
         dim.a = if light { 0.18 } else { 0.4 } * progress;
-        div().absolute().top_0().left_0().size_full().bg(dim)
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(dim)
+            .child(crate::draft::cover())
     }
 
     fn peek_panel(&self, progress: f32, window: &mut Window) -> gpui::Stateful<gpui::Div> {

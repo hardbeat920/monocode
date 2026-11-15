@@ -410,6 +410,13 @@ pub(crate) fn rail_color() -> Hsla {
 pub(crate) fn inset_chrome_wash() -> Hsla {
     content(0.05)
 }
+/// The solid color of the content card as the person has themed it, even when
+/// the card is glass, for a native view that cannot show the window through.
+pub(crate) fn pane_surface() -> Hsla {
+    let mut surface = inset_pane_fill();
+    surface.a = 1.;
+    surface
+}
 pub(crate) fn inset_pane_fill() -> Hsla {
     TOKENS
         .with(|tokens| tokens.borrow().as_ref().map(|t| t.inset_pane))

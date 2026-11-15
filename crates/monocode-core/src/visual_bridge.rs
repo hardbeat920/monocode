@@ -1,26 +1,51 @@
-//! Ephemeral, session-scoped publication of native visuals. No user MCP settings
-//! are changed. Stable provider capabilities can publish only during a live turn.
+//! Ephemeral, session-scoped publication of native visuals and design drafts.
+//! No user MCP settings are changed. Stable provider capabilities can publish
+//! only during a live turn.
 use crate::visual::{self, VisualDocument};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
-        mpsc, Arc, Mutex, OnceLock,
+        mpsc,
     },
     time::{Duration, Instant},
 };
 
 const MAX_WIRE_BYTES: usize = 1_048_576;
+/// A draft request carries its page with images embedded.
+const MAX_DRAFT_BYTES: usize = draft::images::MAX_HTML_BYTES + MAX_WIRE_BYTES;
 const MAX_SOURCE_BYTES: usize = visual::MAX_SOURCE_BYTES;
 const ENV_ENDPOINT: &str = "MONOCODE_VISUAL_ENDPOINT";
 const ENV_TOKEN: &str = "MONOCODE_VISUAL_TOKEN";
 const ENV_SESSION: &str = "MONOCODE_VISUAL_SESSION";
 const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
+mod draft;
+pub use draft::shared::{Outbox as DraftOutbox, Pin as DraftPin, SharedDraft, Side as DraftSide};
+pub use draft::{
+    Anchor as DraftAnchor, DEFAULT_HEIGHT as DRAFT_DEFAULT_HEIGHT,
+    DEFAULT_WAIT_SECONDS as DRAFT_DEFAULT_WAIT_SECONDS, DEFAULT_WIDTH as DRAFT_DEFAULT_WIDTH,
+    Diagnostics as DraftDiagnostics, DraftAction, DraftContent, DraftReply, DraftRequest,
+    Element as DraftElement, FONT_HOSTS, Feedback as DraftFeedback,
+    LAYOUT_WIDTHS as DRAFT_LAYOUT_WIDTHS, Layout as DraftLayout, LogEntry as DraftLog,
+    SCRIPT_HOSTS, STYLE_HOSTS, Snapshot as DraftSnapshot, csp_sources, local_url,
+};
+
+type DraftHandler = Box<dyn Fn(DraftRequest) + Send + Sync>;
+static DRAFT_HANDLER: OnceLock<DraftHandler> = OnceLock::new();
+
+/// The app registers its draft host once at startup; requests from every
+/// session's MCP server arrive here, off the main thread.
+pub fn set_draft_handler(handler: impl Fn(DraftRequest) + Send + Sync + 'static) {
+    let _ = DRAFT_HANDLER.set(Box::new(handler));
+}
+
+const MAX_DRAFT_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
 
 /// Loaded through visual_docs or the CLI only when authoring a visual. Keep the
 /// SDK out of ordinary prompts, server instructions and tool descriptions; only
@@ -95,7 +120,7 @@ title for the published visual. Never expose capability environment variables.
 
 /// The system-prompt rule for when to reach for a visual. Only the trigger
 /// lives here; the SDK stays behind visual_docs.
-const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison or breakdown with an inline visual, and show any chart, diagram or visualizer the user asks for the same way: read `visual_docs` once, then `visual_check` and `visual_show`. Never start a server, open a browser or write an HTML file to show it. Ordinary coding answers need no visual.";
+const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison or breakdown with an inline visual, and show any chart, diagram or visualizer the user asks for the same way: read `visual_docs` once, then `visual_check` and `visual_show`. When something needs freedom of layout, type or motion, a mockup, a small tool, or a screenshot to judge, build a live page with `draft_preview` instead, after reading `visual_docs` with topic `draft` (pass the HTML in `html`; never write it to a file first), look at the result, then publish it with `publish:true`. Never start a server, open a browser or write an HTML file to show it. Ordinary coding answers need no visual.";
 
 /// Usage guidance for a provider that received the visual MCP server. Claude
 /// Code may defer MCP tools behind ToolSearch, so it is told how to load them.
@@ -137,8 +162,26 @@ struct Wire {
     document: VisualDocument,
 }
 
+/// The transcript role of a draft's card.
+pub const DRAFT_ROLE: &str = "draft";
+
+/// A live draft's place in the conversation. The page itself lives in the
+/// app while the draft is open; the card only names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftCard {
+    pub draft: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum Content {
+    Visual(VisualDocument),
+    /// Published by the bridge itself when an agent shows a draft.
+    Draft(DraftCard),
+}
+
 pub struct Publication {
-    pub document: VisualDocument,
+    pub content: Content,
     pub reply: mpsc::Sender<Result<Value, String>>,
     generation: u64,
 }
@@ -147,6 +190,9 @@ struct ActiveTurn {
     generation: u64,
     send: mpsc::SyncSender<Publication>,
     publications: usize,
+    /// Drafts this turn started, so a retry with the same title revises
+    /// the page it already made instead of adding a second card.
+    drafts: Vec<DraftCard>,
 }
 
 struct SessionCapability {
@@ -154,6 +200,8 @@ struct SessionCapability {
     generation: u64,
     active: Option<ActiveTurn>,
     receipts: HashMap<String, (String, Option<Value>)>,
+    /// Cards of drafts the agent has not shown the person yet.
+    unpublished: Vec<DraftCard>,
 }
 
 struct Hub {
@@ -244,6 +292,7 @@ impl Server {
                     generation: 0,
                     active: None,
                     receipts: HashMap::new(),
+                    unpublished: Vec::new(),
                 });
             if capability.active.is_some() {
                 return Err("A visual session turn is already active".into());
@@ -253,6 +302,7 @@ impl Server {
                 generation: capability.generation,
                 send,
                 publications: 0,
+                drafts: Vec::new(),
             });
             (capability.token.clone(), capability.generation)
         };
@@ -275,6 +325,22 @@ impl Server {
                 executable.to_string_lossy().into_owned(),
             ),
         ])
+    }
+
+    /// Takes the cards of drafts the agent has not shown. The app leaves them
+    /// out of the conversation: the agent decides when a draft is ready.
+    #[cfg(test)]
+    fn unpublished(&self) -> Vec<DraftCard> {
+        self.hub
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|mut sessions| {
+                sessions
+                    .get_mut(&self.session)
+                    .map(|session| std::mem::take(&mut session.unpublished))
+            })
+            .unwrap_or_default()
     }
 
     pub fn drain(&self) -> Vec<Publication> {
@@ -329,6 +395,291 @@ fn active_generation(hub: &Hub, session: i64) -> Option<u64> {
         .map(|active| active.generation)
 }
 
+/// One draft renders at a time; a draft needs the app, never a session turn.
+fn serve_draft(mut stream: TcpStream, hub: &Hub, wire: &Value) -> Result<(), String> {
+    /// One request at a time per conversation; a long wait in one must not
+    /// hold up another's.
+    static BUSY: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+    let release = |session: i64| {
+        if let Ok(mut busy) = BUSY.lock() {
+            busy.retain(|s| *s != session);
+        }
+    };
+    let response = (|| -> Result<Value, String> {
+        let session = wire["session"].as_i64().ok_or("Invalid visual session")?;
+        authorized(
+            hub,
+            session,
+            wire["token"].as_str().ok_or("Invalid visual capability")?,
+        )?;
+        let (reply, result) = mpsc::channel();
+        let mut request = DraftRequest::parse(session, &wire["draft_request"], reply)?;
+        let publish = match wire["draft_request"].get("publish") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(publish)) => *publish,
+            Some(_) => return Err("publish must be true or false".into()),
+        };
+        let handler = DRAFT_HANDLER
+            .get()
+            .ok_or("Drafts need the MonoCode desktop app")?;
+        {
+            let mut busy = BUSY.lock().map_err(|_| "Drafts are unavailable")?;
+            if busy.contains(&session) {
+                return Err("Another draft call is still running; try again in a moment".into());
+            }
+            busy.push(session);
+        }
+        // A draft runs out of sight until the agent shows it: with publish,
+        // or by asking the person to try it (a wait). Its card
+        // joins the conversation only once the page has answered. A draft
+        // the agent never shows stays out of the thread.
+        let shows = publish || matches!(request.action, DraftAction::Wait { .. });
+        let closes = matches!(request.action, DraftAction::Close);
+        let request_draft = request.draft.clone();
+        // A new page titled like one this turn already made is a retry or an
+        // iteration of it: revise that draft rather than add a twin card.
+        if request.draft.is_none() && request.content.is_some() {
+            request.draft = same_turn_draft(hub, session, request.title.as_deref());
+        }
+        let revises = request_draft
+            .is_none()
+            .then(|| request.draft.clone())
+            .flatten();
+        let mut created = new_card(session, &mut request);
+        let mut hidden = request
+            .draft
+            .as_deref()
+            .and_then(|id| unhide(hub, session, id, request.title.as_deref(), shows || closes));
+        // The person answers a wait, so its card comes before it.
+        if matches!(request.action, DraftAction::Wait { .. }) {
+            if let Some(card) = hidden.take() {
+                if let Err(error) = publish_card(hub, session, card.clone()) {
+                    hide(hub, session, card);
+                    release(session);
+                    return Err(error);
+                }
+            }
+        }
+        handler(request);
+        let mut reply = result.recv_timeout(Duration::from_secs(45));
+        // The person may have closed the page this call would have revised,
+        // though the agent never named it: start a fresh draft instead.
+        if let Some(gone) = revises
+            .as_deref()
+            .filter(|_| matches!(&reply, Ok(Err(error)) if error.starts_with(DRAFT_GONE)))
+        {
+            forget_draft(hub, session, Some(gone));
+            unhide(hub, session, gone, None, true);
+            hidden = None;
+            let (again_reply, again_result) = mpsc::channel();
+            reply = match DraftRequest::parse(session, &wire["draft_request"], again_reply) {
+                Ok(mut again) => {
+                    created = new_card(session, &mut again);
+                    handler(again);
+                    again_result.recv_timeout(Duration::from_secs(45))
+                }
+                Err(error) => Ok(Err(error)),
+            };
+        }
+        release(session);
+        let reply = reply
+            .map_err(|_| "The draft timed out".to_string())
+            .and_then(|reply| reply)
+            .and_then(|reply| match created.clone().or_else(|| hidden.clone()) {
+                Some(card) if shows => publish_card(hub, session, card).map(|()| reply),
+                Some(card) if !closes => {
+                    hide(hub, session, card);
+                    Ok(reply)
+                }
+                _ => Ok(reply),
+            });
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                // A new page may still be opening; it goes, and nothing of it
+                // stays in the conversation or its folder. One the agent had
+                // already made stays as it was.
+                if let Some(card) = created {
+                    handler(DraftRequest::close(session, card.draft));
+                } else if let Some(card) = hidden {
+                    hide(hub, session, card);
+                }
+                return Err(error);
+            }
+        };
+        if let Some(card) = &created {
+            remember_draft(hub, session, card);
+        }
+        if closes {
+            forget_draft(hub, session, request_draft.as_deref());
+        }
+        Ok(json!({"ok":true,"result":reply.value()}))
+    })()
+    .unwrap_or_else(|error| json!({"ok": false, "error": error}));
+    stream
+        .set_write_timeout(Some(Duration::from_secs(20)))
+        .map_err(|e| e.to_string())?;
+    writeln!(stream, "{response}").map_err(|e| e.to_string())
+}
+
+/// What a draft request that carries the page of a draft the app no longer
+/// has is refused with: the page was closed or replaced.
+pub const DRAFT_GONE: &str = "That draft was closed or replaced";
+
+/// The card of the draft a request starts, if it starts one. The bridge
+/// names the draft so the conversation's card can point at it.
+fn new_card(session: i64, request: &mut DraftRequest) -> Option<DraftCard> {
+    (request.draft.is_none() && request.content.is_some()).then(|| {
+        let card = DraftCard {
+            draft: format!("draft-{session}-{:08x}", rand::random::<u32>()),
+            title: request.title.clone().unwrap_or_default(),
+        };
+        request.id = Some(card.draft.clone());
+        card
+    })
+}
+
+fn normalized_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// The id of the draft this turn already started under `title`, if any.
+fn same_turn_draft(hub: &Hub, session: i64, title: Option<&str>) -> Option<String> {
+    let title = normalized_title(title?);
+    if title.is_empty() {
+        return None;
+    }
+    let sessions = hub.sessions.lock().ok()?;
+    let active = sessions.get(&session)?.active.as_ref()?;
+    active
+        .drafts
+        .iter()
+        .rev()
+        .find(|card| normalized_title(&card.title) == title)
+        .map(|card| card.draft.clone())
+}
+
+fn remember_draft(hub: &Hub, session: i64, card: &DraftCard) {
+    if let Ok(mut sessions) = hub.sessions.lock() {
+        if let Some(active) = sessions
+            .get_mut(&session)
+            .and_then(|capability| capability.active.as_mut())
+        {
+            active.drafts.push(card.clone());
+            if active.drafts.len() > 64 {
+                active.drafts.remove(0);
+            }
+        }
+    }
+}
+
+fn forget_draft(hub: &Hub, session: i64, id: Option<&str>) {
+    if let (Some(id), Ok(mut sessions)) = (id, hub.sessions.lock()) {
+        if let Some(active) = sessions
+            .get_mut(&session)
+            .and_then(|capability| capability.active.as_mut())
+        {
+            active.drafts.retain(|card| card.draft != id);
+        }
+    }
+}
+
+/// Keeps a draft's card back until the agent shows the draft.
+fn hide(hub: &Hub, session: i64, card: DraftCard) {
+    if let Ok(mut sessions) = hub.sessions.lock() {
+        if let Some(capability) = sessions.get_mut(&session) {
+            let unpublished = &mut capability.unpublished;
+            unpublished.retain(|held| held.draft != card.draft);
+            unpublished.push(card);
+            if unpublished.len() > 64 {
+                unpublished.remove(0);
+            }
+        }
+    }
+}
+
+/// The card of draft `id` if the person has not seen it yet: renamed to a
+/// new `title`, and taken out of hiding when `take` is set.
+fn unhide(hub: &Hub, session: i64, id: &str, title: Option<&str>, take: bool) -> Option<DraftCard> {
+    let mut sessions = hub.sessions.lock().ok()?;
+    let unpublished = &mut sessions.get_mut(&session)?.unpublished;
+    let at = unpublished.iter().position(|card| card.draft == id)?;
+    if let Some(title) = title {
+        unpublished[at].title = title.to_owned();
+    }
+    take.then(|| unpublished.remove(at))
+}
+
+/// Puts a draft's card into the session's running turn and waits until the
+/// conversation has it.
+fn publish_card(hub: &Hub, session: i64, card: DraftCard) -> Result<(), String> {
+    let (reply, result) = mpsc::channel();
+    let generation = {
+        let mut sessions = hub
+            .sessions
+            .lock()
+            .map_err(|_| "Visual session unavailable")?;
+        let active = sessions
+            .get_mut(&session)
+            .and_then(|capability| capability.active.as_mut())
+            .ok_or("Drafts open inside a conversation turn, and this session has none running")?;
+        if active.publications >= 64 {
+            return Err("This turn has reached its visual publication limit".into());
+        }
+        active
+            .send
+            .try_send(Publication {
+                content: Content::Draft(card),
+                reply,
+                generation: active.generation,
+            })
+            .map_err(|_| "Visual publication queue unavailable")?;
+        active.publications += 1;
+        active.generation
+    };
+    let started = Instant::now();
+    loop {
+        if active_generation(hub, session) != Some(generation) {
+            return Err("The session turn has ended".into());
+        }
+        match result.recv_timeout(Duration::from_millis(25)) {
+            Ok(result) => return result.map(drop),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("The draft's card was not saved".into());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) if started.elapsed() < Duration::from_secs(15) => {
+            }
+            Err(_) => return Err("The draft's card timed out".into()),
+        }
+    }
+}
+
+fn authorized(hub: &Hub, session: i64, token: &str) -> Result<(), String> {
+    let sessions = hub
+        .sessions
+        .lock()
+        .map_err(|_| "Visual session unavailable")?;
+    let secret = &sessions
+        .get(&session)
+        .ok_or("Invalid visual capability")?
+        .token;
+    let equal = token.len() == secret.len()
+        && token
+            .bytes()
+            .zip(secret.bytes())
+            .fold(0u8, |diff, (a, b)| diff | a ^ b)
+            == 0;
+    if equal {
+        Ok(())
+    } else {
+        Err("Invalid visual capability".into())
+    }
+}
+
 fn serve(mut stream: TcpStream, hub: &Hub) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -337,10 +688,18 @@ fn serve(mut stream: TcpStream, hub: &Hub) -> Result<(), String> {
         .set_write_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
     let mut line = String::new();
-    BufReader::new((&stream).take((MAX_WIRE_BYTES + 1) as u64))
+    BufReader::new((&stream).take((MAX_DRAFT_BYTES + 1) as u64))
         .read_line(&mut line)
         .map_err(|e| e.to_string())?;
-    if line.len() > MAX_WIRE_BYTES || !line.ends_with('\n') {
+    if line.len() > MAX_DRAFT_BYTES || !line.ends_with('\n') {
+        return Err("Invalid visual request".into());
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(&line) {
+        if value.get("draft_request").is_some() {
+            return serve_draft(stream, hub, &value);
+        }
+    }
+    if line.len() > MAX_WIRE_BYTES {
         return Err("Invalid visual request".into());
     }
     let wire: Wire = serde_json::from_str(&line).map_err(|_| "Invalid visual request")?;
@@ -432,7 +791,7 @@ fn serve(mut stream: TcpStream, hub: &Hub) -> Result<(), String> {
             active
                 .send
                 .try_send(Publication {
-                    document: wire.document,
+                    content: Content::Visual(wire.document),
                     reply,
                     generation,
                 })
@@ -593,6 +952,74 @@ fn embed(document: &VisualDocument) -> String {
     format!("![{}](visual:{})", caption.trim(), document.id)
 }
 
+/// Ask the running app to show or inspect a draft in the conversation.
+fn draft_with_environment(
+    input: &Value,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    let mut prepared = input.clone();
+    if let Some(html) = input.get("html") {
+        let html = draft::images::embed_images(html.as_str().ok_or("html must be a string")?)?;
+        prepared["html"] = html.into();
+    }
+    let (reply, _) = mpsc::channel();
+    DraftRequest::parse(0, &prepared, reply)?;
+    let get = |key| {
+        environment
+            .get(key)
+            .ok_or("Drafts require a running MonoCode session")
+    };
+    let endpoint: SocketAddr = get(ENV_ENDPOINT)?
+        .parse()
+        .map_err(|_| "Invalid visual endpoint")?;
+    if !endpoint.ip().is_loopback() {
+        return Err("Visual endpoint must be loopback".into());
+    }
+    let session: i64 = get(ENV_SESSION)?
+        .parse()
+        .map_err(|_| "Invalid visual session")?;
+    let mut stream =
+        TcpStream::connect_timeout(&endpoint, Duration::from_secs(3)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    writeln!(
+        stream,
+        "{}",
+        json!({"session": session, "token": get(ENV_TOKEN)?, "draft_request": prepared})
+    )
+    .map_err(|e| e.to_string())?;
+    let mut response = String::new();
+    BufReader::new(stream.take(MAX_DRAFT_RESPONSE_BYTES as u64))
+        .read_line(&mut response)
+        .map_err(|e| e.to_string())?;
+    let response: Value =
+        serde_json::from_str(&response).map_err(|_| "The app closed without a draft")?;
+    if response["ok"] != true {
+        return Err(response["error"].as_str().unwrap_or("Draft failed").into());
+    }
+    Ok(response["result"].clone())
+}
+
+/// A draft's page with its images embedded, as the tools hand it to the app.
+pub fn embed_draft_images(html: &str) -> Result<String, String> {
+    draft::images::embed_images(html)
+}
+
+/// Waits for the person to send feedback from the page or hand the draft
+/// back, then looks at the page again.
+fn wait_for_draft(input: &Value, environment: &HashMap<String, String>) -> Result<Value, String> {
+    let draft = input["draft"].as_str().ok_or("draft must be a string")?;
+    let mut action = json!({"kind":"wait"});
+    if let Some(seconds) = input.get("seconds").filter(|v| !v.is_null()) {
+        action["seconds"] = seconds.clone();
+    }
+    draft_with_environment(&json!({"draft":draft,"action":action}), environment)
+}
+
 fn current_environment() -> HashMap<String, String> {
     [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
         .into_iter()
@@ -606,7 +1033,7 @@ pub fn client(args: &[String]) -> Result<Value, String> {
         .filter(|a| !matches!(a.as_str(), "help" | "--help" | "-h"))
     else {
         return Ok(
-            json!({"help":format!("Usage: monocode-gpui visual docs\n       monocode-gpui visual check|show --input FILE [--title TITLE] [--id ID]\nFILE is JavaScript source, or JSON with source/title/id/requestId. Use - for stdin.\n{DOCUMENTATION}")}),
+            json!({"help":format!("Usage: monocode-gpui visual docs\n       monocode-gpui visual draft --json JSON\n       monocode-gpui visual check|show --input FILE [--title TITLE] [--id ID]\nFILE is JavaScript source, or JSON with source/title/id/requestId. Use - for stdin.\n{DOCUMENTATION}")}),
         );
     };
     if action == "docs" {
@@ -614,6 +1041,16 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             return Err("Usage: monocode-gpui visual docs".into());
         }
         return Ok(documentation());
+    }
+    if action == "draft" {
+        let json = match &args[1..] {
+            [flag, json] if flag == "--json" => json,
+            _ => {
+                return Err("Usage: monocode-gpui visual draft --json '{\"html\":\"...\"}'".into());
+            }
+        };
+        let input = serde_json::from_str::<Value>(json).map_err(|e| e.to_string())?;
+        return draft_with_environment(&input, &current_environment());
     }
     if !matches!(action.as_str(), "check" | "show") {
         return Err("Expected visual docs, visual check or visual show".into());
@@ -685,6 +1122,22 @@ pub fn client(args: &[String]) -> Result<Value, String> {
     }
 }
 
+const DRAFT_DOCUMENTATION: &str = include_str!("visual_bridge/reference/draft.md");
+const KIT_DOCUMENTATION: &str = include_str!("visual_bridge/reference/kit.md");
+const APP_DOCUMENTATION: &str = include_str!("visual_bridge/reference/app.md");
+const TOKENS_DOCUMENTATION: &str = include_str!("visual_bridge/reference/tokens.md");
+
+fn documentation_for(input: &Value) -> Result<Value, String> {
+    match input.get("topic").and_then(Value::as_str) {
+        None | Some("native") => Ok(documentation()),
+        Some("draft") => Ok(json!({"documentation": DRAFT_DOCUMENTATION})),
+        Some("kit") => Ok(json!({"documentation": KIT_DOCUMENTATION})),
+        Some("app") => Ok(json!({"documentation": APP_DOCUMENTATION})),
+        Some("tokens") => Ok(json!({"documentation": TOKENS_DOCUMENTATION})),
+        Some(_) => Err("topic must be native, draft, kit, app or tokens".into()),
+    }
+}
+
 fn documentation() -> Value {
     json!({
         "documentation": DOCUMENTATION,
@@ -732,6 +1185,8 @@ pub fn configure_codex(command: &mut std::process::Command, environment: &HashMa
     for (key, value) in [
         ("command", json!(environment[ENV_EXECUTABLE])),
         ("args", json!(["visual-mcp"])),
+        // A draft call can hold for most of a minute while its page loads.
+        ("tool_timeout_sec", json!(90)),
         (
             "env_vars",
             json!([ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]),
@@ -749,9 +1204,11 @@ pub fn tool_definitions() -> Vec<Value> {
     show_properties["id"] = json!({"type":"string","maxLength":96,"description":"Optional document identifier. A new request appends a new visual; reuse requestId to retry a publication."});
     show_properties["requestId"] = json!({"type":"string","maxLength":128,"description":"Reuse when retrying an uncertain publication"});
     vec![
-        json!({"name":"visual_docs","description":"Read the native visual SDK reference, examples and styling rules before building an inline chart, diagram or visualizer. Does not publish.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({"name":"visual_docs","description":"Read the native visual SDK reference, examples and styling rules before building an inline chart, diagram or visualizer. Pass topic draft for the design-draft guide, kit for the optional component kit, app for the real MonoCode design language to mock its UI, or tokens for taking colors, type, spacing and radii from an image or from code. Does not publish.","inputSchema":{"type":"object","properties":{"topic":{"enum":["native","draft","kit","app","tokens"]}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"visual_check","description":"Validate a native visual program and representative controls without publishing. Returns its component tree. Read visual_docs for the SDK reference.","inputSchema":{"type":"object","properties":properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        json!({"name":"visual_show","description":"Publish a native visual (chart, stat row, diagram, interactive explainer) inline in this conversation. Use it for data with a trend, comparison or breakdown, and whenever the user asks for a visual. Returns an embed line: put it on its own line in your final reply where the visual belongs, between the sentences it supports. Read visual_docs first; validate with visual_check.","inputSchema":{"type":"object","properties":show_properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+        json!({"name":"visual_show","description":"Publish a native visual (chart, stat row, diagram, interactive explainer) inline in this conversation. Use it for data with a trend, comparison or breakdown, and whenever the user asks for a visual. Returns an embed line: put it on its own line in your final reply where the visual belongs, between the sentences it supports. Read visual_docs first; validate with visual_check. For custom layout, type, motion or a mockup use draft_preview instead.","inputSchema":{"type":"object","properties":show_properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+        json!({"name":"draft_preview","description":"Build and inspect a live page (HTML, CSS, JS) for the conversation, for custom layout, type or motion, mockups, small tools and anything you want to check in a screenshot; for a plain chart or stat row visual_show is simpler. It runs out of sight while you work; publish:true shows its card at this point in the thread, and a draft you never publish is never shown. Publish once it is checked and good, not on the first try. Pass {html} (inline CSS/JS) or a localhost {url} to open one, with a short {title}; pass {draft} to look again. Returns a screenshot, text, controls with refs, console output and diagnostics; a new page also reports layouts, its height and overflow at phone, tablet and laptop widths. Revise with {draft,html}; resize with width/height; appearance light|dark checks the other theme for that one picture, while the card always follows the app. Actions: click {reference}, type {text,reference?,replace?} (a ref stays valid while its element is on the page), set {values} (patches the page's mc.state by key, as its own controls would), resume, close. If userControl is true the user took over: inspect, but resume only after they hand it back. Results carry feedback the person sent from the page (pinned notes, and messages the page sent with mc.send), its state and issues the page reveals; to wait for feedback use draft_wait. Read visual_docs {topic:draft} first.","inputSchema":{"type":"object","properties":{"html":{"type":"string"},"title":{"type":"string","maxLength":160},"url":{"type":"string","description":"A dev server on localhost"},"draft":{"type":"string","maxLength":96},"action":{"type":"object","properties":{"kind":{"enum":["snapshot","click","type","set","resume","close"]},"reference":{"type":"string","maxLength":96},"values":{"type":"object","description":"For set: state keys and their new values"},"text":{"type":"string","maxLength":4096},"replace":{"type":"boolean"}},"required":["kind"],"additionalProperties":false},"width":{"type":"integer","minimum":240,"maximum":1600},"height":{"type":"integer","minimum":120,"maximum":1600,"description":"Only where the card starts; it is as tall as the page"},"appearance":{"enum":["light","dark"]},"publish":{"type":"boolean","description":"Show the draft to the person; later versions then appear in its card as you send them"}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}}),
+        json!({"name":"draft_wait","description":"Pause until the person has tried the draft and sends their feedback (pinned notes on the page) or hands it back, then look at the page again. Returns the usual screenshot and numbers plus feedback, messages, userActions and event (feedback, message, handed back or timeout). Waits up to 30 seconds; call again to keep waiting. Use after asking the person to try it, not in place of draft_preview.","inputSchema":{"type":"object","properties":{"draft":{"type":"string","maxLength":96},"seconds":{"type":"integer","minimum":1,"maximum":30}},"required":["draft"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
     ]
 }
 
@@ -766,15 +1223,30 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
         "tools/call" => {
             let input = request["params"]["arguments"].clone();
             let result = match request["params"]["name"].as_str().unwrap_or("") {
-                "visual_docs" => Ok(documentation()),
+                "visual_docs" => documentation_for(&input),
                 "visual_check" => input["source"]
                     .as_str()
                     .ok_or("source must be a JavaScript string".into())
                     .and_then(check),
                 "visual_show" => publish_with_environment(input, environment),
+                "draft_preview" => draft_with_environment(&input, environment),
+                "draft_wait" => wait_for_draft(&input, environment),
                 _ => Err("Unknown native visual tool".into()),
             };
+            let is_draft = matches!(
+                request["params"]["name"].as_str(),
+                Some("draft_preview" | "draft_wait")
+            );
             Ok(match result {
+                Ok(mut value) if is_draft && value.get("png").is_some() => {
+                    // The picture is an image block; the text keeps the numbers
+                    // and console output without a megabyte of base64.
+                    let png = value.as_object_mut().unwrap().remove("png").unwrap();
+                    json!({"content":[
+                        {"type":"image","data":png,"mimeType":"image/png"},
+                        {"type":"text","text":value.to_string()}
+                    ],"isError":false})
+                }
                 Ok(value) => {
                     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
                 }
@@ -876,7 +1348,10 @@ mod tests {
             .publications
             .recv_timeout(Duration::from_secs(3))
             .unwrap();
-        assert_eq!(publication.document.title, "Hello");
+        let Content::Visual(document) = &publication.content else {
+            panic!("expected a visual");
+        };
+        assert_eq!(document.title, "Hello");
         assert!(!worker.is_finished());
         publication.reply.send(Ok(json!({"id":"hello"}))).unwrap();
         assert_eq!(worker.join().unwrap().unwrap()["result"]["id"], "hello");
@@ -884,9 +1359,11 @@ mod tests {
         assert!(server.drain().is_empty());
         let mut changed = input();
         changed["source"] = "return () => visual.text('Changed');".into();
-        assert!(publish_with_environment(changed, &environment)
-            .unwrap_err()
-            .contains("already used"));
+        assert!(
+            publish_with_environment(changed, &environment)
+                .unwrap_err()
+                .contains("already used")
+        );
     }
 
     #[test]
@@ -912,11 +1389,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .unwrap();
         publication.reply.send(Err("Saving failed".into())).unwrap();
-        assert!(worker
-            .join()
-            .unwrap()
-            .unwrap_err()
-            .contains("Saving failed"));
+        assert!(
+            worker
+                .join()
+                .unwrap()
+                .unwrap_err()
+                .contains("Saving failed")
+        );
     }
 
     #[test]
@@ -930,7 +1409,7 @@ mod tests {
         );
         let response = mcp_response(json!({"id":2,"method":"tools/call","params":{"name":"visual_show","arguments":input()}}), &environment).unwrap();
         assert_eq!(response["result"]["isError"], true);
-        assert_eq!(tool_definitions().len(), 3);
+        assert_eq!(tool_definitions().len(), 5);
         assert_eq!(acp_servers(&environment), json!([]));
     }
 
@@ -945,8 +1424,9 @@ mod tests {
         assert!(initialization["result"].get("instructions").is_none());
         let catalog = mcp_response(json!({"id":2,"method":"tools/list"}), &environment).unwrap();
         let metadata = catalog["result"].to_string();
+        // The draft tools carry their action schema; the guide stays in docs.
         assert!(
-            metadata.len() < 2_500,
+            metadata.len() < 6_000,
             "Discovery must stay small: {} bytes",
             metadata.len()
         );
@@ -961,14 +1441,18 @@ mod tests {
         let reference: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
-        assert!(reference["documentation"]
-            .as_str()
-            .unwrap()
-            .contains("visual.scene"));
-        assert!(reference["documentation"]
-            .as_str()
-            .unwrap()
-            .contains("Style is inherited from the app"));
+        assert!(
+            reference["documentation"]
+                .as_str()
+                .unwrap()
+                .contains("visual.scene")
+        );
+        assert!(
+            reference["documentation"]
+                .as_str()
+                .unwrap()
+                .contains("Style is inherited from the app")
+        );
         assert_eq!(reference, client(&["docs".into()]).unwrap());
         assert!(client(&["docs".into(), "--input".into(), "unused".into()]).is_err());
     }
@@ -1013,5 +1497,321 @@ mod tests {
         assert_eq!(acp[0]["name"], "monocode_visual");
         assert_eq!(acp[0]["env"].as_array().unwrap().len(), 4);
         assert_eq!(mcp_server(&environment).unwrap()["command"], "/test/app");
+    }
+
+    /// One draft renders at a time process-wide, so the draft tests take turns.
+    static DRAFT_TESTS: Mutex<()> = Mutex::new(());
+    /// The drafts the tests' panel was asked to close.
+    static CLOSED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn install_draft_handler() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            set_draft_handler(|request| {
+                if request.title.as_deref() == Some("Fails") {
+                    let _ = request.reply.send(Err("The page did not open".into()));
+                    return;
+                }
+                if request.title.as_deref() == Some("Vanished")
+                    && request.draft.is_some()
+                    && request.content.is_some()
+                {
+                    let _ = request.reply.send(Err(format!(
+                        "{DRAFT_GONE}. Start a new one with html or url."
+                    )));
+                    return;
+                }
+                let reply = match &request.action {
+                    DraftAction::Close => {
+                        let draft = request.draft.clone().unwrap_or_default();
+                        CLOSED.lock().unwrap().push(draft.clone());
+                        DraftReply::Closed { draft }
+                    }
+                    _ => DraftReply::Snapshot(Box::new(DraftSnapshot {
+                        png: vec![137, 80, 78, 71],
+                        draft: request
+                            .id
+                            .clone()
+                            .or_else(|| request.draft.clone())
+                            .unwrap_or_else(|| "d1".into()),
+                        width: request.width.unwrap_or(DRAFT_DEFAULT_WIDTH),
+                        height: request.height.unwrap_or(DRAFT_DEFAULT_HEIGHT),
+                        content_height: 321,
+                        loaded: true,
+                        console: vec![DraftLog {
+                            level: "error".into(),
+                            text: "boom".into(),
+                        }],
+                        diagnostics: DraftDiagnostics {
+                            ready: true,
+                            horizontal_overflow: 12,
+                            ..Default::default()
+                        },
+                        elements: Vec::new(),
+                        text: "hi".into(),
+                        user_control: false,
+                        url: None,
+                        title: None,
+                        feedback: vec![DraftFeedback {
+                            note: "Bigger".into(),
+                            ..DraftFeedback::default()
+                        }],
+                        messages: vec!["Use B".into()],
+                        user_actions: Vec::new(),
+                        event: Some("feedback".into()),
+                        issues: vec!["Small target 16×16".into()],
+                        state: Some(json!({"radius": 12})),
+                        layouts: vec![DraftLayout {
+                            width: 375,
+                            height: 900,
+                            horizontal_overflow: 40,
+                        }],
+                    })),
+                };
+                let _ = request.reply.send(Ok(reply));
+            });
+        });
+    }
+
+    #[test]
+    fn drafts_authenticate_validate_and_reach_the_registered_panel() {
+        let _turn = DRAFT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let server = Server::start(21).unwrap();
+        let environment = server.environment(std::path::Path::new("/test/app"));
+        // Bad input is refused before any panel is asked.
+        assert!(
+            draft_with_environment(
+                &json!({"html":"<script src='http://x'></script>"}),
+                &environment
+            )
+            .is_err()
+        );
+        install_draft_handler();
+        // A draft shown on its first call takes a card once its page answers.
+        let cards = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+            let result = draft_with_environment(
+                &json!({"html":"<p>hi</p>","title":"Pricing","width":500,"height":300,"publish":true}),
+                &environment,
+            )
+            .unwrap();
+            assert_eq!(result["contentHeight"], 321);
+        // What the person sent and what the page reveals reach the agent.
+        assert_eq!(result["feedback"][0]["note"], "Bigger");
+        assert_eq!(result["event"], "feedback");
+        assert_eq!(result["issues"][0], "Small target 16×16");
+        assert_eq!(result["state"]["radius"], 12);
+        assert_eq!(result["messages"][0], "Use B");
+        assert_eq!(result["layouts"][0]["horizontalOverflow"], 40);
+            assert_eq!(result["width"], 500);
+            assert_eq!(result["diagnostics"]["horizontalOverflow"], 12);
+            assert_eq!(result["console"][0]["text"], "boom");
+            for invalid in [
+                json!({"html":"<p>hi</p>","appearance":true}),
+                json!({"html":"<p>hi</p>","width":10}),
+                json!({"url":"https://example.com"}),
+            ] {
+                assert!(draft_with_environment(&invalid, &environment).is_err());
+            }
+            let mut wrong = environment.clone();
+            wrong.insert(ENV_TOKEN.into(), "nope".into());
+            assert!(draft_with_environment(&json!({"html":"<p>hi</p>"}), &wrong).is_err());
+            // The tool returns an image block plus the numbers, not base64 text.
+            let response = mcp_response(
+                json!({"id":3,"method":"tools/call","params":{"name":"draft_preview","arguments":{"html":"<p>hi</p>"}}}),
+                &environment,
+            )
+            .unwrap();
+            let content = &response["result"]["content"];
+            assert_eq!(content[0]["type"], "image");
+            assert!(content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("contentHeight"));
+            assert!(!content[1]["text"].as_str().unwrap().contains("\"png\""));
+            });
+            while !worker.is_finished() {
+                if let Ok(publication) = server.publications.recv_timeout(Duration::from_millis(20))
+                {
+                    if let Content::Draft(card) = &publication.content {
+                        cards.lock().unwrap().push(card.clone());
+                    }
+                    let _ = publication.reply.send(Ok(json!({"saved":true})));
+                }
+            }
+            if let Err(panic) = worker.join() {
+                std::panic::resume_unwind(panic);
+            }
+        });
+        let cards = cards.into_inner().unwrap();
+        assert!(!cards.is_empty());
+        assert_eq!(cards[0].title, "Pricing");
+        assert!(cards[0].draft.starts_with("draft-21-"));
+    }
+
+    #[test]
+    fn a_retry_with_the_same_title_revises_the_draft_instead_of_adding_a_twin() {
+        let _turn = DRAFT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        install_draft_handler();
+        let server = Server::start(24).unwrap();
+        let environment = server.environment(std::path::Path::new("/test/app"));
+        let call = |input: Value| draft_with_environment(&input, &environment);
+        let ids = std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let first = call(json!({"html":"<p>a</p>","title":"Hub","publish":true})).unwrap();
+                let retry =
+                    call(json!({"html":"<p>b</p>","title":" hub ","publish":true})).unwrap();
+                let other =
+                    call(json!({"html":"<p>c</p>","title":"Other","publish":true})).unwrap();
+                [first, retry, other].map(|r| r["draft"].as_str().unwrap().to_owned())
+            });
+            while !worker.is_finished() {
+                if let Ok(publication) = server.publications.recv_timeout(Duration::from_millis(20))
+                {
+                    let _ = publication.reply.send(Ok(json!({"saved":true})));
+                }
+            }
+            worker.join().unwrap()
+        });
+        assert_eq!(ids[0], ids[1], "same title is the same draft");
+        assert_ne!(ids[0], ids[2]);
+    }
+
+    #[test]
+    fn a_retry_after_the_person_closed_the_draft_starts_a_new_one() {
+        let _turn = DRAFT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        install_draft_handler();
+        let server = Server::start(25).unwrap();
+        let environment = server.environment(std::path::Path::new("/test/app"));
+        let call = |input: Value| draft_with_environment(&input, &environment);
+        let cards = Mutex::new(Vec::new());
+        let ids = std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let first =
+                    call(json!({"html":"<p>a</p>","title":"Vanished","publish":true})).unwrap();
+                // The card was closed in the app; the agent knows nothing of it.
+                let retry =
+                    call(json!({"html":"<p>b</p>","title":"Vanished","publish":true})).unwrap();
+                [first, retry].map(|r| r["draft"].as_str().unwrap().to_owned())
+            });
+            while !worker.is_finished() {
+                if let Ok(publication) = server.publications.recv_timeout(Duration::from_millis(20))
+                {
+                    if let Content::Draft(card) = &publication.content {
+                        cards.lock().unwrap().push(card.draft.clone());
+                    }
+                    let _ = publication.reply.send(Ok(json!({"saved":true})));
+                }
+            }
+            worker.join().unwrap()
+        });
+        assert_ne!(ids[0], ids[1], "the closed draft cannot be revised");
+        assert_eq!(cards.into_inner().unwrap(), ids, "each page has its card");
+    }
+
+    #[test]
+    fn a_draft_stays_out_of_the_conversation_until_the_agent_shows_it() {
+        let _turn = DRAFT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        install_draft_handler();
+        let server = Server::start(23).unwrap();
+        let environment = server.environment(std::path::Path::new("/test/app"));
+        let call = |input: Value| draft_with_environment(&input, &environment);
+        let cards = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let first = call(json!({"html":"<p>a</p>","title":"Plan"})).unwrap();
+                let id = first["draft"].as_str().unwrap().to_owned();
+                assert!(id.starts_with("draft-23-"), "{id}");
+                call(json!({"draft":id,"html":"<p>b</p>","title":"Plan B"})).unwrap();
+                call(json!({"draft":id,"action":{"kind":"click","reference":"r1"}})).unwrap();
+                assert!(cards.lock().unwrap().is_empty(), "nothing shown yet");
+                assert!(call(json!({"draft":id,"publish":"yes"})).is_err());
+                call(json!({"draft":id,"publish":true})).unwrap();
+                // Shown once; later revisions land in the same card.
+                call(json!({"draft":id,"html":"<p>c</p>","publish":true})).unwrap();
+                // One the agent never shows waits for the turn's end.
+                let late = call(json!({"html":"<p>d</p>","title":"Later"})).unwrap();
+                let late = late["draft"].as_str().unwrap().to_owned();
+                let closed = call(json!({"html":"<p>e</p>","title":"Gone"})).unwrap();
+                let closed = closed["draft"].as_str().unwrap().to_owned();
+                call(json!({"draft":closed,"action":{"kind":"close"}})).unwrap();
+                late
+            });
+            // Publications are answered until the calls end, passed or not.
+            while !worker.is_finished() {
+                if let Ok(publication) = server.publications.recv_timeout(Duration::from_millis(20))
+                {
+                    if let Content::Draft(card) = &publication.content {
+                        cards.lock().unwrap().push(card.clone());
+                    }
+                    let _ = publication.reply.send(Ok(json!({"saved":true})));
+                }
+            }
+            if let Err(panic) = worker.join() {
+                std::panic::resume_unwind(panic);
+            }
+        });
+        let cards = cards.into_inner().unwrap();
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        assert_eq!(cards[0].title, "Plan B");
+        let unpublished = server.unpublished();
+        assert_eq!(unpublished.len(), 1, "{unpublished:?}");
+        assert_eq!(unpublished[0].title, "Later");
+        assert!(server.unpublished().is_empty(), "taken once");
+    }
+
+    #[test]
+    fn a_new_draft_whose_first_call_fails_leaves_no_card() {
+        let _turn = DRAFT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        install_draft_handler();
+        let server = Server::start(22).unwrap();
+        let environment = server.environment(std::path::Path::new("/test/app"));
+        let worker = std::thread::spawn(move || {
+            draft_with_environment(&json!({"html":"<p>hi</p>","title":"Fails"}), &environment)
+        });
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(error.contains("did not open"), "{error}");
+        assert!(
+            server.publications.try_recv().is_err(),
+            "no card joined the conversation"
+        );
+        // The page that started opening is closed with it.
+        assert!(
+            CLOSED
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|draft| draft.starts_with("draft-22-"))
+        );
+    }
+
+    #[test]
+    fn the_tokens_topic_teaches_measuring_a_look_from_an_image_or_code() {
+        let docs = documentation_for(&json!({"topic":"tokens"})).unwrap();
+        let text = docs["documentation"].as_str().unwrap();
+        assert!(text.contains("From code") && text.contains("From an image"));
+        assert!(documentation_for(&json!({"topic":"nope"})).is_err());
+    }
+
+    #[test]
+    fn the_system_prompt_routes_charts_and_pages_to_their_tools() {
+        let environment = HashMap::from([
+            (ENV_ENDPOINT.to_string(), "127.0.0.1:1".to_string()),
+            (ENV_TOKEN.to_string(), "t".to_string()),
+            (ENV_SESSION.to_string(), "1".to_string()),
+            (ENV_EXECUTABLE.to_string(), "/test/app".to_string()),
+        ]);
+        let usage = instructions(&environment, false).unwrap();
+        assert!(usage.contains("`visual_show`") && usage.contains("`draft_preview`"));
+        assert!(usage.contains("topic `draft`"));
+        for tool in tool_definitions() {
+            let description = tool["description"].as_str().unwrap();
+            match tool["name"].as_str().unwrap() {
+                "visual_show" => assert!(description.contains("draft_preview")),
+                "draft_preview" => assert!(description.contains("visual_show")),
+                _ => {}
+            }
+        }
     }
 }

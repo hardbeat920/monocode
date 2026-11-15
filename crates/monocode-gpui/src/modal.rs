@@ -44,8 +44,9 @@ pub(crate) fn backdrop<E: Styled + IntoElement + 'static>(
 
 /// A full-window scrim layer, for a modal parent that is already
 /// `absolute().inset_0()`. Add it before the card so the card paints above.
+/// A draft's page would draw over the dim, so it shows a still instead.
 pub(crate) fn scrim(id: impl Into<ElementId>) -> AnimationElement<Div> {
-    backdrop(id, div().absolute().inset_0())
+    backdrop(id, div().absolute().inset_0().child(crate::draft::cover()))
 }
 
 /// Lifts a modal overlay out of the pane that renders it, so its scrim covers
