@@ -192,6 +192,45 @@ describe("Composer Explorer file drops", () => {
       container.querySelector('[title="/project/src/main.ts"]'),
     ).not.toBeNull();
   });
+
+  it("attaches a folder from the pointer-driven Explorer drag", async () => {
+    invoke.mockImplementation(
+      async (command: string, args: { paths?: string[] }) =>
+        command === "inspect_paths"
+          ? (args.paths ?? []).map((path) => ({
+              path,
+              name: path.split("/").pop() ?? path,
+              size: 0,
+              isDir: true,
+            }))
+          : [],
+    );
+    await render({ initialDraft: "what is inside" });
+
+    await act(async () => {
+      window.dispatchEvent(
+        explorerDrag({ type: "drop", path: "/project/src", x: 100, y: 100 }),
+      );
+    });
+    expect(container.querySelector('[title="/project/src"]')).not.toBeNull();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Send"]')!
+        .click();
+    });
+    expect(submit).toHaveBeenCalledWith(
+      "what is inside",
+      [
+        expect.objectContaining({
+          name: "src",
+          path: "/project/src",
+          mimeType: "inode/directory",
+        }),
+      ],
+      expect.anything(),
+    );
+  });
 });
 
 describe("Composer image drops", () => {

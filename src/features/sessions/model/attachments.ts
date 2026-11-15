@@ -28,13 +28,13 @@ export type PromptContentBlock =
 const SKIP_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
 
 /**
- * Stands in for a turn that arrived with files but no words.
+ * Stands in for a turn that arrived with files or folders but no words.
  *
  * Sent on the wire only. The transcript keeps the empty text and shows the
  * attachments on their own, so this never reaches the user's own message.
  */
 export const ATTACHMENT_ONLY_PROMPT =
-  "The user attached these files without saying anything. Use the conversation above to work out what they want done with them, then do that. If the conversation gives you nothing to go on, ask.";
+  "The user attached these files or folders without saying anything. Use the conversation above to work out what they want done with them, then do that. If the conversation gives you nothing to go on, ask.";
 
 /**
  * The turn's text, or a stand-in when files arrived without any.
