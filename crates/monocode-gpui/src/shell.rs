@@ -8895,10 +8895,22 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &OpenInbox, window, cx| this.open_inbox(window, cx)))
             .on_action(cx.listener(|this, _: &OpenNotes, window, cx| this.open_notes(window, cx)))
-            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
-                this.notification_state
+            .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
+                let result = this.notification_state
                     .updater
-                    .update(cx, |updater, cx| updater.check(true, cx));
+                    .update(cx, |updater, cx| updater.check_from_menu(cx));
+                cx.spawn_in(window, async move |_, cx| {
+                    if let Ok(result) = result.recv().await {
+                        let _ = cx.update(|window, cx| {
+                            let (level, message) = match result {
+                                Ok(None) => (gpui::PromptLevel::Info, format!("You’re up to date (v{}).", crate::notifications::updater::version())),
+                                Ok(Some(version)) => (gpui::PromptLevel::Info, format!("Version {version} is available. Use the update button to install it.")),
+                                Err(error) => (gpui::PromptLevel::Warning, format!("Couldn’t check for updates: {error}")),
+                            };
+                            drop(window.prompt(level, &message, None, &["OK"], cx));
+                        });
+                    }
+                }).detach();
             }))
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.step_ui_scale(1, cx)))
