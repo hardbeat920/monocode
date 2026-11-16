@@ -72,7 +72,7 @@ pub(crate) struct Updater {
     message: Option<String>,
     poll: Option<gpui::Task<()>>,
     gate: Arc<Mutex<InstallGate>>,
-    menu_check: Option<async_channel::Sender<Result<Option<String>, String>>>,
+    menu_checks: Vec<async_channel::Sender<Result<Option<String>, String>>>,
 }
 impl EventEmitter<Event> for Updater {}
 impl Updater {
@@ -104,7 +104,7 @@ impl Updater {
             message,
             poll: None,
             gate: Arc::new(Mutex::new(InstallGate::default())),
-            menu_check: None,
+            menu_checks: Vec::new(),
         };
         if this.config.is_some() {
             this.check(false, cx);
@@ -142,7 +142,7 @@ impl Updater {
         cx: &mut Context<Self>,
     ) -> async_channel::Receiver<Result<Option<String>, String>> {
         let (sender, receiver) = async_channel::bounded(1);
-        self.menu_check = Some(sender);
+        self.menu_checks.push(sender);
         if self.config.is_none() {
             self.report_menu_check(Err(self.message.clone().unwrap_or_default()));
         } else if matches!(self.phase, Phase::Downloading | Phase::Installing) {
@@ -153,8 +153,8 @@ impl Updater {
         receiver
     }
     fn report_menu_check(&mut self, result: Result<Option<String>, String>) {
-        if let Some(sender) = self.menu_check.take() {
-            let _ = sender.try_send(result);
+        for sender in self.menu_checks.drain(..) {
+            let _ = sender.try_send(result.clone());
         }
     }
     pub(crate) fn check(&mut self, manual: bool, cx: &mut Context<Self>) {
@@ -449,6 +449,34 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use std::sync::{Arc, Mutex};
+    #[gpui::test]
+    fn overlapping_menu_checks_both_receive_the_shared_result(cx: &mut TestAppContext) {
+        let store = Arc::new(Mutex::new(
+            monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let updater = cx.update(|cx| shared(store, cx));
+        let (first, second) = updater.update(cx, |view, cx| {
+            view.config = Some(Config {
+                endpoint: String::new(),
+                public_key: String::new(),
+                current: "1.0.0".parse().unwrap(),
+            });
+            view.installation = Some(Installation {
+                kind: app_update::PackageKind::App,
+                path: std::path::PathBuf::new(),
+            });
+            view.phase = Phase::Idle;
+            let first = view.check_from_menu(cx);
+            let second = view.check_from_menu(cx);
+            assert_eq!(view.phase, Phase::Checking);
+            (first, second)
+        });
+        cx.run_until_parked();
+        let first = first.try_recv().expect("first request receives a result");
+        let second = second.try_recv().expect("second request receives a result");
+        assert!(first.is_err());
+        assert_eq!(first, second);
+    }
     #[gpui::test]
     fn menu_check_joins_background_check_and_reports_result(cx: &mut TestAppContext) {
         let store = Arc::new(Mutex::new(
