@@ -72,6 +72,7 @@ pub(crate) struct Updater {
     message: Option<String>,
     poll: Option<gpui::Task<()>>,
     gate: Arc<Mutex<InstallGate>>,
+    menu_check: Option<async_channel::Sender<Result<Option<String>, String>>>,
 }
 impl EventEmitter<Event> for Updater {}
 impl Updater {
@@ -103,6 +104,7 @@ impl Updater {
             message,
             poll: None,
             gate: Arc::new(Mutex::new(InstallGate::default())),
+            menu_check: None,
         };
         if this.config.is_some() {
             this.check(false, cx);
@@ -135,6 +137,26 @@ impl Updater {
         cx.emit(Event::Changed);
         cx.notify();
     }
+    pub(crate) fn check_from_menu(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<Option<String>, String>> {
+        let (sender, receiver) = async_channel::bounded(1);
+        self.menu_check = Some(sender);
+        if self.config.is_none() {
+            self.report_menu_check(Err(self.message.clone().unwrap_or_default()));
+        } else if matches!(self.phase, Phase::Downloading | Phase::Installing) {
+            self.report_menu_check(Err("An update is already being installed.".into()));
+        } else {
+            self.check(false, cx);
+        }
+        receiver
+    }
+    fn report_menu_check(&mut self, result: Result<Option<String>, String>) {
+        if let Some(sender) = self.menu_check.take() {
+            let _ = sender.try_send(result);
+        }
+    }
     pub(crate) fn check(&mut self, manual: bool, cx: &mut Context<Self>) {
         if self.busy() {
             return;
@@ -158,6 +180,10 @@ impl Updater {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                this.report_menu_check(match &result {
+                    Ok((_, update)) => Ok(update.as_ref().map(|update| update.version.to_string())),
+                    Err(error) => Err(error.clone()),
+                });
                 match result {
                     Ok((installation, update)) => {
                         this.installation = Some(installation);
@@ -423,6 +449,37 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use std::sync::{Arc, Mutex};
+    #[gpui::test]
+    fn menu_check_joins_background_check_and_reports_result(cx: &mut TestAppContext) {
+        let store = Arc::new(Mutex::new(
+            monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let updater = cx.update(|cx| shared(store, cx));
+        updater.update(cx, |view, cx| {
+            view.config = Some(Config {
+                endpoint: String::new(),
+                public_key: String::new(),
+                current: "1.0.0".parse().unwrap(),
+            });
+            view.phase = Phase::Checking;
+            let result = view.check_from_menu(cx);
+            assert!(result.try_recv().is_err());
+            view.report_menu_check(Ok(None));
+            assert_eq!(result.try_recv().unwrap(), Ok(None));
+            view.report_menu_check(Err("offline".into()));
+            assert!(result.try_recv().is_err());
+            let result = view.check_from_menu(cx);
+            view.report_menu_check(Err("offline".into()));
+            assert_eq!(result.try_recv().unwrap(), Err("offline".into()));
+            view.config = None;
+            view.message = Some("Updates are unavailable".into());
+            let result = view.check_from_menu(cx);
+            assert_eq!(
+                result.try_recv().unwrap(),
+                Err("Updates are unavailable".into())
+            );
+        });
+    }
     #[gpui::test]
     fn quit_waits_for_installation_to_finish(cx: &mut TestAppContext) {
         let store = Arc::new(Mutex::new(
