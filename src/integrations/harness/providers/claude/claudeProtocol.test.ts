@@ -9,6 +9,7 @@ import {
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  contextFromCompactBoundary,
   contextFromResult,
   contextUsedFromAssistant,
   extractExitPlanModePlan,
@@ -849,6 +850,76 @@ describe("contextFromResult", () => {
 
   it("has nothing to report for a turn that never called the API", () => {
     expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
+  });
+
+  it("drops a multi-request total rather than reading it as a level", () => {
+    // The CLI sums every request of the turn when it sends no `iterations`.
+    // Treating that as the window level pins the meter near 100% even after
+    // the conversation was compacted.
+    const rec = {
+      type: "result",
+      num_turns: 3,
+      usage: { input_tokens: 227251, output_tokens: 0 },
+      modelUsage: { "claude-opus-5": { contextWindow: 1_000_000 } },
+    };
+    expect(contextFromResult(rec)).toEqual({ window: 1_000_000 });
+  });
+
+  it("keeps a single-request total, which is the level itself", () => {
+    const rec = {
+      type: "result",
+      num_turns: 1,
+      usage: { input_tokens: 12_000, output_tokens: 400 },
+      modelUsage: { "claude-sonnet-5": { contextWindow: 200_000 } },
+    };
+    expect(contextFromResult(rec)).toEqual({
+      used: 12_400,
+      window: 200_000,
+    });
+  });
+});
+
+describe("contextFromCompactBoundary", () => {
+  it("reads the rebuilt transcript size the CLI reports", () => {
+    // Captured from a real `system/compact_boundary` frame.
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "manual",
+          pre_tokens: 149_697,
+          post_tokens: 6_316,
+          cumulative_dropped_tokens: 143_381,
+        },
+      }),
+    ).toBe(6_316);
+  });
+
+  it("accepts the camelCase spelling stored transcripts use", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: { trigger: "auto", preTokens: 197_378, postTokens: 19_436 },
+      }),
+    ).toBe(19_436);
+  });
+
+  it("reports nothing when the boundary carries no size", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+      }),
+    ).toBeUndefined();
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: 1000 },
+      }),
+    ).toBeUndefined();
   });
 });
 

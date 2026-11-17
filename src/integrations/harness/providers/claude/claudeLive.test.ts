@@ -2034,14 +2034,126 @@ describe("claude manual compaction", () => {
       type: "system",
       subtype: "compact_boundary",
       session_id: "sess_1",
+      compact_metadata: { trigger: "manual", pre_tokens: 149_697, post_tokens: 6_316 },
     });
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      num_turns: 1,
+      usage: { input_tokens: 140_000 },
+      modelUsage: { model: { contextWindow: 1_000_000 } },
+    });
     await compact;
 
     expect(events).toContainEqual({
       type: "status",
       text: "Compacted context",
     });
+    // The ring must follow the compaction: the boundary reports the rebuilt
+    // transcript, and the /compact result (the summarizer's own request) must
+    // not put the pre-compaction level back.
+    expect(events.filter((event) => event.type === "context")).toEqual([
+      { type: "context", used: 6_316 },
+      { type: "context", window: 1_000_000 },
+    ]);
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+
+  it.each([false, true])(
+    "keeps a native compact boundary when result iterations are present: %s",
+    async (iterations) => {
+      const { turn } = await startTurn("s1");
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+      sent.length = 0;
+
+      const events: HarnessEvent[] = [];
+      const compact = sendClaudeTurn({
+        sessionId: "s1",
+        cwd: "/repo",
+        model: "claude:claude-sonnet-5",
+        modelSettings: {},
+        runtimeMode: "supervised",
+        text: "/compact preserve the debugging context",
+        attachments: [],
+        onEvent: (event) => events.push(event),
+      });
+      await waitFor(
+        () => parse().some((message) => message.type === "user"),
+        "native compact command",
+      );
+      emit({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", post_tokens: 6_316 },
+      });
+      emit({
+        type: "result",
+        subtype: "success",
+        num_turns: 1,
+        usage: {
+          input_tokens: 140_000,
+          ...(iterations ? { iterations: [{ input_tokens: 140_000 }] } : {}),
+        },
+        modelUsage: { model: { contextWindow: 1_000_000 } },
+      });
+      await compact;
+
+      let session = newSession("claude", "/repo");
+      for (const event of events) session = applyHarnessEvent(session, event);
+      expect(session.context).toEqual({ used: 6_316, window: 1_000_000 });
+
+      sent.length = 0;
+      const nextTurn = sendClaudeTurn({
+        sessionId: "s1",
+        cwd: "/repo",
+        model: "claude:claude-sonnet-5",
+        modelSettings: {},
+        runtimeMode: "supervised",
+        text: "continue",
+        attachments: [],
+        onEvent: (event) => events.push(event),
+      });
+      await waitFor(
+        () => parse().some((message) => message.type === "user"),
+        "next user turn",
+      );
+      emit({
+        type: "result",
+        subtype: "success",
+        num_turns: 1,
+        usage: { input_tokens: 9_000 },
+      });
+      await nextTurn;
+      expect(events).toContainEqual({ type: "context", used: 9_000 });
+    },
+  );
+
+  it("reports a fresh request after automatic compaction", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", post_tokens: 6_316 },
+    });
+    emit({
+      type: "assistant",
+      message: { content: [], usage: { input_tokens: 9_000, output_tokens: 100 } },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      num_turns: 2,
+      usage: {
+        input_tokens: 149_000,
+        iterations: [{ input_tokens: 9_000, output_tokens: 200 }],
+      },
+      modelUsage: { model: { contextWindow: 1_000_000 } },
+    });
+    await turn;
+    let session = newSession("claude", "/repo");
+    for (const event of events) session = applyHarnessEvent(session, event);
+    expect(session.context).toEqual({ used: 9_200, window: 1_000_000 });
   });
 });
