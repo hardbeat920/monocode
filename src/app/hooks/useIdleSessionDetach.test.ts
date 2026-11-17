@@ -27,10 +27,7 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { useIdleSessionDetach } from "./useIdleSessionDetach";
-import {
-  createMono,
-  saveMonoSessionId,
-} from "../../features/monos/model/mono";
+import { createMono, saveMonoSessionId } from "../../features/monos/model/mono";
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),

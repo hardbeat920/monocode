@@ -1,3 +1,11 @@
+import type { OverviewSearch } from "../features/monos/ui/MonoOverview";
+import {
+  cancelMonoScrollRestore,
+  readMonoScroll,
+  restoreMonoScroll,
+  type MonoScroll,
+} from "../features/monos/model/monoScroll";
+import { useMonoReturn } from "./hooks/useMonoReturn";
 import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { useMobileWorkspace } from "../features/mobile/hooks/useMobileWorkspace";
@@ -1170,6 +1178,15 @@ function Workspace({
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
   const [monoViewId, setMonoViewId] = useState<string | null>(null);
+  // The overview's session search: what it holds now, and what a return to
+  // its Mono starts it from.
+  const monoSearchRef = useRef<OverviewSearch | undefined>(undefined);
+  const [monoSearchSeed, setMonoSearchSeed] = useState<
+    OverviewSearch | undefined
+  >(undefined);
+  const onMonoSearchChange = useCallback((search: OverviewSearch) => {
+    monoSearchRef.current = search;
+  }, []);
   // A Mono opens with its overview beside the chat until it is hidden.
   const [monoOverviewOpen, setMonoOverviewOpen] = useState(true);
   const [monoOverviewTab, setMonoOverviewTab] =
@@ -1204,6 +1221,7 @@ function Workspace({
           setSessions(updated);
         }
         setMonoOverviewDocument((current) => (current === id ? null : current));
+        monoReturn.documentDeleted(id);
       },
     );
     return () => {
@@ -1259,6 +1277,9 @@ function Workspace({
     saveOpenMono(undefined);
     setMonoViewId(null);
     setMonoActivity(null);
+    monoSearchRef.current = undefined;
+    setMonoSearchSeed(undefined);
+    cancelMonoScrollRestore();
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
     if (windowTransfer) return true;
@@ -1476,6 +1497,37 @@ function Workspace({
   const leaveCoveringMono = useCallback(() => {
     if (monoViewIdRef.current) closeMonoView();
   }, [closeMonoView]);
+  const openMonoRef = useRef<((monoId: string) => void) | undefined>(undefined);
+  /** Closing a file opened from a Mono returns to that Mono. */
+  const monoReturn = useMonoReturn({
+    tabs,
+    activeTabId,
+    shownMonoSession: () => monoViewIdRef.current,
+    viewRequest: () => monoViewRequest.current,
+    monoOfSession: (sessionId) => monoForSession(sessionId)?.id,
+    // A session shown over the overview is no tab's, so it may be parked by
+    // now; loading it also tells a deleted one from one just parked.
+    hasSession: async (sessionId) =>
+      !!(await ensureOpenSessionRef.current(sessionId)),
+    // The project terminal takes focus off the file without touching its tab.
+    covered:
+      settingsOpen ||
+      !!activeAppView ||
+      !!monoViewId ||
+      projectTerminalFocused,
+    canOpenMono: (monoId) => monosEnabled && !!findMono(monoId),
+    openMono: (monoId) => openMonoRef.current?.(monoId),
+    readOverview: () => ({
+      scroll: readMonoScroll(),
+      search: monoSearchRef.current,
+    }),
+    view: {
+      shownSession: monoShownSession,
+      shownSessionFocused: monoShownSessionFocused,
+      document: monoOverviewDocument,
+      activity: monoActivity,
+    },
+  });
   const [providerSignInRequest, setProviderSignInRequest] = useState<{
     key: string;
     sessionId: string;
@@ -3200,6 +3252,8 @@ function Workspace({
   );
 
   const focusProjectTerminal = useCallback(() => {
+    // Reaching for the terminal supersedes a Mono still opening.
+    monoViewRequest.current += 1;
     setProjectTerminalFocused(true);
     setComposerFocused(false);
   }, []);
@@ -3496,7 +3550,10 @@ function Workspace({
   }, [terminalCwd, onOpenTerminal]);
 
   const onCloseTab = useCallback(
-    (id: string, opts?: { confirmedTerminalIds?: string[] }) => {
+    (
+      id: string,
+      opts?: { confirmedTerminalIds?: string[]; returnToMono?: boolean },
+    ) => {
       const current = tabsRef.current;
       const index = current.findIndex((t) => t.id === id);
       if (index < 0) return;
@@ -3593,10 +3650,31 @@ function Workspace({
           const ok = await confirmCloseTerminals(terminals);
           if (!ok) return;
         }
+        // Closing a file's own tab returns to its Mono; a tab with a chat, or
+        // one closed by the app, is not that.
+        if (
+          opts?.returnToMono &&
+          !leafIds(closing.layout).some((paneId) =>
+            sessionsRef.current.some((session) => session.id === paneId),
+          )
+        ) {
+          monoReturn.closeStarting(
+            id,
+            closingFiles.filter(isFilesystemTab).map((file) => file.path),
+          );
+        }
         finishClose();
+        monoReturn.closeFinished();
       })();
     },
-    [activateTab, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
+    [
+      activateTab,
+      monoReturn,
+      persistSession,
+      refreshHistory,
+      sidebarCwd,
+      tabCloseScope,
+    ],
   );
 
   const onCloseTabs = useCallback(
@@ -3691,12 +3769,23 @@ function Workspace({
       const needsUnsavedConfirm =
         isFilesystemTab(file) && dirtyFilesRef.current.has(fileId);
 
+      // Closing the tab's last file hands over to `onCloseTab`, which returns
+      // to the Mono itself once it has moved on.
+      let closedWithTab = false;
+      /** The user closing this file returns to its Mono, if it came from one;
+       * before the close moves to a neighbour, which may be that Mono. */
+      const startReturn = () => {
+        if (isFilesystemTab(file)) {
+          monoReturn.closeStarting(tab.id, [file.path]);
+        }
+      };
       const finishClose = () => {
         const files = pane.files.filter((entry) => entry.id !== fileId);
         let nextFocus = tab.focusedId;
         let nextLayout = tab.layout;
         let nextPanes = surfacePanes(tab, kind);
         if (files.length > 0) {
+          startReturn();
           nextFocus = paneId;
           const activeFileId =
             pane.activeFileId === fileId
@@ -3722,12 +3811,14 @@ function Workspace({
               worktreeOf: tabWorktreeOf,
             });
             if (closePlan.action === "close") {
-              onCloseTab(
-                tab.id,
-                file.terminal ? { confirmedTerminalIds: [fileId] } : undefined,
-              );
+              closedWithTab = true;
+              onCloseTab(tab.id, {
+                returnToMono: true,
+                ...(file.terminal ? { confirmedTerminalIds: [fileId] } : {}),
+              });
               return;
             }
+            startReturn();
             const seed = sessionsRef.current[0];
             const session = newSession(
               seed?.harness ?? "claude",
@@ -3762,6 +3853,7 @@ function Workspace({
             if (nextId) navigation.select?.(nextId);
             return;
           }
+          startReturn();
           nextLayout = withoutPane;
           nextFocus =
             tab.focusedId === paneId
@@ -3809,9 +3901,11 @@ function Workspace({
           if (!ok) return;
         }
         finishClose();
+        // Closing the tab's last file is `onCloseTab`'s to finish.
+        if (!closedWithTab) monoReturn.closeFinished();
       })();
     },
-    [activeTabId, onCloseTab, projectCwd, tabCloseScope],
+    [activeTabId, monoReturn, onCloseTab, projectCwd, tabCloseScope],
   );
 
   const onCloseOtherFiles = useCallback((paneId: string, fileId: string) => {
@@ -4273,7 +4367,7 @@ function Workspace({
         onClosePane();
         return;
       }
-      onCloseTab(id);
+      onCloseTab(id, { returnToMono: true });
     },
     [onClosePane, onCloseTab, tabCloseScope],
   );
@@ -5065,6 +5159,8 @@ function Workspace({
       workspaceNavigation.cancel();
       const request = ++monoViewRequest.current;
       lastMonoIdRef.current = monoId;
+      const restoreFor = monoReturn.monoOpening(monoId);
+      cancelMonoScrollRestore();
       const session = await ensureMonoSession(monoId, {
         home: homeDir,
         load: ensureOpenSession,
@@ -5077,10 +5173,18 @@ function Workspace({
       if (!session || request !== monoViewRequest.current) return;
       // What the last Mono had open over its overview is its own; another
       // Mono opens on its list.
+      let scrollBack: MonoScroll | undefined;
       if (monoViewIdRef.current !== session.id) {
-        setMonoShownSession(null);
-        setMonoShownSessionFocused(false);
-        setMonoOverviewDocument(null);
+        // Loads a parked session shown over the overview; another open may
+        // supersede this one meanwhile.
+        const view = await restoreFor(session.id);
+        if (request !== monoViewRequest.current) return;
+        setMonoShownSession(view?.shownSession ?? null);
+        setMonoShownSessionFocused(view?.shownSessionFocused ?? false);
+        setMonoOverviewDocument(view?.document ?? null);
+        if (view?.activity) setMonoActivity(view.activity);
+        scrollBack = view?.scroll;
+        setMonoSearchSeed(view?.search);
       }
       monoViewIdRef.current = session.id;
       saveOpenMono(monoId);
@@ -5099,9 +5203,12 @@ function Workspace({
       setProjectTerminalFocused(false);
       setComposerFocused(true);
       setComposerFocusToken((token) => token + 1);
+      // The overview mounts with this render; the restore waits for it.
+      if (scrollBack) restoreMonoScroll(scrollBack);
     },
-    [ensureOpenSession, workspaceNavigation.cancel],
+    [ensureOpenSession, monoReturn, workspaceNavigation.cancel],
   );
+  openMonoRef.current = (monoId) => void onOpenMono(monoId);
 
   // A Mono open when the app last closed opens again; a moved window keeps
   // what it carried.
@@ -6836,7 +6943,7 @@ function Workspace({
 
   const onOpenFile = useCallback<OpenFileFn>(
     (path, navigation, options) => {
-      closeMonoView();
+      const opening = monoReturn.beginFileOpen(closeMonoView);
       void (async () => {
         const fileCwd = gitCwdRef.current;
         const fileProjectCwd = sidebarCwdRef.current;
@@ -6846,6 +6953,7 @@ function Workspace({
           (entry) => entry.id === activeTabIdRef.current,
         );
         if (!tab) return;
+        opening.resolved();
         const file = newFileTab(
           resolved,
           fileCwd,
@@ -6878,6 +6986,7 @@ function Workspace({
           });
           if (target?.paneId) activateTab(target.tabId, target.paneId);
           else if (target) setActiveTabId(target.tabId);
+          if (target) opening.opened(target.tabId, resolved);
           setProjectTerminalFocused(false);
           setComposerFocused(false);
           if (navigation) {
@@ -6910,10 +7019,11 @@ function Workspace({
             token: editorNavigationToken.current,
           });
         }
+        opening.opened(tab.id, resolved);
         setComposerFocused(false);
       })();
     },
-    [activateTab, insertBesideActive, closeMonoView],
+    [activateTab, insertBesideActive, closeMonoView, monoReturn],
   );
 
   const onOpenPlan = useCallback(
@@ -13692,6 +13802,8 @@ function Workspace({
     monoViewMono && monoViewSession ? (
       <MonoOverview
         key={monoViewMono.id}
+        search={monoSearchSeed}
+        onSearchChange={onMonoSearchChange}
         open={monoOverviewOpen}
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}
@@ -14245,7 +14357,8 @@ function Workspace({
                         onShowSourceControl={onToggleChanges}
                         onCloseCurrentTab={
                           activeTabId
-                            ? () => onCloseTab(activeTabId)
+                            ? () =>
+                                onCloseTab(activeTabId, { returnToMono: true })
                             : undefined
                         }
                         onCloseOtherTabs={onCloseOtherTabs}

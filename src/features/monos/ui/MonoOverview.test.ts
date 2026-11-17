@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoOverview, type MonoOverviewTab } from "./MonoOverview";
+import { DEFAULT_SESSION_SIDEBAR_FILTERS } from "../../sessions/model/sessionFilters";
 
 vi.mock("../model/monoHabits", async (original) => ({
   ...(await original<object>()),
@@ -265,4 +266,24 @@ it("opens a document over its tab with a way back", async () => {
     page.querySelector<HTMLButtonElement>('button[aria-label="Back"]')!.click(),
   );
   expect(onBackFromDocument).toHaveBeenCalledOnce();
+});
+
+it("starts from the session search it was left with, and reports changes", async () => {
+  const onSearchChange = vi.fn();
+  await render("sessions", vi.fn(), {
+    search: { query: "Second", filters: DEFAULT_SESSION_SIDEBAR_FILTERS },
+    onSearchChange,
+  });
+  expect(container.querySelector<HTMLInputElement>("input")?.value).toBe(
+    "Second",
+  );
+  expect(onSearchChange).toHaveBeenLastCalledWith({
+    query: "Second",
+    filters: DEFAULT_SESSION_SIDEBAR_FILTERS,
+  });
+});
+
+it("starts with an empty search when nothing was left", async () => {
+  await render("sessions");
+  expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("");
 });
