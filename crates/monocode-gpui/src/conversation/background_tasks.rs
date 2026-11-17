@@ -343,6 +343,82 @@ mod tests {
     }
 
     #[gpui::test]
+    fn messages_queued_while_the_agent_worked_steer_once_only_background_work_is_left(
+        cx: &mut TestAppContext,
+    ) {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let summary = store.create("claude", "/tmp").unwrap();
+        let (controls, received) = std::sync::mpsc::channel();
+        let window = cx.update(|cx| {
+            input::bind(cx);
+            cx.set_global(crate::settings::Preferences {
+                follow_up: "queue".into(),
+                ..Default::default()
+            });
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
+                    view.loaded = true;
+                    view.summary.has_messages = true;
+                    view
+                })
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.busy = true;
+                view.controls = Some(controls);
+                view.follow_ups.ready = true;
+                view.enqueue_follow_up("This one is ugly too".into(), None, cx);
+                view.enqueue_follow_up("Also make it faster".into(), None, cx);
+                view.enqueue_follow_up("Plan the next map".into(), Some("plan".into()), cx);
+                assert!(!view.follow_ups.state.messages[0].steer);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            received.try_recv().is_err(),
+            "queued messages wait while the agent is still working"
+        );
+
+        // The agent answers, but the dev server it started keeps running.
+        window
+            .update(cx, |view, _, cx| {
+                view.set_background(vec![task("dev", false)], cx);
+                view.pump_follow_ups(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let control = received
+            .try_recv()
+            .expect("a queued message must not wait behind a server that never ends");
+        let Decision::Steer(first) = control.decision else {
+            panic!("expected steering")
+        };
+        assert_eq!(first.text, "This one is ugly too", "queue order holds");
+
+        window
+            .update(cx, |view, _, cx| view.follow_up_delivered(&first.id, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let control = received.try_recv().expect("the next message follows");
+        let Decision::Steer(second) = control.decision else {
+            panic!("expected steering")
+        };
+        assert_eq!(second.text, "Also make it faster");
+
+        window
+            .update(cx, |view, _, cx| view.follow_up_delivered(&second.id, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            received.try_recv().is_err(),
+            "a message with a mode cannot steer, so it waits for the turn to end"
+        );
+    }
+
+    #[gpui::test]
     fn a_lone_task_folds_into_the_header(cx: &mut TestAppContext) {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let summary = store.create("claude", "/tmp").unwrap();
