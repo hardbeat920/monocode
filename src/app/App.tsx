@@ -1,3 +1,9 @@
+import {
+  cancelMonoScrollRestore,
+  readMonoScroll,
+  restoreMonoScroll,
+  type MonoScroll,
+} from "../features/monos/model/monoScroll";
 import { useMonoReturn } from "./hooks/useMonoReturn";
 import { recoverMobileUsage } from "../features/mobile/model/mobileUsageLimit";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
@@ -1261,6 +1267,7 @@ function Workspace({
     saveOpenMono(undefined);
     setMonoViewId(null);
     setMonoActivity(null);
+    cancelMonoScrollRestore();
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
     if (windowTransfer) return true;
@@ -1490,6 +1497,7 @@ function Workspace({
       sessionsRef.current.some((session) => session.id === sessionId),
     canOpenMono: (monoId) => monosEnabled && !!findMono(monoId),
     openMono: (monoId) => openMonoRef.current?.(monoId),
+    readScroll: () => readMonoScroll(),
     view: {
       shownSession: monoShownSession,
       shownSessionFocused: monoShownSessionFocused,
@@ -5117,6 +5125,7 @@ function Workspace({
       const request = ++monoViewRequest.current;
       lastMonoIdRef.current = monoId;
       const restoreFor = monoReturn.monoOpening();
+      cancelMonoScrollRestore();
       const session = await ensureMonoSession(monoId, {
         home: homeDir,
         load: ensureOpenSession,
@@ -5129,12 +5138,14 @@ function Workspace({
       if (!session || request !== monoViewRequest.current) return;
       // What the last Mono had open over its overview is its own; another
       // Mono opens on its list.
+      let scrollBack: MonoScroll | undefined;
       if (monoViewIdRef.current !== session.id) {
         const view = restoreFor(session.id);
         setMonoShownSession(view?.shownSession ?? null);
         setMonoShownSessionFocused(view?.shownSessionFocused ?? false);
         setMonoOverviewDocument(view?.document ?? null);
         if (view?.activity) setMonoActivity(view.activity);
+        scrollBack = view?.scroll;
       }
       monoViewIdRef.current = session.id;
       saveOpenMono(monoId);
@@ -5153,6 +5164,8 @@ function Workspace({
       setProjectTerminalFocused(false);
       setComposerFocused(true);
       setComposerFocusToken((token) => token + 1);
+      // The overview mounts with this render; the restore waits for it.
+      if (scrollBack) restoreMonoScroll(scrollBack);
     },
     [ensureOpenSession, monoReturn, workspaceNavigation.cancel],
   );

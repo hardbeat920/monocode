@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   focusedFileTab,
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
+import type { MonoScroll } from "../../features/monos/model/monoScroll";
 import {
   monoReturnFor,
   restorableMonoView,
@@ -24,6 +25,8 @@ type Host = {
   canOpenMono: (monoId: string) => boolean;
   openMono: (monoId: string) => void;
   view: MonoOverviewView;
+  /** Where the shown overview is scrolled, read before it unmounts. */
+  readScroll: () => MonoScroll | undefined;
 };
 
 /** Closing a file opened from a Mono returns to that Mono, and its overview
@@ -35,6 +38,13 @@ export function useMonoReturn(host: Host) {
   const restore = useRef<
     { sessionId: string; view: MonoOverviewView } | undefined
   >(undefined);
+  // Documents deleted this session; a restore in flight checks them when it
+  // applies, after it was handed over.
+  const deleted = useRef(new Set<string>());
+
+  // Recording a return renders once more: an open that landed in a commit of
+  // its own (flushSync, into the tab already active) has no pass after it.
+  const [recorded, setRecorded] = useState(0);
 
   // Focus moving off the file, to another file, pane or tab, ends the return.
   useEffect(() => {
@@ -45,7 +55,7 @@ export function useMonoReturn(host: Host) {
       host.activeTabId,
       tab && focusedFileTab(tab)?.path,
     );
-  }, [host.tabs, host.activeTabId]);
+  }, [host.tabs, host.activeTabId, recorded]);
 
   // Every method reads refs only, so the object stays the same.
   return useMemo(
@@ -58,7 +68,11 @@ export function useMonoReturn(host: Host) {
         const monoId = sessionId
           ? hostRef.current.monoOfSession(sessionId)
           : undefined;
-        const view = hostRef.current.view;
+        // Read before closing: the overview unmounts with the Mono.
+        const view = {
+          ...hostRef.current.view,
+          scroll: hostRef.current.readScroll(),
+        };
         close();
         const request = hostRef.current.viewRequest();
         let untouched = false;
@@ -72,13 +86,15 @@ export function useMonoReturn(host: Host) {
           opened(tabId: string, path: string) {
             if (!sessionId || !monoId || !untouched) return;
             back.current = { monoId, sessionId, tabId, path, view };
+            setRecorded((count) => count + 1);
           },
         };
       },
       /** The user closed these files in `tabId`. */
       fileClosed(tabId: string, paths: readonly string[]) {
         const found = monoReturnFor(back.current, { tabId, paths });
-        if (!found) return;
+        // A file never seen in view was opened in the background.
+        if (!found?.seen) return;
         back.current = undefined;
         // A Mono already showing, or one that is gone, leaves the close alone.
         if (
@@ -99,14 +115,15 @@ export function useMonoReturn(host: Host) {
         restore.current = undefined;
         return (sessionId: string) =>
           taken?.sessionId === sessionId
-            ? restorableMonoView(taken.view, hostRef.current.hasSession)
+            ? restorableMonoView(taken.view, hostRef.current.hasSession, (id) =>
+                deleted.current.has(id),
+              )
             : null;
       },
-      /** A document is gone, so no view brings it back. */
+      /** A document is gone, so no view brings it back, whether it is
+       * waiting here or already handed to a Mono opening. */
       documentDeleted(id: string) {
-        for (const view of [back.current?.view, restore.current?.view]) {
-          if (view?.document === id) view.document = null;
-        }
+        deleted.current.add(id);
       },
     }),
     [],

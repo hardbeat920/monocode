@@ -7,6 +7,7 @@ import {
   newFileTab,
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
+import type { MonoScroll } from "../../features/monos/model/monoScroll";
 import type { MonoOverviewView } from "../model/monoReturn";
 import { useMonoReturn } from "./useMonoReturn";
 
@@ -27,6 +28,9 @@ let state: {
   request: number;
   sessions: Set<string>;
   view: MonoOverviewView;
+  scroll: MonoScroll | undefined;
+  /** What the overview scrolled to is only readable while it is mounted. */
+  mounted: boolean;
 };
 const openMono = vi.fn();
 
@@ -41,6 +45,7 @@ function Harness() {
     canOpenMono: (id) => id === "mono-1",
     openMono,
     view: state.view,
+    readScroll: () => (state.mounted ? state.scroll : undefined),
   });
   return null;
 }
@@ -54,6 +59,7 @@ function openFromMono(path = "/p/notes.md") {
   const opening = api.beginFileOpen(() => {
     state.shown = null;
     state.request += 1;
+    state.mounted = false;
   });
   opening.resolved();
   opening.opened(tab.id, path);
@@ -73,6 +79,8 @@ beforeEach(() => {
     request: 0,
     sessions: new Set(["chat", "launched"]),
     view: structuredClone(overview),
+    scroll: { overview: { tab: "documents", top: 240 }, document: { top: 90 } },
+    mounted: true,
   };
   container = document.createElement("div");
   root = createRoot(container);
@@ -87,7 +95,16 @@ it("returns to the Mono with its overview when the file closes", () => {
   const tab = openFromMono();
   api.fileClosed(tab.id, ["/p/notes.md"]);
   expect(openMono).toHaveBeenCalledExactlyOnceWith("mono-1");
-  expect(api.monoOpening()("chat")).toEqual(overview);
+  expect(api.monoOpening()("chat")).toEqual({
+    ...overview,
+    scroll: state.scroll,
+  });
+});
+
+it("reads the scroll before the Mono closes, not after", () => {
+  const tab = openFromMono();
+  api.fileClosed(tab.id, ["/p/notes.md"]);
+  expect(api.monoOpening()("chat")?.scroll).toEqual(state.scroll);
 });
 
 it("only returns once, and only for that file in that tab", () => {
@@ -194,12 +211,55 @@ it("drops deleted sessions and documents from the restored view", () => {
   api.documentDeleted("doc-1");
   state.sessions.delete("launched");
   api.fileClosed(tab.id, ["/p/notes.md"]);
-  expect(api.monoOpening()("chat")).toEqual({
+  expect(api.monoOpening()("chat")).toMatchObject({
     shownSession: null,
     shownSessionFocused: false,
     document: null,
     activity: null,
+    // The deleted document's scroll goes with it.
+    scroll: { overview: { tab: "documents", top: 240 } },
   });
+});
+
+it("drops a document deleted while the Mono is still opening", () => {
+  const tab = openFromMono();
+  api.fileClosed(tab.id, ["/p/notes.md"]);
+  const restoreFor = api.monoOpening(); // the open awaits its session
+  api.documentDeleted("doc-1");
+  const view = restoreFor("chat");
+  expect(view?.document).toBeNull();
+  expect(view?.scroll?.document).toBeUndefined();
+  expect(view?.shownSession).toBe("launched");
+});
+
+it("does not return for a file never seen in view", () => {
+  state.shown = "chat";
+  const opening = api.beginFileOpen(() => (state.shown = null));
+  opening.resolved();
+  opening.opened("tab-bg", "/p/notes.md");
+  api.fileClosed("tab-bg", ["/p/notes.md"]);
+  expect(openMono).not.toHaveBeenCalled();
+});
+
+it("forgets a file opened in the background after a pass or two", () => {
+  const visible = fileTab("/p/visible.md");
+  state.tabs = [visible];
+  state.activeTabId = visible.id;
+  render();
+  state.shown = "chat";
+  const opening = api.beginFileOpen(() => (state.shown = null));
+  opening.resolved();
+  const background = fileTab("/p/background.md");
+  opening.opened(background.id, "/p/background.md");
+  state.tabs = [visible, background];
+  render(); // the open rendered, behind the active tab
+  render();
+  state.tabs = [visible, background];
+  render();
+  state.activeTabId = background.id; // looked at much later
+  render();
+  api.fileClosed(background.id, ["/p/background.md"]);
+  expect(openMono).not.toHaveBeenCalled();
 });
 
 it("restores only for the session it came from", () => {

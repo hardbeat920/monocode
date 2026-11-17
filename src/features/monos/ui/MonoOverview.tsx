@@ -315,6 +315,7 @@ export function MonoOverview({
           hidden={tab === "changes"}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none px-2 py-2"
           data-mono-overview={tab === "changes" ? undefined : tab}
+          data-mono-scroll="overview"
         >
           {tab === "activity" ? (
             (activity ?? (
