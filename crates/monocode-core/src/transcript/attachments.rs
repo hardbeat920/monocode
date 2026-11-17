@@ -102,10 +102,14 @@ mod tests {
         std::fs::create_dir(&folder).unwrap();
         let file = temp.path().join("notes.txt");
         std::fs::write(&file, "notes").unwrap();
-        let saved = from_paths(&[folder, file]);
+        let image_named = temp.path().join("logo.png");
+        std::fs::create_dir(&image_named).unwrap();
+        let saved = from_paths(&[folder, file, image_named]);
         assert_eq!(saved[0]["mimeType"], FOLDER_MIME);
         assert_eq!(saved[0]["kind"], "file");
         assert_eq!(saved[0]["name"], "src");
         assert_eq!(saved[1]["mimeType"], "application/octet-stream");
+        assert_eq!(saved[2]["mimeType"], FOLDER_MIME);
+        assert_eq!(saved[2]["kind"], "file");
     }
 }

@@ -172,6 +172,10 @@ pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 pub fn image_mime(path: &Path) -> Option<&'static str> {
+    // A folder can't be read as an image.
+    if path.is_dir() {
+        return None;
+    }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),

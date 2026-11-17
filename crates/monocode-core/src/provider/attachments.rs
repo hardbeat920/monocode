@@ -79,4 +79,24 @@ mod tests {
         assert_eq!(request.acp_content().unwrap()[1]["mimeType"], "image/png");
         assert_eq!(request.pi_images().unwrap()[0]["type"], "image");
     }
+    #[test]
+    fn image_named_folders_are_not_sent_as_images() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("screenshots.png");
+        std::fs::create_dir(&folder).unwrap();
+        let mut request = Request {
+            kind: Kind::Claude,
+            binary: "unused".into(),
+            cwd: temp.path().into(),
+            prompt: "Look at this".into(),
+            provider_id: None,
+            model: None,
+            settings: Settings::default(),
+        };
+        request.settings.attachments.push(folder);
+        assert_eq!(request.codex_input().as_array().unwrap().len(), 1);
+        assert_eq!(request.claude_content("hello").unwrap(), json!("hello"));
+        assert_eq!(request.acp_content().unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(request.pi_images().unwrap(), json!([]));
+    }
 }
