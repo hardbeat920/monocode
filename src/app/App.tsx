@@ -3252,6 +3252,8 @@ function Workspace({
   );
 
   const focusProjectTerminal = useCallback(() => {
+    // Reaching for the terminal supersedes a Mono still opening.
+    monoViewRequest.current += 1;
     setProjectTerminalFocused(true);
     setComposerFocused(false);
   }, []);
@@ -14355,7 +14357,8 @@ function Workspace({
                         onShowSourceControl={onToggleChanges}
                         onCloseCurrentTab={
                           activeTabId
-                            ? () => onCloseTab(activeTabId)
+                            ? () =>
+                                onCloseTab(activeTabId, { returnToMono: true })
                             : undefined
                         }
                         onCloseOtherTabs={onCloseOtherTabs}
