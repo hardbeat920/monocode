@@ -19,7 +19,7 @@ impl Palette {
         Self {
             ink: crate::theme::content(1.),
             accent: crate::theme::accent_color(),
-            surface: crate::theme::pane_surface(),
+            surface: crate::theme::thread_surface(),
             popover: crate::theme::floating_fill(),
         }
     }

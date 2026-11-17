@@ -119,16 +119,31 @@ title for the published visual. Never expose capability environment variables.
 
 /// The system-prompt rule for when to reach for a visual. Only the trigger
 /// lives here; the SDK stays behind visual_docs.
-const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison or breakdown with an inline visual, and show any chart, diagram or visualizer the user asks for the same way: read `visual_docs` once, then `visual_check` and `visual_show`. When something needs freedom of layout, type or motion, a mockup, a small tool, or a screenshot to judge, build a live page with `draft_preview` instead, after reading `visual_docs` with topic `draft` (pass the HTML in `html`; never write it to a file first), look at the result, then publish it with `publish:true`. Never start a server, open a browser or write an HTML file to show it. Ordinary coding answers need no visual.";
+const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison or breakdown with an inline visual, and show any chart, diagram or visualizer the user asks for the same way: read `visual_docs` once, then `visual_check` and `visual_show`. Never start a server, open a browser or write an HTML file to show it. Ordinary coding answers need no visual.";
+/// How drafts fit in, told only where the app can host a draft's page.
+const DRAFT_USAGE: &str = "When something needs freedom of layout, type or motion, a mockup, a small tool, or a screenshot to judge, build a live page with `draft_preview` instead, after reading `visual_docs` with topic `draft` (pass the HTML in `html`; never write it to a file first), look at the result, then publish it with `publish:true`.";
+
+/// Whether this build of the app can show a draft's page. Agents are only
+/// offered the draft tools where it can; elsewhere `draft_preview` would
+/// have nothing to show the page in.
+pub const DRAFTS_HOSTED: bool = cfg!(target_os = "macos");
+
+fn usage() -> String {
+    if DRAFTS_HOSTED {
+        USAGE.replacen(" Never start", &format!(" {DRAFT_USAGE} Never start"), 1)
+    } else {
+        USAGE.to_owned()
+    }
+}
 
 /// Usage guidance for a provider that received the visual MCP server. Claude
 /// Code may defer MCP tools behind ToolSearch, so it is told how to load them.
 pub fn instructions(environment: &HashMap<String, String>, deferred: bool) -> Option<String> {
     configured(environment).then(|| {
         if deferred {
-            format!("{USAGE} The monocode_visual tools may be deferred: load them with ToolSearch before you call them.")
+            format!("{} The monocode_visual tools may be deferred: load them with ToolSearch before you call them.", usage())
         } else {
-            USAGE.to_owned()
+            usage()
         }
     })
 }
@@ -1202,13 +1217,21 @@ pub fn tool_definitions() -> Vec<Value> {
     show_properties["title"] = json!({"type":"string","maxLength":160});
     show_properties["id"] = json!({"type":"string","maxLength":96,"description":"Optional document identifier. A new request appends a new visual; reuse requestId to retry a publication."});
     show_properties["requestId"] = json!({"type":"string","maxLength":128,"description":"Reuse when retrying an uncertain publication"});
-    vec![
+    let mut tools = vec![
         json!({"name":"visual_docs","description":"Read the native visual SDK reference, examples and styling rules before building an inline chart, diagram or visualizer. Pass topic draft for the design-draft guide, kit for the optional component kit, app for the real MonoCode design language to mock its UI, or tokens for taking colors, type, spacing and radii from an image or from code. Does not publish.","inputSchema":{"type":"object","properties":{"topic":{"enum":["native","draft","kit","app","tokens"]}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"visual_check","description":"Validate a native visual program and representative controls without publishing. Returns its component tree. Read visual_docs for the SDK reference.","inputSchema":{"type":"object","properties":properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"visual_show","description":"Publish a native visual (chart, stat row, diagram, interactive explainer) inline in this conversation. Use it for data with a trend, comparison or breakdown, and whenever the user asks for a visual. Returns an embed line: put it on its own line in your final reply where the visual belongs, between the sentences it supports. Read visual_docs first; validate with visual_check. For custom layout, type, motion or a mockup use draft_preview instead.","inputSchema":{"type":"object","properties":show_properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
         json!({"name":"draft_preview","description":"Build and inspect a live page (HTML, CSS, JS) for the conversation, for custom layout, type or motion, mockups, small tools and anything you want to check in a screenshot; for a plain chart or stat row visual_show is simpler. It runs out of sight while you work; publish:true shows its card at this point in the thread, and a draft you never publish is never shown. Publish once it is checked and good, not on the first try. Pass {html} (inline CSS/JS) or a localhost {url} to open one, with a short {title}; pass {draft} to look again. Returns a screenshot, text, controls with refs, console output and diagnostics; a new page also reports layouts, its height and overflow at phone, tablet and laptop widths. Revise with {draft,html}; resize with width/height; appearance light|dark checks the other theme for that one picture, while the card always follows the app. Actions: click {reference}, type {text,reference?,replace?} (a ref stays valid while its element is on the page), set {values} (patches the page's mc.state by key, as its own controls would), resume, close. If userControl is true the user took over: inspect, but resume only after they hand it back. Results carry feedback the person sent from the page (pinned notes, and messages the page sent with mc.send), its state and issues the page reveals; to wait for feedback use draft_wait. Read visual_docs {topic:draft} first.","inputSchema":{"type":"object","properties":{"html":{"type":"string"},"title":{"type":"string","maxLength":160},"url":{"type":"string","description":"A dev server on localhost"},"draft":{"type":"string","maxLength":96},"action":{"type":"object","properties":{"kind":{"enum":["snapshot","click","type","set","resume","close"]},"reference":{"type":"string","maxLength":96},"values":{"type":"object","description":"For set: state keys and their new values"},"text":{"type":"string","maxLength":4096},"replace":{"type":"boolean"}},"required":["kind"],"additionalProperties":false},"width":{"type":"integer","minimum":240,"maximum":1600},"height":{"type":"integer","minimum":120,"maximum":1600,"description":"Only where the card starts; it is as tall as the page"},"appearance":{"enum":["light","dark"]},"publish":{"type":"boolean","description":"Show the draft to the person; later versions then appear in its card as you send them"}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}}),
         json!({"name":"draft_wait","description":"Pause until the person has tried the draft and sends their feedback (pinned notes on the page) or hands it back, then look at the page again. Returns the usual screenshot and numbers plus feedback, messages, userActions and event (feedback, message, handed back or timeout). Waits up to 30 seconds; call again to keep waiting. Use after asking the person to try it, not in place of draft_preview.","inputSchema":{"type":"object","properties":{"draft":{"type":"string","maxLength":96},"seconds":{"type":"integer","minimum":1,"maximum":30}},"required":["draft"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-    ]
+    ];
+    if !DRAFTS_HOSTED {
+        tools.retain(|tool| {
+            !tool["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("draft_"))
+        });
+    }
+    tools
 }
 
 fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option<Value> {
@@ -1228,6 +1251,9 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                     .ok_or("source must be a JavaScript string".into())
                     .and_then(check),
                 "visual_show" => publish_with_environment(input, environment),
+                "draft_preview" | "draft_wait" if !DRAFTS_HOSTED => {
+                    Err("Drafts need the macOS app; use visual_show instead".into())
+                }
                 "draft_preview" => draft_with_environment(&input, environment),
                 "draft_wait" => wait_for_draft(&input, environment),
                 _ => Err("Unknown native visual tool".into()),
@@ -1404,8 +1430,21 @@ mod tests {
         );
         let response = mcp_response(json!({"id":2,"method":"tools/call","params":{"name":"visual_show","arguments":input()}}), &environment).unwrap();
         assert_eq!(response["result"]["isError"], true);
-        assert_eq!(tool_definitions().len(), 5);
+        assert_eq!(tool_definitions().len(), if DRAFTS_HOSTED { 5 } else { 3 });
         assert_eq!(acp_servers(&environment), json!([]));
+    }
+
+    #[test]
+    fn agents_hear_of_drafts_only_where_the_app_can_show_one() {
+        let prompt = usage();
+        assert_eq!(prompt.contains("draft_preview"), DRAFTS_HOSTED);
+        assert!(prompt.ends_with("Ordinary coding answers need no visual."));
+        let offered = tool_definitions().iter().any(|tool| {
+            tool["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("draft_"))
+        });
+        assert_eq!(offered, DRAFTS_HOSTED);
     }
 
     #[test]

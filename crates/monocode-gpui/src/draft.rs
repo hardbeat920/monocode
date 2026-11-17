@@ -968,7 +968,7 @@ impl Draft {
                             .px_2()
                             .py_1()
                             .rounded(px(6.))
-                            .bg(pane_surface())
+                            .bg(thread_surface())
                             .border_1()
                             .border_color(content(0.1))
                             .text_size(px(12.))
@@ -1751,7 +1751,7 @@ impl Draft {
             .overflow_hidden()
             .border_1()
             .border_color(content(0.1))
-            .bg(pane_surface())
+            .bg(thread_surface())
             .shadow(vec![
                 gpui::BoxShadow::new(px(0.), px(24.), black(0.3))
                     .blur_radius(px(48.))
