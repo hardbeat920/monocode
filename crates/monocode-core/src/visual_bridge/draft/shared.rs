@@ -7,7 +7,7 @@
 //! page keeps to itself stay on the screen that drew it.
 use super::{Anchor, DraftContent, Feedback};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 /// What the page reports as `mc.state` is capped at this many bytes of JSON.
 const MAX_STATE_BYTES: usize = 4000;

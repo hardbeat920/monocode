@@ -349,7 +349,13 @@ function MonoTranscript({
 }) {
   const { turns, hasOlder, loadOlder } = useConversationTurns(conversationId);
   return turns.length > 0 ? (
-    <Transcript turns={turns} agent={agent} hasOlder={hasOlder} loadOlder={loadOlder} />
+    <Transcript
+      turns={turns}
+      conversationId={conversationId}
+      agent={agent}
+      hasOlder={hasOlder}
+      loadOlder={loadOlder}
+    />
   ) : (
     <EmptySession mono={agent} />
   );

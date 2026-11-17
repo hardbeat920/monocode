@@ -19,6 +19,8 @@ import { withAlpha, themedStyles, useColors } from "@/ui/theme";
 import { LaunchedSessions } from "./LaunchedSessionCard";
 import { DocumentCard, MonoChoices } from "./MonoCards";
 import { Markdown } from "./Markdown";
+import { DraftCard } from "@/features/drafts/DraftCard";
+
 import { ProviderLogo } from "./ProviderLogo";
 import { sessionErrorContent, type SessionErrorNotice } from "./sessionError";
 import {
@@ -62,10 +64,13 @@ const CONTENT_X = GUTTER + FOLD_MARK + 6;
  */
 export const TranscriptTurn = memo(function TranscriptTurn({
   turn,
+  conversationId,
   agent,
   onError,
 }: {
   turn: Turn;
+  /** Where the turn's drafts are read from; without it they stay notices. */
+  conversationId?: string;
   agent?: TranscriptAgent;
   onError: (notice: SessionErrorNotice) => void;
 }) {
@@ -111,6 +116,10 @@ export const TranscriptTurn = memo(function TranscriptTurn({
           case "document":
             return <DocumentCard key={item.id} document={item} />;
           case "notice":
+            if (item.draft && conversationId)
+              return (
+                <DraftCard key={item.id} conversationId={conversationId} card={item.draft} />
+              );
             return item.error ? (
               <ErrorNotice key={item.id} item={item} onPress={() => onError(item)} />
             ) : (

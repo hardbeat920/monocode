@@ -580,6 +580,7 @@ function SessionTranscript({
     <FileOpener value={openFile}>
       {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
         key={sessionId}
+        conversationId={sessionId}
         pushed
         busy={busy}
         turns={turns}

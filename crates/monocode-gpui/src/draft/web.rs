@@ -201,6 +201,9 @@ pub(super) struct Wakes {
     receive: async_channel::Receiver<()>,
     /// How many times the page itself has pinged: it may look different since.
     pings: Pings,
+    /// How many times the app asked for a read, as when the phone changed
+    /// the record.
+    asks: Pings,
 }
 type Pings = Rc<std::cell::Cell<u64>>;
 impl Default for Wakes {
@@ -211,6 +214,7 @@ impl Default for Wakes {
             send,
             receive,
             pings: Pings::default(),
+            asks: Pings::default(),
         }
     }
 }
@@ -772,6 +776,11 @@ impl Host {
     pub(super) fn woken(&self) -> async_channel::Receiver<()> {
         self.wakes.receive.clone()
     }
+    /// Reads the page again soon, as when the phone changed the record.
+    pub(super) fn wake(&self) {
+        self.wakes.asks.set(self.wakes.asks.get() + 1);
+        let _ = self.wakes.send.try_send(());
+    }
     /// Runs the reader's checks again without asking it to read the page.
     pub(super) fn nudge(&self) {
         let _ = self.wakes.send.try_send(());
@@ -779,7 +788,7 @@ impl Host {
     /// Grows whenever there may be something new to read from the page. A
     /// wake without it, such as the tick's, has nothing to read.
     pub(super) fn demand(&self) -> u64 {
-        self.wakes.pings.get()
+        self.wakes.pings.get() + self.wakes.asks.get()
     }
     /// Wakes the reader from another thread.
     pub(super) fn waker(&self) -> impl Fn() + Send + use<> {
@@ -847,6 +856,11 @@ impl Host {
     #[cfg(test)]
     pub(super) fn painted_in(&self, window: gpui::WindowId) -> bool {
         self.claim.get().is_some_and(|claim| claim.window == window)
+    }
+    /// Whether an agent's lease is keeping the page running.
+    #[cfg(test)]
+    pub(super) fn leased(&self) -> bool {
+        self.leases.get() > 0
     }
     /// The width the thread gave the draft when it was last painted.
     pub(super) fn column(&self) -> Option<f32> {

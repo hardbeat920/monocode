@@ -253,7 +253,7 @@ pub(crate) enum DraftEvent {
 pub(crate) struct Draft {
     id: String,
     /// What the draft is to the thread: the page, its state, the person's
-    /// notes and who drives it.
+    /// notes and who drives it. The phone reads and changes the same record.
     shared: SharedDraft,
     /// How the card's height has been following the page lately.
     growth: Growth,
@@ -563,7 +563,7 @@ impl Draft {
             cx,
         );
         // The page's first report takes these values, as it would from
-        // another screen sharing the record.
+        // the phone.
         if let Some(state) = saved.state {
             this.shared.report_state(state);
         }
@@ -710,8 +710,38 @@ impl Draft {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_waiting_for_test(&mut self, waiting: bool) {
+        self.shared.set_waiting(waiting);
+    }
+
+    /// Whether an agent's lease is keeping the page running.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn leased_for_test(&self) -> bool {
+        self.host.leased()
+    }
+
     pub(crate) fn shared(&self) -> &SharedDraft {
         &self.shared
+    }
+
+    /// How tall the page was laid out at a phone's width, for a card that
+    /// has not loaded it yet.
+    pub(crate) fn phone_height(&self) -> Option<u32> {
+        let phone = monocode_core::visual_bridge::DRAFT_LAYOUT_WIDTHS.first()?;
+        self.layouts
+            .iter()
+            .find(|layout| layout.width == *phone)
+            .map(|layout| layout.height)
+    }
+
+    /// The page as the phone draws it, themed light or dark like the phone.
+    /// A dev server has none: it runs on this machine.
+    pub(crate) fn phone_page(&self, light: bool) -> Option<String> {
+        let html = self.html()?;
+        Some(page::phone(
+            html,
+            Palette::forced(self.light.unwrap_or(light)),
+        ))
     }
 
     /// The notes, page messages and hand-done actions the agent has not seen,
@@ -727,6 +757,48 @@ impl Draft {
         }
         self.set_commenting(false, cx);
         cx.emit(DraftEvent::Send);
+    }
+
+    /// The person pinned notes on the phone's copy of the page.
+    pub(crate) fn pin_from_phone(&mut self, notes: Vec<DraftFeedback>, cx: &mut Context<Self>) {
+        self.shared.pin(notes, DraftSide::Phone);
+        #[cfg(target_os = "macos")]
+        self.host.wake();
+        cx.notify();
+    }
+
+    /// The person used the phone's copy of the page.
+    pub(crate) fn touch_from_phone(&mut self, actions: Vec<String>, cx: &mut Context<Self>) {
+        self.shared.touch(actions);
+        cx.notify();
+    }
+
+    /// The person changed the page's state on the phone; this card's page
+    /// follows on its next reading.
+    pub(crate) fn patch_from_phone(
+        &mut self,
+        values: &serde_json::Map<String, serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.shared.state().is_some() {
+            self.shared.patch_state(values)?;
+        } else {
+            // This page has not run here, so the phone's values start the record.
+            self.shared.report_state(values.clone());
+        }
+        self.shared.touch(Vec::new());
+        self.persist(cx);
+        #[cfg(target_os = "macos")]
+        self.host.wake();
+        cx.notify();
+        Ok(())
+    }
+
+    /// The phone's page sent a line with `mc.send`.
+    pub(crate) fn tell_from_phone(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.shared.tell(vec![text]) {
+            cx.emit(DraftEvent::Send);
+        }
     }
 
     /// Turns comment mode on or off in the page.
@@ -759,7 +831,6 @@ impl Draft {
     }
 
     /// The page the agent wrote.
-    #[cfg(test)]
     pub(crate) fn html(&self) -> Option<&str> {
         match self.shared.content() {
             DraftContent::Html(html) => Some(html),
@@ -978,8 +1049,8 @@ impl Draft {
         let woken = self.host.woken();
         let tick = self.host.waker();
         Some(cx.spawn(async move |this, cx| {
-            // The page pings when it reports something, and changes to the
-            // shared record wake the card too; the tick only catches a card that
+            // The page pings when it reports something, and the phone's
+            // changes wake the card too; the tick only catches a card that
             // came back into view.
             let _tick = cx.background_spawn({
                 let executor = cx.background_executor().clone();
@@ -1234,7 +1305,7 @@ impl Draft {
     }
 
     /// What this card's page needs to match the shared record: state and pins
-    /// set from elsewhere. The page's own report of its state goes into the
+    /// from the phone. The page's own report of its state goes into the
     /// record first, unless the page has not caught up with values it was
     /// just given.
     #[cfg(target_os = "macos")]
@@ -1803,6 +1874,19 @@ fn flatten(png: &[u8], color: [u8; 3]) -> Option<Vec<u8>> {
         .write_to(&mut out, image::ImageFormat::Png)
         .ok()?;
     Some(out.into_inner())
+}
+
+/// A PNG as a JPEG, small enough to send to a phone every second.
+#[cfg(target_os = "macos")]
+pub(crate) fn jpeg(png: &[u8]) -> Option<Vec<u8>> {
+    let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .ok()?
+        .into_rgb8();
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70)
+        .encode_image(&image)
+        .ok()?;
+    Some(out)
 }
 
 /// The wrapper's state as JSON.
@@ -2524,6 +2608,26 @@ impl Draft {
         }
     }
 
+    /// A picture of the page for a phone that cannot load it itself, as a dev
+    /// server on this Mac's localhost: a JPEG at most `width` pixels wide.
+    pub(crate) async fn frame(
+        this: &gpui::WeakEntity<Self>,
+        width: u32,
+        cx: &mut gpui::AsyncApp,
+    ) -> Result<(Vec<u8>, (u32, u32)), String> {
+        let web = Self::ready(this, cx).await?;
+        let (viewport, _) = this
+            .read_with(cx, |this, _| this.viewport())
+            .map_err(|_| "The draft was closed".to_string())?;
+        let (png, size) = web::png(&web, f64::from(viewport.min(width)), cx).await?;
+        let jpeg = cx
+            .background_executor()
+            .spawn(async move { jpeg(&png) })
+            .await
+            .ok_or("The picture could not be encoded")?;
+        Ok((jpeg, size))
+    }
+
     async fn capture(
         this: &gpui::WeakEntity<Self>,
         web: &web::Page,
@@ -2655,6 +2759,14 @@ impl Draft {
         _: &DraftRequest,
         _: &mut gpui::AsyncApp,
     ) -> Result<DraftReply, String> {
+        Err("Drafts need the macOS app".into())
+    }
+
+    pub(crate) async fn frame(
+        _: &gpui::WeakEntity<Self>,
+        _: u32,
+        _: &mut gpui::AsyncApp,
+    ) -> Result<(Vec<u8>, (u32, u32)), String> {
         Err("Drafts need the macOS app".into())
     }
 }
@@ -2854,8 +2966,9 @@ mod tests {
             draft
                 .shared
                 .pin(vec![note("Make this blue")], DraftSide::Desktop);
-            draft.shared.pin(vec![note("And this")], DraftSide::Desktop);
-            draft.shared.touch(vec!["clicked \"Go\"".into()]);
+            // A note pinned on the phone waits with the desktop's.
+            draft.pin_from_phone(vec![note("And this")], cx);
+            draft.touch_from_phone(vec!["clicked \"Go\"".into()], cx);
             assert!(draft.shared().control());
             // Pinned notes are the person's own until sent.
             assert_eq!(draft.shared().signal(), None);
@@ -2876,10 +2989,80 @@ mod tests {
         });
     }
 
+    /// The card's page and the phone's share one `mc.state` and one set of
+    /// pins, whichever screen changed them.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn the_cards_page_follows_what_the_phone_changed_and_reports_its_own(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let draft = cx.new(|cx| {
+            Draft::new(
+                Some("d".into()),
+                1,
+                DraftContent::Html("<p>Hi</p>".into()),
+                (None, None),
+                None,
+                None,
+                cx,
+            )
+        });
+        let reading = |page: &str, radius: u32| json!({"page": page, "state": {"radius": radius}});
+        draft.update(cx, |draft, cx| {
+            // The first report is the page's starting state.
+            assert!(draft.reconcile(&reading("1", 8)).is_empty());
+            assert_eq!(draft.shared().state().unwrap()["radius"], 8);
+
+            // The phone moved it: the page is set to match.
+            let patch = json!({"radius": 12});
+            draft
+                .patch_from_phone(patch.as_object().unwrap(), cx)
+                .unwrap();
+            assert_eq!(
+                draft.reconcile(&reading("1", 8)),
+                vec![json!({"__mcState": {"radius": 12}})]
+            );
+            // A report from before the page caught up does not undo it.
+            assert!(draft.reconcile(&reading("1", 8)).is_empty());
+            assert_eq!(draft.shared().state().unwrap()["radius"], 12);
+            assert!(draft.reconcile(&reading("1", 12)).is_empty());
+
+            // A change made in this page goes into the record.
+            assert!(draft.reconcile(&reading("1", 20)).is_empty());
+            assert_eq!(draft.shared().state().unwrap()["radius"], 20);
+
+            // Only the phone's pins are drawn in; this page drew its own.
+            draft.shared.pin(vec![note("Here")], DraftSide::Desktop);
+            let at = monocode_core::visual_bridge::DraftAnchor {
+                path: "0.1".into(),
+                ax: 0.5,
+                ay: 0.25,
+            };
+            draft.pin_from_phone(
+                vec![DraftFeedback {
+                    at: Some(at),
+                    ..note("There")
+                }],
+                cx,
+            );
+            let pins = draft.reconcile(&reading("1", 20));
+            // It goes on the element it was placed on at the phone's width.
+            assert_eq!(
+                pins,
+                vec![json!({"__mcPin": {"x": 1.0, "y": 2.0, "at": {"path": "0.1", "ax": 0.5, "ay": 0.25}}})]
+            );
+
+            // A page that loads again gets every pin and the shared state back.
+            let again = draft.reconcile(&reading("2", 8));
+            assert_eq!(again.len(), 3);
+            assert_eq!(again[2], json!({"__mcState": {"radius": 20}}));
+        });
+    }
+
     /// Renders the card's own parts (the page is a native view and is not in
     /// these pictures): the skeleton before anything is known, the page's
     /// outline, and the full view.
     /// `DRAFT_SHOTS=/tmp/shots cargo test --bins draft_shots -- --ignored`
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Requires a Metal device; writes screenshots"]
     fn draft_shots() {

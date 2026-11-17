@@ -929,6 +929,14 @@ fn project(
                     }
                 }
             }
+            // The desktop sends a draft's card with the notice older phones
+            // show; the page itself is the transcript view's own.
+            "notice" if item["draft"]["draft"].is_string() => {
+                let mut row = Row::text(id, "draft", string(&item["draft"], "title"));
+                row.action = item["draft"].clone();
+                row.action["type"] = json!("draft");
+                rows.push(Arc::new(row));
+            }
             "notice" => {
                 let mut row = Row::text(
                     id,
@@ -1606,6 +1614,21 @@ mod tests {
         assert!(end["rows"].as_array().unwrap().is_empty());
         assert!(end["order"].is_null());
     }
+    #[test]
+    fn a_draft_notice_becomes_a_card_and_a_plain_notice_stays_one() {
+        let turn = json!({"id":"t","items":[
+            {"id":"d","type":"notice","text":"Pricing · Open on desktop to view",
+             "draft":{"draft":"draft-1-a","title":"Pricing"}},
+            {"id":"n","type":"notice","text":"Screenshot · Open on desktop to view"}
+        ]});
+        let rows = project(&turn, &mut HashMap::new(), &HashMap::new(), false);
+        let card = rows.iter().find(|row| row.id == "t/d").unwrap();
+        assert_eq!(card.kind, "draft");
+        assert_eq!(card.action["type"], "draft");
+        assert_eq!(card.action["draft"], "draft-1-a");
+        assert_eq!(rows.iter().filter(|row| row.kind == "draft").count(), 1);
+    }
+
     #[test]
     fn fold_actions_and_selection_keep_the_source_text() {
         let mut t = Transcript::new(

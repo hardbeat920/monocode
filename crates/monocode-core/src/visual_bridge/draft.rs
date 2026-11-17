@@ -1,7 +1,7 @@
 //! The agent's design draft: an HTML page (or a local dev server) drawn as a
 //! card in the conversation and inspected through screenshots.
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::mpsc;
 
 pub mod images;

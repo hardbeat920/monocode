@@ -1,6 +1,8 @@
 //! A paired phone browses and drives this workspace. The core host pairs and
 //! serves devices; the shell answers their requests from its own state, through
 //! the same paths as the sidebar, composer and Changes panel.
+mod drafts;
+
 use super::*;
 use crate::{
     accounts::Tone,
@@ -414,6 +416,7 @@ impl Shell {
                     .find(|path| monocode_core::files::path_key(path) == key)?;
                 let live = self.sessions.get(&id).map(|view| {
                     let view = view.read(cx);
+                    let waiting_draft = self.waiting_draft(id, cx);
                     mobile_catalog::LiveSession {
                         loaded: view.history_loaded(),
                         metadata: monocode_core::store::MobileSessionMetadata {
@@ -427,8 +430,9 @@ impl Shell {
                         waiting: match view.mobile_waiting(cx) {
                             Some(crate::conversation::MobileWaiting::Approval) => Some("approval"),
                             Some(crate::conversation::MobileWaiting::Question) => Some("question"),
-                            None => None,
+                            None => waiting_draft.as_ref().map(|_| "draft"),
                         },
+                        waiting_draft,
                     }
                 });
                 Some(CatalogEntry {
@@ -739,6 +743,8 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
+            "draft.read" => self.mobile_draft_read(request, window, cx),
+            "draft.frame" => self.mobile_draft_frame(request, window, cx),
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -996,7 +1002,12 @@ impl Shell {
         let waiting = match chat.mobile_waiting(cx) {
             Some(crate::conversation::MobileWaiting::Approval) => Some("Waiting for approval"),
             Some(crate::conversation::MobileWaiting::Question) => Some("Waiting for answers"),
-            None => None,
+            None => match target {
+                Target::Session(session) => {
+                    self.waiting_draft(*session, cx).map(|_| "Waiting for you")
+                }
+                Target::Mono(_) => None,
+            },
         };
         let snapshot = Snapshot {
             usage_limit: chat.mobile_usage_limit(cx),
@@ -1425,6 +1436,7 @@ impl Shell {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
             }
+            ("draft.action", _) => self.mobile_draft_action(params, window, cx),
             ("session.answerQuestion" | "session.keepQuestionOpen", target) => {
                 let view = match target {
                     Target::Session(id) => self.sessions.get(id).cloned(),

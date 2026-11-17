@@ -343,6 +343,18 @@ fn notice(rows: &[Row], at: usize, end: usize) -> Option<Value> {
                 json!({"type": "notice", "id": id, "text": format!("{title} · Open on desktop to interact")}),
             )
         }
+        // A phone that draws drafts opens the page in the thread, live with
+        // the desktop's; an older one shows the notice.
+        monocode_core::visual_bridge::DRAFT_ROLE => {
+            let card =
+                serde_json::from_str::<monocode_core::visual_bridge::DraftCard>(&text).ok()?;
+            let title = Some(card.title)
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| "Draft".into());
+            let mut notice = json!({"type": "notice", "id": id, "text": format!("{title} · Open on desktop to view")});
+            notice["draft"] = json!({"draft": card.draft, "title": title});
+            Some(notice)
+        }
         "system" if !text.trim().is_empty() => {
             Some(json!({"type": "notice", "id": id, "text": text}))
         }
@@ -565,7 +577,7 @@ fn agent_turn(source: &Source, turn: &Turn, live: bool) -> Value {
             continue;
         }
         responded = true;
-        if role == "visual" {
+        if role == "visual" || role == monocode_core::visual_bridge::DRAFT_ROLE {
             close(&mut work, &mut items);
             if let Some(notice) = notice(rows, at, end) {
                 items.push(notice);
@@ -960,6 +972,37 @@ mod tests {
         assert_eq!(visual["title"], "Capacity explorer");
         assert_eq!(visual["tree"]["kind"], "text");
         assert!(!turns[0].to_string().contains("visual.text"));
+    }
+    #[test]
+    fn a_draft_is_a_card_for_the_phone_and_a_notice_for_an_older_one() {
+        let card = monocode_core::visual_bridge::DraftCard {
+            draft: "draft-1-a".into(),
+            title: "Pricing".into(),
+        };
+        let rows = vec![
+            row("user", "Mock it"),
+            tool("Read", json!({"path":"data.json"}), ToolState::Completed),
+            row(
+                monocode_core::visual_bridge::DRAFT_ROLE,
+                &serde_json::to_string(&card).unwrap(),
+            ),
+            row("assistant", "Ready"),
+        ];
+        let info = HashMap::new();
+        let turns = all(&source(&rows, &info, false));
+        let cards: Vec<_> = turns[0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["draft"].is_object())
+            .collect();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0]["type"], "notice");
+        assert_eq!(cards[0]["text"], "Pricing · Open on desktop to view");
+        assert_eq!(
+            cards[0]["draft"],
+            json!({"draft": "draft-1-a", "title": "Pricing"})
+        );
     }
     fn types(turn: &Value) -> Vec<&str> {
         turn["items"]

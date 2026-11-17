@@ -100,6 +100,67 @@ from the page itself:
   the thread's visible area, and hidden when its row is not painted. A popover
   over it swaps in a still.
 
+## On the phone
+
+A draft runs inside the thread on a paired phone too, at its place in the
+conversation, with no screen of its own. Each one is a card: its title, the
+page at the phone's width, and the desktop's controls (comment, close, send
+notes, hand back). On iOS the card is a native view the transcript owns
+(`TranscriptDraft.swift`), because rows are recycled and a page has to outlive
+them; on Android it is a React view (`DraftCard.tsx`). Both are driven by
+`DraftController.ts`, and the rules for what crosses between the screens are in
+`sync.ts`.
+
+- **Reading never opens.** A card reads with `peek`, so scrolling past a closed
+  draft leaves it closed and retires nothing on the desktop. A paused card offers
+  "Paused · tap to run"; only that press opens the page. A draft the person
+  closed says so in one line, with **Open again**.
+- **On screen means running.** A card off screen stops following the record and
+  pauses its page. iOS keeps at most three pages per thread and gives up the one
+  used longest ago; the card asks the desktop for it when it comes back.
+- **Height.** The page reports its height (`h`) and the card follows it, up to
+  12,000 points. The row is measured again alone, so nothing else in the thread
+  is laid out for it. Until the page speaks, the card uses the height the
+  desktop measured at phone width.
+- **Touch.** A vertical drag scrolls the thread; a sideways drag on the page
+  belongs to the page. What the page reports counts only within two seconds of a
+  real touch, and a touch that became a scroll does not count: the input it
+  reported is dropped, so scrolling past a card does not take control of it.
+  While a finger is on a page, the screen's own pans sit out the touch (iOS 26's
+  swipe back from anywhere). The edge swipe stays.
+- **Touch events.** WebKit on iOS sends touches only where the outer document
+  listens, and the sandboxed page's listeners do not count, so the phone bridge
+  adds passive ones. Without them a tap arrives as a bare click, with no
+  `pointerdown`, and `mc.send` refuses it.
+- **State.** The desktop page's first report starts the record. If that page has
+  not run, the person's first change on the phone starts it instead.
+- **Dev servers** show pictures from `draft.frame`, once a second, with no page.
+- **Full view.** iOS moves the same page into a full screen view and back, so
+  nothing the page keeps to itself is lost. Android has no full view.
+- **Waiting.** When the agent waits on a draft that is off screen, a pill above
+  the composer goes to it, and the sessions list says so. The catalog carries
+  `waitingDraft` for this. A card less than 120 points past the edge still
+  counts as on screen, because its row is kept that far out. The wait holds a
+  lease, so the person can answer here while the desktop shows no card.
+- **Mono chats.** A Mono's chat is not among the sessions, so `draft.*` calls
+  name it by Mono and the desktop finds the drafts in its conversation. Notes
+  sent there go to that chat.
+
+A phone from before this reads the same rows as the plain line "Pricing · Open on
+desktop to view"; the card rides on that notice as `draft`.
+
+To check on a real phone paired to a desktop built from this source:
+
+- Scroll past a closed draft and confirm it stays closed on the desktop.
+- Move a control on the phone and see it move on the desktop, then the reverse.
+- Press a button in the page that calls `mc.send`, and see the turn start.
+- Leave a note on the phone, press **Send**, and see it reach the agent.
+- With the agent in `draft_wait`, scroll away and follow the pill back.
+- With the desktop on another conversation, answer a `draft_wait` on the phone:
+  the agent gets the answer, not an error.
+- Drag a slider in a Mono's chat: the chat must not swipe back.
+- On Android, repeat these with a card in a long thread.
+
 ## Verifying
 
 ```sh

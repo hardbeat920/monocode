@@ -393,6 +393,26 @@ pub(crate) fn sandbox(body: &str, palette: Palette) -> String {
     )
 }
 
+/// Passes what the page tells the wrapper on to the phone app: state, notes,
+/// the person's input, page messages and the page's height. The phone's web
+/// view has no other way to read it. WebKit on iOS sends touches only where the
+/// outer document listens for them, and the sandboxed page's own listeners do
+/// not count: without these, a tap reached the page as a bare click, so nothing
+/// but a slider saw `pointerdown` and `mc.send` refused every button.
+const PHONE_BRIDGE: &str = r#"<script>for(const type of ['touchstart','pointerdown'])addEventListener(type,()=>{},{passive:true});addEventListener('message',e=>{const d=e.data;if(!d||d.__mc!==1||!/^[vfunh]$/.test(d.k))return;try{window.ReactNativeWebView.postMessage(JSON.stringify(d))}catch(x){}});</script>"#;
+
+/// The same sandboxed page for the phone's web view, laid out at the phone's
+/// width. The phone drives it with `__mcSend`, as the desktop does.
+pub(crate) fn phone(body: &str, palette: Palette) -> String {
+    sandbox(body, palette).replacen(
+        "<!doctype html>",
+        &format!(
+            "<!doctype html><meta name=viewport content=\"width=device-width,initial-scale=1,viewport-fit=cover\">{PHONE_BRIDGE}"
+        ),
+        1,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +484,7 @@ mod tests {
         for (name, source) in [
             ("probe", strip(PAGE_PROBE)),
             ("wrapper", strip(WRAPPER_SCRIPT)),
+            ("phone bridge", strip(PHONE_BRIDGE)),
             ("browser probe", browser_probe()),
             ("retheme", retheme_script(Palette::forced(true))),
         ] {
@@ -498,6 +519,17 @@ mod tests {
         // The audit measures the other theme with transitions held still.
         assert!(PAGE_PROBE.contains("doc.setAttribute('data-mc-flip','')"));
         assert!(PAGE_PROBE.contains("transition:none!important"));
+    }
+
+    #[test]
+    fn the_phone_gets_the_same_sandbox_with_a_bridge_to_the_app() {
+        let page = phone("<p>x</p>", Palette::forced(false));
+        assert!(page.starts_with("<!doctype html><meta name=viewport"));
+        assert!(page.contains("ReactNativeWebView.postMessage"));
+        assert!(page.contains("sandbox=\"allow-scripts\""));
+        assert!(page.contains("connect-src https: wss:;"));
+        // Only the outer document is changed; the page itself is not.
+        assert_eq!(page.matches(PHONE_BRIDGE).count(), 1);
     }
 
     #[test]

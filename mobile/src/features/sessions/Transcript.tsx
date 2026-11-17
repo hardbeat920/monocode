@@ -76,6 +76,7 @@ const NO_TURNS: Turn[] = [];
  */
 export function Transcript({
   turns: allTurns,
+  conversationId,
   agent,
   hasOlder = false,
   loadOlder,
@@ -83,6 +84,8 @@ export function Transcript({
   busy = false,
 }: {
   turns: Turn[];
+  /** The conversation the turns are from, for its drafts' cards. */
+  conversationId?: string;
   /** Whether the session is working; one that is opens anchored. */
   busy?: boolean;
   /** On a screen pushed over another: wait for the push to start. */
@@ -410,7 +413,12 @@ export function Transcript({
               slack={!agent && index >= anchorIndex ? slack : null}
               onLayout={(event) => onRowLayout(item.id, event)}
             >
-              <TranscriptTurn turn={item} agent={agent} onError={showError} />
+              <TranscriptTurn
+                turn={item}
+                conversationId={conversationId}
+                agent={agent}
+                onError={showError}
+              />
             </HeldRow>
           )}
         />

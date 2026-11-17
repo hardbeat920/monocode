@@ -67,6 +67,15 @@ impl Shell {
         let _ = request.reply.send(result);
     }
 
+    /// The draft in this conversation the agent is waiting on, if any.
+    pub(super) fn waiting_draft(&self, session: i64, cx: &App) -> Option<String> {
+        self.drafts
+            .get(&session)?
+            .iter()
+            .find(|draft| draft.read(cx).waiting())
+            .map(|draft| draft.read(cx).id().to_owned())
+    }
+
     pub(super) fn draft_named(&self, session: i64, id: &str, cx: &App) -> Option<Entity<Draft>> {
         self.drafts
             .get(&session)?
@@ -122,7 +131,7 @@ impl Shell {
         self.keep_running(session, &draft, cx);
         // The page keeps running for the request even when its conversation
         // is in the background. That holds for a wait too: the person may be
-        // looking at another conversation when they answer.
+        // answering on their phone, with no card on screen here.
         let lease = draft.update(cx, |draft, cx| draft.lease(window, cx));
         let weak = draft.downgrade();
         cx.spawn(async move |this, cx| {

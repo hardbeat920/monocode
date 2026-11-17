@@ -3,16 +3,15 @@
 //! only during a live turn.
 use crate::visual::{self, VisualDocument};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
-        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
+        mpsc, Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -28,12 +27,12 @@ const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
 mod draft;
 pub use draft::shared::{Outbox as DraftOutbox, Pin as DraftPin, SharedDraft, Side as DraftSide};
 pub use draft::{
-    Anchor as DraftAnchor, DEFAULT_HEIGHT as DRAFT_DEFAULT_HEIGHT,
-    DEFAULT_WAIT_SECONDS as DRAFT_DEFAULT_WAIT_SECONDS, DEFAULT_WIDTH as DRAFT_DEFAULT_WIDTH,
-    Diagnostics as DraftDiagnostics, DraftAction, DraftContent, DraftReply, DraftRequest,
-    Element as DraftElement, FONT_HOSTS, Feedback as DraftFeedback,
-    LAYOUT_WIDTHS as DRAFT_LAYOUT_WIDTHS, Layout as DraftLayout, LogEntry as DraftLog,
-    SCRIPT_HOSTS, STYLE_HOSTS, Snapshot as DraftSnapshot, csp_sources, local_url,
+    csp_sources, local_url, Anchor as DraftAnchor, Diagnostics as DraftDiagnostics, DraftAction,
+    DraftContent, DraftReply, DraftRequest, Element as DraftElement, Feedback as DraftFeedback,
+    Layout as DraftLayout, LogEntry as DraftLog, Snapshot as DraftSnapshot,
+    DEFAULT_HEIGHT as DRAFT_DEFAULT_HEIGHT, DEFAULT_WAIT_SECONDS as DRAFT_DEFAULT_WAIT_SECONDS,
+    DEFAULT_WIDTH as DRAFT_DEFAULT_WIDTH, FONT_HOSTS, LAYOUT_WIDTHS as DRAFT_LAYOUT_WIDTHS,
+    SCRIPT_HOSTS, STYLE_HOSTS,
 };
 
 type DraftHandler = Box<dyn Fn(DraftRequest) + Send + Sync>;
@@ -1359,11 +1358,9 @@ mod tests {
         assert!(server.drain().is_empty());
         let mut changed = input();
         changed["source"] = "return () => visual.text('Changed');".into();
-        assert!(
-            publish_with_environment(changed, &environment)
-                .unwrap_err()
-                .contains("already used")
-        );
+        assert!(publish_with_environment(changed, &environment)
+            .unwrap_err()
+            .contains("already used"));
     }
 
     #[test]
@@ -1389,13 +1386,11 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .unwrap();
         publication.reply.send(Err("Saving failed".into())).unwrap();
-        assert!(
-            worker
-                .join()
-                .unwrap()
-                .unwrap_err()
-                .contains("Saving failed")
-        );
+        assert!(worker
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .contains("Saving failed"));
     }
 
     #[test]
@@ -1441,18 +1436,14 @@ mod tests {
         let reference: Value =
             serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
-        assert!(
-            reference["documentation"]
-                .as_str()
-                .unwrap()
-                .contains("visual.scene")
-        );
-        assert!(
-            reference["documentation"]
-                .as_str()
-                .unwrap()
-                .contains("Style is inherited from the app")
-        );
+        assert!(reference["documentation"]
+            .as_str()
+            .unwrap()
+            .contains("visual.scene"));
+        assert!(reference["documentation"]
+            .as_str()
+            .unwrap()
+            .contains("Style is inherited from the app"));
         assert_eq!(reference, client(&["docs".into()]).unwrap());
         assert!(client(&["docs".into(), "--input".into(), "unused".into()]).is_err());
     }
@@ -1579,13 +1570,11 @@ mod tests {
         let server = Server::start(21).unwrap();
         let environment = server.environment(std::path::Path::new("/test/app"));
         // Bad input is refused before any panel is asked.
-        assert!(
-            draft_with_environment(
-                &json!({"html":"<script src='http://x'></script>"}),
-                &environment
-            )
-            .is_err()
-        );
+        assert!(draft_with_environment(
+            &json!({"html":"<script src='http://x'></script>"}),
+            &environment
+        )
+        .is_err());
         install_draft_handler();
         // A draft shown on its first call takes a card once its page answers.
         let cards = Mutex::new(Vec::new());
@@ -1777,13 +1766,11 @@ mod tests {
             "no card joined the conversation"
         );
         // The page that started opening is closed with it.
-        assert!(
-            CLOSED
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|draft| draft.starts_with("draft-22-"))
-        );
+        assert!(CLOSED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|draft| draft.starts_with("draft-22-")));
     }
 
     #[test]

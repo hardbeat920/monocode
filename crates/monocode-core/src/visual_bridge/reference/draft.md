@@ -63,7 +63,7 @@ The page runs for each of your requests whether or not the person can see its
 card: before you publish it, in a conversation in the background, or scrolled
 out of view. Start and drive a draft whenever it helps; a published card shows
 the latest version when the person gets to it. draft_wait is the exception: it
-waits for the person, who has to see the card. A new draft's first call that
+waits for the person, who has to see the card, here or on a paired phone. A new draft's first call that
 fails leaves nothing behind, so just try again. Several screenshots in a row
 are fine: they never appear in the thread, only the card does.
 
@@ -73,7 +73,9 @@ Every new version you send is also laid out, out of sight, at a phone, tablet
 and laptop width (375, 768 and 1280). The result carries layouts: the height
 each needs and how far it overflows to the right. A horizontalOverflow above 0
 at 375 means the page breaks on a phone; fix it unless the page is a fixed
-desktop mock.
+desktop mock. A paired phone runs the page in the thread at its own width, so
+mc.state, notes and control work from there too; a page from a dev server shows
+there as pictures.
 
 The person can open the draft in a full view over the window. A page you gave
 a width keeps it there, up to life size; any other page reflows to fill the

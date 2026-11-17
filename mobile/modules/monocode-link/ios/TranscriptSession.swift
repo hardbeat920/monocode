@@ -309,6 +309,11 @@ final class TranscriptSession {
                   params)
               }
             }
+          } else if command["type"] as? String == "draftHeight" {
+            if let id = command["id"] as? String, let height = command["height"] as? CGFloat {
+              engine.setDraftHeight(id, height)
+              changed = true
+            }
           } else if command["type"] as? String == "selection" {
             let selected = try update(command)
             onSelection?(selected["text"] as? String ?? "")
