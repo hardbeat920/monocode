@@ -4,6 +4,8 @@ use super::{Row, Transcript};
 use std::path::{Path, PathBuf};
 
 pub const ROLE: &str = "user-attachments";
+/// The desktop app's type for an attached folder.
+pub const FOLDER_MIME: &str = "inode/directory";
 
 pub fn from_paths(paths: &[PathBuf]) -> serde_json::Value {
     serde_json::Value::Array(
@@ -11,10 +13,16 @@ pub fn from_paths(paths: &[PathBuf]) -> serde_json::Value {
             .iter()
             .map(|path| {
                 let mime = crate::composer::image_mime(path);
+                // Folders use the desktop app's folder type, so either app shows them as folders.
+                let fallback = if path.is_dir() {
+                    FOLDER_MIME
+                } else {
+                    "application/octet-stream"
+                };
                 serde_json::json!({
                     "id":path.to_string_lossy(), "path":path,
                     "name":path.file_name().unwrap_or_default().to_string_lossy(),
-                    "mimeType":mime.unwrap_or("application/octet-stream"),
+                    "mimeType":mime.unwrap_or(fallback),
                     "kind":if mime.is_some() { "image" } else { "file" }
                 })
             })
@@ -81,5 +89,23 @@ impl Transcript {
                 sent_at: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn folders_are_saved_with_the_folder_type() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("src");
+        std::fs::create_dir(&folder).unwrap();
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "notes").unwrap();
+        let saved = from_paths(&[folder, file]);
+        assert_eq!(saved[0]["mimeType"], FOLDER_MIME);
+        assert_eq!(saved[0]["kind"], "file");
+        assert_eq!(saved[0]["name"], "src");
+        assert_eq!(saved[1]["mimeType"], "application/octet-stream");
     }
 }
