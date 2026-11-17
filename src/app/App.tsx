@@ -1509,7 +1509,12 @@ function Workspace({
     // now; loading it also tells a deleted one from one just parked.
     hasSession: async (sessionId) =>
       !!(await ensureOpenSessionRef.current(sessionId)),
-    covered: settingsOpen || !!activeAppView || !!monoViewId,
+    // The project terminal takes focus off the file without touching its tab.
+    covered:
+      settingsOpen ||
+      !!activeAppView ||
+      !!monoViewId ||
+      projectTerminalFocused,
     canOpenMono: (monoId) => monosEnabled && !!findMono(monoId),
     openMono: (monoId) => openMonoRef.current?.(monoId),
     readOverview: () => ({
