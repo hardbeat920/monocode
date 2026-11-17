@@ -8860,23 +8860,7 @@ impl Render for Shell {
             }))
             .on_action(
                 cx.listener(|this, event: &crate::file_editor::OpenPath, window, cx| {
-                    let cwd = this.git.read(cx).project().to_owned();
-                    let (path, location) = crate::file_editor::file_location(&event.0, &cwd);
-                    this.open_review(crate::review::ReviewTab::File { cwd, path }, window, cx);
-                    // Monos render above the session pane tree. Give its file
-                    // an independent visible tab using the normal navigation
-                    // path, which retains the Mono tab and live conversation.
-                    if this.mono_active(cx)
-                        && let Some(owner) = this.workspace.active
-                        && let Some(pane) = this.independent_file_pane(owner, cx)
-                    {
-                        this.open_file_pane(pane, window, cx);
-                    }
-                    if let Some((line, column)) = location
-                        && let Some(pane) = this.active_review(cx)
-                    {
-                        pane.update(cx, |pane, cx| pane.navigate_file(line, column, cx));
-                    }
+                    this.open_path_link(&event.0, window, cx)
                 }),
             )
             .on_action(
