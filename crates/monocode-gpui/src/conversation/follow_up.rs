@@ -306,6 +306,12 @@ impl Conversation {
         {
             return;
         }
+        // Once the agent has answered and only background work is left, which
+        // may never end (a dev server), the turn never finishes. Messages
+        // queued while the agent was still working would wait behind it
+        // forever, so they steer too, in queue order.
+        let yielded = !self.background.tasks.is_empty();
+        let steers = |m: &Message| m.steer || (yielded && m.can_steer());
         let message = self
             .follow_ups
             .requested
@@ -313,7 +319,7 @@ impl Conversation {
             .and_then(|id| self.follow_ups.state.messages.iter().find(|m| &m.id == id))
             .or_else(|| {
                 self.busy
-                    .then(|| self.follow_ups.state.messages.iter().find(|m| m.steer))
+                    .then(|| self.follow_ups.state.messages.iter().find(|m| steers(m)))
                     .flatten()
             })
             .or_else(|| self.follow_ups.state.messages.first());
@@ -338,7 +344,7 @@ impl Conversation {
                 }
                 return;
             }
-            if !message.steer
+            if !steers(&message)
                 || !Kind::from_id(&self.summary.provider).can_steer()
                 || !message.can_steer()
                 || !self.follow_ups.ready
