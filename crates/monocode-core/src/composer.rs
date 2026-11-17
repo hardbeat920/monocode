@@ -156,6 +156,11 @@ pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
         let meta = path
             .metadata()
             .map_err(|e| format!("{}: {e}", path.display()))?;
+        // A folder travels as its path for the agent to list or read with its
+        // own tools, so it has no size to count.
+        if meta.is_dir() {
+            continue;
+        }
         if !meta.is_file() {
             return Err(format!("{} is not a file.", path.display()));
         }
@@ -167,6 +172,10 @@ pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 pub fn image_mime(path: &Path) -> Option<&'static str> {
+    // A folder can't be read as an image.
+    if path.is_dir() {
+        return None;
+    }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -269,6 +278,14 @@ pub fn prepare_prompt(text: &str, cwd: &str, attachments: &[PathBuf]) -> Result<
         }
     }
     for path in attachments {
+        // A folder has no text to inline; the agent lists or reads it itself.
+        if path.is_dir() {
+            blocks.push(format!(
+                "Attached folder (list or read the files inside from this path): {}",
+                path.display()
+            ));
+            continue;
+        }
         let mut block = format!("Attached file: {}", path.display());
         if image_mime(path).is_none() {
             if let Ok(body) = read_text(path, 128 * 1024) {
@@ -287,7 +304,7 @@ pub fn prepare_prompt(text: &str, cwd: &str, attachments: &[PathBuf]) -> Result<
         blocks.push(block);
     }
     let text = if text.trim().is_empty() && !attachments.is_empty() {
-        "The user attached these files. Use the conversation to determine what to do with them; ask if the intent is unclear."
+        "The user attached these files or folders. Use the conversation to determine what to do with them; ask if the intent is unclear."
     } else {
         text
     };
@@ -444,5 +461,43 @@ mod tests {
         assert!(prompt.contains("Inspect before edits."));
         assert!(prompt.contains("useful context"));
         assert!(prompt.ends_with("/native-test-skill do it"));
+    }
+    #[test]
+    fn attachments_accept_folders_without_counting_their_size() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("src");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(
+            folder.join("large.bin"),
+            vec![0; MAX_EMBED_BYTES as usize + 1],
+        )
+        .unwrap();
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "notes").unwrap();
+        assert!(validate_attachments(&[folder, file]).is_ok());
+        let missing = temp.path().join("missing");
+        assert!(validate_attachments(&[missing]).is_err());
+    }
+    #[test]
+    fn folders_reach_the_prompt_as_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("src");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("main.rs"), "fn secret_body() {}").unwrap();
+        let prompt = prepare_prompt(
+            "what is inside",
+            temp.path().to_str().unwrap(),
+            std::slice::from_ref(&folder),
+        )
+        .unwrap();
+        assert!(prompt.contains(&format!(
+            "Attached folder (list or read the files inside from this path): {}",
+            folder.display()
+        )));
+        assert!(!prompt.contains("Attached file:"));
+        assert!(!prompt.contains("secret_body"));
+        assert!(prompt.ends_with("what is inside"));
+        let silent = prepare_prompt("", temp.path().to_str().unwrap(), &[folder]).unwrap();
+        assert!(silent.ends_with("The user attached these files or folders. Use the conversation to determine what to do with them; ask if the intent is unclear."));
     }
 }

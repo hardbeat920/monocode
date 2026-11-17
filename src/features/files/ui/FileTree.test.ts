@@ -374,7 +374,6 @@ describe("FileTree starts Explorer file drags", () => {
   it("publishes a pointer-driven file drop without opening the file", async () => {
     await act(async () => render());
     const fileRow = row("first.ts");
-    const folderRow = row("docs");
     const events: ExplorerFilePointerDragDetail[] = [];
     const onDrag = (event: Event) => {
       events.push((event as CustomEvent<ExplorerFilePointerDragDetail>).detail);
@@ -445,7 +444,18 @@ describe("FileTree starts Explorer file drags", () => {
     ]);
     expect(props.onOpenFile).not.toHaveBeenCalled();
 
-    events.length = 0;
+    window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+  });
+
+  it("publishes a pointer-driven folder drop without toggling the folder", async () => {
+    await act(async () => render());
+    const folderRow = row("docs");
+    const events: ExplorerFilePointerDragDetail[] = [];
+    const onDrag = (event: Event) => {
+      events.push((event as CustomEvent<ExplorerFilePointerDragDetail>).detail);
+    };
+    window.addEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+
     act(() => {
       folderRow.dispatchEvent(
         new PointerEvent("pointerdown", {
@@ -459,10 +469,19 @@ describe("FileTree starts Explorer file drags", () => {
       window.dispatchEvent(
         new PointerEvent("pointermove", {
           pointerId: 2,
-          clientX: 40,
-          clientY: 40,
+          clientX: 30,
+          clientY: 30,
         }),
       );
+    });
+
+    const preview = document.querySelector<HTMLElement>(
+      ".explorer-file-drag-preview",
+    );
+    expect(preview?.textContent).toContain("docs");
+    expect(preview?.querySelectorAll('[data-icon="docs"]')).toHaveLength(1);
+
+    act(() => {
       window.dispatchEvent(
         new PointerEvent("pointerup", {
           pointerId: 2,
@@ -470,8 +489,15 @@ describe("FileTree starts Explorer file drags", () => {
           clientY: 40,
         }),
       );
+      folderRow.click();
     });
-    expect(events).toEqual([]);
+
+    expect(document.querySelector(".explorer-file-drag-preview")).toBeNull();
+    expect(events.slice(-2)).toEqual([
+      { type: "drop", path: `${cwd}/docs`, x: 40, y: 40 },
+      { type: "end", path: `${cwd}/docs` },
+    ]);
+    expect(folderRow.getAttribute("aria-expanded")).toBe("false");
 
     window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
   });

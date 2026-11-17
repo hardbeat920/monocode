@@ -1303,9 +1303,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
               onOpenFile(entry.path, undefined, { exact: true, pin: true });
             }
           }}
-          onPointerDown={(event) => {
-            if (!entry.isDir) onFilePointerDown(entry.path, event);
-          }}
+          onPointerDown={(event) => onFilePointerDown(entry.path, event)}
           onContextMenu={(e) => onItemContextMenu(entry, e)}
           style={{ paddingLeft: 8 + depth * 12 }}
           className={`flex h-7.5 w-full cursor-default items-center gap-1 pr-2 text-left text-[14px] outline-none focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-accent/40 leading-none data-[explorer-dragging]:opacity-50 ${

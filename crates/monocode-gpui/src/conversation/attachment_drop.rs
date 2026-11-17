@@ -1,5 +1,5 @@
 use super::*;
-use crate::explorer::DraggedFile;
+use crate::explorer::{DraggedFile, DraggedFolder};
 use gpui::ExternalPaths;
 
 impl Conversation {
@@ -25,6 +25,11 @@ impl Conversation {
             ))
             .on_drag_move::<DraggedFile>(cx.listener(
                 |this, event: &gpui::DragMoveEvent<DraggedFile>, _, cx| {
+                    this.set_file_drag(event.bounds.contains(&event.event.position), cx);
+                },
+            ))
+            .on_drag_move::<DraggedFolder>(cx.listener(
+                |this, event: &gpui::DragMoveEvent<DraggedFolder>, _, cx| {
                     this.set_file_drag(event.bounds.contains(&event.event.position), cx);
                 },
             ))
@@ -57,6 +62,11 @@ impl Conversation {
             .on_drop(cx.listener(|this, file: &DraggedFile, window, cx| {
                 this.set_file_drag(false, cx);
                 this.add_attachments(vec![file.0.clone()], cx);
+                window.focus(&this.input.focus_handle(cx), cx);
+            }))
+            .on_drop(cx.listener(|this, folder: &DraggedFolder, window, cx| {
+                this.set_file_drag(false, cx);
+                this.add_attachments(vec![folder.0.clone()], cx);
                 window.focus(&this.input.focus_handle(cx), cx);
             }))
     }

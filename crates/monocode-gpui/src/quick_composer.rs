@@ -1173,7 +1173,9 @@ impl QuickComposer {
                                 .overflow_hidden()
                                 .child(photo)
                                 .into_any_element(),
-                            None => crate::file_icons::file_type_icon(&label, false, false, 14.),
+                            None => {
+                                crate::file_icons::file_type_icon(&label, path.is_dir(), false, 14.)
+                            }
                         })
                         .child(div().max_w(px(190.)).truncate().child(label))
                         .when(!busy, |d| d.child(remove))

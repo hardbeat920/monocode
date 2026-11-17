@@ -295,7 +295,10 @@ impl TranscriptView {
                         .rounded_md()
                         .bg(content(0.06))
                         .child(crate::file_icons::file_type_icon(
-                            &file.name, false, false, 16.,
+                            &file.name,
+                            file.mime == monocode_core::transcript::attachments::FOLDER_MIME,
+                            false,
+                            16.,
                         ))
                         .child(
                             div()
