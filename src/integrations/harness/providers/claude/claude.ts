@@ -22,6 +22,7 @@ import {
   assistantTextBlocks,
   assistantThinkingBlocks,
   assistantToolUses,
+  contextFromCompactBoundary,
   contextFromResult,
   contextUsedFromAssistant,
   turnMetricsFromResult,
@@ -176,6 +177,7 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  contextCompacted: boolean;
 };
 
 type Resume = {
@@ -513,6 +515,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    contextCompacted: false,
   };
   liveRef.current = live;
 
@@ -595,6 +598,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  live.contextCompacted = false;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -738,6 +742,13 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       }
       live.onEvent({ type: "status", text });
     }
+    if (!isSubagentMessage(rec)) {
+      if (stringField(rec, "subtype") === "compact_boundary") {
+        live.contextCompacted = true;
+      }
+      const used = contextFromCompactBoundary(rec);
+      if (used !== undefined) live.onEvent({ type: "context", used });
+    }
   }
 }
 
@@ -824,7 +835,10 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   }
 
   const used = contextUsedFromAssistant(rec);
-  if (used !== undefined) live.onEvent({ type: "context", used });
+  if (used !== undefined) {
+    live.contextCompacted = false;
+    live.onEvent({ type: "context", used });
+  }
 
   const snapshot = assistantTextBlocks(rec).join("");
   if (snapshot) closePendingAssistantMessage(live);
@@ -975,12 +989,15 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     live.usageLimit = null;
     return;
   }
-  // A /compact result reports the summarizer call's usage, not the rebuilt
-  // conversation level. The next real turn will provide the fresh reading.
-  if (!live.manualCompaction) {
-    const context = contextFromResult(rec);
-    if (context) live.onEvent({ type: "context", ...context });
+  const context = contextFromResult(rec);
+  // Until a fresh assistant reading arrives, the result measures the summarizer.
+  if (context && (live.manualCompaction || live.contextCompacted)) {
+    delete context.used;
   }
+  if (context && (context.used !== undefined || context.window !== undefined)) {
+    live.onEvent({ type: "context", ...context });
+  }
+  live.contextCompacted = false;
   const metrics = turnMetricsFromResult(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 

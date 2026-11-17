@@ -263,6 +263,7 @@ struct Protocol {
     interrupt_id: Option<String>,
     claude_prompt_sent: bool,
     claude_result_seen: bool,
+    claude_context_compacted: bool,
     claude_usage_limit: Option<crate::usage::Limit>,
     claude_resume_at: Option<Instant>,
     follow_up_ready: bool,
@@ -304,6 +305,7 @@ impl Protocol {
             interrupt_id: None,
             claude_prompt_sent: false,
             claude_result_seen: false,
+            claude_context_compacted: false,
             claude_usage_limit: None,
             claude_resume_at: None,
             follow_up_ready: false,
@@ -467,6 +469,15 @@ impl Protocol {
                 .is_some_and(|subtype| subtype.starts_with("compact"))
             {
                 self.compaction(None, ToolState::Completed, &mut events);
+                if v["subtype"] == "compact_boundary" {
+                    self.claude_context_compacted = true;
+                }
+                if let Some(used) = crate::context::claude_compacted(&v) {
+                    events.push(Event::Context {
+                        used: Some(used),
+                        window: None,
+                    });
+                }
             }
         }
         if let Some(commands) = self.command_updates(&v) {
@@ -846,6 +857,7 @@ impl Protocol {
                         if v["parent_tool_use_id"].is_null() {
                             if let Some(used) = crate::context::claude_used(&v["message"]["usage"])
                             {
+                                self.claude_context_compacted = false;
                                 events.push(Event::Context {
                                     used: Some(used),
                                     window: None,
@@ -933,11 +945,24 @@ impl Protocol {
                         if metrics.reported() {
                             events.push(Event::Metrics(metrics));
                         }
-                        let last = v["usage"]["iterations"]
+                        // `usage` sums every request of the turn, so only the
+                        // last iteration is a level. Without one, a turn that
+                        // ran several requests would report its total and pin
+                        // the meter near 100% for the rest of the session.
+                        //
+                        // A boundary without a newer assistant reading makes
+                        // result usage the summarizer's pre-compaction request.
+                        let level = v["usage"]["iterations"]
                             .as_array()
                             .and_then(|iterations| iterations.last())
-                            .unwrap_or(&v["usage"]);
-                        let used = crate::context::claude_used(last);
+                            .or_else(|| {
+                                let requests = v["num_turns"].as_u64().unwrap_or(1);
+                                (requests <= 1).then_some(&v["usage"])
+                            });
+                        let used = level
+                            .filter(|_| !self.compact && !self.claude_context_compacted)
+                            .and_then(crate::context::claude_used);
+                        self.claude_context_compacted = false;
                         let window = v["modelUsage"]
                             .as_object()
                             .into_iter()
@@ -1978,6 +2003,75 @@ mod tests {
         assert!(events.contains(&Event::Context {
             used: Some(2050),
             window: Some(200000)
+        }));
+    }
+    #[test]
+    fn a_multi_request_result_total_is_not_read_as_a_context_level() {
+        let mut claude = protocol(Kind::Claude);
+        // Three requests summed: 227251 + 227683 + 228180. Reading that as the
+        // level would clamp the meter at 100% and leave it there after a
+        // compaction.
+        let events = claude.frame(json!({"type":"result","num_turns":3,"usage":{"input_tokens":683114},"modelUsage":{"model":{"contextWindow":1000000}}}),&mut Vec::new()).unwrap();
+        assert!(!events.contains(&Event::Context {
+            used: Some(683114),
+            window: Some(1000000)
+        }));
+        assert!(events.contains(&Event::Context {
+            used: None,
+            window: Some(1000000)
+        }));
+        // A single request is the level itself.
+        let mut one = protocol(Kind::Claude);
+        let events = one.frame(json!({"type":"result","num_turns":1,"usage":{"input_tokens":12000,"output_tokens":400}}),&mut Vec::new()).unwrap();
+        assert!(events.contains(&Event::Context {
+            used: Some(12400),
+            window: None
+        }));
+    }
+    #[test]
+    fn a_compact_boundary_reports_the_rebuilt_transcript_size() {
+        let mut claude = protocol(Kind::Claude);
+        let events = claude.frame(json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":149697,"post_tokens":6316}}),&mut Vec::new()).unwrap();
+        assert!(events.contains(&Event::Context {
+            used: Some(6316),
+            window: None
+        }));
+    }
+    #[test]
+    fn a_compact_turns_usage_does_not_undo_the_boundary_reading() {
+        // Native /claude:compact and /compact with arguments run as ordinary turns.
+        for compact in [false, true] {
+            for usage in [
+                json!({"input_tokens":140000}),
+                json!({"input_tokens":140000,"iterations":[{"input_tokens":140000}]}),
+            ] {
+                let mut claude = protocol(Kind::Claude);
+                claude.compact = compact;
+                let mut events = claude.frame(json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":149697,"post_tokens":6316}}),&mut Vec::new()).unwrap();
+                events.extend(claude.frame(json!({"type":"result","subtype":"success","num_turns":1,"usage":usage,"modelUsage":{"model":{"contextWindow":1000000}}}),&mut Vec::new()).unwrap());
+                let mut context = crate::context::Usage::default();
+                for event in events {
+                    if let Event::Context { used, window } = event {
+                        context.merge(used, window);
+                    }
+                }
+                assert_eq!(context.used, 6316);
+                assert_eq!(context.window, Some(1000000));
+            }
+        }
+    }
+    #[test]
+    fn claude_reports_new_request_usage_after_an_automatic_compaction() {
+        let mut claude = protocol(Kind::Claude);
+        claude.frame(json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","post_tokens":6316}}), &mut Vec::new()).unwrap();
+        assert!(claude.frame(json!({"type":"assistant","message":{"content":[],"usage":{"input_tokens":9000,"output_tokens":100}}}), &mut Vec::new()).unwrap().contains(&Event::Context {
+            used: Some(9100),
+            window: None,
+        }));
+        let events = claude.frame(json!({"type":"result","num_turns":2,"usage":{"input_tokens":149000,"iterations":[{"input_tokens":9000,"output_tokens":200}]},"modelUsage":{"model":{"contextWindow":1000000}}}), &mut Vec::new()).unwrap();
+        assert!(events.contains(&Event::Context {
+            used: Some(9200),
+            window: Some(1000000),
         }));
     }
     #[test]

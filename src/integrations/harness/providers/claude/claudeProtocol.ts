@@ -1182,12 +1182,34 @@ export function contextUsedFromAssistant(
 }
 
 /**
+ * Context level right after the CLI compacted the conversation.
+ *
+ * `compact_boundary` carries `compact_metadata.post_tokens`, the size of the
+ * rebuilt transcript. It is the only reading that describes the post-compaction
+ * window: the turn's `result` reports the summarizer request, which read the
+ * *old* conversation, so trusting it would leave the meter at the level that
+ * triggered the compaction.
+ */
+export function contextFromCompactBoundary(
+  rec: Record<string, unknown>,
+): number | undefined {
+  // The stream uses snake_case; stored transcripts keep the camelCase spelling.
+  const metadata =
+    asRecord(rec.compact_metadata) ?? asRecord(rec.compactMetadata);
+  const used =
+    numberField(metadata, "post_tokens") || numberField(metadata, "postTokens");
+  return used > 0 ? used : undefined;
+}
+
+/**
  * Context level and window from a turn `result`.
  *
- * `usage` at the top level sums every iteration of the turn, so the last entry
- * of `usage.iterations` is what actually sits in the window. `modelUsage`
- * carries the window itself, which is why we let the CLI tell us rather than
- * keeping a model table in sync.
+ * `usage` at the top level sums every request of the turn, so the last entry
+ * of `usage.iterations` is what actually sits in the window — and when the CLI
+ * sends no `iterations`, only a turn with at most one request makes the
+ * top-level figure a level rather than a total. `modelUsage` carries the window
+ * itself, which is why we let the CLI tell us rather than keeping a model table
+ * in sync.
  */
 export function contextFromResult(
   rec: Record<string, unknown>,
@@ -1195,7 +1217,11 @@ export function contextFromResult(
   const usage = asRecord(rec.usage);
   const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
   const last = asRecord(iterations[iterations.length - 1]);
-  const used = contextUsedFromUsage(last ?? usage);
+  // `num_turns` counts the model requests the turn ran. When it is absent,
+  // keep the old reading: older CLIs sent no iterations for a single request.
+  const requests = numberField(rec, "num_turns");
+  const level = last ?? (requests <= 1 ? usage : null);
+  const used = contextUsedFromUsage(level);
 
   let window: number | undefined;
   const modelUsage = asRecord(rec.modelUsage);
