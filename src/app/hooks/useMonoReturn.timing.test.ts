@@ -33,7 +33,7 @@ function Harness({ first }: { first: Nav }) {
     hasSession: () => true,
     canOpenMono: () => true,
     openMono,
-    readScroll: () => undefined,
+    readOverview: () => ({}),
     view: {
       shownSession: null,
       shownSessionFocused: false,

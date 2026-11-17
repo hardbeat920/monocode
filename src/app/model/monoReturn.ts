@@ -1,4 +1,5 @@
 import type { MonoActivitySelection } from "../../features/monos/model/monoActivity";
+import type { OverviewSearch } from "../../features/monos/ui/MonoOverview";
 import type { MonoScroll } from "../../features/monos/model/monoScroll";
 
 /** What a Mono's overview showed over its chat. */
@@ -8,6 +9,7 @@ export type MonoOverviewView = {
   document: string | null;
   activity: MonoActivitySelection | null;
   scroll?: MonoScroll;
+  search?: OverviewSearch;
 };
 
 /** The Mono a file was opened from, so closing that file returns to it. */
@@ -76,6 +78,7 @@ export function restorableMonoView(
       ...view.scroll,
       document: document ? view.scroll.document : undefined,
     },
+    search: view.search,
     activity:
       view.activity && hasSession(view.activity.sessionId)
         ? view.activity

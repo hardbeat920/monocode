@@ -70,10 +70,22 @@ export function restoreMonoScroll(
   const stop = () => {
     stopped = true;
     cancelFrame(handle);
-    for (const type of INPUT) root.removeEventListener(type, stop, true);
+    for (const type of INPUT) root.removeEventListener(type, reader, true);
     if (cancelActive === stop) cancelActive = undefined;
   };
-  for (const type of INPUT) root.addEventListener(type, stop, true);
+  // Input elsewhere, such as typing in the chat, is not the reader taking
+  // over the scroll being restored.
+  const scrollers = new Set<HTMLElement>();
+  const reader = (event: Event) => {
+    const target = event.target;
+    if (
+      target instanceof Node &&
+      [...scrollers].some((el) => el.contains(target))
+    ) {
+      stop();
+    }
+  };
+  for (const type of INPUT) root.addEventListener(type, reader, true);
   cancelActive = stop;
   let waited = 0;
   const tick = () => {
@@ -81,6 +93,7 @@ export function restoreMonoScroll(
     const last = ++waited >= frames;
     for (let index = pending.length - 1; index >= 0; index--) {
       const el = pending[index].find();
+      if (el) scrollers.add(el);
       if (
         el &&
         (last || el.scrollHeight - el.clientHeight >= pending[index].top - 1)

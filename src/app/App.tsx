@@ -1,3 +1,4 @@
+import type { OverviewSearch } from "../features/monos/ui/MonoOverview";
 import {
   cancelMonoScrollRestore,
   readMonoScroll,
@@ -1177,6 +1178,15 @@ function Workspace({
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
   const [monoViewId, setMonoViewId] = useState<string | null>(null);
+  // The overview's session search: what it holds now, and what a return to
+  // its Mono starts it from.
+  const monoSearchRef = useRef<OverviewSearch | undefined>(undefined);
+  const [monoSearchSeed, setMonoSearchSeed] = useState<
+    OverviewSearch | undefined
+  >(undefined);
+  const onMonoSearchChange = useCallback((search: OverviewSearch) => {
+    monoSearchRef.current = search;
+  }, []);
   // A Mono opens with its overview beside the chat until it is hidden.
   const [monoOverviewOpen, setMonoOverviewOpen] = useState(true);
   const [monoOverviewTab, setMonoOverviewTab] =
@@ -1267,6 +1277,8 @@ function Workspace({
     saveOpenMono(undefined);
     setMonoViewId(null);
     setMonoActivity(null);
+    monoSearchRef.current = undefined;
+    setMonoSearchSeed(undefined);
     cancelMonoScrollRestore();
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
@@ -1497,7 +1509,10 @@ function Workspace({
       sessionsRef.current.some((session) => session.id === sessionId),
     canOpenMono: (monoId) => monosEnabled && !!findMono(monoId),
     openMono: (monoId) => openMonoRef.current?.(monoId),
-    readScroll: () => readMonoScroll(),
+    readOverview: () => ({
+      scroll: readMonoScroll(),
+      search: monoSearchRef.current,
+    }),
     view: {
       shownSession: monoShownSession,
       shownSessionFocused: monoShownSessionFocused,
@@ -5146,6 +5161,7 @@ function Workspace({
         setMonoOverviewDocument(view?.document ?? null);
         if (view?.activity) setMonoActivity(view.activity);
         scrollBack = view?.scroll;
+        setMonoSearchSeed(view?.search);
       }
       monoViewIdRef.current = session.id;
       saveOpenMono(monoId);
@@ -13763,6 +13779,8 @@ function Workspace({
     monoViewMono && monoViewSession ? (
       <MonoOverview
         key={monoViewMono.id}
+        search={monoSearchSeed}
+        onSearchChange={onMonoSearchChange}
         open={monoOverviewOpen}
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}

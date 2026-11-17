@@ -102,16 +102,33 @@ it("settles for what fits when content never grows enough", () => {
   expect(list.scrollTop).toBeGreaterThan(0);
 });
 
-it("stops when the reader scrolls, or another Mono opens", () => {
+it("stops when the reader scrolls it, not for input elsewhere", () => {
   const list = overview(0, 150);
+  const chat = document.createElement("textarea");
+  document.body.append(chat);
   restoreMonoScroll({ overview: { tab: "documents", top: 100 } }, options);
-  document.dispatchEvent(new Event("wheel", { bubbles: true }));
+  step(); // found, with too little room yet
+  chat.dispatchEvent(new Event("keydown", { bubbles: true }));
+  chat.dispatchEvent(new Event("wheel", { bubbles: true }));
+  Object.defineProperty(list, "scrollHeight", { value: 1000 });
+  step();
+  expect(list.scrollTop).toBe(100);
+
+  list.scrollTop = 0;
+  restoreMonoScroll({ overview: { tab: "documents", top: 100 } }, options);
+  Object.defineProperty(list, "scrollHeight", { value: 150 });
+  step();
+  list.dispatchEvent(new Event("wheel", { bubbles: true }));
   Object.defineProperty(list, "scrollHeight", { value: 1000 });
   step();
   expect(list.scrollTop).toBe(0);
+});
 
+it("stops when another Mono opens", () => {
+  const list = overview(0, 150);
   restoreMonoScroll({ overview: { tab: "documents", top: 100 } }, options);
   cancelMonoScrollRestore();
+  Object.defineProperty(list, "scrollHeight", { value: 1000 });
   step();
   expect(list.scrollTop).toBe(0);
 });

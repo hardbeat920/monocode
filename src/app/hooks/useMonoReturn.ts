@@ -3,7 +3,6 @@ import {
   focusedFileTab,
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
-import type { MonoScroll } from "../../features/monos/model/monoScroll";
 import {
   monoReturnFor,
   restorableMonoView,
@@ -25,8 +24,9 @@ type Host = {
   canOpenMono: (monoId: string) => boolean;
   openMono: (monoId: string) => void;
   view: MonoOverviewView;
-  /** Where the shown overview is scrolled, read before it unmounts. */
-  readScroll: () => MonoScroll | undefined;
+  /** What the shown overview holds that its Mono's state does not: where it
+   * is scrolled and its search. Read before it unmounts. */
+  readOverview: () => Pick<MonoOverviewView, "scroll" | "search">;
 };
 
 /** Closing a file opened from a Mono returns to that Mono, and its overview
@@ -71,7 +71,7 @@ export function useMonoReturn(host: Host) {
         // Read before closing: the overview unmounts with the Mono.
         const view = {
           ...hostRef.current.view,
-          scroll: hostRef.current.readScroll(),
+          ...hostRef.current.readOverview(),
         };
         close();
         const request = hostRef.current.viewRequest();

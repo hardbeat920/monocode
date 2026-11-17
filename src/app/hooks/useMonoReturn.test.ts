@@ -7,8 +7,10 @@ import {
   newFileTab,
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
+import type { OverviewSearch } from "../../features/monos/ui/MonoOverview";
 import type { MonoScroll } from "../../features/monos/model/monoScroll";
 import type { MonoOverviewView } from "../model/monoReturn";
+import { DEFAULT_SESSION_SIDEBAR_FILTERS } from "../../features/sessions/model/sessionFilters";
 import { useMonoReturn } from "./useMonoReturn";
 
 const overview: MonoOverviewView = {
@@ -29,6 +31,7 @@ let state: {
   sessions: Set<string>;
   view: MonoOverviewView;
   scroll: MonoScroll | undefined;
+  search: OverviewSearch | undefined;
   /** What the overview scrolled to is only readable while it is mounted. */
   mounted: boolean;
 };
@@ -45,7 +48,8 @@ function Harness() {
     canOpenMono: (id) => id === "mono-1",
     openMono,
     view: state.view,
-    readScroll: () => (state.mounted ? state.scroll : undefined),
+    readOverview: () =>
+      state.mounted ? { scroll: state.scroll, search: state.search } : {},
   });
   return null;
 }
@@ -80,6 +84,7 @@ beforeEach(() => {
     sessions: new Set(["chat", "launched"]),
     view: structuredClone(overview),
     scroll: { overview: { tab: "documents", top: 240 }, document: { top: 90 } },
+    search: { query: "deploy", filters: DEFAULT_SESSION_SIDEBAR_FILTERS },
     mounted: true,
   };
   container = document.createElement("div");
@@ -98,6 +103,7 @@ it("returns to the Mono with its overview when the file closes", () => {
   expect(api.monoOpening()("chat")).toEqual({
     ...overview,
     scroll: state.scroll,
+    search: state.search,
   });
 });
 

@@ -68,6 +68,12 @@ export type MonoOverviewChanges = {
 
 type Route = { kind: "new-habit" } | { kind: "habit"; id: string };
 
+/** The session search over the Mono's sessions. */
+export type OverviewSearch = {
+  query: string;
+  filters: SessionSidebarFilters;
+};
+
 type Props = {
   open: boolean;
   monoId: string;
@@ -98,6 +104,9 @@ type Props = {
   onOpenDocument: (id: string) => void;
   onClose: () => void;
   windowControls?: ReactNode;
+  /** What the session search held when this overview was left, to start from. */
+  search?: OverviewSearch;
+  onSearchChange?: (search: OverviewSearch) => void;
 };
 
 /**
@@ -128,15 +137,20 @@ export function MonoOverview({
   onOpenDocument,
   onClose,
   windowControls,
+  search,
+  onSearchChange,
 }: Props) {
   const lock = useLockOverscroll<HTMLDivElement>();
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
   const [routes, setRoutes] = useState<Route[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(search?.query ?? "");
   const [filters, setFilters] = useState<SessionSidebarFilters>(
-    DEFAULT_SESSION_SIDEBAR_FILTERS,
+    search?.filters ?? DEFAULT_SESSION_SIDEBAR_FILTERS,
   );
+  useEffect(() => {
+    onSearchChange?.({ query, filters });
+  }, [query, filters, onSearchChange]);
   // Once opened, the changes stay mounted so a commit draft survives a look
   // at another tab.
   const [changesVisited, setChangesVisited] = useState(tab === "changes");
@@ -146,8 +160,12 @@ export function MonoOverview({
     tab === "activity" ? "sessions" : tab,
   );
   if (tab !== "activity") lastTab.current = tab;
-  // Another Mono starts at its own front page, with all its sessions.
+  // Another Mono starts at its own front page, with all its sessions. One
+  // returned to starts as it was left.
+  const seededFor = useRef(search ? monoId : undefined);
   useEffect(() => {
+    if (seededFor.current === monoId) return;
+    seededFor.current = undefined;
     setRoutes([]);
     setQuery("");
     setFilters(DEFAULT_SESSION_SIDEBAR_FILTERS);
