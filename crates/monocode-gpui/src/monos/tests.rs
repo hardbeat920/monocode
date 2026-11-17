@@ -2817,3 +2817,69 @@ fn completion_report_flags_a_child_stopped_before_a_restart(cx: &mut TestAppCont
         );
     });
 }
+
+/// A file link clicked in the floating panel is dispatched on the panel's own
+/// window; the panel forwards it so the workspace window opens the file.
+#[gpui::test]
+fn floating_panel_file_link_opens_in_the_workspace(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let path = s
+        .root
+        .join("floating-link.md")
+        .to_string_lossy()
+        .into_owned();
+    std::fs::write(&path, "# Heading\nsecond line\nthird line\n").unwrap();
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
+    });
+    cx.run_until_parked();
+    let floating = cx.update(|cx| s.manager.read(cx).floating[0]);
+    floating
+        .update(cx, |_, w, cx| {
+            w.dispatch_action(
+                Box::new(crate::file_editor::OpenPath(format!("{path}:2:3"))),
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |shell, _, _| {
+            let opened = shell.workspace.reviews.values().any(|state| {
+                state.tabs.iter().any(|tab| {
+                    matches!(tab, crate::review::ReviewTab::File { path: p, .. } if *p == path)
+                })
+            });
+            assert!(opened, "the workspace window opened the linked file");
+        })
+        .unwrap();
+}
+
+/// With no workspace window to hand it to, a file link in the panel does
+/// nothing, and the panel keeps working.
+#[gpui::test]
+fn floating_panel_file_link_without_a_workspace_window_does_nothing(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let path = s.root.join("orphan.md").to_string_lossy().into_owned();
+    std::fs::write(&path, "# Heading\n").unwrap();
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
+    });
+    cx.run_until_parked();
+    cx.update(|cx| s.manager.update(cx, |m, _| m.parent_window = None));
+    let floating = cx.update(|cx| s.manager.read(cx).floating[0]);
+    floating
+        .update(cx, |_, w, cx| {
+            w.dispatch_action(Box::new(crate::file_editor::OpenPath(path.clone())), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |shell, _, _| {
+            assert!(shell.workspace.reviews.is_empty())
+        })
+        .unwrap();
+    cx.update(|cx| assert!(s.manager.read(cx).floating_shows(&s.id, cx)));
+}

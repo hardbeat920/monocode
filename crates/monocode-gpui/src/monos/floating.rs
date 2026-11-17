@@ -2,6 +2,7 @@
 //! apps without activating MonoCode, and its rail moves between Monos without
 //! touching the workspace window's selection.
 use super::*;
+use crate::file_editor::OpenPath;
 use gpui::{Bounds, WindowBounds, WindowKind, WindowOptions, point, size};
 /// A 384pt conversation plus the 56pt Mono rail beside it.
 const WIDTH: f32 = 440.;
@@ -344,6 +345,12 @@ impl gpui::Render for Floating {
                     this.stop(cx);
                 }
             }))
+            // A file link in the chat dispatches this on the panel's window,
+            // where only the workspace window has a handler: forward it there.
+            .on_action(cx.listener(|this, event: &OpenPath, _, cx| {
+                this.owner
+                    .update(cx, |m, cx| m.open_path(event.0.clone(), cx));
+            }))
             .child(
                 // The card's spread shadow: it shades the rail and the gaps
                 // around the chat, never the chat itself.
@@ -405,6 +412,21 @@ impl gpui::Render for Floating {
     }
 }
 impl Monos {
+    /// Open a file link from a panel in the workspace window and raise it. With
+    /// no workspace window to receive it, the link does nothing.
+    pub(super) fn open_path(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(parent) = self.parent_window else {
+            return;
+        };
+        let app: &mut App = cx;
+        app.defer(move |cx| {
+            let _ = parent.update(cx, |_, window, cx| {
+                window.dispatch_action(Box::new(OpenPath(path)), cx);
+                window.activate_window();
+                cx.activate(true);
+            });
+        });
+    }
     pub(crate) fn visible_idle_sessions(&self, cx: &App) -> Vec<i64> {
         let mut ids = self
             .chat()
