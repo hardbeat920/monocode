@@ -345,12 +345,6 @@ impl gpui::Render for Floating {
                     this.stop(cx);
                 }
             }))
-            // A file link in the chat dispatches this on the panel's window,
-            // where only the workspace window has a handler: forward it there.
-            .on_action(cx.listener(|this, event: &OpenPath, _, cx| {
-                this.owner
-                    .update(cx, |m, cx| m.open_path(event.0.clone(), cx));
-            }))
             .child(
                 // The card's spread shadow: it shades the rail and the gaps
                 // around the chat, never the chat itself.
@@ -412,16 +406,44 @@ impl gpui::Render for Floating {
     }
 }
 impl Monos {
-    /// Open a file link from a panel in the workspace window and raise it. With
-    /// no workspace window to receive it, the link does nothing.
-    pub(super) fn open_path(&mut self, path: String, cx: &mut Context<Self>) {
+    /// A file link clicked in a floating panel dispatches `OpenPath` on the
+    /// panel's own window, which has no handler, and with no focused element
+    /// (the panel is not activating, a link menu may have just closed) the
+    /// dispatch never reaches the panel's elements either. Only an action
+    /// nothing handled gets here, so catch it once for the whole app.
+    pub(super) fn forward_file_links(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.forwarding_links, true) {
+            return;
+        }
+        let monos = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |event: &OpenPath, cx: &mut App| {
+            let _ = monos.update(cx, |m, cx| m.open_path_from_panel(event.0.clone(), cx));
+        });
+    }
+    fn open_path_from_panel(&mut self, path: String, cx: &mut Context<Self>) {
+        // The window being dispatched on is leased, so updating it fails: that
+        // marks the panel the link came from, and ignores any other window. A
+        // panel that is gone fails too, so it must still be open to count.
+        let open = cx.windows();
+        let from_panel = self
+            .floating
+            .iter()
+            .any(|w| open.contains(w) && w.update(cx, |_, _, _| ()).is_err());
         let Some(parent) = self.parent_window else {
+            return;
+        };
+        if !from_panel {
+            return;
+        }
+        let Some(parent) = parent.downcast::<crate::shell::Shell>() else {
             return;
         };
         let app: &mut App = cx;
         app.defer(move |cx| {
-            let _ = parent.update(cx, |_, window, cx| {
-                window.dispatch_action(Box::new(OpenPath(path)), cx);
+            // A closed workspace window fails the update: nothing to open in.
+            let _ = parent.update(cx, |shell, window, cx| {
+                shell.open_path_link(&path, window, cx);
                 window.activate_window();
                 cx.activate(true);
             });
@@ -519,6 +541,7 @@ impl Monos {
         id
     }
     pub(super) fn open_floating(&mut self, id: String, cx: &mut Context<Self>) {
+        self.forward_file_links(cx);
         if self.roster.get(&id).is_none() {
             return;
         }

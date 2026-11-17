@@ -2818,68 +2818,150 @@ fn completion_report_flags_a_child_stopped_before_a_restart(cx: &mut TestAppCont
     });
 }
 
-/// A file link clicked in the floating panel is dispatched on the panel's own
-/// window; the panel forwards it so the workspace window opens the file.
-#[gpui::test]
-fn floating_panel_file_link_opens_in_the_workspace(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let path = s
-        .root
-        .join("floating-link.md")
-        .to_string_lossy()
-        .into_owned();
+fn linked_file(s: &Setup) -> String {
+    let path = std::path::Path::new(&s.project).join("linked.md");
     std::fs::write(&path, "# Heading\nsecond line\nthird line\n").unwrap();
+    path.to_string_lossy().into_owned()
+}
+fn opened_file(s: &Setup, cx: &mut TestAppContext) -> Option<(String, std::ops::Range<usize>)> {
+    s.window
+        .update(cx, |shell, _, cx| shell.active_file_for_test(cx))
+        .unwrap()
+}
+fn floating_panel(s: &Setup, cx: &mut TestAppContext) -> gpui::AnyWindowHandle {
     cx.update(|cx| {
         s.manager
             .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
     });
     cx.run_until_parked();
-    let floating = cx.update(|cx| s.manager.read(cx).floating[0]);
-    floating
-        .update(cx, |_, w, cx| {
-            w.dispatch_action(
-                Box::new(crate::file_editor::OpenPath(format!("{path}:2:3"))),
+    cx.update(|cx| s.manager.read(cx).floating[0])
+}
+
+/// A file link dispatched on the floating panel's window, focused or not, is
+/// handed to the workspace window, which opens it at its line and column.
+#[gpui::test]
+fn floating_panel_file_link_opens_in_the_workspace(cx: &mut TestAppContext) {
+    for blurred in [false, true] {
+        let s = setup(cx);
+        let path = linked_file(&s);
+        let floating = floating_panel(&s, cx);
+        assert!(opened_file(&s, cx).is_none());
+        floating
+            .update(cx, |_, w, cx| {
+                if blurred {
+                    w.blur(cx);
+                    assert!(w.focused(cx).is_none());
+                }
+                w.dispatch_action(
+                    Box::new(crate::file_editor::OpenPath(format!("{path}:2:3"))),
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            opened_file(&s, cx),
+            Some((path, 12..12)),
+            "blurred: {blurred}"
+        );
+    }
+}
+
+/// A real click on a file link in the floating chat's transcript opens the
+/// file in the workspace window, at the link's line and column.
+#[gpui::test]
+fn clicking_a_transcript_link_in_the_floating_panel_opens_the_file(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let path = linked_file(&s);
+    let floating = floating_panel(&s, cx);
+    let chat = cx.update(|cx| s.manager.read(cx).chats[&s.id].clone());
+    let transcript = cx.update(|cx| chat.read(cx).transcript.clone());
+    cx.update(|cx| {
+        chat.update(cx, |c, _| c.summary.has_messages = true);
+        transcript.update(cx, |view, cx| {
+            view.patch(
+                0,
+                ["user", "assistant"]
+                    .map(|role| monocode_core::transcript::Row {
+                        role: role.into(),
+                        text: if role == "user" {
+                            "Where are the notes?".to_owned()
+                        } else {
+                            format!("[the note]({path}:2:3)")
+                        },
+                        first: true,
+                        sent_at: None,
+                    })
+                    .to_vec(),
                 cx,
-            );
+            )
         })
-        .unwrap();
-    cx.run_until_parked();
-    s.window
-        .update(cx, |shell, _, _| {
-            let opened = shell.workspace.reviews.values().any(|state| {
-                state.tabs.iter().any(|tab| {
-                    matches!(tab, crate::review::ReviewTab::File { path: p, .. } if *p == path)
-                })
-            });
-            assert!(opened, "the workspace window opened the linked file");
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(floating, cx);
+    visual.run_until_parked();
+    visual.update(|_, cx| transcript.update(cx, |_, cx| cx.notify()));
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    // The reply is the Mono transcript's second row; the link opens its text.
+    // Its selector's second number is not stable, so look it up.
+    let reply = (0..512)
+        .find_map(|n| {
+            let name: &'static str = Box::leak(format!("mono-prose-1-{n}").into_boxed_str());
+            visual.debug_bounds(name)
         })
-        .unwrap();
+        .expect("the reply is rendered in the panel");
+    let at = gpui::point(reply.left() + px(12.), reply.center().y);
+    visual.simulate_click(at, Default::default());
+    visual.run_until_parked();
+    assert_eq!(opened_file(&s, cx), Some((path, 12..12)));
 }
 
 /// With no workspace window to hand it to, a file link in the panel does
 /// nothing, and the panel keeps working.
 #[gpui::test]
 fn floating_panel_file_link_without_a_workspace_window_does_nothing(cx: &mut TestAppContext) {
+    for closed in [false, true] {
+        let s = setup(cx);
+        let path = linked_file(&s);
+        let floating = floating_panel(&s, cx);
+        if closed {
+            s.window.update(cx, |_, w, _| w.remove_window()).unwrap();
+        } else {
+            cx.update(|cx| s.manager.update(cx, |m, _| m.parent_window = None));
+        }
+        floating
+            .update(cx, |_, w, cx| {
+                w.dispatch_action(Box::new(crate::file_editor::OpenPath(path.clone())), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        if !closed {
+            assert!(opened_file(&s, cx).is_none());
+        }
+        cx.update(|cx| assert!(s.manager.read(cx).floating_shows(&s.id, cx)));
+    }
+}
+
+/// A link dispatched in a window that is not a floating panel is not forwarded.
+#[gpui::test]
+fn file_links_outside_floating_panels_are_left_alone(cx: &mut TestAppContext) {
     let s = setup(cx);
-    let path = s.root.join("orphan.md").to_string_lossy().into_owned();
-    std::fs::write(&path, "# Heading\n").unwrap();
-    cx.update(|cx| {
-        s.manager
-            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
-    });
+    let path = linked_file(&s);
+    let floating = floating_panel(&s, cx);
+    // A closed panel must not make other windows look like it.
+    floating.update(cx, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
-    cx.update(|cx| s.manager.update(cx, |m, _| m.parent_window = None));
-    let floating = cx.update(|cx| s.manager.read(cx).floating[0]);
-    floating
+    let other = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::Empty))
+            .unwrap()
+    });
+    let other: gpui::AnyWindowHandle = other.into();
+    other
         .update(cx, |_, w, cx| {
+            w.blur(cx);
             w.dispatch_action(Box::new(crate::file_editor::OpenPath(path.clone())), cx);
         })
         .unwrap();
     cx.run_until_parked();
-    s.window
-        .update(cx, |shell, _, _| {
-            assert!(shell.workspace.reviews.is_empty())
-        })
-        .unwrap();
-    cx.update(|cx| assert!(s.manager.read(cx).floating_shows(&s.id, cx)));
+    assert!(opened_file(&s, cx).is_none());
 }

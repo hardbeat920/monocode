@@ -3,6 +3,44 @@
 use super::*;
 
 impl Shell {
+    /// Open a file link, `path[:line[:column]]`, against the current project.
+    /// Panels in other windows call this directly: it needs no focus here.
+    pub(crate) fn open_path_link(
+        &mut self,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.git.read(cx).project().to_owned();
+        let (path, location) = crate::file_editor::file_location(target, &cwd);
+        self.open_review(crate::review::ReviewTab::File { cwd, path }, window, cx);
+        // Monos render above the session pane tree. Give its file an
+        // independent visible tab using the normal navigation path, which
+        // retains the Mono tab and live conversation.
+        if self.mono_active(cx)
+            && let Some(owner) = self.workspace.active
+            && let Some(pane) = self.independent_file_pane(owner, cx)
+        {
+            self.open_file_pane(pane, window, cx);
+        }
+        if let Some((line, column)) = location
+            && let Some(pane) = self.active_review(cx)
+        {
+            pane.update(cx, |pane, cx| pane.navigate_file(line, column, cx));
+        }
+    }
+
+    /// The file shown in the active file pane, and its caret, for tests.
+    #[cfg(test)]
+    pub(crate) fn active_file_for_test(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, std::ops::Range<usize>)> {
+        let editor = self.active_review(cx)?.read(cx).active_editor()?;
+        let editor = editor.read(cx);
+        Some((editor.path.clone(), editor.input.read(cx).selection_range()))
+    }
+
     pub(super) fn independent_file_pane(&mut self, id: i64, cx: &mut Context<Self>) -> Option<i64> {
         let pane = self.take_review_pane(id, cx)?;
         self.workspace.open(pane);
