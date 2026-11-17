@@ -98,6 +98,7 @@ export function ArtifactReader({
       <div
         className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 py-3"
         data-mono-scroll="document"
+        data-document-id={id}
       >
         {!loaded ? (
           <p role="status" className="text-[13px] text-content/50">

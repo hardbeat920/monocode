@@ -30,7 +30,8 @@ function Harness({ first }: { first: Nav }) {
     shownMonoSession: () => shown,
     viewRequest: () => 0,
     monoOfSession: (id) => (id === "chat" ? "mono-1" : undefined),
-    hasSession: () => true,
+    covered: false,
+    hasSession: async () => true,
     canOpenMono: () => true,
     openMono,
     readOverview: () => ({}),
@@ -62,7 +63,8 @@ async function openThenClose(
   else apply();
   opening.opened(target.id, target.editorPanes[0].files[0].path);
   await settle();
-  api.fileClosed(target.id, [target.editorPanes[0].files[0].path]);
+  api.closeStarting(target.id, [target.editorPanes[0].files[0].path]);
+  api.closeFinished();
 }
 
 beforeEach(() => {

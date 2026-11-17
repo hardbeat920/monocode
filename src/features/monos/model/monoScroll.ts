@@ -2,7 +2,8 @@
  * document. Read while mounted, put back once it mounts again. */
 export type MonoScroll = {
   overview?: { tab: string; top: number };
-  document?: { top: number };
+  /** The document it belongs to: another one opened meanwhile is not it. */
+  document?: { id: string; top: number };
 };
 
 const OVERVIEW = '[data-mono-scroll="overview"]:not([hidden])';
@@ -18,7 +19,10 @@ export function readMonoScroll(
   if (overview && tab && overview.scrollTop > 0) {
     scroll.overview = { tab, top: overview.scrollTop };
   }
-  if (page && page.scrollTop > 0) scroll.document = { top: page.scrollTop };
+  const id = page?.dataset.documentId;
+  if (page && id && page.scrollTop > 0) {
+    scroll.document = { id, top: page.scrollTop };
+  }
   return scroll.overview || scroll.document ? scroll : undefined;
 }
 
@@ -62,7 +66,13 @@ export function restoreMonoScroll(
     },
     scroll.document && {
       top: scroll.document.top,
-      find: () => root.querySelector<HTMLElement>(DOCUMENT),
+      find: () => {
+        return (
+          [...root.querySelectorAll<HTMLElement>(DOCUMENT)].find(
+            (el) => el.dataset.documentId === scroll.document?.id,
+          ) ?? null
+        );
+      },
     },
   ].filter((entry) => !!entry);
   let handle = 0;
@@ -74,13 +84,14 @@ export function restoreMonoScroll(
     if (cancelActive === stop) cancelActive = undefined;
   };
   // Input elsewhere, such as typing in the chat, is not the reader taking
-  // over the scroll being restored.
-  const scrollers = new Set<HTMLElement>();
+  // over the scroll being restored. The scrollers are looked up as the input
+  // arrives, so input before the first frame counts too.
+  const finders = pending.map((entry) => entry.find);
   const reader = (event: Event) => {
     const target = event.target;
     if (
       target instanceof Node &&
-      [...scrollers].some((el) => el.contains(target))
+      finders.some((find) => find()?.contains(target))
     ) {
       stop();
     }
@@ -93,7 +104,6 @@ export function restoreMonoScroll(
     const last = ++waited >= frames;
     for (let index = pending.length - 1; index >= 0; index--) {
       const el = pending[index].find();
-      if (el) scrollers.add(el);
       if (
         el &&
         (last || el.scrollHeight - el.clientHeight >= pending[index].top - 1)

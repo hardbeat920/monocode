@@ -14,12 +14,15 @@ import {
 type Host = {
   tabs: readonly WorkspaceTab[];
   activeTabId: string;
+  /** Something other than the workspace shows: a Mono, an app view, settings. */
+  covered: boolean;
   /** The session of the Mono showing now, if any. */
   shownMonoSession: () => string | null;
   /** Bumped whenever a Mono opens or closes. */
   viewRequest: () => number;
   monoOfSession: (sessionId: string) => string | undefined;
-  hasSession: (sessionId: string) => boolean;
+  /** Whether the session still exists, loading it when it was parked. */
+  hasSession: (sessionId: string) => Promise<boolean>;
   /** Whether the Mono exists and Monos are on. */
   canOpenMono: (monoId: string) => boolean;
   openMono: (monoId: string) => void;
@@ -35,27 +38,36 @@ export function useMonoReturn(host: Host) {
   const hostRef = useRef(host);
   hostRef.current = host;
   const back = useRef<MonoReturn | undefined>(undefined);
-  const restore = useRef<
-    { sessionId: string; view: MonoOverviewView } | undefined
-  >(undefined);
+  // The return of a close under way. Closing moves on to a neighbouring tab,
+  // which may be this very Mono's: that open takes the return over.
+  const closing = useRef<MonoReturn | undefined>(undefined);
   // Documents deleted this session; a restore in flight checks them when it
   // applies, after it was handed over.
   const deleted = useRef(new Set<string>());
+  const generation = useRef(0);
 
-  // Recording a return renders once more: an open that landed in a commit of
-  // its own (flushSync, into the tab already active) has no pass after it.
+  // Recording a return renders once more, whose pass sees what the open left:
+  // an open that landed in a commit of its own (flushSync, into the tab
+  // already active) has no other pass after it.
   const [recorded, setRecorded] = useState(0);
 
-  // Focus moving off the file, to another file, pane or tab, ends the return.
+  // Focus moving off the file, to another file, pane, tab or view, ends the
+  // return. A pass older than the record is stale and says nothing.
   useEffect(() => {
-    if (!back.current) return;
+    if (!back.current || recorded < back.current.generation) return;
     const tab = host.tabs.find((entry) => entry.id === host.activeTabId);
+    const { tabId, path } = back.current;
+    const landed = !!host.tabs
+      .find((entry) => entry.id === tabId)
+      ?.editorPanes.some((pane) => pane.files.some((f) => f.path === path));
     back.current = trackMonoReturn(
       back.current,
       host.activeTabId,
       tab && focusedFileTab(tab)?.path,
+      host.covered,
+      landed,
     );
-  }, [host.tabs, host.activeTabId, recorded]);
+  }, [host.tabs, host.activeTabId, host.covered, recorded]);
 
   // Every method reads refs only, so the object stays the same.
   return useMemo(
@@ -85,40 +97,65 @@ export function useMonoReturn(host: Host) {
            * from a Mono while it resolved. */
           opened(tabId: string, path: string) {
             if (!sessionId || !monoId || !untouched) return;
-            back.current = { monoId, sessionId, tabId, path, view };
-            setRecorded((count) => count + 1);
+            generation.current += 1;
+            back.current = {
+              monoId,
+              sessionId,
+              tabId,
+              path,
+              view,
+              generation: generation.current,
+            };
+            setRecorded(generation.current);
           },
         };
       },
-      /** The user closed these files in `tabId`. */
-      fileClosed(tabId: string, paths: readonly string[]) {
+      /** The user is closing these files in `tabId`, confirmed, and the close
+       * is about to move on. Pair with `closeFinished`. */
+      closeStarting(tabId: string, paths: readonly string[]) {
         const found = monoReturnFor(back.current, { tabId, paths });
         // A file never seen in view was opened in the background.
         if (!found?.seen) return;
         back.current = undefined;
+        closing.current = found;
+      },
+      /** The close has moved on: return to the Mono unless a Mono opened
+       * meanwhile and took the return over. */
+      closeFinished() {
+        const found = closing.current;
+        if (!found) return;
         // A Mono already showing, or one that is gone, leaves the close alone.
         if (
-          hostRef.current.shownMonoSession() ||
-          !hostRef.current.canOpenMono(found.monoId)
+          !hostRef.current.shownMonoSession() &&
+          hostRef.current.canOpenMono(found.monoId)
         ) {
-          return;
+          hostRef.current.openMono(found.monoId); // takes `closing`
         }
-        restore.current = { sessionId: found.sessionId, view: found.view };
-        hostRef.current.openMono(found.monoId);
+        closing.current = undefined;
       },
-      /** A Mono is opening, whichever it is: ends any return. Once its session
-       * is known, the returned function gives the view to put back, if the
-       * open is the return's own, minus what no longer exists. */
-      monoOpening() {
+      /** A Mono is opening, whichever it is: ends any return, except that of
+       * a close under way for this same Mono, which is what it returns to.
+       * Once its session is known, the returned function gives the view to put
+       * back, minus what no longer exists. */
+      monoOpening(monoId: string) {
         back.current = undefined;
-        const taken = restore.current;
-        restore.current = undefined;
-        return (sessionId: string) =>
-          taken?.sessionId === sessionId
-            ? restorableMonoView(taken.view, hostRef.current.hasSession, (id) =>
-                deleted.current.has(id),
-              )
-            : null;
+        const taken =
+          closing.current?.monoId === monoId ? closing.current : undefined;
+        if (taken) closing.current = undefined;
+        return async (sessionId: string) => {
+          if (taken?.sessionId !== sessionId) return null;
+          const { shownSession, activity } = taken.view;
+          const live = new Set<string>();
+          for (const id of [shownSession, activity?.sessionId]) {
+            if (id && (await hostRef.current.hasSession(id))) live.add(id);
+          }
+          // After the awaits, so a deletion during them is seen.
+          return restorableMonoView(
+            taken.view,
+            (id) => live.has(id),
+            (id) => deleted.current.has(id),
+          );
+        };
       },
       /** A document is gone, so no view brings it back, whether it is
        * waiting here or already handed to a Mono opening. */

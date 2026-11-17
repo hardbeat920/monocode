@@ -1505,8 +1505,11 @@ function Workspace({
     shownMonoSession: () => monoViewIdRef.current,
     viewRequest: () => monoViewRequest.current,
     monoOfSession: (sessionId) => monoForSession(sessionId)?.id,
-    hasSession: (sessionId) =>
-      sessionsRef.current.some((session) => session.id === sessionId),
+    // A session shown over the overview is no tab's, so it may be parked by
+    // now; loading it also tells a deleted one from one just parked.
+    hasSession: async (sessionId) =>
+      !!(await ensureOpenSessionRef.current(sessionId)),
+    covered: settingsOpen || !!activeAppView || !!monoViewId,
     canOpenMono: (monoId) => monosEnabled && !!findMono(monoId),
     openMono: (monoId) => openMonoRef.current?.(monoId),
     readOverview: () => ({
@@ -3640,7 +3643,6 @@ function Workspace({
           const ok = await confirmCloseTerminals(terminals);
           if (!ok) return;
         }
-        finishClose();
         // Closing a file's own tab returns to its Mono; a tab with a chat, or
         // one closed by the app, is not that.
         if (
@@ -3649,11 +3651,13 @@ function Workspace({
             sessionsRef.current.some((session) => session.id === paneId),
           )
         ) {
-          monoReturn.fileClosed(
+          monoReturn.closeStarting(
             id,
             closingFiles.filter(isFilesystemTab).map((file) => file.path),
           );
         }
+        finishClose();
+        monoReturn.closeFinished();
       })();
     },
     [
@@ -3761,12 +3765,20 @@ function Workspace({
       // Closing the tab's last file hands over to `onCloseTab`, which returns
       // to the Mono itself once it has moved on.
       let closedWithTab = false;
+      /** The user closing this file returns to its Mono, if it came from one;
+       * before the close moves to a neighbour, which may be that Mono. */
+      const startReturn = () => {
+        if (isFilesystemTab(file)) {
+          monoReturn.closeStarting(tab.id, [file.path]);
+        }
+      };
       const finishClose = () => {
         const files = pane.files.filter((entry) => entry.id !== fileId);
         let nextFocus = tab.focusedId;
         let nextLayout = tab.layout;
         let nextPanes = surfacePanes(tab, kind);
         if (files.length > 0) {
+          startReturn();
           nextFocus = paneId;
           const activeFileId =
             pane.activeFileId === fileId
@@ -3799,6 +3811,7 @@ function Workspace({
               });
               return;
             }
+            startReturn();
             const seed = sessionsRef.current[0];
             const session = newSession(
               seed?.harness ?? "claude",
@@ -3833,6 +3846,7 @@ function Workspace({
             if (nextId) navigation.select?.(nextId);
             return;
           }
+          startReturn();
           nextLayout = withoutPane;
           nextFocus =
             tab.focusedId === paneId
@@ -3880,9 +3894,8 @@ function Workspace({
           if (!ok) return;
         }
         finishClose();
-        if (!closedWithTab && isFilesystemTab(file)) {
-          monoReturn.fileClosed(tab.id, [file.path]);
-        }
+        // Closing the tab's last file is `onCloseTab`'s to finish.
+        if (!closedWithTab) monoReturn.closeFinished();
       })();
     },
     [activeTabId, monoReturn, onCloseTab, projectCwd, tabCloseScope],
@@ -5139,7 +5152,7 @@ function Workspace({
       workspaceNavigation.cancel();
       const request = ++monoViewRequest.current;
       lastMonoIdRef.current = monoId;
-      const restoreFor = monoReturn.monoOpening();
+      const restoreFor = monoReturn.monoOpening(monoId);
       cancelMonoScrollRestore();
       const session = await ensureMonoSession(monoId, {
         home: homeDir,
@@ -5155,7 +5168,10 @@ function Workspace({
       // Mono opens on its list.
       let scrollBack: MonoScroll | undefined;
       if (monoViewIdRef.current !== session.id) {
-        const view = restoreFor(session.id);
+        // Loads a parked session shown over the overview; another open may
+        // supersede this one meanwhile.
+        const view = await restoreFor(session.id);
+        if (request !== monoViewRequest.current) return;
         setMonoShownSession(view?.shownSession ?? null);
         setMonoShownSessionFocused(view?.shownSessionFocused ?? false);
         setMonoOverviewDocument(view?.document ?? null);

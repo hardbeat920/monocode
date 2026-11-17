@@ -34,8 +34,12 @@ const overview = (top = 0, room = 1000, tab = "documents") =>
     top,
     room,
   );
-const page = (top = 0, room = 1000) =>
-  scroller({ "data-mono-scroll": "document" }, top, room);
+const page = (top = 0, room = 1000, id = "doc-1") =>
+  scroller(
+    { "data-mono-scroll": "document", "data-document-id": id },
+    top,
+    room,
+  );
 
 beforeEach(() => {
   frames = [];
@@ -50,7 +54,7 @@ it("reads where the overview and an open document were scrolled", () => {
   page(90);
   expect(readMonoScroll()).toEqual({
     overview: { tab: "documents", top: 240 },
-    document: { top: 90 },
+    document: { id: "doc-1", top: 90 },
   });
 });
 
@@ -64,7 +68,10 @@ it("reads nothing from an unscrolled or hidden overview", () => {
 
 it("puts the scroll back once a loading document has room for it", () => {
   restoreMonoScroll(
-    { overview: { tab: "documents", top: 240 }, document: { top: 90 } },
+    {
+      overview: { tab: "documents", top: 240 },
+      document: { id: "doc-1", top: 90 },
+    },
     options,
   );
   const list = overview();
@@ -81,7 +88,10 @@ it("puts the scroll back once a loading document has room for it", () => {
 
 it("leaves another tab's list, and a document that never comes, alone", () => {
   restoreMonoScroll(
-    { overview: { tab: "documents", top: 240 }, document: { top: 90 } },
+    {
+      overview: { tab: "documents", top: 240 },
+      document: { id: "doc-1", top: 90 },
+    },
     { ...options, frames: 3 },
   );
   const other = overview(0, 1000, "habits");
@@ -129,6 +139,28 @@ it("stops when another Mono opens", () => {
   restoreMonoScroll({ overview: { tab: "documents", top: 100 } }, options);
   cancelMonoScrollRestore();
   Object.defineProperty(list, "scrollHeight", { value: 1000 });
+  step();
+  expect(list.scrollTop).toBe(0);
+});
+
+it("puts a document's scroll only on that document", () => {
+  restoreMonoScroll(
+    { document: { id: "doc-1", top: 90 } },
+    { ...options, frames: 3 },
+  );
+  const other = page(0, 1000, "doc-2"); // another document opened meanwhile
+  step();
+  expect(other.scrollTop).toBe(0);
+  const doc = page(0, 1000, "doc-1");
+  step();
+  expect(doc.scrollTop).toBe(90);
+  expect(other.scrollTop).toBe(0);
+});
+
+it("counts input before the first frame, in a scroller already mounted", () => {
+  const list = overview(0, 1000);
+  restoreMonoScroll({ overview: { tab: "documents", top: 100 } }, options);
+  list.dispatchEvent(new Event("wheel", { bubbles: true })); // no frame yet
   step();
   expect(list.scrollTop).toBe(0);
 });
