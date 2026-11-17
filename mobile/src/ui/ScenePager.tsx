@@ -76,6 +76,9 @@ type ScenePager = {
   enabled: SharedValue<boolean>;
   /** How many pages the screen has. */
   pages: SharedValue<number>;
+  /** How many touches are down on something that keeps sideways drags, which
+   *  the swipe between pages leaves alone (see useKeepsSwipe). */
+  held: SharedValue<number>;
   /** Turns the pan on while a screen with pages is in front, and off
    *  otherwise, so it never holds up the stack's swipe back. */
   setOn: (on: boolean) => void;
@@ -87,6 +90,32 @@ function usePager() {
   const pager = use(ScenePagerContext);
   if (!pager) throw new Error("useScenePager must be used inside ScenePagerHost");
   return pager;
+}
+
+/**
+ * Touch handlers for something that takes sideways drags, such as a draft's
+ * page with a slider on it: while a finger is on it, the swipe between pages
+ * and to the drawer keeps out of the drag.
+ */
+export function useKeepsSwipe() {
+  const { held } = usePager();
+  const down = useRef(false);
+  return useMemo(() => {
+    const lift = () => {
+      if (!down.current) return;
+      down.current = false;
+      held.set(Math.max(0, held.get() - 1));
+    };
+    return {
+      onTouchStart: () => {
+        if (down.current) return;
+        down.current = true;
+        held.set(held.get() + 1);
+      },
+      onTouchEnd: lift,
+      onTouchCancel: lift,
+    };
+  }, [held]);
 }
 
 /** Dev only: when each stage of a switch from the drawer happens, in ms from
@@ -239,12 +268,14 @@ export function ScenePagerHost({
   const target = useSharedValue(0);
   const enabled = useSharedValue(false);
   const pages = useSharedValue(2);
+  const held = useSharedValue(0);
   const [on, setOn] = useState(false);
   const [pager] = useState<ScenePager>(() => ({
     progress,
     target,
     enabled,
     pages,
+    held,
     setOn,
   }));
   /** How far the scene has moved aside for the drawer. */
@@ -409,6 +440,11 @@ export function ScenePagerHost({
           // Decided: the moves after are the drag's own, and judging them
           // again would fail the drawer as soon as the scene moved aside.
           if (moving.get() !== NONE) return;
+          // A finger on a draft's page is using it, not paging.
+          if (held.get() > 0) {
+            manager.fail();
+            return;
+          }
           const touch = event.allTouches[0];
           const dx = touch.absoluteX - touchX.get();
           const dy = touch.absoluteY - touchY.get();
@@ -498,6 +534,7 @@ export function ScenePagerHost({
       progress,
       target,
       pages,
+      held,
       touchX,
       touchY,
       isOpen,

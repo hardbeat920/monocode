@@ -7,6 +7,7 @@ mod classic_sidebar;
 #[cfg(test)]
 mod classic_surface_tests;
 mod classic_surfaces;
+mod drafts;
 mod file_panes;
 mod github_star;
 mod idle_agents;
@@ -666,6 +667,8 @@ pub(crate) struct Shell {
     remote_marks: HashMap<i64, (bool, bool)>,
     _remote_clock: gpui::Task<()>,
     sessions: HashMap<i64, Entity<Conversation>>,
+    /// The live pages behind each conversation's draft cards.
+    drafts: HashMap<i64, Vec<Entity<crate::draft::Draft>>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
     draft_sessions: HashSet<i64>,
@@ -1058,6 +1061,7 @@ impl Shell {
             remote_marks: HashMap::new(),
             _remote_clock: remote_clock,
             sessions: HashMap::new(),
+            drafts: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,
             history_recency: HashMap::new(),
@@ -1292,6 +1296,7 @@ impl Shell {
         this.monos = Some(monos);
         this.bind_notices(cx);
         this.init_app_bridge(cx);
+        this.init_draft_inbox(cx);
         for summary in summaries {
             if this
                 .monos
@@ -8829,6 +8834,17 @@ impl Render for Shell {
                 this.archive_active_session(window, cx)
             }))
             .on_action(
+                cx.listener(|this, open: &crate::draft::Reopen, window, cx| {
+                    if this
+                        .reopen_draft(open.session, &open.draft, window, cx)
+                        .is_none()
+                    {
+                        this.error = Some("That draft's page is no longer available.".into());
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_action(
                 cx.listener(|this, open: &crate::image_lightbox::Open, window, cx| {
                     let view = cx.new(|cx| {
                         crate::image_lightbox::ImageLightbox::new(open.clone(), window, cx)
@@ -9313,6 +9329,8 @@ impl Render for Shell {
                     .as_ref()
                     .map(|(view, _)| crate::image_lightbox::overlay(view)),
             )
+            // After everything that can hold a draft's card.
+            .child(crate::draft::sentinel())
             .map(|root| {
                 #[cfg(target_os = "linux")]
                 let caption = self.client_decorations;
@@ -12094,7 +12112,14 @@ mod tests {
             .unwrap();
     }
     pub(super) fn window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
-        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        window_with(cx, Store::open(std::path::Path::new(":memory:")).unwrap())
+    }
+
+    /// `window` over a given store, such as one on disk.
+    pub(super) fn window_with(
+        cx: &mut TestAppContext,
+        mut store: Store,
+    ) -> (WindowHandle<Shell>, i64, i64) {
         let mut a = store.create("codex", "/work/another-project").unwrap();
         let b = store.create("claude", "/work/monocode").unwrap();
         store

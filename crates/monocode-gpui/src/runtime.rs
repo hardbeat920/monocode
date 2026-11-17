@@ -854,10 +854,15 @@ fn run_turn_using(
                     }
                 }
                 for publication in &publications {
-                    let document =
-                        serde_json::to_string(&publication.document).map_err(|e| e.to_string())?;
-                    let at = transcript.begin("visual");
-                    transcript.append(&document);
+                    use monocode_core::visual_bridge::{Content, DRAFT_ROLE};
+                    let (role, text) = match &publication.content {
+                        Content::Visual(document) => ("visual", serde_json::to_string(document)),
+                        // A draft's card names its page; the page lives in the app.
+                        Content::Draft(card) => (DRAFT_ROLE, serde_json::to_string(card)),
+                    };
+                    let text = text.map_err(|e| e.to_string())?;
+                    let at = transcript.begin(role);
+                    transcript.append(&text);
                     start = start.min(at);
                     pending.changed(at);
                     boundary = true;
@@ -902,9 +907,14 @@ fn run_turn_using(
                 // A tool succeeds only after both durable storage and the live
                 // transcript update have accepted the visual.
                 for publication in publications {
-                    let result = publication_result.as_ref().map(|_| {
-                        serde_json::json!({"id":publication.document.id,"title":publication.document.title,"saved":true})
-                    }).map_err(Clone::clone);
+                    use monocode_core::visual_bridge::Content;
+                    let result = publication_result
+                        .as_ref()
+                        .map(|_| match &publication.content {
+                            Content::Visual(document) => serde_json::json!({"id":document.id,"title":document.title,"saved":true}),
+                            Content::Draft(card) => serde_json::json!({"draft":card.draft}),
+                        })
+                        .map_err(Clone::clone);
                     let _ = publication.reply.send(result);
                 }
                 publication_result

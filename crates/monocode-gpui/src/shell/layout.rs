@@ -223,6 +223,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let classic = self.workspace.boxy_layout();
+        crate::theme::set_thread_on_pane(classic);
         self.usage_footer
             .update(cx, |footer, cx| footer.set_classic(classic, cx));
         self.resources

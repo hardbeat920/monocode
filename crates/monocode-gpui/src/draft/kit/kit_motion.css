@@ -1,0 +1,8 @@
+.mc-transport{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.mc-transport .mc-button[aria-pressed=true]{background:var(--accent);color:var(--accent-foreground);border-color:transparent}
+.mc-transport .mc-button:focus:not(:focus-visible){outline:0}
+.mc-side{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:20px;align-items:start;min-width:0}
+.mc-side-col{min-width:0}
+.mc-side-title{font-size:13px;font-weight:600;color:var(--foreground)}
+.mc-side-note{margin:2px 0 10px;font-size:12px;line-height:1.45;color:var(--muted-foreground)}
+.mc-side .mc-stage{min-height:240px}

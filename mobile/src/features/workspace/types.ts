@@ -1,6 +1,7 @@
 // Trimmed-down versions of the desktop shapes (RecentProject, Mono, SessionSummary).
 // These will be filled from the paired desktop once sync exists.
 
+import type { DraftCardItem } from "@/features/drafts/DraftController";
 import type { MascotStatus } from "@/features/mascots/PixelMascot";
 
 // The desktop's HarnessId (src/features/sessions/model/session.ts).
@@ -134,7 +135,9 @@ export type SessionSummary = {
   updatedAt: number;
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
-  waiting?: "approval" | "question";
+  waiting?: "approval" | "question" | "draft";
+  /** The draft the agent is waiting on, when `waiting` is "draft". */
+  waitingDraft?: string;
 };
 
 // The desktop's UserQuestionPrompt (src/features/sessions/model/userQuestion.ts):
@@ -206,7 +209,14 @@ export type TurnItem =
       entries: FoldEntry[];
     }
   | { type: "work"; id: string; live: boolean; phases: WorkPhase[] }
-  | { type: "notice"; id: string; text: string; error?: boolean }
+  | {
+      type: "notice";
+      id: string;
+      text: string;
+      error?: boolean;
+      /** A page the agent built, drawn live in the thread. */
+      draft?: DraftCardItem;
+    }
   /** Sessions a Mono started, as cards under the reply after the launch. */
   | { type: "sessions"; id: string; sessions: LaunchedSession[] }
   /** A Mono's suggested replies; `chosen` is the reply sent after them. */

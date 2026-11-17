@@ -1,0 +1,7 @@
+<style>body{padding:20px;font:14px var(--font-sans)}h1{font-size:20px;margin:0 0 12px}.row{display:flex;gap:8px;margin:10px 0}button{padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--foreground);cursor:pointer}input{padding:8px;border-radius:8px;border:1px solid var(--input);background:transparent;color:var(--foreground);flex:1}#out{color:var(--muted-foreground)}</style>
+<h1>Draft spike</h1>
+<div class="row"><button id="add" onclick="n.textContent=+n.textContent+1">Add one</button><b id="n">0</b></div>
+<div class="row"><input id="name" placeholder="Your name" oninput="hello.textContent='Hello, '+this.value"></div>
+<p id="hello">Hello, </p>
+<p id="out">trusted clicks: <span id="t">0</span></p>
+<script>document.addEventListener('click',e=>{if(e.isTrusted)t.textContent=+t.textContent+1});console.log('ready');</script>

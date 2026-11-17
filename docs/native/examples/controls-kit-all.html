@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>All controls</title>
+<style>
+body{padding:20px;display:flex;gap:28px;align-items:flex-start}
+.box{flex:1;min-height:220px;display:grid;place-items:center;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+/* No script reads the state: the CSS reacts to it. */
+.chip{padding:10px 18px;border-radius:calc(var(--s-radius) * 1px);font-size:calc(var(--s-size) * 1px);background:var(--s-tone);color:#fff;letter-spacing:calc(var(--s-track) * 1px)}
+html[data-s-bold=on] .chip{font-weight:700}
+html[data-s-caps=on] .chip{text-transform:uppercase}
+</style>
+<div id="panel"></div>
+<div class="box"><span class="chip" id="chip">Hello</span></div>
+<script>
+const ui = mc.controls('#panel', [
+  {key: 'text', type: 'text', value: 'Hello'},
+  {key: 'note', type: 'textarea', value: 'Notes here', rows: 2},
+  {key: 'radius', type: 'slider', value: 8, min: 0, max: 24, unit: 'px'},
+  {key: 'size', type: 'stepper', value: 14, min: 10, max: 32, unit: 'px'},
+  {key: 'track', type: 'slider', value: 0, min: -1, max: 4, step: .5},
+  {key: 'weight', type: 'select', value: 'regular', options: ['regular', 'medium', {value: 'bold', label: 'Bold'}]},
+  {key: 'align', type: 'radio', value: 'left', options: ['left', 'center']},
+  {key: 'mode', type: 'segmented', value: 'a', options: [{value: 'a', label: 'One'}, {value: 'b', label: 'Two'}]},
+  {key: 'tone', type: 'swatch', value: '#4f5bd5', options: ['#4f5bd5', '#1f8a5b']},
+  {key: 'bold', type: 'toggle', value: false},
+  {key: 'caps', type: 'checkbox', value: false, label: 'Uppercase'},
+  {type: 'sep'},
+  {type: 'button', label: 'Reset', icon: 'replay', onClick: () => ui.state.reset()},
+], {title: 'Chip'});
+ui.state.on(v => { document.getElementById('chip').textContent = v.text || 'Empty'; });
+</script>

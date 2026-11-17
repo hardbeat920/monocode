@@ -250,7 +250,7 @@ final class TranscriptCadence {
   var fade: Double { min(0.4, max(0.12, average * 3)) }
 }
 
-final class TranscriptRowView: UIView, UIScrollViewDelegate {
+final class TranscriptRowView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
   private static let streamed: Set<String> = ["text", "heading", "code", "table", "list", "quote"]
   /// How long a word still being written is held back before it shows as is.
   private static let hold: Double = 0.15
@@ -308,6 +308,8 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
   private var copiedUntil: Date?
   private(set) var model: TranscriptRowModel?
   private var prepared: TranscriptTextLayout?
+  /// A draft's card, which the transcript owns and lends to the row showing it.
+  private weak var draftCard: UIView?
   var onAction: (([String: Any]) -> Void)?
   var onSelection: ((String) -> Void)?
   var onHorizontalScroll: ((String, CGFloat) -> Void)?
@@ -353,8 +355,12 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
     shimmerBand.startPoint = CGPoint(x: 0, y: 0.5)
     shimmerBand.endPoint = CGPoint(x: 1, y: 0.5)
     shimmerBand.anchorPoint = .zero
-    addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
-    addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(held(_:))))
+    let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+    tap.delegate = self
+    addGestureRecognizer(tap)
+    let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+    hold.delegate = self
+    addGestureRecognizer(hold)
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
   deinit { clock?.invalidate() }
@@ -748,7 +754,25 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
       onHorizontalScroll?(group, horizontal.contentOffset.x)
     }
   }
+  /// A touch on a draft's card is the card's: a tap there must not let go of
+  /// the keyboard the page's own note field brought up.
+  func gestureRecognizer(
+    _ gesture: UIGestureRecognizer, shouldReceive touch: UITouch
+  ) -> Bool {
+    guard let draftCard, let view = touch.view else { return true }
+    return !view.isDescendant(of: draftCard)
+  }
+  func host(_ card: UIView, height: CGFloat) {
+    if card.superview !== self { addSubview(card) }
+    draftCard = card
+    card.frame = CGRect(x: 20, y: 8, width: max(1, bounds.width - 40), height: max(0, height - 24))
+    isAccessibilityElement = false
+    accessibilityElements = [card]
+  }
   func reuse() {
+    // By now it may already be in the row that took over.
+    if draftCard?.superview === self { draftCard?.removeFromSuperview() }
+    draftCard = nil
     clock?.invalidate()
     clock = nil
     horizontal.setContentOffset(horizontal.contentOffset, animated: false)

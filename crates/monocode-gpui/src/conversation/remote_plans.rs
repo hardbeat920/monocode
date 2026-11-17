@@ -204,6 +204,7 @@ impl Conversation {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
+                .child(crate::draft::float(px(0.)))
                 .child(
                     div()
                         .h(px(42.))

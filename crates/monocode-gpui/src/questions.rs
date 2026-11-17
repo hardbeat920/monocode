@@ -655,6 +655,7 @@ impl Render for QuestionCard {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.keep_open(cx)),
             )
+            .child(crate::draft::float(px(RADIUS)))
             .child(
                 canvas(
                     |_, _, _| {},

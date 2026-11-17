@@ -7,7 +7,7 @@ public class MonocodeLinkModule: Module {
     Constant("nativeTranscriptVersion") { 1 }
     Constant("typingPostureVersion") { 1 }
     View(NativeTranscriptView.self) {
-      Events("onStatus", "onAction", "onScrollState")
+      Events("onStatus", "onAction", "onScrollState", "onDraft")
       Prop("configuration") { (view: NativeTranscriptView, value: String) in
         view.setConfiguration(value)
       }
@@ -29,6 +29,23 @@ public class MonocodeLinkModule: Module {
       AsyncFunction("scrollToEnd") { (view: NativeTranscriptView) in view.jumpToEnd() }
       AsyncFunction("selectText") { (view: NativeTranscriptView, text: String) in
         view.selectText(text)
+      }
+      AsyncFunction("draftChrome") { (view: NativeTranscriptView, id: String, chrome: String) in
+        view.setDraftChrome(id, chrome)
+      }
+      AsyncFunction("draftLoad") {
+        (view: NativeTranscriptView, id: String, html: String, generation: Int) in
+        view.loadDraft(id, html: html, generation: generation)
+      }
+      AsyncFunction("draftScript") { (view: NativeTranscriptView, id: String, script: String) in
+        view.runDraftScript(id, script)
+      }
+      AsyncFunction("draftPicture") {
+        (view: NativeTranscriptView, id: String, uri: String?, ratio: Double?) in
+        view.setDraftPicture(id, uri, ratio: ratio)
+      }
+      AsyncFunction("scrollToDraft") { (view: NativeTranscriptView, draft: String) in
+        view.scrollToDraft(draft)
       }
     }
     View(TypingPostureView.self) {

@@ -410,6 +410,44 @@ pub(crate) fn rail_color() -> Hsla {
 pub(crate) fn inset_chrome_wash() -> Hsla {
     content(0.05)
 }
+thread_local! {
+    /// Whether the conversation sits on the flat pane tone (Boxy) rather than
+    /// the content card's deeper fill. The shell says so every frame.
+    static THREAD_ON_PANE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Records which fill the shell paints behind the conversation this frame.
+pub(crate) fn set_thread_on_pane(on_pane: bool) {
+    THREAD_ON_PANE.with(|cell| cell.set(on_pane));
+}
+/// The color the conversation is drawn on, as one solid color: the card's
+/// fill in the card layout, the pane tone in Boxy, laid over the shell where
+/// it is glass. A page shown in the thread is clear, so this is what shows
+/// through it, what its `--background` names and what its contrast is
+/// measured against.
+pub(crate) fn thread_surface() -> Hsla {
+    let fill = if THREAD_ON_PANE.with(std::cell::Cell::get) {
+        pane_fill()
+    } else {
+        inset_pane_fill()
+    };
+    over_shell(fill)
+}
+/// `fill` laid over the opaque shell tint, the nearest solid stand-in for a
+/// glass surface whose desktop shows through.
+fn over_shell(fill: Hsla) -> Hsla {
+    if fill.a >= 1. {
+        return fill;
+    }
+    let (top, base) = (fill.to_rgb(), background_base().to_rgb());
+    let mix = |t: f32, b: f32| t * fill.a + b * (1. - fill.a);
+    gpui::Rgba {
+        r: mix(top.r, base.r),
+        g: mix(top.g, base.g),
+        b: mix(top.b, base.b),
+        a: 1.,
+    }
+    .into()
+}
 pub(crate) fn inset_pane_fill() -> Hsla {
     TOKENS
         .with(|tokens| tokens.borrow().as_ref().map(|t| t.inset_pane))
@@ -686,6 +724,49 @@ mod composer_tests {
         assert_eq!(composer_blur(), 0.);
         assert_eq!(composer_border(false), content(0.1));
         assert_eq!(composer_border(true), content(0.2));
+    }
+
+    #[test]
+    fn a_page_in_the_thread_gets_the_color_behind_the_thread() {
+        struct Restore(Option<Tokens>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
+                set_thread_on_pane(false);
+            }
+        }
+        let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
+        // Solid content: the card layout draws the conversation on the
+        // card's deeper fill, Boxy on the flat pane tone.
+        let solid = crate::settings::Preferences {
+            theme: "dark".into(),
+            body_glass: false,
+            ..Default::default()
+        };
+        configure(&solid, false);
+        set_thread_on_pane(false);
+        let card = thread_surface();
+        set_thread_on_pane(true);
+        let boxy = thread_surface();
+        assert_ne!(card, boxy);
+        assert_eq!(card, inset_pane_fill());
+        assert_eq!(boxy, pane_fill());
+        // Glass content is see-through to the shell's tint; the page gets that
+        // tint as one solid color in either layout.
+        let glass = crate::settings::Preferences {
+            body_glass: true,
+            ..solid
+        };
+        configure(&glass, false);
+        if GLASS_PLATFORM {
+            assert!(pane_fill().a < 1.);
+            for on_pane in [false, true] {
+                set_thread_on_pane(on_pane);
+                let surface = thread_surface();
+                assert_eq!(surface.a, 1.);
+                assert!((surface.l - background_base().l).abs() < 0.01);
+            }
+        }
     }
 
     #[test]

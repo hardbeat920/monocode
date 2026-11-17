@@ -12,7 +12,15 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
   let onStatus = EventDispatcher()
   let onAction = EventDispatcher()
   let onScrollState = EventDispatcher()
-  private let scroll = UIScrollView()
+  let onDraft = EventDispatcher()
+  private let scroll = TranscriptScrollView()
+  /// Drafts' cards by row. Rows are recycled; a page has to outlive them.
+  private var drafts: [String: TranscriptDraftCard] = [:]
+  /// The cards on screen, and those holding a page, most recent last.
+  private var shownDrafts: Set<String> = []
+  private var draftUse: [String] = []
+  /// Pages kept per conversation, as on the desktop.
+  private static let liveDrafts = 3
   private let spinner = UIActivityIndicatorView(style: .medium)
   private var session: TranscriptSession?
   private var configuration = ""
@@ -120,6 +128,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       ) { [weak self] _ in
         self?.session?.purge()
         self?.pool.removeAll()
+        self?.releaseDrafts(keeping: 0)
       })
   }
   deinit {
@@ -148,6 +157,8 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     var hit = scroll.hitTest(slide.location(in: scroll), with: nil)
     while let view = hit, view !== scroll {
       if let inner = view as? UIScrollView, inner.isScrollEnabled { return false }
+      // So does a page, whose scrolling is the thread's but whose swipes are its own.
+      if let card = view as? TranscriptDraftCard, card.holdsPage(at: slide) { return false }
       hit = view.superview
     }
     return true
@@ -222,6 +233,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     session?.setActive(value && foreground)
     for row in visible.values { row.setPresentationActive(value && foreground) }
     if !value { stopFollowingAnimation(settling: true) }
+    syncDrafts()
   }
   func setInsets(
     top: Double? = nil, bottom: Double? = nil, extra: Double? = nil, keyboardOffset: Double? = nil
@@ -275,6 +287,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       self.collapsed = collapsed
       session?.command(["type": "collapsed", "value": collapsed])
     }
+    for card in drafts.values { card.apply(style: style) }
     publishViewport()
   }
   func updateProps() {
@@ -285,6 +298,10 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       lastStatus = nil
       lastAway = nil
       initialized = false
+      for card in drafts.values { card.removeFromSuperview() }
+      drafts.removeAll()
+      shownDrafts.removeAll()
+      draftUse.removeAll()
       for row in visible.values { row.reuse() }
       visible.removeAll()
       pool.removeAll()
@@ -350,6 +367,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     session?.setActive(value && active)
     for row in visible.values { row.setPresentationActive(value && active) }
     if !value { stopFollowingAnimation(settling: true) }
+    syncDrafts()
   }
   private func enqueue(_ frame: TranscriptLayoutFrame, generation: UUID) {
     relayLock.lock()
@@ -917,6 +935,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
         model, layout: prepared, animate: animate && index >= answer && style.agent.isEmpty,
         horizontalWidth: model.group.flatMap { frame.groupWidths[$0] } ?? 0,
         horizontalOffset: model.group.flatMap { horizontalOffsets[$0] } ?? 0)
+      if model.kind == "draft" { row.host(draftCard(for: model), height: model.height) }
       row.cadence = cadence
       row.setPresentationActive(active && foreground)
       row.onHorizontalScroll = { [weak self, weak row] group, offset in
@@ -949,7 +968,10 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       }
     }
     var held: [String: TranscriptRowView] = [:]
-    defer { if !times.isEmpty { layoutReveal() } }
+    defer {
+      if !times.isEmpty { layoutReveal() }
+      syncDrafts()
+    }
     for id in Array(visible.keys) where !keep.contains(id) {
       guard let row = visible.removeValue(forKey: id) else { continue }
       if holding {
@@ -961,6 +983,108 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     }
     return held
   }
+  /// Brings cards up to date with the rows on screen: one arriving runs, one
+  /// leaving pauses, and a row that is gone takes its card with it.
+  private func syncDrafts() {
+    guard let frame = frameData else { return }
+    let rows = Set(frame.rows.lazy.filter { $0.kind == "draft" }.map(\.id))
+    for id in drafts.keys where !rows.contains(id) {
+      drafts.removeValue(forKey: id)?.removeFromSuperview()
+      draftUse.removeAll { $0 == id }
+      shownDrafts.remove(id)
+      onDraft(["id": id, "kind": "gone"])
+    }
+    let live = active && foreground
+    var showing: Set<String> = []
+    if live {
+      for (id, row) in visible where row.model?.kind == "draft" { showing.insert(id) }
+    }
+    for id in shownDrafts.subtracting(showing) {
+      guard let card = drafts[id], !card.isFull else {
+        showing.insert(id)
+        continue
+      }
+      card.suspend()
+      onDraft(["id": id, "kind": "hidden"])
+    }
+    for id in showing.subtracting(shownDrafts) {
+      guard let card = drafts[id] else { continue }
+      card.resume()
+      draftUse.removeAll { $0 == id }
+      draftUse.append(id)
+      var event = card.action
+      event["id"] = id
+      event["kind"] = "shown"
+      onDraft(event)
+    }
+    shownDrafts = showing
+    releaseDrafts(keeping: Self.liveDrafts)
+  }
+
+  /// Gives up the pages used longest ago that are not on screen.
+  private func releaseDrafts(keeping limit: Int) {
+    var holding = draftUse.filter { drafts[$0]?.holdsLoadedPage == true }
+    while holding.count > limit, let id = holding.first(where: { !shownDrafts.contains($0) }) {
+      drafts[id]?.dropPage()
+      holding.removeAll { $0 == id }
+    }
+  }
+
+  private func draftCard(for model: TranscriptRowModel) -> TranscriptDraftCard {
+    if let card = drafts[model.id] {
+      // The agent renamed it since the card was made.
+      if card.action["title"] as? String != model.action["title"] as? String {
+        card.action = model.action
+        var event = model.action
+        event["id"] = model.id
+        event["kind"] = "card"
+        onDraft(event)
+      }
+      return card
+    }
+    let card = TranscriptDraftCard(id: model.id, action: model.action)
+    card.apply(style: style)
+    card.onEvent = { [weak self] event in
+      var event = event
+      event["id"] = model.id
+      self?.onDraft(event)
+    }
+    card.onHeight = { [weak self] height in
+      self?.session?.command(["type": "draftHeight", "id": model.id, "height": height])
+    }
+    card.isThreadDragging = { [weak self] in self?.scroll.isDragging == true }
+    drafts[model.id] = card
+    return card
+  }
+
+  func setDraftChrome(_ id: String, _ json: String) {
+    guard let data = json.data(using: .utf8),
+      let chrome = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return }
+    drafts[id]?.setChrome(chrome)
+  }
+  func loadDraft(_ id: String, html: String, generation: Int) {
+    drafts[id]?.load(html: html, generation: generation)
+  }
+  func runDraftScript(_ id: String, _ source: String) { drafts[id]?.script(source) }
+  func setDraftPicture(_ id: String, _ uri: String?, ratio: Double?) {
+    drafts[id]?.setPicture(uri, ratio: ratio.map { CGFloat($0) })
+  }
+  /// Brings a draft's card to the middle of the screen.
+  func scrollToDraft(_ draft: String) {
+    guard let frame = frameData,
+      let index = frame.rows.firstIndex(where: {
+        $0.kind == "draft" && $0.action["draft"] as? String == draft
+      })
+    else { return }
+    following = false
+    pinned = false
+    stopFollowingAnimation()
+    let end = max(-scroll.contentInset.top, scroll.contentSize.height - scroll.bounds.height)
+    let y = top + frame.offsets[index] - (bounds.height - frame.rows[index].height) / 2
+    scroll.setContentOffset(CGPoint(x: 0, y: min(end, max(0, y))), animated: true)
+  }
+
   private func publishViewport() {
     session?.configure(
       style: style,
@@ -983,6 +1107,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
     following = false
     pinned = false
     stopFollowingAnimation()
+    for card in drafts.values { card.threadTookTouch() }
   }
   func scrollViewDidScroll(_ scrollView: UIScrollView) {
     displayRows()
@@ -1028,7 +1153,20 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecog
       self.updateGeometry()
       // Lift only when already at the end, like KeyboardChatScrollView's whenAtEnd.
       if self.following || atEnd { self.scroll.contentOffset.y = self.targetOffset() }
+      self.revealDraftField()
     }
+  }
+
+  /// A field on a page has no say in where the thread is, so the thread lifts
+  /// the spot the person touched above the keyboard.
+  private func revealDraftField() {
+    guard keyboard > 0, let card = drafts.values.first(where: \.isEditing),
+      let point = card.touchPoint(in: scroll)
+    else { return }
+    // A note's box opens under the touch, with its buttons at the bottom.
+    let noteBox: CGFloat = 140
+    let lowest = scroll.contentOffset.y + bounds.height - keyboard - 64 - noteBox
+    if point.y > lowest { scroll.contentOffset.y += point.y - lowest }
   }
   /// A long-pressed message's text: a Mono's chat offers what to do with it
   /// in a sheet, as Messages does; elsewhere it opens to be selected.

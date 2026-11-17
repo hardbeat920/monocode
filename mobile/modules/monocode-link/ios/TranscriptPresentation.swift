@@ -302,6 +302,10 @@ final class TranscriptRowModel {
     let muted = presentation["muted"] as? Bool == true
     let hairline: CGFloat = 1 / style.pixelRatio
     switch kind {
+    case "draft":
+      // The card and its page are views of the transcript's own, so they
+      // outlive this row; the row only keeps their place.
+      height = 8 + (action["cardHeight"] as? CGFloat ?? TranscriptDraftCard.estimate) + 16
     case "user":
       let compact = action["compact"] as? Bool == true
       let reaction = action["reaction"] as? String

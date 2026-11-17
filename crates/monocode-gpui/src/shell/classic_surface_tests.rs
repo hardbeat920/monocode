@@ -4,7 +4,7 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext, WindowHandle};
 
 #[derive(Clone, Copy, Debug)]
-enum Surface {
+pub(super) enum Surface {
     Inbox,
     Notes,
     Automations,
@@ -13,7 +13,7 @@ enum Surface {
 }
 
 impl Surface {
-    fn open(self, shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) {
+    pub(super) fn open(self, shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) {
         match self {
             Self::Inbox => shell.open_inbox(window, cx),
             Self::Notes => shell.open_notes(window, cx),
@@ -41,7 +41,13 @@ impl Surface {
         }
     }
 
-    fn close(self, shell: &mut Shell, session: i64, window: &mut Window, cx: &mut Context<Shell>) {
+    pub(super) fn close(
+        self,
+        shell: &mut Shell,
+        session: i64,
+        window: &mut Window,
+        cx: &mut Context<Shell>,
+    ) {
         match self {
             Self::Inbox | Self::Notes | Self::Automations => shell.close_app_view(window, cx),
             Self::Search => shell.close_app_search(window, cx),

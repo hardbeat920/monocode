@@ -16,6 +16,7 @@ import {
   Keyboard,
   Linking,
   StyleSheet,
+  Text,
   View,
   useWindowDimensions,
   type NativeSyntheticEvent,
@@ -25,6 +26,11 @@ import { withTiming } from "react-native-reanimated";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
+import {
+  useDraftCards,
+  type DraftCardEvent,
+  type DraftCardsHandle,
+} from "@/features/drafts/useDraftCards";
 import { useCollapsedToolCalls } from "@/features/settings/toolCalls";
 import {
   useNativeTranscript,
@@ -32,6 +38,7 @@ import {
 } from "@/features/workspace/WorkspaceProvider";
 import type { TurnMetrics } from "@/features/workspace/types";
 import { pixelLayers } from "@/features/mascots/pixelMascots";
+import { LiquidView } from "@/ui/LiquidView";
 import { AccentOverride, mix, useAccent, useColors, useScheme, useTheme } from "@/ui/theme";
 import { usePushStarted } from "@/ui/usePushedIn";
 
@@ -40,13 +47,16 @@ import { useOpenLaunchedSession } from "./LaunchedSessionCard";
 import { MonoMessageActions, openDocument, useMonoChoose } from "./MonoCards";
 import { FileOpener } from "./Markdown";
 import { SessionErrorSheet } from "./SessionErrorSheet";
-import { useJumpToEnd, useSessionLayout } from "./SessionScreen";
+import { COMPOSER_FADE, useJumpToEnd, useSessionLayout } from "./SessionScreen";
 import type { TranscriptAgent } from "./TranscriptTurn";
 import { MessageActionsSheet, type HeldMessage } from "./MessageActionsSheet";
 import { TurnMetricsSheet } from "./TurnMetricsSheet";
 import { useReportSessionError, type SessionErrorNotice } from "./sessionError";
 
-type Handle = { scrollToEnd: () => Promise<void>; selectText: (text: string) => Promise<void> };
+type Handle = DraftCardsHandle & {
+  scrollToEnd: () => Promise<void>;
+  selectText: (text: string) => Promise<void>;
+};
 type Action = {
   type: "copy" | "metrics" | "error" | "link" | "session" | "choice" | "document" | "message";
   /** A long-pressed message in a Mono's chat: whose it is. */
@@ -80,6 +90,7 @@ type Props = ViewProps & {
   onStatus: (event: NativeSyntheticEvent<NativeTranscriptStatus>) => void;
   onAction: (event: NativeSyntheticEvent<Action>) => void;
   onScrollState: (event: NativeSyntheticEvent<{ away: boolean; log?: string }>) => void;
+  onDraft: (event: NativeSyntheticEvent<DraftCardEvent>) => void;
 };
 const NativeView = hasNativeTranscript
   ? requireNativeView<Props>("MonocodeLink")
@@ -115,6 +126,7 @@ export function NativeTranscript({
   const choose = useMonoChoose();
   const jump = useJumpToEnd();
   const view = useRef<Handle>(null);
+  const { onDraft, waitingDraft } = useDraftCards(conversationId, view);
   const [notice, setNotice] = useState<SessionErrorNotice | null>(null);
   const [error, setError] = useState<SessionErrorNotice | null>(null);
   const [errorPresented, setErrorPresented] = useState(false);
@@ -276,7 +288,28 @@ export function NativeTranscript({
         onStatus={handleStatus}
         onAction={handleAction}
         onScrollState={scrollState}
+        onDraft={onDraft}
       />
+      {waitingDraft && focused ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.draftPill,
+            { bottom: layout.bottom - COMPOSER_FADE + layout.composerGrowth + 54 },
+          ]}
+        >
+          <LiquidView
+            onPress={() => void view.current?.scrollToDraft(waitingDraft)}
+            accessibilityLabel="Go to the draft waiting for you"
+            borderRadius={18}
+            innerStyle={styles.draftPillInner}
+          >
+            <Text style={[styles.draftPillLabel, { color: colors.content }]}>
+              Draft waiting for you
+            </Text>
+          </LiquidView>
+        </View>
+      ) : null}
       {error ? (
         <SessionErrorSheet
           message={error.text}
@@ -311,7 +344,12 @@ export function NativeTranscript({
     </View>
   );
 }
-const styles = StyleSheet.create({ fill: { flex: 1 } });
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  draftPill: { position: "absolute", alignSelf: "center" },
+  draftPillInner: { height: 36, paddingHorizontal: 14, justifyContent: "center" },
+  draftPillLabel: { fontSize: 13, fontWeight: "600" },
+});
 
 /**
  * Reactions the user put on a Mono's replies, by the reply's first row, kept

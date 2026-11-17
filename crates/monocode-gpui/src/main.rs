@@ -19,6 +19,7 @@ mod conversation;
 #[cfg(debug_assertions)]
 mod dev_reload;
 mod diff_view;
+mod draft;
 mod editor_analysis;
 mod editor_scrollbar;
 mod editor_syntax;
@@ -233,6 +234,11 @@ fn main() {
         }
         return;
     }
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    if let Some(page) = std::env::var_os("MONOCODE_DRAFT_SELFTEST") {
+        draft::selftest::run(page);
+        return;
+    }
     let mut args = std::env::args().skip(1);
     let mut fixture = false;
     let mut chat_fixture = false;
@@ -435,6 +441,7 @@ fn main() {
             file_editor::bind(cx);
             popover::bind(cx);
             cx.set_prompt_builder(modal::prompt_builder);
+            draft::start();
             explorer::bind(cx);
             history::bind(cx);
             diff_view::bind(cx);

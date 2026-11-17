@@ -13,6 +13,6 @@ Pod::Spec.new do |s|
   s.source_files = '**/*.swift'
   s.resource_bundles = { 'MonocodeTranscriptAssets' => ['Resources/transcript-artwork.json'] }
   s.vendored_frameworks = 'MonocodeLinkCore.xcframework'
-  s.frameworks = 'Security', 'SystemConfiguration', 'UIKit', 'CoreText'
+  s.frameworks = 'Security', 'SystemConfiguration', 'UIKit', 'CoreText', 'WebKit'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
 end

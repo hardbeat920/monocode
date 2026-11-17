@@ -55,12 +55,21 @@ final class TranscriptLayoutEngine {
   private var shownReactions: [String: String] = [:]
   /// Messages shown without the reaction they have yet, and as what.
   private var staged: [String: TranscriptRowModel] = [:]
+  /// How tall each draft's card says it is. Only that row is measured again.
+  private var draftHeights: [String: CGFloat] = [:]
 
   init() {
     layouts.countLimit = 500
     layouts.totalCostLimit = 12 * 1024 * 1024
   }
   func purge() { layouts.removeAllObjects() }
+  func setDraftHeight(_ id: String, _ height: CGFloat) {
+    guard draftHeights[id] != height else { return }
+    draftHeights[id] = height
+    models.removeValue(forKey: id)
+    layouts.removeObject(forKey: id as NSString)
+    dirty = true
+  }
 
   // Consume every delta even when several arrive before a frame is published.
   func accept(_ update: [String: Any]) {
@@ -162,7 +171,11 @@ final class TranscriptLayoutEngine {
     }
     let all = order.compactMap { id -> TranscriptRowModel? in
       if let cached = models[id] { return cached }
-      guard let source = sources[id] else { return nil }
+      guard var source = sources[id] else { return nil }
+      if let height = draftHeights[id], var action = source["action"] as? [String: Any] {
+        action["cardHeight"] = height
+        source["action"] = action
+      }
       let model = TranscriptRowModel(source, style: style)
       models[id] = model
       return model
