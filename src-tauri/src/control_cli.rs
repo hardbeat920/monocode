@@ -290,18 +290,18 @@ fn quoted(value: &str) -> String {
     }
 }
 
-pub fn help() -> String {
-    let exe = std::env::current_exe()
+pub fn quoted_executable() -> String {
+    std::env::current_exe()
         .map(|path| quoted(&path.to_string_lossy()))
-        .unwrap_or_else(|_| "monocode".into());
-    USAGE.replace("{exe}", &exe)
+        .unwrap_or_else(|_| "monocode".into())
+}
+
+pub fn help() -> String {
+    USAGE.replace("{exe}", &quoted_executable())
 }
 
 pub fn app_help() -> String {
-    let exe = std::env::current_exe()
-        .map(|path| quoted(&path.to_string_lossy()))
-        .unwrap_or_else(|_| "monocode".into());
-    APP_USAGE.replace("{exe}", &exe)
+    APP_USAGE.replace("{exe}", &quoted_executable())
 }
 
 enum Parsed {

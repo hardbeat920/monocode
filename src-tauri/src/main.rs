@@ -10,13 +10,14 @@ fn main() {
     monocode_lib::run()
 }
 
-fn run_cli(mut args: impl Iterator<Item = String>) -> Option<i32> {
+fn run_cli(mut args: impl ExactSizeIterator<Item = String>) -> Option<i32> {
     match args.next().as_deref() {
-        Some("--help" | "-h") => {
+        Some("--help" | "-h") if args.len() == 0 => {
+            let exe = monocode_lib::control_cli::quoted_executable();
             println!(
-                "Usage: monocode [app|control]\n\n\
-                Run monocode without arguments to open the desktop app.\n\
-                Run monocode app --help or monocode control --help for command details."
+                "Usage: {exe} [app|control]\n\n\
+                Run without arguments to open the desktop app.\n\n\
+                For command details, run either\n  {exe} app --help\n  {exe} control --help"
             );
             Some(0)
         }
@@ -31,14 +32,17 @@ mod tests {
     use super::run_cli;
 
     #[test]
-    fn help_exits_before_desktop_startup() {
+    fn only_standalone_help_exits_before_desktop_startup() {
         for flag in ["--help", "-h"] {
             assert_eq!(run_cli(std::iter::once(flag.to_owned())), Some(0));
+            for args in [[flag, "project"], ["project", flag]] {
+                assert_eq!(
+                    run_cli(args.into_iter().map(String::from)),
+                    None,
+                    "{args:?}"
+                );
+            }
         }
         assert_eq!(run_cli(std::iter::empty()), None);
-        assert_eq!(
-            run_cli(["project", "--help"].into_iter().map(String::from)),
-            None
-        );
     }
 }
