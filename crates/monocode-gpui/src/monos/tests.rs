@@ -650,6 +650,57 @@ fn heartbeat_runs_keep_the_monos_selected_permissions(cx: &mut TestAppContext) {
     }
 }
 
+#[gpui::test]
+fn background_runs_and_child_launches_use_the_model_picked_after_a_switch(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, cx| {
+            // A saved Claude chat: the stored settings and live model agree.
+            chat.mono_config(Kind::Claude, Some("fable".into()), Default::default(), cx)
+                .unwrap();
+            chat.settings.model = Some("fable".into());
+            // Stop the run before triage swaps in a heartbeat model.
+            chat.settings.usage_limit = Some(Default::default());
+            chat.mono_config(
+                Kind::Codex,
+                Some("gpt-6.2-astra".into()),
+                Default::default(),
+                cx,
+            )
+            .unwrap();
+        });
+        m.start_heartbeat(&s.id, "Check for follow-ups".into(), cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, cx| {
+        assert!(m.error.is_none(), "run failed: {:?}", m.error);
+        let run = &m.running[&m.active_run.expect("run session was created")];
+        assert_eq!(
+            run.view.read(cx).mono_model().as_deref(),
+            Some("gpt-6.2-astra")
+        );
+    });
+
+    let started = call(
+        &s,
+        "after-switch",
+        "sessions.start",
+        json!({"project":s.project,"prompt":"Follow up","draft":true}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    let child = started["sessionId"].as_i64().unwrap();
+    s.window
+        .update(cx, |shell, _, cx| {
+            let view = shell.mono_session_entity(child).expect("child session");
+            assert_eq!(view.read(cx).summary.provider, "codex");
+            assert_eq!(view.read(cx).mono_model().as_deref(), Some("gpt-6.2-astra"));
+        })
+        .unwrap();
+}
+
 fn call(
     s: &Setup,
     request: &str,

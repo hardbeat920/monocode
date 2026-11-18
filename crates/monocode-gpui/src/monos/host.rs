@@ -322,7 +322,7 @@ impl Monos {
                         .unwrap_or_else(|| provider.clone());
                     let mut settings = source
                         .as_ref()
-                        .map(|v| v.read(cx).settings.clone())
+                        .map(|v| v.read(cx).mono_launch_settings())
                         .unwrap_or_default();
                     if source
                         .as_ref()
