@@ -1520,7 +1520,7 @@ impl Monos {
         let mut inherited = self
             .chats
             .get(id)
-            .map(|v| v.read(cx).settings.clone())
+            .map(|v| v.read(cx).mono_launch_settings())
             .unwrap_or_default();
         let provider = self
             .chats

@@ -277,6 +277,11 @@ impl Conversation {
             "idle"
         }
     }
+    pub(crate) fn mono_launch_settings(&self) -> Settings {
+        let mut settings = self.settings.clone();
+        settings.model = self.model.clone();
+        settings
+    }
     pub(crate) fn mono_model(&self) -> Option<String> {
         self.model.clone()
     }
