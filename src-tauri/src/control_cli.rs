@@ -291,9 +291,22 @@ fn quoted(value: &str) -> String {
 }
 
 pub fn quoted_executable() -> String {
-    std::env::current_exe()
-        .map(|path| quoted(&path.to_string_lossy()))
-        .unwrap_or_else(|_| "monocode".into())
+    let Ok(exe) = std::env::current_exe() else {
+        return "monocode".into();
+    };
+    #[cfg(target_os = "linux")]
+    if let (Some(mount), Some(image)) = (std::env::var_os("APPDIR"), std::env::var_os("APPIMAGE")) {
+        let mount = std::path::Path::new(&mount);
+        let image = std::path::Path::new(&image);
+        // An AppImage's inner executable disappears on exit. Other apps can inherit its environment.
+        if image.is_absolute()
+            && mount.is_absolute()
+            && mount.canonicalize().is_ok_and(|dir| exe.starts_with(dir))
+        {
+            return quoted(&image.to_string_lossy());
+        }
+    }
+    quoted(&exe.to_string_lossy())
 }
 
 pub fn help() -> String {
