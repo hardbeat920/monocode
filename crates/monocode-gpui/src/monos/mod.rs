@@ -633,6 +633,9 @@ impl Monos {
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
+        self.save_roster(None, cx);
+    }
+    fn save_roster(&mut self, discarded: Option<(i64, String)>, cx: &mut Context<Self>) {
         let roster = self.roster.clone();
         let store = self.store.clone();
         let queued = roster
@@ -652,7 +655,12 @@ impl Monos {
             }
             let work = cx.background_executor().spawn(async move {
                 let db = locked(&store)?;
-                roster.save(&db)
+                roster.save(&db)?;
+                // Until the discard is durable, recovery still needs this hold.
+                if let Some((session, message)) = discarded {
+                    db.release_mono_steer(session, &message)?;
+                }
+                Ok::<_, String>(())
             });
             let result = work.await;
             let _ = this.update(cx, |this, cx| match result {
@@ -886,14 +894,27 @@ impl Monos {
     }
     /// Retry clears a queued message's error; discard drops it.
     fn queue_changed(&mut self, source: &str, id: &str, remove: bool, cx: &mut Context<Self>) {
+        let mut discarded = None;
         if let Some(mono) = self.roster.get_mut(source) {
             if remove {
+                let before = mono.outbox.len();
                 mono.outbox.retain(|m| m.id != id);
+                if mono.outbox.len() != before {
+                    discarded = mono.session_id.map(|session| (session, id.to_owned()));
+                }
             } else if let Some(message) = mono.outbox.iter_mut().find(|m| m.id == id) {
+                if let Some(session) = mono.session_id
+                    && let Err(error) =
+                        locked(&self.store).and_then(|db| db.release_mono_steer(session, id))
+                {
+                    self.error = Some(error);
+                    self.changed(cx);
+                    return;
+                }
                 message.error = None;
             }
         }
-        self.save(cx);
+        self.save_roster(discarded, cx);
         self.configure_chat(source, cx);
     }
     fn configure_chat(&mut self, id: &str, cx: &mut Context<Self>) {

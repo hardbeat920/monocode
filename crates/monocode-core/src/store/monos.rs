@@ -2,6 +2,67 @@ use super::{Session, Store};
 use rusqlite::OptionalExtension;
 
 impl Store {
+    fn pending_steers_db(&self) -> Result<&rusqlite::Connection, String> {
+        if self.uses_monocode_schema() {
+            self.shared_writable()?;
+        }
+        // Writable shared stores have a native sidecar except for :memory:.
+        let db = self.native_db().unwrap_or(&self.conn);
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pending_mono_steers(
+            session_id INTEGER NOT NULL, message_id TEXT NOT NULL,
+            PRIMARY KEY(session_id, message_id))",
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(db)
+    }
+
+    /// Returns false for a recorded receipt. Claim a steer before handing its
+    /// control to the worker, or hold a prior unconfirmed attempt for Retry.
+    pub fn prepare_mono_dispatch(
+        &self,
+        session: i64,
+        id: &str,
+        steer: bool,
+    ) -> Result<bool, String> {
+        let db = self.pending_steers_db()?;
+        let key = rusqlite::params![session, id];
+        let pending = if steer {
+            let inserted = db.execute(
+                "INSERT OR IGNORE INTO pending_mono_steers(session_id,message_id) VALUES(?1,?2)",
+                key,
+            ).map_err(|e| e.to_string())?;
+            inserted == 0
+        } else {
+            db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pending_mono_steers WHERE session_id=?1 AND message_id=?2)",
+                key,
+                |row| row.get(0),
+            ).map_err(|e| e.to_string())?
+        };
+        if self
+            .setting(&format!("mono-delivered:{session}:{id}"))?
+            .is_some()
+        {
+            self.release_mono_steer(session, id)?;
+            return Ok(false);
+        }
+        if pending {
+            return Err("The turn ended without confirming delivery of this message".into());
+        }
+        Ok(true)
+    }
+
+    pub fn release_mono_steer(&self, session: i64, id: &str) -> Result<(), String> {
+        self.pending_steers_db()?
+            .execute(
+                "DELETE FROM pending_mono_steers WHERE session_id=?1 AND message_id=?2",
+                rusqlite::params![session, id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Look up an existing Mono conversation independently of the sidebar.
     /// Hidden sessions are valid conversations and must never be replaced.
     pub fn mono_session(&self, id: i64) -> Result<Option<Session>, String> {
@@ -248,6 +309,28 @@ impl Store {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn another_open_store_holds_a_pending_steer_until_its_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let mut writer = Store::open_monocode(&path).unwrap();
+        let session = writer.create("opencode", "/project").unwrap().id;
+        let reader = Store::open_monocode(&path).unwrap();
+        assert!(writer.prepare_mono_dispatch(session, "one", true).unwrap());
+        assert!(reader.prepare_mono_dispatch(session, "one", true).is_err());
+        assert!(reader.prepare_mono_dispatch(session, "one", false).is_err());
+        let prompt = crate::transcript::Row {
+            role: "user".into(),
+            text: "Keep once".into(),
+            first: true,
+            sent_at: None,
+        };
+        writer
+            .write_rows_with_message(session, 0, &[prompt], Some("one"))
+            .unwrap();
+        assert!(!reader.prepare_mono_dispatch(session, "one", false).unwrap());
+    }
 
     #[test]
     fn hidden_mono_summary_preserves_original_session_and_provider() {

@@ -1265,6 +1265,7 @@ impl Conversation {
                             && (update.turn_ready
                                 || update.delivered.is_some()
                                 || !update.follow_up_delivered.is_empty()
+                                || !update.follow_up_refused.is_empty()
                                 || !update.follow_up_errors.is_empty());
                         this.transcript.update(cx, |v, cx| {
                             v.patch(update.start, update.rows, cx);
@@ -1354,6 +1355,9 @@ impl Conversation {
                             } else {
                                 this.follow_up_delivered(&id, cx);
                             }
+                        }
+                        for id in update.follow_up_refused {
+                            this.follow_up_refused(&id, cx);
                         }
                         for (id, error) in update.follow_up_errors {
                             if this.settings.mono.is_some() {
@@ -1486,13 +1490,11 @@ impl Conversation {
                                     this.save_follow_ups(cx);
                                 }
                             }
-                            if let Some(id) = this.follow_ups.sending.clone() {
-                                this.fail_follow_up(
-                                    &id,
-                                    "The turn ended before this message was accepted".into(),
-                                    cx,
-                                );
-                            }
+                            this.finish_pending_follow_up(
+                                kind,
+                                update.steers_settled && !stopping,
+                                cx,
+                            );
                             if this.status != "Ready" && !this.follow_ups.state.messages.is_empty()
                             {
                                 this.follow_ups.state.paused = true;

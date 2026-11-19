@@ -189,6 +189,25 @@ impl Conversation {
         self.transcript
             .update(cx, |t, cx| t.set_pending(pending, cx));
     }
+    fn prepare_mono_dispatch(&mut self, id: &str, steer: bool, cx: &mut Context<Self>) -> bool {
+        let prepared =
+            locked(&self.store).and_then(|db| db.prepare_mono_dispatch(self.summary.id, id, steer));
+        match prepared {
+            Ok(true) => return true,
+            Ok(false) => self.mono_message_delivered(id.into(), cx),
+            Err(error) => self.mono_message_failed(id.into(), error),
+        }
+        cx.notify();
+        false
+    }
+
+    pub(super) fn release_mono_steer(&mut self, id: &str) {
+        let result = locked(&self.store).and_then(|db| db.release_mono_steer(self.summary.id, id));
+        if let Err(error) = result {
+            self.mono_message_failed(id.into(), error);
+        }
+    }
+
     pub(crate) fn mono_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
         if self.mono_ui.delivered.contains(&message.id) || (self.busy && message.internal) {
             return false;
@@ -208,6 +227,7 @@ impl Conversation {
             self.stop(cx);
         }
         if self.stopping
+            || self.mono_ui.sending.is_some()
             || !self.loaded
             || self.settings.usage_limit.is_some()
             || self.account_switching
@@ -215,8 +235,7 @@ impl Conversation {
             return false;
         }
         if self.busy {
-            if self.mono_ui.sending.is_some()
-                || !self.follow_ups.ready
+            if !self.follow_ups.ready
                 || !Kind::from_id(&self.summary.provider).can_steer()
                 || self
                     .questions
@@ -235,20 +254,28 @@ impl Conversation {
                 steer: true,
                 ..Default::default()
             };
-            if self.controls.as_ref().is_some_and(|controls| {
-                controls
-                    .send(Control {
-                        id: message.id.clone(),
-                        decision: Decision::Steer(steer),
-                    })
-                    .is_ok()
-            }) {
+            let Some(controls) = self.controls.clone() else {
+                return false;
+            };
+            if !self.prepare_mono_dispatch(&message.id, true, cx) {
+                return false;
+            }
+            if controls
+                .send(Control {
+                    id: message.id.clone(),
+                    decision: Decision::Steer(steer),
+                })
+                .is_ok()
+            {
                 self.mono_ui.sending = Some(message.id.clone());
                 return true;
             }
+            self.release_mono_steer(&message.id);
             return false;
         }
-        self.mono_ui.sending = None;
+        if !self.prepare_mono_dispatch(&message.id, false, cx) {
+            return false;
+        }
         self.settings.mono_message_id = Some(message.id.clone());
         self.settings.mono_sent_at = message.sent_at;
         self.settings.internal_message = message.internal;
@@ -397,6 +424,7 @@ impl Conversation {
     pub(super) fn mono_message_delivered(&mut self, id: String, cx: &mut Context<Self>) {
         if self.mono_ui.sending.as_ref() == Some(&id) {
             self.mono_ui.sending = None;
+            self.release_mono_steer(&id);
         }
         self.mono_ui.delivered.insert(id);
         self.sync_mono_pending(cx);

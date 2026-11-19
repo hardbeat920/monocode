@@ -19,6 +19,8 @@ pub struct Message {
     pub at: usize,
     pub error: Option<String>,
     pub steer: bool,
+    /// A refused steer keeps its place even when later messages can steer.
+    pub deferred: bool,
 }
 impl Message {
     pub fn label(&self) -> String {

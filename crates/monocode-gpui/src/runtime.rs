@@ -33,6 +33,7 @@ pub(crate) struct Update {
     pub(crate) provider_turn_id: Option<String>,
     pub(crate) turn_ready: bool,
     pub(crate) follow_up_delivered: Vec<String>,
+    pub(crate) follow_up_refused: Vec<String>,
     pub(crate) follow_up_errors: Vec<(String, String)>,
     pub(crate) delivered: Option<String>,
     pub(crate) start: usize,
@@ -54,6 +55,8 @@ pub(crate) struct Update {
     pub(crate) questions_resolved: Vec<String>,
     pub(crate) handoff: Option<Option<monocode_core::agent::Handoff>>,
     pub(crate) status: String,
+    /// Clean local completion accounts for every steer written to the provider.
+    pub(crate) steers_settled: bool,
     pub(crate) finished: bool,
 }
 fn publish(
@@ -236,6 +239,7 @@ fn run_turn_using(
                 provider_turn_id: None,
                 turn_ready: false,
                 follow_up_delivered: Vec::new(),
+                follow_up_refused: Vec::new(),
                 follow_up_errors: Vec::new(),
                 delivered: settings.mono_message_id.clone(),
                 start,
@@ -262,6 +266,7 @@ fn run_turn_using(
                     "Connecting…"
                 }
                 .into(),
+                steers_settled: false,
                 finished: false,
             },
         )?;
@@ -291,6 +296,7 @@ fn run_turn_using(
                     provider_turn_id: None,
                     turn_ready: false,
                     follow_up_delivered: Vec::new(),
+                    follow_up_refused: Vec::new(),
                     follow_up_errors: Vec::new(),
                     delivered: None,
                     start: transcript.rows.len(),
@@ -310,6 +316,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: None,
                     status: "Connecting…".into(),
+                    steers_settled: false,
                     finished: false,
                 },
             )?;
@@ -339,6 +346,7 @@ fn run_turn_using(
                     provider_turn_id: None,
                     turn_ready: false,
                     follow_up_delivered: Vec::new(),
+                    follow_up_refused: Vec::new(),
                     follow_up_errors: Vec::new(),
                     delivered: None,
                     start: transfer_row,
@@ -358,6 +366,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: None,
                     status: "Preparing handoff…".into(),
+                    steers_settled: false,
                     finished: false,
                 },
             )?;
@@ -399,6 +408,7 @@ fn run_turn_using(
                     provider_turn_id: None,
                     turn_ready: false,
                     follow_up_delivered: Vec::new(),
+                    follow_up_refused: Vec::new(),
                     follow_up_errors: Vec::new(),
                     delivered: None,
                     start: transfer_row,
@@ -418,6 +428,7 @@ fn run_turn_using(
                     questions_resolved: Vec::new(),
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
+                    steers_settled: false,
                     finished: false,
                 },
             )?;
@@ -626,6 +637,7 @@ fn run_turn_using(
                 let mut handoff = None;
                 let mut turn_ready = false;
                 let mut follow_up_delivered = Vec::new();
+                let mut follow_up_refused = Vec::new();
                 let mut follow_up_errors = Vec::new();
                 let mut boundary = false;
                 let mut commands = None;
@@ -691,6 +703,7 @@ fn run_turn_using(
                             accepted_messages.push(message.id.clone());
                             follow_up_delivered.push(message.id);
                         }
+                        Event::FollowUpRefused { id, .. } => follow_up_refused.push(id),
                         Event::FollowUpFailed { id, error } => follow_up_errors.push((id, error)),
                         Event::BeginAssistant => {
                             if transcript
@@ -876,6 +889,7 @@ fn run_turn_using(
                             provider_turn_id,
                             turn_ready,
                             follow_up_delivered,
+                            follow_up_refused,
                             follow_up_errors,
                             delivered: None,
                             start,
@@ -895,6 +909,7 @@ fn run_turn_using(
                             questions_resolved,
                             handoff,
                             status,
+                            steers_settled: false,
                             finished: false,
                         },
                     )
@@ -929,6 +944,7 @@ fn run_turn_using(
     })();
     let cancelled =
         cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    let steers_settled = result.is_ok() && !cancelled;
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -1069,6 +1085,7 @@ fn run_turn_using(
         provider_turn_id: None,
         turn_ready: false,
         follow_up_delivered: accepted_messages,
+        follow_up_refused: Vec::new(),
         follow_up_errors: Vec::new(),
         delivered: initial_delivery,
         start,
@@ -1087,6 +1104,7 @@ fn run_turn_using(
         questions: Vec::new(),
         questions_resolved: Vec::new(),
         handoff,
+        steers_settled: steers_settled && status == "Ready",
         status,
         finished: true,
     });

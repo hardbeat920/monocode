@@ -663,6 +663,36 @@ fn configuring_the_same_provider_preserves_its_resume_id() {
 }
 
 #[test]
+fn deferred_steer_is_visible_to_an_already_open_queue_reader() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("monocode.db");
+    let writer = Store::open_monocode(&path).unwrap();
+    let (id, _) = saved(&writer, json!([]));
+    let mut state = writer.follow_ups(id).unwrap();
+    for id in ["B", "C"] {
+        state.messages.push(crate::follow_up::Message {
+            id: id.into(),
+            ..Default::default()
+        });
+    }
+    writer.save_follow_ups(id, &state).unwrap();
+    let reader = Store::open_monocode(&path).unwrap();
+    let reader_id = reader.sessions().unwrap()[0].id;
+    assert!(!reader.follow_ups(reader_id).unwrap().messages[0].deferred);
+    state.messages[0].deferred = true;
+    state.revision += 1;
+    writer.save_follow_ups(id, &state).unwrap();
+    let messages = reader.follow_ups(reader_id).unwrap().messages;
+    assert_eq!(
+        messages
+            .iter()
+            .map(|m| (m.id.as_str(), m.deferred))
+            .collect::<Vec<_>>(),
+        [("B", true), ("C", false)]
+    );
+}
+
+#[test]
 fn concurrent_queue_changes_are_preserved_and_transaction_is_rolled_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("monocode.db");

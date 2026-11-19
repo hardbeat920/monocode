@@ -4,6 +4,21 @@ use crate::follow_up::Message;
 
 static STEER_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+pub(super) fn turn_unavailable(message: &str) -> bool {
+    matches!(
+        message
+            .trim()
+            .trim_end_matches('.')
+            .to_ascii_lowercase()
+            .as_str(),
+        "turn is closing"
+            | "turn has ended"
+            | "turn is closed"
+            | "no active turn"
+            | "no active turn to steer"
+    )
+}
+
 impl Kind {
     pub fn can_steer(self) -> bool {
         matches!(
@@ -33,10 +48,9 @@ impl Protocol {
         stdin: &mut impl Write,
     ) -> Result<Vec<Event>, String> {
         if !self.request.kind.can_steer() || !self.ready() || self.done {
-            return Ok(vec![Event::FollowUpFailed {
+            return Ok(vec![Event::FollowUpRefused {
                 id: message.id,
-                error: "The provider is not ready for a follow-up. Resume the queue to retry."
-                    .into(),
+                error: "The provider is not ready for a follow-up.".into(),
             }]);
         }
         let mut request = self.request.clone();
@@ -140,9 +154,17 @@ impl Protocol {
                 .as_str()
                 .or_else(|| value["error"].as_str())
                 .unwrap_or("The provider could not accept this follow-up");
-            Some(vec![Event::FollowUpFailed {
-                id: message.id,
-                error: error.into(),
+            let id = message.id;
+            Some(vec![if turn_unavailable(error) {
+                Event::FollowUpRefused {
+                    id,
+                    error: error.into(),
+                }
+            } else {
+                Event::FollowUpFailed {
+                    id,
+                    error: error.into(),
+                }
             }])
         } else {
             self.text_key = None;
@@ -213,7 +235,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            matches!(&events[0], Event::FollowUpFailed { id, error } if id == "one" && error == "turn is closing")
+            matches!(&events[0], Event::FollowUpRefused { id, error } if id == "one" && error == "turn is closing")
         );
         assert!(!p.done);
         out.clear();
@@ -230,6 +252,31 @@ mod tests {
             vec![Event::FollowUp(message)]
         );
     }
+    #[test]
+    fn invalid_steer_input_preserves_the_provider_error() {
+        let mut p = protocol(Kind::Codex);
+        let mut out = Vec::new();
+        p.steer(
+            Message {
+                id: "one".into(),
+                text: "hello".into(),
+                ..Default::default()
+            },
+            &mut out,
+        )
+        .unwrap();
+        let wire: Value = serde_json::from_slice(&out).unwrap();
+        let events = p
+            .frame(
+                json!({"id":wire["id"], "error":{"message":"Invalid input"}}),
+                &mut out,
+            )
+            .unwrap();
+        assert!(
+            matches!(&events[..], [Event::FollowUpFailed { id, error }] if id == "one" && error == "Invalid input")
+        );
+    }
+
     #[test]
     fn claude_and_pi_use_their_existing_stream_protocols() {
         for kind in [Kind::Claude, Kind::Pi, Kind::Omp] {
@@ -263,9 +310,23 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn running_process_waits_for_turn_readiness_and_streams_after_steering() {
+        run_steer_process(true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn written_steer_without_a_receipt_is_uncertain_at_completion() {
+        run_steer_process(false);
+    }
+
+    #[cfg(unix)]
+    fn run_steer_process(acknowledge: bool) {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let binary = temp.path().join("provider");
+        if acknowledge {
+            std::fs::write(temp.path().join("acknowledge"), "").unwrap();
+        }
         std::fs::write(&binary, r##"#!/usr/bin/env python3
 import json, sys
 
@@ -283,13 +344,16 @@ for line in sys.stdin:
         send({'id': frame['id'], 'result': {'turn': {'id': 'turn'}}})
         send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'before', 'delta': 'Before'}})
     elif method == 'turn/steer':
-        send({'id': frame['id'], 'result': {}})
+        from pathlib import Path
+        if Path('acknowledge').exists():
+            send({'id': frame['id'], 'result': {}})
         send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'after', 'delta': 'After'}})
         send({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}})
 "##).unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let (controls, receive) = mpsc::channel();
         let mut delivered = false;
+        let mut uncertain = false;
         let mut output = String::new();
         run_with_controls(
             Request {
@@ -320,8 +384,9 @@ for line in sys.stdin:
                             assert_eq!(message.id, "test");
                             delivered = true;
                         }
+                        Event::FollowUpFailed { id, .. } if id == "test" => uncertain = true,
                         Event::Text(text) => {
-                            if text == "After" {
+                            if acknowledge && text == "After" {
                                 assert!(
                                     delivered,
                                     "the accepted user message must precede its response"
@@ -336,7 +401,8 @@ for line in sys.stdin:
             },
         )
         .unwrap();
-        assert!(delivered);
+        assert_eq!(delivered, acknowledge);
+        assert_eq!(uncertain, !acknowledge);
         assert_eq!(output, "BeforeAfter");
     }
 }

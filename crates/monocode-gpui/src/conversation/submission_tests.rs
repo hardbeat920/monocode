@@ -23,6 +23,28 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     })
 }
 
+impl Conversation {
+    pub(crate) fn start_mock_mono_turn(
+        &mut self,
+        kind: Kind,
+    ) -> std::sync::mpsc::Receiver<Control> {
+        let (send, receive) = std::sync::mpsc::channel();
+        self.summary.provider = kind.id().into();
+        self.controls = Some(send);
+        self.busy = true;
+        self.follow_ups.ready = true;
+        receive
+    }
+
+    pub(crate) fn finish_mock_mono_stop(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        assert!(self.stopping);
+        self.summary.provider = "fixture".into();
+        self.stopping = false;
+        self.finish_pending_follow_up(kind, false, cx);
+        cx.emit(SessionChanged);
+    }
+}
+
 #[gpui::test]
 fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut TestAppContext) {
     let window = conversation(cx);
@@ -85,6 +107,71 @@ fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut
                 vec![(second.id, "Could not steer".into())]
             );
             assert!(view.mono_ui.sending.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn mono_refusal_leaves_the_outbox_head_eligible_for_the_next_turn(cx: &mut TestAppContext) {
+    use monocode_core::mono::{Message, Mono};
+    let window = conversation(cx);
+    let (send, received) = std::sync::mpsc::channel();
+    let messages = ["first", "second"].map(|text| Message {
+        id: text.into(),
+        text: text.into(),
+        sent_at: None,
+        internal: false,
+        error: None,
+        attachments: vec![],
+    });
+    window
+        .update(cx, |view, _, cx| {
+            view.configure_mono(
+                Mono {
+                    outbox: messages.to_vec(),
+                    ..Default::default()
+                },
+                std::env::temp_dir().join(monocode_core::mono::new_id()),
+                Default::default(),
+                cx,
+            );
+            view.summary.has_messages = true;
+            view.summary.provider = "codex".into();
+            view.busy = true;
+            view.follow_ups.ready = true;
+            view.controls = Some(send);
+            let [head, next] = &messages;
+            assert!(view.mono_dispatch(head, cx));
+            let id = received.try_recv().unwrap().id;
+            assert_eq!(id, head.id);
+            view.follow_up_refused(&id, cx);
+            assert!(
+                view.mono_take_failures().is_empty(),
+                "a refusal must not mark the outbox head failed"
+            );
+            assert!(!view.mono_dispatch(head, cx));
+            assert!(!view.mono_dispatch(next, cx));
+            assert!(received.try_recv().is_err());
+            view.busy = false;
+            view.summary.provider = "fixture".into();
+            assert!(view.mono_dispatch(head, cx));
+            assert!(!view.mono_dispatch(head, cx));
+            assert!(!view.mono_dispatch(next, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.mono_delivered().contains(&messages[0].id));
+            assert!(!view.mono_delivered().contains(&messages[1].id));
+            let rows = view.transcript.read(cx).source_rows();
+            assert_eq!(
+                rows.iter()
+                    .filter(|r| r.is_prompt())
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["first"]
+            );
         })
         .unwrap();
 }
