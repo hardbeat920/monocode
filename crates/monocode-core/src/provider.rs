@@ -76,6 +76,10 @@ pub enum Event {
     Ready,
     Commands(Vec<NativeCommand>),
     FollowUp(crate::follow_up::Message),
+    FollowUpRefused {
+        id: String,
+        error: String,
+    },
     FollowUpFailed {
         id: String,
         error: String,
@@ -1807,6 +1811,16 @@ fn run_operation(
                     ));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if protocol.done {
+                // A written steer without a reply may already have reached the
+                // provider. Report it before the view pumps the next turn.
+                pending.extend(protocol.steering.drain().map(|(_, (message, _))| {
+                    Event::FollowUpFailed {
+                        id: message.id,
+                        error: "The turn ended without confirming delivery of this message".into(),
+                    }
+                }));
             }
             if !pending.is_empty()
                 && (last_emit.elapsed() >= TICK || pending_bytes >= BATCH_BYTES || protocol.done)

@@ -257,6 +257,84 @@ impl Conversation {
             self.save_follow_ups(cx);
         }
     }
+    pub(super) fn finish_pending_follow_up(
+        &mut self,
+        kind: Kind,
+        steers_settled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let uncertain = "The turn ended without confirming delivery of this message";
+        if let Some(id) = self.mono_ui.sending.take() {
+            if steers_settled && kind != Kind::OpenCode {
+                self.release_mono_steer(&id);
+            } else {
+                self.mono_message_failed(id, uncertain.into());
+            }
+        }
+        // OpenCode can finish the stream while its steer POST is still pending.
+        if kind == Kind::OpenCode {
+            if let Some(id) = self.follow_ups.sending.clone() {
+                self.fail_follow_up(
+                    &id,
+                    "The turn ended before this message was accepted".into(),
+                    cx,
+                );
+            }
+            return;
+        }
+        if let Some(id) = self.follow_ups.sending.clone() {
+            // On clean completion the runtime has settled every written steer.
+            // A control still pending here never reached the provider.
+            if steers_settled {
+                self.defer_steer(&id, cx);
+            } else {
+                self.fail_follow_up(&id, uncertain.into(), cx);
+            }
+        }
+        if !steers_settled
+            && self
+                .follow_ups
+                .state
+                .messages
+                .iter()
+                .any(|m| m.deferred && self.follow_ups.requested.as_ref() == Some(&m.id))
+        {
+            // A failed or interrupted turn cannot release the paused queue.
+            self.follow_ups.requested = None;
+        }
+    }
+    pub(super) fn follow_up_refused(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.settings.mono.is_some() {
+            if self.mono_ui.sending.as_deref() == Some(id) {
+                self.mono_ui.sending = None;
+                self.release_mono_steer(id);
+                self.follow_ups.ready = false;
+            }
+        } else if self.follow_ups.sending.as_deref() == Some(id) {
+            self.defer_steer(id, cx);
+        }
+    }
+    pub(super) fn defer_steer(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.follow_ups.sending = None;
+        // Keep later steers behind this message until the current turn finishes.
+        self.follow_ups.ready = false;
+        // An active queue resumes in order. A paused queue may release only
+        // the message the user explicitly selected.
+        if !self.follow_ups.state.paused && self.follow_ups.requested.as_deref() == Some(id) {
+            self.follow_ups.requested = None;
+        }
+        if let Some(message) = self
+            .follow_ups
+            .state
+            .messages
+            .iter_mut()
+            .find(|m| m.id == id)
+        {
+            message.steer = false;
+            message.deferred = true;
+            self.save_follow_ups(cx);
+        }
+    }
     pub(super) fn fail_follow_up(&mut self, id: &str, error: String, cx: &mut Context<Self>) {
         if let Some(message) = self
             .follow_ups
@@ -306,17 +384,27 @@ impl Conversation {
         {
             return;
         }
+        let messages = &self.follow_ups.state.messages;
+        // Paused queues allow explicit continuations after Stop. During normal
+        // delivery a later steer must wait for the deferred turn's receipt.
+        let available = if !self.follow_ups.state.paused
+            && let Some(index) = messages.iter().position(|m| m.deferred)
+        {
+            &messages[..=index]
+        } else {
+            messages.as_slice()
+        };
         let message = self
             .follow_ups
             .requested
             .as_ref()
-            .and_then(|id| self.follow_ups.state.messages.iter().find(|m| &m.id == id))
+            .and_then(|id| available.iter().find(|m| &m.id == id))
             .or_else(|| {
                 self.busy
-                    .then(|| self.follow_ups.state.messages.iter().find(|m| m.steer))
+                    .then(|| available.iter().find(|m| m.steer))
                     .flatten()
             })
-            .or_else(|| self.follow_ups.state.messages.first());
+            .or_else(|| available.first());
         let Some(message) = message.cloned() else {
             return;
         };
@@ -359,12 +447,14 @@ impl Conversation {
                     .is_ok()
                 {
                     self.follow_ups.sending = Some(message.id);
-                } else {
+                } else if Kind::from_id(&self.summary.provider) == Kind::OpenCode {
                     self.fail_follow_up(
                         &message.id,
                         "The provider disconnected before accepting this message".into(),
                         cx,
                     );
+                } else {
+                    self.defer_steer(&message.id, cx);
                 }
             }
         } else {
@@ -591,7 +681,12 @@ mod tests {
     use std::sync::Mutex;
 
     fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        conversation_with_store(cx, Store::open(Path::new(":memory:")).unwrap())
+    }
+    fn conversation_with_store(
+        cx: &mut TestAppContext,
+        store: Store,
+    ) -> WindowHandle<Conversation> {
         let summary = store.create("codex", "/tmp").unwrap();
         cx.update(|cx| {
             input::bind(cx);
@@ -862,7 +957,238 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_rejected_steer_keeps_its_text_for_retry(cx: &mut TestAppContext) {
+    fn opencode_completion_with_a_pending_steer_pauses_for_retry(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let (controls, received) = std::sync::mpsc::channel();
+        window
+            .update(cx, |view, _, cx| {
+                view.summary.provider = "opencode".into();
+                view.busy = true;
+                view.controls = Some(controls);
+                view.follow_ups.ready = true;
+                view.enqueue_follow_up_inverted("keep once".into(), None, true, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let id = received.try_recv().unwrap().id;
+        window
+            .update(cx, |view, _, cx| {
+                view.busy = false;
+                view.finish_pending_follow_up(Kind::OpenCode, true, cx);
+                assert!(view.follow_ups.state.paused);
+                let pending = &view.follow_ups.state.messages[0];
+                assert_eq!(pending.id, id);
+                assert!(pending.error.is_some());
+                assert!(!pending.deferred);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn an_unaccepted_steer_starts_the_next_turn_once(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let (controls, received) = std::sync::mpsc::channel();
+        window
+            .update(cx, |view, _, cx| {
+                // Let the retry write its receipt without launching a provider.
+                view.summary.cwd = "/missing/steer-test-project".into();
+                view.summary.has_messages = true;
+                view.busy = true;
+                view.controls = Some(controls);
+                view.follow_ups.ready = true;
+                view.enqueue_follow_up_inverted("first".into(), None, true, cx);
+                view.enqueue_follow_up("second".into(), None, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let first = received.try_recv().unwrap().id;
+        window
+            .update(cx, |view, _, cx| {
+                view.busy = false;
+                view.follow_ups.ready = false;
+                view.status = "Ready".into();
+                view.finish_pending_follow_up(Kind::Codex, true, cx);
+                assert!(!view.follow_ups.state.paused);
+                assert!(!view.follow_ups.state.messages[0].steer);
+                view.summary.provider = "fixture".into();
+                view.pump_follow_ups(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let rows = view.transcript.read(cx).source_rows();
+                assert_eq!(
+                    rows.iter()
+                        .filter(|r| r.is_prompt())
+                        .map(|r| r.text.as_str())
+                        .collect::<Vec<_>>(),
+                    ["first"]
+                );
+                assert!(view.follow_ups.sending.is_none());
+                assert!(view.follow_ups.state.messages.iter().all(|m| m.id != first));
+                assert_eq!(view.follow_ups.state.messages.len(), 1);
+                assert_eq!(view.follow_ups.state.messages[0].text, "second");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_refusal_before_finish_keeps_later_steers_in_order(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let (controls, received) = std::sync::mpsc::channel();
+        cx.update(|cx| {
+            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+                prefs.follow_up = "steer".into();
+            })
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.busy = true;
+                view.follow_ups.ready = true;
+                view.controls = Some(controls);
+                view.enqueue_follow_up_inverted("ordinary".into(), None, true, cx);
+                view.enqueue_follow_up("first".into(), None, cx);
+                view.enqueue_follow_up("second".into(), None, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let first = received.try_recv().unwrap().id;
+        window
+            .update(cx, |view, _, cx| view.defer_steer(&first, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(received.try_recv().is_err());
+                assert!(!view.follow_ups.state.paused);
+                assert!(view.follow_ups.sending.is_none());
+                assert_eq!(view.follow_ups.state.messages[0].text, "ordinary");
+                assert_eq!(view.follow_ups.state.messages[1].id, first);
+                assert!(view.follow_ups.state.messages[1].error.is_none());
+                // The older ordinary turn starts and becomes ready for steers.
+                let older = view.follow_ups.state.messages[0].id.clone();
+                view.follow_up_delivered(&older, cx);
+                view.follow_ups.ready = true;
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(
+                    received.try_recv().is_err(),
+                    "later steer overtook refused message"
+                );
+                view.follow_up_delivered(&first, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            matches!(received.try_recv().unwrap().decision, Decision::Steer(m) if m.text == "second")
+        );
+    }
+
+    #[gpui::test]
+    fn restored_refusal_keeps_new_steers_behind_the_next_turn(cx: &mut TestAppContext) {
+        let window =
+            conversation_with_store(cx, Store::open_monocode(Path::new(":memory:")).unwrap());
+        let (controls, received) = std::sync::mpsc::channel();
+        window
+            .update(cx, |view, _, cx| {
+                let store = locked(&view.store).unwrap();
+                let mut state = State::default();
+                for text in ["ordinary", "refused"] {
+                    state.messages.push(Message {
+                        id: text.into(),
+                        text: text.into(),
+                        deferred: text == "refused",
+                        ..Default::default()
+                    });
+                }
+                store.save_follow_ups(view.summary.id, &state).unwrap();
+                view.follow_ups.state = store.follow_ups(view.summary.id).unwrap();
+                drop(store);
+                assert!(view.follow_ups.state.paused);
+                // Resume: the ordinary turn has started and its receipt arrives.
+                view.follow_ups.state.paused = false;
+                view.busy = true;
+                view.controls = Some(controls);
+                view.follow_ups.ready = true;
+                view.follow_up_delivered("ordinary", cx);
+                cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+                    prefs.follow_up = "steer".into()
+                });
+                view.enqueue_follow_up("later".into(), None, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(
+                    received.try_recv().is_err(),
+                    "new steer overtook the restored refusal"
+                );
+                view.follow_up_delivered("refused", cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            matches!(received.try_recv().unwrap().decision, Decision::Steer(m) if m.text == "later")
+        );
+    }
+
+    #[gpui::test]
+    fn paused_queue_refusal_starts_only_the_selected_turn(cx: &mut TestAppContext) {
+        for clean_finish in [true, false] {
+            let window = conversation(cx);
+            let (controls, received) = std::sync::mpsc::channel();
+            window
+                .update(cx, |view, _, cx| {
+                    view.summary.has_messages = true;
+                    view.busy = true;
+                    view.controls = Some(controls);
+                    view.follow_ups.ready = true;
+                    view.follow_ups.state.paused = true;
+                    view.enqueue_follow_up("older".into(), None, cx);
+                    view.enqueue_follow_up_inverted("selected".into(), None, true, cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let id = received.try_recv().unwrap().id;
+            window
+                .update(cx, |view, _, cx| {
+                    view.follow_up_refused(&id, cx);
+                    view.summary.provider = "fixture".into();
+                    view.busy = false;
+                    view.finish_pending_follow_up(Kind::Codex, clean_finish, cx);
+                    view.pump_follow_ups(cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, cx| {
+                    let rows = view.transcript.read(cx).source_rows();
+                    let prompts: Vec<_> = rows
+                        .iter()
+                        .filter(|r| r.is_prompt())
+                        .map(|r| r.text.as_str())
+                        .collect();
+                    if clean_finish {
+                        assert_eq!(prompts, ["selected"]);
+                        assert_eq!(view.follow_ups.state.messages.len(), 1);
+                    } else {
+                        assert!(prompts.is_empty());
+                        assert_eq!(view.follow_ups.state.messages.len(), 2);
+                    }
+                    assert!(view.follow_ups.state.paused);
+                    assert_eq!(view.follow_ups.state.messages[0].text, "older");
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn a_steer_with_uncertain_delivery_keeps_its_text_for_retry(cx: &mut TestAppContext) {
         let window = conversation(cx);
         cx.update(|cx| {
             cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
@@ -884,12 +1210,12 @@ mod tests {
         let id = received.try_recv().unwrap().id;
         window
             .update(cx, |view, _, cx| {
-                view.fail_follow_up(&id, "Rejected by provider".into(), cx);
+                view.fail_follow_up(&id, "Acknowledgement timed out".into(), cx);
                 assert!(view.follow_ups.state.paused);
                 assert_eq!(view.follow_ups.state.messages[0].text, "keep this");
                 assert_eq!(
                     view.follow_ups.state.messages[0].error.as_deref(),
-                    Some("Rejected by provider")
+                    Some("Acknowledgement timed out")
                 );
             })
             .unwrap();

@@ -1714,6 +1714,7 @@ impl Store {
                     .cloned()
                     .unwrap_or(json!({}));
                 update_follow_up(&mut value, m);
+                value["deferred"] = json!(m.deferred);
                 value
             })
             .collect::<Vec<_>>();
@@ -1788,6 +1789,7 @@ fn follow_up(value: &Value) -> crate::follow_up::Message {
             .filter_map(|a| a["path"].as_str())
             .map(PathBuf::from)
             .collect(),
+        deferred: value["deferred"].as_bool().unwrap_or(false),
         mode: value["intent"].as_str().map(str::to_owned),
         error: value["error"].as_str().map(str::to_owned),
         ..Default::default()

@@ -1,6 +1,6 @@
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
-use monocode_core::store::Store;
+use monocode_core::{provider::Kind, store::Store};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc};
 struct Setup {
@@ -1598,6 +1598,188 @@ fn mono_app_launch_visibility_can_be_toggled_and_survives_roster_reload(cx: &mut
             .show_started_sessions_in_sidebar
     );
 }
+#[gpui::test]
+fn interrupted_steer_without_a_receipt_stays_failed_in_the_mono_outbox(cx: &mut TestAppContext) {
+    assert_interrupted_mono_steer(Kind::Codex, cx);
+}
+
+#[gpui::test]
+fn interrupted_opencode_steer_without_a_receipt_stays_failed_in_the_mono_outbox(
+    cx: &mut TestAppContext,
+) {
+    assert_interrupted_mono_steer(Kind::OpenCode, cx);
+}
+
+#[gpui::test]
+fn discarding_an_unconfirmed_steer_releases_its_hold_after_the_outbox_save(
+    cx: &mut TestAppContext,
+) {
+    let s = setup_shared(cx);
+    let chat = s.manager.read_with(cx, |m, _| m.chat().unwrap());
+    let provider = chat.update(cx, |v, _| v.start_mock_mono_turn(Kind::OpenCode));
+    s.manager.update(cx, |m, cx| {
+        m.enqueue(&s.id, "Discard me".into(), vec![], false, cx)
+    });
+    cx.run_until_parked();
+    let sent = provider.try_recv().unwrap();
+    chat.update(cx, |v, cx| {
+        v.mono_stop(cx);
+        v.finish_mock_mono_stop(Kind::OpenCode, cx);
+    });
+    cx.run_until_parked();
+    // Check the ordering inside the background write, too.
+    let sidecar = PathBuf::from(&s.project).join("native.sqlite.gpui.sqlite3");
+    rusqlite::Connection::open(sidecar)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER guard_discard BEFORE DELETE ON pending_mono_steers
+         WHEN instr((SELECT value FROM settings WHERE key='mono-roster'), OLD.message_id) > 0
+         BEGIN SELECT RAISE(ABORT, 'outbox entry still saved'); END;",
+        )
+        .unwrap();
+    s.manager.update(cx, |m, cx| {
+        m.queue_changed(&s.id, &sent.id, true, cx);
+        let db = locked(&s.store).unwrap();
+        let roster = Roster::load(&db).unwrap();
+        assert_eq!(roster.get(&s.id).unwrap().outbox[0].id, sent.id);
+        assert!(
+            db.prepare_mono_dispatch(s.session, &sent.id, false)
+                .is_err()
+        );
+    });
+    cx.run_until_parked();
+    let reopened = Store::open_monocode(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
+    assert!(
+        Roster::load(&reopened)
+            .unwrap()
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .is_empty()
+    );
+    assert_eq!(
+        reopened.prepare_mono_dispatch(s.session, &sent.id, false),
+        Ok(true)
+    );
+}
+
+#[gpui::test]
+fn restart_after_stop_holds_unconfirmed_opencode_steer(cx: &mut TestAppContext) {
+    let s = setup_shared(cx);
+    let chat = s.manager.read_with(cx, |m, _| m.chat().unwrap());
+    let provider = chat.update(cx, |v, _| v.start_mock_mono_turn(Kind::OpenCode));
+    s.manager.update(cx, |m, cx| {
+        m.enqueue(&s.id, "Keep once".into(), vec![], false, cx)
+    });
+    cx.run_until_parked();
+    let sent = provider.try_recv().unwrap();
+    assert!(matches!(
+        sent.decision,
+        monocode_core::agent::Decision::Steer(_)
+    ));
+    chat.update(cx, |v, cx| v.mono_stop(cx));
+
+    // Reopen the same database without delivering the worker's completion.
+    let db = Store::open_monocode(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
+    db.change_provider(s.session, "fixture").unwrap();
+    let db = Arc::new(Mutex::new(db));
+    let reopened = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(db.clone(), Vec::new(), s.project.clone(), None, cx))
+        })
+        .unwrap()
+    });
+    reopened
+        .update(cx, |shell, w, cx| {
+            shell
+                .mono_manager()
+                .update(cx, |m, cx| m.open(&s.id, w, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let store = locked(&db).unwrap();
+    assert!(
+        !store
+            .load(s.session)
+            .unwrap()
+            .rows
+            .iter()
+            .any(|r| r.is_prompt() && r.text == "Keep once"),
+        "reopening the outbox dispatched the unconfirmed steer"
+    );
+    let saved = Roster::load(&store).unwrap();
+    let pending = &saved.get(&s.id).unwrap().outbox;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, sent.id);
+    assert!(
+        pending[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("without confirming delivery")
+    );
+    drop(store);
+
+    reopened
+        .update(cx, |shell, _, cx| {
+            shell
+                .mono_manager()
+                .update(cx, |m, cx| m.queue_changed(&s.id, &sent.id, false, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let store = locked(&db).unwrap();
+    assert_eq!(
+        store
+            .load(s.session)
+            .unwrap()
+            .rows
+            .iter()
+            .filter(|r| r.is_prompt() && r.text == "Keep once")
+            .count(),
+        1
+    );
+    assert!(
+        store
+            .setting(&format!("mono-delivered:{}:{}", s.session, sent.id))
+            .unwrap()
+            .is_some()
+    );
+}
+
+fn assert_interrupted_mono_steer(kind: Kind, cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let chat = s.manager.read_with(cx, |m, _| m.chat().unwrap());
+    let provider = chat.update(cx, |view, _| view.start_mock_mono_turn(kind));
+    s.manager.update(cx, |m, cx| {
+        m.enqueue(&s.id, "Keep once".into(), vec![], false, cx)
+    });
+    cx.run_until_parked();
+    let sent = provider.try_recv().unwrap();
+    assert!(
+        matches!(sent.decision, monocode_core::agent::Decision::Steer(m) if m.text == "Keep once")
+    );
+    chat.update(cx, |view, cx| {
+        view.mono_stop(cx);
+        view.finish_mock_mono_stop(kind, cx);
+    });
+    cx.run_until_parked();
+    let store = locked(&s.store).unwrap();
+    let transcript = store.load(s.session).unwrap();
+    assert!(
+        !transcript
+            .rows
+            .iter()
+            .any(|r| r.is_prompt() && r.text == "Keep once"),
+        "the interrupted steer started another turn"
+    );
+    let roster = Roster::load(&store).unwrap();
+    let outbox = &roster.get(&s.id).unwrap().outbox;
+    assert_eq!(outbox.len(), 1);
+    assert_eq!(outbox[0].id, sent.id);
+    assert!(outbox[0].error.is_some());
+}
+
 #[gpui::test]
 fn queued_messages_are_saved_before_dispatch_and_do_not_run_while_blocked(cx: &mut TestAppContext) {
     let s = setup(cx);
