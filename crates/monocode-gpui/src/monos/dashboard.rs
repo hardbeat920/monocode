@@ -701,7 +701,7 @@ impl Monos {
             .habits
             .iter()
             .map(|h| {
-                h.runs
+                h.runs()
                     .iter()
                     .filter(|r| local_day(r.at) == Some(today))
                     .count()
@@ -777,7 +777,8 @@ impl Monos {
                 .into_any_element()
         }));
         let up_next = up_next.children(upcoming.into_iter().take(3).map(|(running, h)| {
-            let id = h.id.clone();
+            let route = self.habit_route(h);
+            let id = route.key();
             let at = local_day(h.next_run_at);
             // Today's runs give their time, later ones their weekday.
             let when = match running {
@@ -797,7 +798,7 @@ impl Monos {
                 }
             };
             div()
-                .id(SharedString::from(format!("mono-dashboard-habit-{id}")))
+                .id(SharedString::from(format!("mono-dashboard-{id}")))
                 .role(Role::Button)
                 .aria_label(h.name.clone())
                 .mx(px(-ROW_HANG))
@@ -863,7 +864,7 @@ impl Monos {
                         .child(when),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.route = Some(Route::Habit(id.clone()));
+                    this.route = Some(route.clone());
                     cx.notify();
                 }))
         }));

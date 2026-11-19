@@ -65,6 +65,7 @@ pub(crate) struct OverviewChrome {
 struct RunningHabit {
     mono: String,
     habit: String,
+    claim_id: Option<String>,
     view: Entity<Conversation>,
     started: u64,
     launched: u64,
