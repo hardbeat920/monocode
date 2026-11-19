@@ -4,6 +4,12 @@ use monocode_core::mono::habits::{Run, Schedule};
 use monocode_core::mono::heartbeat;
 use monocode_core::time::now_ms;
 
+#[derive(Clone, Copy, PartialEq)]
+enum HabitAction {
+    RequestRun,
+    Toggle,
+}
+
 enum Claimed {
     Habit(Box<Habit>),
     Heartbeat(String),
@@ -176,7 +182,7 @@ fn grouped_habits(
         } else if h.enabled && same_day(h.next_run_at, now) {
             upcoming.push((2, h.next_run_at, ix));
         } else if let Some(last) = h
-            .runs
+            .runs()
             .first()
             .map(|r| r.at)
             .or(h.last_run_at)
@@ -308,7 +314,12 @@ impl Monos {
     pub(super) fn habit_running_since(&self, habit: &Habit) -> Option<u64> {
         self.running
             .values()
-            .find(|r| r.habit == habit.id && self.active.as_deref() == Some(r.mono.as_str()))
+            .find(|r| {
+                r.claim_id
+                    .as_ref()
+                    .is_some_and(|id| Some(id) == habit.native_claim_id.as_ref())
+                    && self.active.as_deref() == Some(r.mono.as_str())
+            })
             .map(|r| r.launched)
             .or(habit.running_since)
     }
@@ -362,8 +373,18 @@ impl Monos {
             .child(list)
             .into_any_element()
     }
+    pub(super) fn habit_route(&self, h: &Habit) -> Route {
+        h.saved_row()
+            .cloned()
+            .map(Route::SavedHabit)
+            .unwrap_or_else(|| Route::Habit(h.id.clone()))
+    }
     fn habit_row(&self, h: &Habit, mono: &Mono, cx: &mut Context<Self>) -> AnyElement {
-        let id = h.id.clone();
+        let route = self.habit_route(h);
+        let id = match &route {
+            Route::SavedHabit(row) => format!("{}:row:{}", h.id, row.index()),
+            _ => h.id.clone(),
+        };
         let since = self.habit_running_since(h);
         let subtitle = if let Some(since) = since {
             format!("Running now · {}", duration(now_ms().saturating_sub(since)))
@@ -444,7 +465,7 @@ impl Monos {
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.route = Some(Route::Habit(id.clone()));
+                        this.route = Some(route.clone());
                         this.clear_habit_fields();
                         cx.notify();
                     })),
@@ -455,11 +476,14 @@ impl Monos {
     fn habit_actions(&self, h: &Habit, page: bool, cx: &mut Context<Self>) -> gpui::Div {
         let busy = self.habit_busy(h);
         let running = self.habit_running_since(h).is_some();
-        let run = h.id.clone();
-        let toggle = h.id.clone();
+        let run = h.saved_row().cloned();
+        let toggle = run.clone();
         let remove = h.id.clone();
+        let saved_row = h.saved_row().cloned();
         let suffix = if page {
             String::new()
+        } else if let Route::SavedHabit(row) = self.habit_route(h) {
+            format!("-{}:row:{}", h.id, row.index())
         } else {
             format!("-{}", h.id)
         };
@@ -488,8 +512,8 @@ impl Monos {
                 })
                 .when(busy, |d| d.opacity(0.35))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if !busy {
-                        this.request_habit(&run, cx);
+                    if !busy && let Some(row) = &run {
+                        this.edit_habit(row.clone(), HabitAction::RequestRun, cx);
                     }
                 })),
             )
@@ -507,7 +531,11 @@ impl Monos {
                     let suffix = suffix.clone();
                     move || format!("mono-habit-toggle{suffix}")
                 })
-                .on_click(cx.listener(move |this, _, _, cx| this.habit_toggle(&toggle, cx))),
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(row) = &toggle {
+                        this.edit_habit(row.clone(), HabitAction::Toggle, cx);
+                    }
+                })),
             )
             .child(
                 habit_icon_button(
@@ -516,7 +544,11 @@ impl Monos {
                     "trash",
                 )
                 .debug_selector(move || format!("mono-habit-delete{suffix}"))
-                .on_click(cx.listener(move |this, _, _, cx| this.remove_habit(&remove, cx))),
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(row) = &saved_row {
+                        this.remove_habit(&remove, row.clone(), cx);
+                    }
+                })),
             )
     }
     pub(super) fn clear_habit_fields(&mut self) {
@@ -524,40 +556,20 @@ impl Monos {
         self.habit_ui.error = None;
         self.habit_ui.revision = self.habit_ui.revision.wrapping_add(1);
     }
-    pub(super) fn habit_toggle(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
-        let root = self.root.clone();
-        let target = mono.clone();
-        let id = id.to_string();
-        self.file_work(
-            mono,
-            move || {
-                habits::update(&root, &target, |all| {
-                    let h = all
-                        .iter_mut()
-                        .find(|h| h.id == id)
-                        .ok_or("Habit not found")?;
-                    h.enabled = !h.enabled;
-                    if h.enabled {
-                        h.next_run_at = h.schedule.next(now_ms())?;
-                    }
-                    Ok(())
-                })
-            },
-            cx,
-        );
-    }
     pub(super) fn habit_page(
         &mut self,
         mono: &Mono,
-        id: Option<&str>,
+        route: Option<&Route>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(id) = id {
-            let Some(h) = self.habits.iter().find(|h| h.id == id).cloned() else {
+        if let Some(route) = route {
+            let mut matches = self.habits.iter().filter(|h| match route {
+                Route::SavedHabit(row) => h.saved_row() == Some(row),
+                Route::Habit(id) => &h.id == id,
+                _ => false,
+            });
+            let Some(h) = matches.next().filter(|_| matches.next().is_none()).cloned() else {
                 return div()
                     .size_full()
                     .min_w_0()
@@ -569,7 +581,7 @@ impl Monos {
                             .p_4()
                             .text_size(px(12.))
                             .text_color(content(0.45))
-                            .child("This habit is no longer available."),
+                            .child("Reopen the habit from the list to see its current details."),
                     )
                     .into_any_element();
             };
@@ -630,7 +642,7 @@ impl Monos {
                     ),
             );
         }
-        if h.runs.is_empty() && since.is_none() {
+        if h.runs().is_empty() && since.is_none() {
             history = history.child(
                 div()
                     .px_2()
@@ -640,7 +652,7 @@ impl Monos {
                     .child("It hasn't run yet."),
             );
         }
-        for run in &h.runs {
+        for run in h.runs() {
             history = history.child(self.habit_run_row(mono, &h, run, cx));
         }
         div()
@@ -1247,58 +1259,31 @@ impl Monos {
         .detach();
         cx.notify();
     }
-    fn request_habit(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self
-            .habits
-            .iter()
-            .find(|h| h.id == id)
-            .is_none_or(|h| self.habit_busy(h))
-        {
-            return;
-        }
+    fn edit_habit(&mut self, row: habits::SavedRow, action: HabitAction, cx: &mut Context<Self>) {
         let Some(mono) = self.active.clone() else {
             return;
         };
+        let request_run = action == HabitAction::RequestRun;
+        if request_run && let Ok(index) = row.position(&self.habits) {
+            if self.habit_busy(&self.habits[index]) {
+                return;
+            }
+            self.habits[index].run_requested = true;
+            cx.notify();
+        }
         let root = self.root.clone();
         let target = mono.clone();
-        let id = id.to_string();
-        if let Some(h) = self.habits.iter_mut().find(|h| h.id == id) {
-            h.run_requested = true;
-        }
+        let selected = Route::SavedHabit(row.clone());
         let work = cx.background_executor().spawn(async move {
-            habits::update(&root, &target, |all| {
-                all.iter_mut()
-                    .find(|h| h.id == id)
-                    .ok_or("Habit not found")?
-                    .run_requested = true;
-                Ok(())
-            })
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    this.error = Some(error);
+            row.edit(&root, &target, |h| {
+                if request_run {
+                    h.run_requested = true;
+                } else {
+                    h.enabled = !h.enabled;
+                    if h.enabled {
+                        h.next_run_at = h.schedule.next(now_ms())?;
+                    }
                 }
-                this.reload_files(&mono, cx);
-                this.check_habits(cx);
-                this.changed(cx);
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-    fn remove_habit(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(mono) = self.active.clone() else {
-            return;
-        };
-        let root = self.root.clone();
-        let target = mono.clone();
-        let id = id.to_string();
-        let removed = id.clone();
-        let work = cx.background_executor().spawn(async move {
-            habits::update(&root, &target, |all| {
-                all.retain(|h| h.id != id);
                 Ok(())
             })
         });
@@ -1306,10 +1291,48 @@ impl Monos {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
+                    Ok(row)
+                        if this.active.as_ref() == Some(&mono)
+                            && this.route.as_ref() == Some(&selected) =>
+                    {
+                        this.route = Some(Route::SavedHabit(row))
+                    }
+                    Err(error) => this.error = Some(error),
+                    _ => (),
+                }
+                this.reload_files(&mono, cx);
+                if request_run {
+                    this.check_habits(cx);
+                }
+                this.changed(cx);
+            });
+        })
+        .detach();
+    }
+    fn remove_habit(&mut self, id: &str, row: habits::SavedRow, cx: &mut Context<Self>) {
+        let Some(mono) = self.active.clone() else {
+            return;
+        };
+        let root = self.root.clone();
+        let target = mono.clone();
+        let selected = Route::SavedHabit(row.clone());
+        let removed = Route::Habit(id.to_string());
+        let work = cx.background_executor().spawn(async move {
+            habits::update(&root, &target, |all| {
+                let index = row.position(all)?;
+                all.remove(index);
+                Ok(())
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.reload_files(&mono, cx);
+                match result {
                     Ok(()) => {
-                        this.reload_files(&mono, cx);
                         if this.active.as_deref() == Some(&mono)
-                            && this.route == Some(Route::Habit(removed.clone()))
+                            && (this.route.as_ref() == Some(&removed)
+                                || this.route.as_ref() == Some(&selected))
                         {
                             this.route = None;
                             this.clear_habit_fields();
@@ -1429,9 +1452,10 @@ impl Monos {
                 let claimed = habits::update(&root, &id, |all| {
                     // A process restart cannot resume an old provider turn.
                     // Record the interruption instead of leaving it claimed forever.
-                    for h in all.iter_mut() {
+                    for h in all.iter_mut().filter(|h| h.supports_run_history()) {
                         if let Some(start) = h.running_since {
                             h.finish(Run {
+                                extra: Default::default(),
                                 at: start,
                                 duration_ms: now.saturating_sub(start),
                                 outcome: "interrupted".into(),
@@ -1448,6 +1472,7 @@ impl Monos {
                     }
                     if let Some(h) = all.iter_mut().find(|h| h.due(now)) {
                         h.running_since = Some(now);
+                        h.native_claim_id = Some(mono::new_id());
                         let manual = std::mem::take(&mut h.run_requested);
                         if !manual || h.next_run_at <= now {
                             h.next_run_at = h.schedule.next(now)?;
@@ -1489,7 +1514,7 @@ impl Monos {
             "[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",
             habit.name, habit.instructions
         );
-        self.start_run(id, habit.id, habit.name, text, false, cx);
+        self.start_run(id, habit.id, habit.name, text, habit.native_claim_id, cx);
     }
     pub(super) fn start_heartbeat(&mut self, id: &str, text: String, cx: &mut Context<Self>) {
         self.start_run(
@@ -1497,7 +1522,7 @@ impl Monos {
             heartbeat::RUN_ID.into(),
             "Heartbeat".into(),
             text,
-            true,
+            None,
             cx,
         );
     }
@@ -1509,9 +1534,10 @@ impl Monos {
         run_id: String,
         name: String,
         text: String,
-        triage: bool,
+        claim_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        let triage = claim_id.is_none();
         self.active_run = Some(-1);
         let Some(mono) = self.roster.get(id).cloned() else {
             return;
@@ -1592,6 +1618,7 @@ impl Monos {
                             RunningHabit {
                                 mono: target.clone(),
                                 habit: run_id,
+                                claim_id,
                                 view: view.clone(),
                                 started: now_ms(),
                                 launched: now_ms(),
@@ -1698,6 +1725,7 @@ impl Monos {
         let error = (!ok).then_some(text);
         let stored = report.clone();
         let result = Run {
+            extra: Default::default(),
             at,
             duration_ms: duration,
             outcome: if ok {
@@ -1709,8 +1737,29 @@ impl Monos {
             report: stored,
             error,
         };
-        let beat = habit == heartbeat::RUN_ID;
-        if beat {
+        let beat = run.claim_id.is_none();
+        if let Some(claim) = run.claim_id {
+            self.file_work(
+                id.clone(),
+                move || {
+                    habits::update(&root, &id, |all| {
+                        let mut matching = all.iter_mut().filter(|h| {
+                            h.id == habit
+                                && h.running_since.is_some()
+                                && h.native_claim_id.as_ref() == Some(&claim)
+                        });
+                        let h = matching
+                            .next()
+                            .ok_or("Habit run claim is no longer active")?;
+                        if matching.next().is_some() {
+                            return Err("Multiple habits have the same run claim".into());
+                        }
+                        h.finish(result.clone())
+                    })
+                },
+                cx,
+            );
+        } else {
             let remembered = report.clone();
             let quiet = ok && report.is_none();
             self.file_work(
@@ -1730,19 +1779,6 @@ impl Monos {
             if ok && report.is_none() && run.cards.is_empty() {
                 self.discard_quiet_heartbeat(&run.mono, session, cx);
             }
-        } else {
-            self.file_work(
-                id.clone(),
-                move || {
-                    habits::update(&root, &id, |all| {
-                        if let Some(h) = all.iter_mut().find(|h| h.id == habit) {
-                            h.finish(result.clone())?;
-                        }
-                        Ok(())
-                    })
-                },
-                cx,
-            );
         }
         if let Some(report) = report {
             if let Some(m) = self.roster.get_mut(&run.mono) {

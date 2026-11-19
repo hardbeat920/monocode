@@ -650,6 +650,195 @@ fn heartbeat_runs_keep_the_monos_selected_permissions(cx: &mut TestAppContext) {
     }
 }
 
+#[gpui::test]
+fn duplicate_habit_completion_finishes_only_the_claimed_row(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let now = monocode_core::time::now_ms();
+    let mut first = Habit::new("Disabled".into(), "Check".into(), Default::default(), now).unwrap();
+    first.enabled = false;
+    let mut second = first.clone();
+    second.name = "Due".into();
+    second.enabled = true;
+    second.next_run_at = now;
+    habits::update(&s.root, &s.id, |all| {
+        all.extend([first.clone(), second.clone()]);
+        Ok(())
+    })
+    .unwrap();
+    let window: gpui::AnyWindowHandle = s.window.into();
+    window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.chats[&s.id].update(cx, |chat, _| {
+                    chat.settings.usage_limit = Some(Default::default());
+                });
+                m.tick(window, cx);
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let claimed = habits::load(&s.root, &s.id).unwrap();
+    assert!(claimed[0].running_since.is_none());
+    assert!(claimed[1].running_since.is_some());
+    s.manager.update(cx, |m, cx| {
+        let session = m.active_run.unwrap();
+        assert!(!m.running[&session].view.read(cx).busy);
+        m.habit_changed(session, cx);
+    });
+    cx.run_until_parked();
+    let saved = habits::load(&s.root, &s.id).unwrap();
+    assert!(saved[0].runs().is_empty());
+    assert!(saved[0].running_since.is_none());
+    assert_eq!(saved[1].runs().len(), 1);
+    assert!(saved[1].running_since.is_none());
+}
+
+fn seed_duplicate_habits(s: &Setup) {
+    let mut first = Habit::new(
+        "First".into(),
+        "One".into(),
+        Default::default(),
+        monocode_core::time::now_ms(),
+    )
+    .unwrap();
+    first.id = "shared".into();
+    let mut second = first.clone();
+    second.name = "Second".into();
+    second.instructions = "Two".into();
+    habits::update(&s.root, &s.id, |all| {
+        all.extend([first.clone(), second.clone()]);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[gpui::test]
+fn duplicate_habit_host_removals_reject_ambiguous_ids(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    seed_duplicate_habits(&s);
+    let window: gpui::AnyWindowHandle = s.window.into();
+    let replies = ["first-remove", "second-remove"].map(|request| {
+        let (reply, rx) = mpsc::channel();
+        window
+            .update(cx, |_, w, cx| {
+                s.manager.update(cx, |m, cx| {
+                    m.app_call(
+                        mono::bridge::Call {
+                            session: s.session,
+                            request_id: request.into(),
+                            action: "habits.remove".into(),
+                            input: json!({"id":"shared"}),
+                            reply,
+                        },
+                        w,
+                        cx,
+                    )
+                })
+            })
+            .unwrap();
+        rx
+    });
+    cx.run_until_parked();
+    assert_eq!(habits::load(&s.root, &s.id).unwrap().len(), 2);
+    for reply in replies {
+        assert!(reply.try_recv().unwrap().unwrap_err().contains("same ID"));
+    }
+}
+
+#[gpui::test]
+fn repeated_id_member_cannot_hide_an_ambiguous_host_removal(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let original = r#"[{"id":"old","id":"shared","name":"First","instructions":"Check","schedule":{"kind":"daily"}},{"id":"shared","name":"Second","instructions":"Check","schedule":{"kind":"daily"}}]"#;
+    mono::files::save(&s.root, &s.id, None, "habits.json", original, None).unwrap();
+    let reply = call(&s, "remove", "habits.remove", json!({"id":"shared"}), cx);
+    let saved = mono::files::read(&s.root, &s.id, None, "habits.json").unwrap();
+    assert_eq!(saved.text.as_deref(), Some(original));
+    assert!(reply.try_recv().unwrap().unwrap_err().contains("same ID"));
+}
+
+#[gpui::test]
+fn promoted_hidden_duplicate_cannot_replace_an_open_detail(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut rows: Vec<_> = (0..=habits::MAX).map(|index| {
+        json!({"id": index.to_string(), "name": format!("Habit {index}"), "instructions":"Check", "schedule":{"kind":"daily"}})
+    }).collect();
+    rows[habits::MAX]["id"] = json!("0");
+    mono::files::save(
+        &s.root,
+        &s.id,
+        None,
+        "habits.json",
+        &json!(rows).to_string(),
+        None,
+    )
+    .unwrap();
+    cx.update(|cx| cx.set_reduce_motion(true));
+    s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        m.overview_tab = OverviewTab::Habits;
+        m.scheduling = true;
+        m.habits = habits::load(&s.root, &s.id).unwrap();
+        m.route = Some(m.habit_route(&m.habits[0]));
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("mono-habit-toggle").is_some());
+    habits::update(&s.root, &s.id, |all| {
+        all.remove(0);
+        Ok(())
+    })
+    .unwrap();
+    s.manager.update(visual, |m, cx| m.reload_files(&s.id, cx));
+    visual.run_until_parked();
+    s.manager
+        .read_with(visual, |m, _| assert_eq!(m.habits.last().unwrap().id, "0"));
+    assert!(
+        visual.debug_bounds("mono-habit-toggle").is_none(),
+        "replacement has an active toggle"
+    );
+}
+
+#[gpui::test]
+fn duplicate_habit_controls_follow_the_opened_list_row(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    seed_duplicate_habits(&s);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        m.overview_tab = OverviewTab::Habits;
+        m.habits = habits::load(&s.root, &s.id).unwrap();
+        m.scheduling = true;
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    let row = visual.debug_bounds("mono-habit-shared:row:1").unwrap();
+    visual.simulate_click(
+        gpui::point(row.left() + px(20.), row.center().y),
+        Default::default(),
+    );
+    visual.run_until_parked();
+    let pause = visual.debug_bounds("mono-habit-toggle").unwrap();
+    visual.simulate_click(pause.center(), Default::default());
+    visual.run_until_parked();
+    let saved = habits::load(&s.root, &s.id).unwrap();
+    assert!(saved[0].enabled);
+    assert!(!saved[1].enabled);
+    assert!(visual.debug_bounds("mono-habit-run").is_some());
+    s.manager.update(visual, |m, cx| {
+        m.route = None;
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let run = visual.debug_bounds("mono-habit-run-shared:row:1").unwrap();
+    visual.simulate_click(run.center(), Default::default());
+    visual.run_until_parked();
+    let saved = habits::load(&s.root, &s.id).unwrap();
+    assert!(!saved[0].run_requested);
+    assert!(saved[1].run_requested);
+}
+
 fn call(
     s: &Setup,
     request: &str,
@@ -2137,13 +2326,15 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     )
     .unwrap();
     h.id = "layout-history".into();
-    h.runs.push(habits::Run {
+    h.finish(habits::Run {
+        extra: Default::default(),
         at: monocode_core::time::now_ms() - 60_000,
         duration_ms: 72_000,
         outcome: "posted".into(),
         report: Some("**Result**\n\nThe project is ready to review.".into()),
         error: None,
-    });
+    })
+    .unwrap();
     habits::update(&s.root, &s.id, |all| {
         all.push(h.clone());
         Ok(())
@@ -2155,8 +2346,8 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
             s.manager.update(cx, |m, cx| {
                 m.settings = None;
                 m.overview_tab = OverviewTab::Habits;
-                m.habits = vec![h.clone()];
-                m.route = Some(Route::Habit(h.id.clone()));
+                m.habits = habits::load(&s.root, &s.id).unwrap();
+                m.route = Some(m.habit_route(&m.habits[0]));
                 cx.notify();
             });
         })
@@ -2169,7 +2360,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     );
     let body = visual.debug_bounds("mono-habit-editor").unwrap();
     let description = visual.debug_bounds("mono-habit-instructions").unwrap();
-    let row_id = format!("mono-habit-history-{}-{}", h.id, h.runs[0].at);
+    let row_id = format!("mono-habit-history-{}-{}", h.id, h.runs()[0].at);
     let row = visual
         .debug_bounds(Box::leak(row_id.into_boxed_str()))
         .unwrap();
@@ -2185,7 +2376,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     assert!(
         visual
             .debug_bounds(Box::leak(
-                format!("mono-habit-report-{}-{}", h.id, h.runs[0].at).into_boxed_str()
+                format!("mono-habit-report-{}-{}", h.id, h.runs()[0].at).into_boxed_str()
             ))
             .is_some()
     );
@@ -2195,13 +2386,48 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
     assert!(!habits::load(&s.root, &s.id).unwrap()[0].enabled);
     assert!(
         s.manager
-            .read_with(visual, |m, _| m.route == Some(Route::Habit(h.id.clone())))
+            .read_with(visual, |m, _| m.route == Some(m.habit_route(&m.habits[0])))
     );
+    // A second imported row shares the ID of the habit open in the detail view.
+    let mut other = h.clone();
+    other.name = "Other habit".into();
+    habits::update(&s.root, &s.id, |all| {
+        all.push(other.clone());
+        Ok(())
+    })
+    .unwrap();
+    let stale = habits::load(&s.root, &s.id).unwrap();
+    s.manager.update(visual, |m, cx| {
+        m.habits = stale.clone();
+        m.route = Some(m.habit_route(&stale[0]));
+        cx.notify();
+    });
+    visual.run_until_parked();
     let remove = visual.debug_bounds("mono-habit-delete").unwrap();
     visual.simulate_click(remove.center(), Default::default());
     visual.run_until_parked();
-    assert!(habits::load(&s.root, &s.id).unwrap().is_empty());
+    let saved = habits::load(&s.root, &s.id).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, other.name);
     assert!(s.manager.read_with(visual, |m, _| m.route.is_none()));
+
+    // A second window still displays the same revision the first window deleted from.
+    s.manager.update(visual, |m, cx| {
+        m.habits = stale.clone();
+        m.route = Some(m.habit_route(&stale[0]));
+        cx.notify();
+    });
+    visual.run_until_parked();
+    let remove = visual.debug_bounds("mono-habit-delete").unwrap();
+    visual.simulate_click(remove.center(), Default::default());
+    visual.run_until_parked();
+    let saved = habits::load(&s.root, &s.id).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, other.name);
+    s.manager.read_with(visual, |m, _| {
+        assert!(m.error.is_some());
+        assert_eq!(m.habits.len(), 1);
+    });
 }
 
 #[gpui::test]

@@ -66,6 +66,37 @@ fn memory_supersedes_uniquely_redacts_and_archives_before_prompt_budget() {
     assert!(memory::topic("../secret").is_err());
 }
 #[test]
+fn stale_id_removal_does_not_retry_against_a_replacement_habit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let original = Habit::new("A".into(), "Check".into(), Schedule::default(), 0).unwrap();
+    habits::update(root, "mono", |all| {
+        all.push(original.clone());
+        Ok(())
+    })
+    .unwrap();
+    let row = habits::SavedRow::for_id(root, "mono", &original.id).unwrap();
+    let inject = AtomicBool::new(true);
+    let result = habits::update(root, "mono", |all| {
+        let index = row.position(all)?;
+        if inject.swap(false, Ordering::SeqCst) {
+            habits::update(root, "mono", |other| {
+                let mut replacement = original.clone();
+                replacement.name = "Replacement".into();
+                other.clear();
+                other.push(replacement);
+                Ok(())
+            })?;
+        }
+        all.remove(index);
+        Ok(())
+    });
+    assert!(result.unwrap_err().contains("Habits changed"));
+    let saved = habits::load(root, "mono").unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, "Replacement");
+}
+#[test]
 fn habit_updates_retry_conflicts_without_losing_other_edits() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

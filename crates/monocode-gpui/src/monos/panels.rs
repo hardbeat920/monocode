@@ -28,6 +28,7 @@ pub(super) enum Route {
     Session(i64),
     Document(String),
     Habit(String),
+    SavedHabit(habits::SavedRow),
     NewHabit,
 }
 impl Route {
@@ -37,6 +38,7 @@ impl Route {
             Self::Session(id) => format!("session:{id}"),
             Self::Document(id) => format!("document:{id}"),
             Self::Habit(id) => format!("habit:{id}"),
+            Self::SavedHabit(row) => format!("habit-row:{}", row.index()),
             Self::NewHabit => "new-habit".into(),
         }
     }
@@ -1614,7 +1616,9 @@ impl Monos {
                     .child(div().flex_1().min_h_0().child(view))
                     .into_any_element()
             }
-            Route::Habit(id) => self.habit_page(mono, Some(&id), window, cx),
+            route @ (Route::Habit(_) | Route::SavedHabit(_)) => {
+                self.habit_page(mono, Some(&route), window, cx)
+            }
             Route::NewHabit => self.habit_page(mono, None, window, cx),
         }
     }

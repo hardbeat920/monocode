@@ -68,7 +68,7 @@ impl Monos {
         let ran_today: usize = habits
             .iter()
             .map(|h| {
-                h.runs
+                h.runs()
                     .iter()
                     .filter(|r| local_day(r.at) == Some(today))
                     .count()
@@ -142,7 +142,7 @@ impl Monos {
                 "lastRunAt": h.last_run_at,
                 "lastOutcome": h.last_outcome,
                 "lastError": h.last_error,
-                "runs": h.runs.iter().rev().take(10).collect::<Vec<_>>(),
+                "runs": h.runs().iter().rev().take(10).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "documents": documents.iter().map(|d| json!({
                 "id": d.id,
