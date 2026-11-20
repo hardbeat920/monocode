@@ -17,6 +17,19 @@ pub struct HistoryPage {
 }
 
 impl Store {
+    /// Read a complete local conversation without altering its active write revision.
+    pub fn session_markdown(&self, session: i64, title: &str) -> Result<String, String> {
+        if self.remote_session(session)?.is_some() {
+            return Err("Only local sessions can be exported as Markdown.".into());
+        }
+        let rows = if self.shared.is_some() {
+            blocks::project(&self.shared_all_blocks(session)?)?
+        } else {
+            self.load(session)?.rows
+        };
+        crate::response::session_markdown(title, &rows)
+    }
+
     pub(super) fn shared_indexed(&self, original: &str) -> Result<bool, String> {
         Ok(has_table(&self.conn, "mono_transcripts")?
             && sql(self.conn.query_row(

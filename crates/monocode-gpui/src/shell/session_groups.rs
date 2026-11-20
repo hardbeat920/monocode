@@ -450,6 +450,14 @@ impl Shell {
                         MenuAction::new("copy-monocode-session-id", "MonoCode session ID"),
                     ])
                     .into(),
+            ]);
+            if summary.has_messages && !summary.cwd.starts_with("remote://") {
+                items.extend([
+                    MenuAction::new("copy-session-markdown", "Copy as Markdown").into(),
+                    MenuAction::new("export-session-markdown", "Export as Markdown…").into(),
+                ]);
+            }
+            items.push(
                 MenuAction::new(
                     "link-work-item",
                     if summary.work_item.is_some() {
@@ -459,7 +467,7 @@ impl Shell {
                     },
                 )
                 .into(),
-            ]);
+            );
         }
         items.extend([
             MenuAction::new("reminder", "Remind me")
@@ -511,6 +519,63 @@ impl Shell {
         ]);
         items
     }
+
+    fn session_markdown(
+        &self,
+        summary: Session,
+        title: String,
+        export: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let picker = export.then(|| {
+            let directory = std::path::Path::new(&summary.cwd);
+            let directory = if directory.is_absolute() {
+                directory.to_path_buf()
+            } else {
+                std::env::home_dir().unwrap_or_else(std::env::temp_dir)
+            };
+            cx.prompt_for_new_path(
+                &directory,
+                Some(&monocode_core::response::session_markdown_filename(&title)),
+            )
+        });
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let path = match picker {
+                    Some(picker) => match picker.await {
+                        Ok(Ok(Some(path))) => Some(path),
+                        Ok(Ok(None)) | Err(_) => return Ok(None),
+                        Ok(Err(error)) => return Err(error.to_string()),
+                    },
+                    None => None,
+                };
+                cx.background_executor()
+                    .spawn(async move {
+                        let markdown = locked(&store)?.session_markdown(summary.id, &title)?;
+                        if let Some(path) = path {
+                            monocode_core::response::save_session_markdown(&path, &markdown)?;
+                            Ok(None)
+                        } else {
+                            Ok(Some(markdown))
+                        }
+                    })
+                    .await
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(markdown)) => cx.write_to_clipboard(ClipboardItem::new_string(markdown)),
+                Ok(None) => {}
+                Err(error) => {
+                    let action = if export { "export" } else { "copy" };
+                    this.error = Some(format!("Could not {action} the session: {error}"));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn run_session_menu(
         &mut self,
         id: i64,
@@ -524,6 +589,14 @@ impl Shell {
         let summary = self.session_metadata(id, cx).summary.clone();
         let ids = self.session_menu_ids(id, cx);
         match action {
+            "copy-session-markdown" | "export-session-markdown"
+                if ids.len() == 1
+                    && summary.has_messages
+                    && !summary.cwd.starts_with("remote://") =>
+            {
+                let title = self.session_metadata(id, cx).display_title();
+                self.session_markdown(summary, title, action == "export-session-markdown", cx);
+            }
             "copy-harness-session-id" | "copy-monocode-session-id" => {
                 let text = if action == "copy-harness-session-id" {
                     summary.provider_id
@@ -2107,11 +2180,11 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert!(
-                    !actions.iter().any(|id| id == "rename"
-                        || id == "copy-session-id"
-                        || id == "link-work-item")
-                );
+                assert!(!actions.iter().any(|id| id == "rename"
+                    || id == "copy-session-id"
+                    || id == "copy-session-markdown"
+                    || id == "export-session-markdown"
+                    || id == "link-work-item"));
                 shell.run_menu(MenuTarget::Session(a), "pin", None, w, cx);
             })
             .unwrap();
@@ -2122,6 +2195,73 @@ mod tests {
                 assert!(shell.sessions[&b].read(cx).summary.pinned);
                 let stored = locked(&shell.store).unwrap().sessions().unwrap();
                 assert!(stored.iter().all(|s| s.pinned));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn session_markdown_actions_copy_and_save_the_same_document(cx: &mut TestAppContext) {
+        let (window, id, _) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                let summary = shell.session_metadata(id, cx).summary;
+                assert!(summary.has_messages);
+                let actions = shell.session_menu_items(id, cx);
+                for id in ["copy-session-markdown", "export-session-markdown"] {
+                    assert!(actions.iter().any(|item| {
+                        matches!(item, MenuItem::Action(action) if action.id == id && !action.disabled)
+                    }));
+                }
+                shell.run_menu(MenuTarget::Session(id), "copy-session-markdown", None, w, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+        assert!(
+            copied
+                .ends_with("## Assistant\n\nHistory loaded when the adjacent tab becomes active\n")
+        );
+
+        let open_export = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, w, cx| {
+                    shell.run_menu(
+                        MenuTarget::Session(id),
+                        "export-session-markdown",
+                        None,
+                        w,
+                        cx,
+                    )
+                })
+                .unwrap();
+            assert!(cx.did_prompt_for_new_path());
+        };
+        open_export(cx);
+        cx.simulate_new_path_selection(|_| None);
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| assert!(shell.error.is_none()))
+            .unwrap();
+
+        let path = std::env::temp_dir().join(format!("{}.md", monocode_core::mono::new_id()));
+        open_export(cx);
+        cx.simulate_new_path_selection(|_| Some(path.clone()));
+        cx.run_until_parked();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), copied);
+        std::fs::remove_file(path).unwrap();
+
+        open_export(cx);
+        cx.simulate_new_path_selection(|_| Some(std::env::temp_dir()));
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    shell
+                        .error
+                        .as_ref()
+                        .unwrap()
+                        .starts_with("Could not export the session:")
+                );
             })
             .unwrap();
     }

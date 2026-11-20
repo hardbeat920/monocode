@@ -53,11 +53,16 @@ pub fn legacy_tail(text: &str) -> (&str, Vec<PathBuf>) {
         else {
             break;
         };
-        let path = Path::new(path);
-        if !path.is_absolute() || path.file_name().unwrap_or_default().to_string_lossy() != name {
+        let native_path = Path::new(path);
+        let native_match = native_path.is_absolute()
+            && native_path.file_name().and_then(|part| part.to_str()) == Some(name);
+        let windows_path = path.starts_with("\\\\")
+            || matches!(path.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
+        let windows_match = windows_path && path.rsplit(['/', '\\']).next() == Some(name);
+        if !native_match && !windows_match {
             break;
         }
-        paths.push(path.to_path_buf());
+        paths.push(native_path.to_path_buf());
         body = before;
     }
     paths.reverse();

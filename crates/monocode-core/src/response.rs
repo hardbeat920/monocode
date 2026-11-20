@@ -5,6 +5,7 @@ use crate::{
     transcript::Row,
 };
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferKind {
@@ -77,6 +78,138 @@ pub fn prose(rows: &[Row]) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
+
+/// The visible conversation, with row continuations restored before formatting.
+pub(crate) fn session_markdown(title: &str, rows: &[Row]) -> Result<String, String> {
+    let title = markdown_label(title);
+    let title = if title.is_empty() {
+        "Conversation"
+    } else {
+        &title
+    };
+    let mut markdown = format!("# {title}\n");
+    let mut wrote_message = false;
+    let mut rows = rows.iter().peekable();
+    while let Some(row) = rows.next() {
+        let heading = match row.role.as_str() {
+            "user" => "User",
+            "assistant" => "Assistant",
+            _ => continue,
+        };
+        let mut text = row.text.clone();
+        while let Some(next) = rows.next_if(|next| !next.first && next.role == row.role) {
+            text.push_str(&next.text);
+        }
+        let (text, attachments) = if row.role == "user" {
+            let manifest = rows.next_if(|next| next.role == crate::transcript::attachments::ROLE);
+            export_attachments(&text, manifest)
+        } else {
+            (text.as_str(), Vec::new())
+        };
+        if text.trim().is_empty() && attachments.is_empty() {
+            continue;
+        }
+        wrote_message = true;
+        markdown.push_str(&format!("\n## {heading}\n"));
+        if !text.trim().is_empty() {
+            markdown.push('\n');
+            markdown.push_str(text.trim_end_matches(['\r', '\n']));
+            markdown.push('\n');
+        }
+        if !attachments.is_empty() {
+            markdown.push_str("\nAttachments\n");
+            for name in attachments {
+                markdown.push_str(&format!("\n- {}", markdown_label(&name)));
+            }
+            markdown.push('\n');
+        }
+    }
+    if !wrote_message {
+        return Err("This session has no messages to export.".into());
+    }
+    Ok(markdown)
+}
+
+fn export_attachments<'a>(text: &'a str, manifest: Option<&Row>) -> (&'a str, Vec<String>) {
+    if let Some(manifest) = manifest {
+        let files =
+            serde_json::from_str::<Vec<serde_json::Value>>(&manifest.text).unwrap_or_default();
+        let names = files
+            .iter()
+            .filter_map(|file| {
+                [file["name"].as_str(), file["path"].as_str()]
+                    .into_iter()
+                    .flatten()
+                    .find_map(attachment_name)
+                    .map(str::to_owned)
+            })
+            .collect();
+        return (text, names);
+    }
+    let (text, paths) = crate::transcript::attachments::legacy_tail(text);
+    let names = paths
+        .iter()
+        .filter_map(|path| attachment_name(path.to_str()?))
+        .map(str::to_owned)
+        .collect();
+    (text, names)
+}
+
+fn attachment_name(path: &str) -> Option<&str> {
+    path.rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn markdown_label(label: &str) -> String {
+    let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut escaped = String::with_capacity(label.len());
+    for ch in label.chars() {
+        if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+/// A bounded filename with a fixed prefix so even a Windows device title is safe.
+pub fn session_markdown_filename(title: &str) -> String {
+    let stem = title
+        .trim()
+        .chars()
+        .take(60)
+        .map(|ch| {
+            if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    let stem = stem.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stem = if stem.is_empty() {
+        "Conversation"
+    } else {
+        &stem
+    };
+    format!("MonoCode - {stem}.md")
+}
+
+/// Write beside the chosen destination so an interrupted write leaves it intact.
+pub fn save_session_markdown(path: &Path, markdown: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Choose a destination file.".to_owned())?;
+    let mut file = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
+    file.write_all(markdown.as_bytes())
+        .map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.error.to_string())?;
+    Ok(())
+}
+
 /// The final assistant message, including its virtualized continuation rows.
 pub fn final_prose(rows: &[Row]) -> String {
     let start = rows
@@ -823,5 +956,57 @@ mod tests {
         assert!(review.contains("## User request\nCheck the footer"));
         assert!(review.contains("## What Codex reported"));
         assert!(!review.contains("Tool output"));
+    }
+
+    #[test]
+    fn session_markdown_preserves_visible_text_and_attachment_names() {
+        let mut transcript = crate::transcript::Transcript::default();
+        for (role, text) in [
+            ("mono-system", "Hidden instructions"),
+            (
+                "user",
+                "Review **the file**.\n\n[legacy.txt](<C:\\private\\legacy.txt>)",
+            ),
+            ("reasoning", "Private reasoning"),
+            ("tool", "Tool output"),
+            ("assistant", "**Ready.**\n\n```text\n  first line\n"),
+        ] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        let long = "🙂".repeat(700);
+        transcript.append(&long);
+        transcript.append("\n```");
+        transcript.begin("user");
+        transcript.begin(crate::transcript::attachments::ROLE);
+        transcript.append(r#"[{"name":"C:\\private\\report.txt","data":"image bytes"}]"#);
+        transcript.begin("assistant");
+
+        let markdown = session_markdown("Check [report]\nnext", &transcript.rows).unwrap();
+        assert_eq!(
+            markdown,
+            format!("# Check \\[report\\] next\n\n## User\n\nReview **the file**.\n\nAttachments\n\n- legacy.txt\n\n## Assistant\n\n**Ready.**\n\n```text\n  first line\n{long}\n```\n\n## User\n\nAttachments\n\n- report.txt\n")
+        );
+        assert!(session_markdown("Empty session", &[]).is_err());
+    }
+
+    #[test]
+    fn session_markdown_uses_a_safe_name_and_saves_to_the_chosen_path() {
+        assert_eq!(
+            session_markdown_filename("C:\\CON\r\n/deploy* now?"),
+            "MonoCode - C CON deploy now.md"
+        );
+        assert_eq!(
+            session_markdown_filename(".."),
+            "MonoCode - Conversation.md"
+        );
+        assert!(session_markdown_filename(&"𐐀".repeat(100)).len() < 255);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("chosen.md");
+        std::fs::write(&path, "existing").unwrap();
+        save_session_markdown(&path, "# Saved title\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Saved title\n");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

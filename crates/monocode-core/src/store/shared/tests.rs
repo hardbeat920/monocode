@@ -193,6 +193,28 @@ fn a_long_indexed_mono_opens_on_its_newest_turns_and_pages_older_ones() {
 }
 
 #[test]
+fn markdown_export_reads_the_complete_history_without_updating_the_write_revision() {
+    let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
+    let (id, original, _) = indexed_mono(&mut store, 25);
+    let window = store.load(id).unwrap();
+    assert_eq!(window.rows[0].text, "Question 15");
+    let changed = store.conn.execute(
+        "UPDATE mono_blocks SET block_json=json_set(block_json,'$.text','Externally edited') WHERE session_id=?1 AND block_id='prompt-15'",
+        [&original],
+    ).unwrap();
+    assert_eq!(changed, 1);
+
+    let markdown = store.session_markdown(id, "Earlier and latest").unwrap();
+    assert!(markdown.starts_with("# Earlier and latest\n\n## User\n\nQuestion 0\n"));
+    assert!(markdown.contains("## User\n\nExternally edited\n"));
+    assert!(markdown.ends_with("## Assistant\n\nAnswer 24\n"));
+    assert_eq!(markdown.matches("\n## User\n").count(), 25);
+    assert_eq!(markdown.matches("\n## Assistant\n").count(), 25);
+    let error = store.write_rows(id, 0, &window.rows[..1]).unwrap_err();
+    assert!(error.contains("changed in another window"), "{error}");
+}
+
+#[test]
 fn window_saves_never_rewrite_or_drop_turns_before_it() {
     let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
     let (id, original, blocks) = indexed_mono(&mut store, 25);
