@@ -767,13 +767,20 @@ impl QuickComposer {
             multiple: true,
             prompt: Some("Attach".into()),
         });
+        let before = window.focused(cx);
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = prompt.await {
-                let _ = this.update_in(cx, |this, window, cx| {
+            let picked = prompt.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Ok(Ok(Some(paths))) = picked {
                     this.add_attachments(paths, cx);
+                }
+                // Hand focus back so typing continues, unless the user moved
+                // it (say, to the project filter) while the panel was open.
+                let now = window.focused(cx);
+                if now.is_none() || now == before {
                     this.focus(window, cx);
-                });
-            }
+                }
+            });
         })
         .detach();
     }
@@ -2264,5 +2271,58 @@ mod tests {
         assert_eq!(launch.worktree_cwd, None);
         assert!(launch.foreground);
         assert_eq!(launch.access, AccessMode::FullAccess);
+    }
+
+    #[gpui::test]
+    fn the_attach_picker_hands_focus_back_to_the_composer(cx: &mut TestAppContext) {
+        let window = open(cx);
+        let focused = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |view, w, cx| view.input.focus_handle(cx).is_focused(w))
+                .unwrap()
+        };
+        let file = std::env::temp_dir().join(format!(
+            "monocode-quick-attach-focus-{}.txt",
+            monocode_core::mono::new_id()
+        ));
+        std::fs::write(&file, "notes").unwrap();
+        for pick in [Some(vec![file.clone()]), None] {
+            window
+                .update(cx, |view, w, cx| view.choose_files(w, cx))
+                .unwrap();
+            cx.run_until_parked();
+            // The native panel takes focus while it is up.
+            window.update(cx, |_, w, cx| w.blur(cx)).unwrap();
+            assert!(!focused(cx));
+            cx.simulate_path_prompt_response(move |_| pick);
+            cx.run_until_parked();
+            // Attaching and cancelling both return to the draft.
+            assert!(focused(cx));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.attachments, vec![file.clone()])
+            })
+            .unwrap();
+        std::fs::remove_file(file).ok();
+        // Opening the project picker while the panel is up keeps its filter
+        // focused when the panel is cancelled.
+        window
+            .update(cx, |view, w, cx| view.choose_files(w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, w, cx| view.open(Picker::Project, w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        assert!(!focused(cx));
+        window
+            .update(cx, |view, w, cx| {
+                assert!(view.picker == Some(Picker::Project));
+                assert!(view.query.focus_handle(cx).is_focused(w));
+            })
+            .unwrap();
     }
 }
