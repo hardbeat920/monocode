@@ -254,6 +254,9 @@ fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
 
 /// State machine is deliberately testable without spawning a provider.
 struct Protocol {
+    goal_active: bool,
+    goal_ack: bool,
+    claude_goal_supported: bool,
     initialized: bool,
     compact: bool,
     command_probe: bool,
@@ -295,6 +298,9 @@ impl Protocol {
     fn new(request: Request) -> Self {
         Self {
             request,
+            goal_active: false,
+            goal_ack: false,
+            claude_goal_supported: false,
             initialized: false,
             compact: false,
             command_probe: false,
@@ -405,6 +411,17 @@ impl Protocol {
                     events.extend(self.show_next_question());
                 }
                 return Ok(events);
+            }
+            if v["response"]["request_id"] == "native-init"
+                && v["response"]["response"]["commands"].is_array()
+            {
+                self.claude_goal_supported = v["response"]["response"]["commands"]
+                    .as_array()
+                    .is_some_and(|commands| {
+                        commands
+                            .iter()
+                            .any(|command| command["name"] == "goal" && command["builtin"] == true)
+                    });
             }
             if v["type"] == "control_response"
                 || (v["type"] == "system"
@@ -568,6 +585,30 @@ impl Protocol {
                         if let Some(model) = v["result"]["model"].as_str() {
                             events.push(Event::Model(model.into()));
                         }
+                        if let Some(argument) = self.request.settings.mono_goal.as_deref() {
+                            let mut params = json!({"threadId":id,"origin":"user"});
+                            let method = match argument {
+                                "" | "status" => {
+                                    params = json!({"threadId":id});
+                                    "thread/goal/get"
+                                }
+                                "clear" => "thread/goal/clear",
+                                "pause" | "resume" => {
+                                    self.goal_active = argument == "resume";
+                                    params["status"] =
+                                        if self.goal_active { "active" } else { "paused" }.into();
+                                    "thread/goal/set"
+                                }
+                                objective => {
+                                    self.goal_active = true;
+                                    params["objective"] = objective.into();
+                                    params["status"] = "active".into();
+                                    "thread/goal/set"
+                                }
+                            };
+                            write_json(stdin, json!({"id":4,"method":method,"params":params}))?;
+                            return Ok(events);
+                        }
                         if self.compact {
                             write_json(
                                 stdin,
@@ -617,6 +658,40 @@ impl Protocol {
                         write_json(stdin, json!({"id":3,"method":"turn/start","params":params}))?;
                     }
                     _ => {}
+                }
+                if self.request.settings.mono_goal.is_some()
+                    && (v["id"] == 4
+                        || (v["method"] == "thread/goal/updated"
+                            || v["method"] == "thread/goal/cleared")
+                            && v["params"]["threadId"].as_str()
+                                == self.request.provider_id.as_deref())
+                {
+                    let response = v["id"] == 4;
+                    let goal = if response {
+                        &v["result"]["goal"]
+                    } else {
+                        &v["params"]["goal"]
+                    };
+                    let status = goal["status"].as_str();
+                    self.goal_ack |= response;
+                    self.goal_active &= status == Some("active");
+                    if !response && self.goal_active {
+                        return Ok(events);
+                    }
+                    let message = match status {
+                        Some(status) => format!(
+                            "Goal ({status}): {}",
+                            goal["objective"].as_str().unwrap_or("")
+                        ),
+                        None => "No active goal.".into(),
+                    };
+                    events.push(Event::BeginAssistant);
+                    events.push(Event::Text(message));
+                    self.done = self.goal_ack && !self.goal_active && self.active_turn.is_none();
+                    if self.done {
+                        events.push(Event::Done);
+                    }
+                    return Ok(events);
                 }
                 let p = &v["params"];
                 match v["method"].as_str().unwrap_or("") {
@@ -714,6 +789,12 @@ impl Protocol {
                             {
                                 tool.state = ToolState::Cancelled;
                                 events.push(Event::Tool(tool.clone()));
+                            }
+                        }
+                        if self.request.settings.mono_goal.is_some() {
+                            self.active_turn = None;
+                            if !interrupted && (self.goal_active || !self.goal_ack) {
+                                return Ok(events);
                             }
                         }
                         events.push(Event::Done);
@@ -1585,6 +1666,7 @@ fn run_operation(
         .flatten();
     let (mut wire, mut protocol, warm) = if let Some(cached) = cached {
         let mut protocol = Protocol::new(request);
+        protocol.claude_goal_supported = cached.protocol.claude_goal_supported;
         protocol.acp = cached.protocol.acp;
         protocol.pi = cached.protocol.pi;
         protocol.previous_turn = cached.protocol.active_turn;
@@ -1739,7 +1821,7 @@ fn run_operation(
                             || turn_id.is_none() && protocol.previous_turn.is_none());
                         let codex_ack = protocol.request.kind == Kind::Codex
                             && (reply_id.is_some() && reply_id == protocol.interrupt_id.as_deref()
-                                || terminal);
+                                || terminal && !protocol.goal_active);
                         let claude_end =
                             protocol.request.kind == Kind::Claude && claude_turn_result(&value);
                         if codex_ack || claude_end {
@@ -1862,6 +1944,7 @@ fn run_operation(
         let _ = emit(std::mem::take(&mut pending));
     }
     if eligible
+        && protocol.request.settings.mono_goal.is_none()
         && cancel.load(Ordering::Relaxed)
         && !protocol.done
         && protocol.request.kind != Kind::Antigravity
@@ -1869,6 +1952,7 @@ fn run_operation(
     {
         parked::settle_cancelled(wire, protocol);
     } else if eligible
+        && !(cancel.load(Ordering::Relaxed) && protocol.request.settings.mono_goal.is_some())
         && ((result.is_ok() && !cancel.load(Ordering::Relaxed))
             || (stop_confirmed && protocol.request.kind != Kind::Antigravity))
     {
@@ -2005,6 +2089,51 @@ mod tests {
         let error = claude.frame(json!({"type":"result","is_error":true,"num_turns":1,"result":"Something else went wrong"}), &mut Vec::new()).unwrap_err();
         assert_eq!(error, "Something else went wrong");
     }
+    #[test]
+    fn mono_goal_waits_across_turns_and_drains_the_final_turn() {
+        let mut p = protocol(Kind::Codex);
+        p.request.settings.mono_goal = Some("fix build".into());
+        let mut wire = Vec::new();
+        p.frame(json!({"id":2,"result":{"thread":{"id":"main"}}}), &mut wire)
+            .unwrap();
+        let rpc: Value = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(rpc["method"], "thread/goal/set");
+        assert_eq!(
+            rpc["params"],
+            json!({"objective":"fix build","threadId":"main","origin":"user","status":"active"})
+        );
+        p.frame(
+            json!({"id":4,"result":{"goal":{"status":"active"}}}),
+            &mut wire,
+        )
+        .unwrap();
+        let end = json!({"method":"turn/completed","params":{"threadId":"main","turn":{"status":"completed"}}});
+        assert!(!p
+            .frame(end.clone(), &mut wire)
+            .unwrap()
+            .contains(&Event::Done));
+        p.frame(
+            json!({"method":"turn/started","params":{"threadId":"main","turn":{"id":"next"}}}),
+            &mut wire,
+        )
+        .unwrap();
+        p.frame(json!({"method":"thread/goal/updated","params":{"threadId":"main","goal":{"status":"complete"}}}), &mut wire).unwrap();
+        assert!(!p.done);
+        assert!(p.frame(end, &mut wire).unwrap().contains(&Event::Done));
+    }
+
+    #[test]
+    fn claude_goal_requires_the_advertised_builtin_and_preserves_the_command() {
+        let mut p = protocol(Kind::Claude);
+        p.request.settings.mono_goal = Some("fix build".into());
+        p.request.settings.effort = Some("ultrathink".into());
+        let mut wire = Vec::new();
+        assert!(p.claude_prompt(&mut wire).is_err());
+        assert!(wire.is_empty());
+        p.frame(json!({"type":"control_response","response":{"request_id":"native-init","response":{"commands":[{"name":"goal","builtin":true}]}}}), &mut wire).unwrap();
+        assert!(String::from_utf8(wire).unwrap().contains("/goal fix build"));
+    }
+
     #[test]
     fn codex_handshake_stream_snapshot_and_resume() {
         let mut p = protocol(Kind::Codex);

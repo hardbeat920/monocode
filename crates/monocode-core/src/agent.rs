@@ -110,6 +110,8 @@ pub struct Settings {
     #[serde(skip)]
     pub mono: Option<MonoContext>,
     #[serde(skip)]
+    pub mono_goal: Option<String>,
+    #[serde(skip)]
     pub mono_message_id: Option<String>,
     #[serde(skip)]
     pub mono_sent_at: Option<u64>,

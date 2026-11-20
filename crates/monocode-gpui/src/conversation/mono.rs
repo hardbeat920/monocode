@@ -215,7 +215,8 @@ impl Conversation {
             return false;
         }
         if self.busy {
-            if self.mono_ui.sending.is_some()
+            if monocode_core::composer::consume_command(&message.text, "goal").is_some()
+                || self.mono_ui.sending.is_some()
                 || !self.follow_ups.ready
                 || !Kind::from_id(&self.summary.provider).can_steer()
                 || self

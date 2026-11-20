@@ -41,7 +41,12 @@ impl Protocol {
         if self.claude_prompt_sent {
             return Ok(());
         }
-        let prompt = if self.request.settings.effort.as_deref() == Some("ultrathink") {
+        let prompt = if let Some(argument) = &self.request.settings.mono_goal {
+            if !self.claude_goal_supported {
+                return Err("This Claude CLI did not advertise its built-in /goal command.".into());
+            }
+            format!("/goal {argument}").trim_end().to_owned()
+        } else if self.request.settings.effort.as_deref() == Some("ultrathink") {
             if self.request.prompt.is_empty() {
                 "Ultrathink:".into()
             } else {
@@ -99,6 +104,24 @@ impl Protocol {
         self.interrupt_id = Some(interrupt_id.clone());
         match self.request.kind {
             Kind::Codex => {
+                if let Some(thread) = self
+                    .request
+                    .provider_id
+                    .as_ref()
+                    .filter(|_| self.goal_active)
+                {
+                    write_json(
+                        stdin,
+                        json!({"id":interrupt_id,"method":"thread/goal/set","params":{"threadId":thread,"origin":"user","status":"paused"}}),
+                    )?;
+                    if let Some(turn) = &self.active_turn {
+                        write_json(
+                            stdin,
+                            json!({"id":"goal-turn-stop","method":"turn/interrupt","params":{"threadId":thread,"turnId":turn}}),
+                        )?;
+                    }
+                    return Ok(true);
+                }
                 self.approvals.clear();
                 self.questions.clear();
                 if let (Some(thread), Some(turn)) = (&self.request.provider_id, &self.active_turn) {

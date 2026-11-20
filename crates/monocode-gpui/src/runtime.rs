@@ -433,11 +433,35 @@ fn run_turn_using(
         })?;
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
-        let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
-        let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
-            && provider::native_prompt(kind, &prompt)
-                .trim_start()
-                .starts_with('/');
+        if settings.mono.is_some()
+            && !settings.internal_message
+            && let Some(argument) = monocode_core::composer::consume_command(&prompt, "goal")
+        {
+            if !matches!(kind, Kind::Codex | Kind::Claude) {
+                return Err(format!(
+                    "{} does not support native Mono goals.",
+                    kind.label()
+                ));
+            }
+            if !settings.attachments.is_empty() {
+                return Err("Send goal attachments in a separate message.".into());
+            }
+            let argument = argument.trim();
+            if kind == Kind::Claude && matches!(argument, "pause" | "resume") {
+                return Err("Claude supports /goal, /goal <condition>, and /goal clear.".into());
+            }
+            settings.mono_goal = Some(if argument == "status" { "" } else { argument }.into());
+        }
+        let prompt = if settings.mono_goal.is_some() {
+            prompt
+        } else {
+            settings.prepared_prompt.take().unwrap_or(prompt)
+        };
+        let raw_native_command = settings.mono_goal.is_some()
+            || matches!(kind, Kind::Omp | Kind::Devin)
+                && provider::native_prompt(kind, &prompt)
+                    .trim_start()
+                    .starts_with('/');
         let prompt = if raw_native_command {
             prompt
         } else if let Some(mono) = &settings.mono {
@@ -524,7 +548,11 @@ fn run_turn_using(
             });
             checkpoint = Some((cwd.to_owned(), id));
         }
-        let mut prompt = provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?;
+        let mut prompt = if settings.mono_goal.is_some() {
+            prompt
+        } else {
+            provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?
+        };
         if !raw_native_command && prompt.contains("@note:") {
             let notes = locked(&store)?.notes()?;
             for note in notes {
