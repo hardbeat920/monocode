@@ -631,6 +631,11 @@ fn run_turn_using(
             }
         }
         let codex_goal = kind == Kind::Codex && settings.mono_goal.is_some();
+        let stop_request = codex_goal.then(|| {
+            goal_message
+                .clone()
+                .unwrap_or_else(monocode_core::mono::new_id)
+        });
         let request = Request {
             kind,
             binary,
@@ -902,6 +907,18 @@ fn run_turn_using(
                                 initial_delivery = Some(id.clone());
                                 follow_up_delivered.push(id.clone());
                             }
+                        }
+                        Event::GoalStopRequested | Event::GoalStopConfirmed => {
+                            // The provider sends these individually and waits for durable storage.
+                            let id = stop_request
+                                .as_deref()
+                                .ok_or("Missing Codex goal operation")?;
+                            let db = locked(&store)?;
+                            return if event == Event::GoalStopRequested {
+                                db.save_setting(&monocode_core::mono::goal_stop_key(summary.id), id)
+                            } else {
+                                monocode_core::mono::clear_goal_stop(&db, summary.id, id)
+                            };
                         }
                         Event::GoalPauseUnconfirmed => goal_pause_unconfirmed = true,
                         Event::UsageLimited(limit) => usage_limit = Some(limit),

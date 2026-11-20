@@ -1230,9 +1230,20 @@ fn mono_goal_stop_keeps_the_outbox_until_settled_and_retries_only_pause(cx: &mut
         m.inflight.insert(s.id.clone(), goal);
         m.roster.get_mut(&s.id).unwrap().outbox.push(queued);
         view.update(cx, |chat, cx| {
+            chat.summary.provider = "codex".into();
+            chat.settings.mono_message_id = Some("delivered".into());
+            chat.track_mono_goal("/goal fix build");
             chat.busy = true;
             chat.mono_stop(cx);
         });
+        assert_eq!(
+            locked(&s.store)
+                .unwrap()
+                .setting(&mono::goal_stop_key(s.session))
+                .unwrap()
+                .as_deref(),
+            Some("delivered")
+        );
         m.chat_changed(&s.id, cx);
         assert!(m.inflight.contains_key(&s.id));
         assert_eq!(view.read(cx).mono_status(), "working");

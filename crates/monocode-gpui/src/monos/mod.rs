@@ -1064,22 +1064,29 @@ impl Monos {
             mono.seen_rows = row_count;
         }
         if finished {
-            if let Some(mut sent) = self.inflight.remove(id) {
+            let sent = self.inflight.remove(id);
+            let goal_stop = self.chats[id].update(cx, |view, _| {
+                if view.mono_goal_pause_unconfirmed() {
+                    view.take_unconfirmed_goal_stop()
+                        .or_else(|| sent.as_ref().map(|m| m.id.clone()))
+                } else {
+                    None
+                }
+            });
+            if sent.is_some() || goal_stop.is_some() {
                 let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
                 if !ok && !status.starts_with("Stopped") {
                     if let Some(mono) = self.roster.get_mut(id) {
-                        if self.chats[id].read(cx).mono_goal_pause_unconfirmed() {
-                            // Retrying the original objective could restart a goal the user stopped.
-                            mono.outbox.retain(|m| m.id != sent.id);
-                            sent.text = "/goal pause".into();
-                            sent.attachments.clear();
-                        }
-                        if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
-                            queued.error = Some(status);
-                        } else {
-                            sent.id = mono::new_id();
-                            sent.error = Some(status);
-                            mono.outbox.insert(0, sent);
+                        if let Some(request) = goal_stop {
+                            mono.hold_goal_stop(&request, status);
+                        } else if let Some(mut sent) = sent {
+                            if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
+                                queued.error = Some(status);
+                            } else {
+                                sent.id = mono::new_id();
+                                sent.error = Some(status);
+                                mono.outbox.insert(0, sent);
+                            }
                         }
                     }
                     self.save(cx);

@@ -4,6 +4,7 @@ use monocode_core::mono::{Message, Mono};
 use std::path::PathBuf;
 #[derive(Default)]
 pub(super) struct ChatState {
+    pub(super) goal_request: Option<String>,
     pub(super) goal_pause_unconfirmed: bool,
     pub(super) pending: Vec<Message>,
     queue_scroll: gpui::ScrollHandle,
@@ -92,6 +93,32 @@ impl Conversation {
         });
         window.focus(&self.input.focus_handle(cx), cx);
     }
+    pub(crate) fn track_mono_goal(&mut self, prompt: &str) {
+        self.mono_ui.goal_request = (!self.is_remote()
+            && self.settings.mono.is_some()
+            && !self.settings.internal_message
+            && self.summary.provider == "codex"
+            && monocode_core::composer::consume_command(prompt, "goal").is_some())
+        .then(|| {
+            self.settings
+                .mono_message_id
+                .clone()
+                .unwrap_or_else(monocode_core::mono::new_id)
+        });
+    }
+
+    pub(super) fn goal_stop_still_pending(&self) -> bool {
+        self.mono_ui.goal_request.as_ref().is_some_and(|id| {
+            locked(&self.store)
+                .and_then(|db| db.setting(&monocode_core::mono::goal_stop_key(self.summary.id)))
+                .map_or(true, |pending| pending.as_ref() == Some(id))
+        })
+    }
+
+    pub(crate) fn take_unconfirmed_goal_stop(&mut self) -> Option<String> {
+        self.mono_ui.goal_request.take()
+    }
+
     pub(crate) fn mono_goal_pause_unconfirmed(&self) -> bool {
         self.mono_ui.goal_pause_unconfirmed
     }
@@ -193,7 +220,10 @@ impl Conversation {
             .update(cx, |t, cx| t.set_pending(pending, cx));
     }
     pub(crate) fn mono_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
-        if self.mono_ui.delivered.contains(&message.id) || (self.busy && message.internal) {
+        if self.mono_ui.delivered.contains(&message.id)
+            || (self.busy && message.internal)
+            || (self.mono_ui.goal_pause_unconfirmed && self.mono_ui.goal_request.is_some())
+        {
             return false;
         }
         // Its own turn is already running and hasn't reported it delivered.

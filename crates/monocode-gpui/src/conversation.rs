@@ -1102,6 +1102,7 @@ impl Conversation {
             .update(cx, |v, _| v.identity(&self.summary.provider, &model_label));
         self.begin_turn(cx);
         let generation = self.submission_generation;
+        self.track_mono_goal(&prompt);
         let source_provider = self.summary.provider.clone();
         let source_account = self.settings.account.id.clone();
         self.status = if self.settings.pending_provider_switch.is_some() {
@@ -1121,6 +1122,9 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        if let Some(id) = &self.mono_ui.goal_request {
+            settings.mono_message_id = Some(id.clone());
+        }
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -1460,7 +1464,14 @@ impl Conversation {
                                 this.remote_state.refreshing = false;
                             }
                             this.summary.updated_at = monocode_core::time::now_ms();
-                            this.settle_runtime(update.status, update.goal_pause_unconfirmed);
+                            let mut status = update.status;
+                            let mut unconfirmed = update.goal_pause_unconfirmed;
+                            if stopping && !unconfirmed && this.goal_stop_still_pending() {
+                                // Stop can arrive after the worker sent its last update.
+                                unconfirmed = true;
+                                status = "Goal Stop was not confirmed. Check the provider before retrying the pause.".into();
+                            }
+                            this.settle_runtime(status, unconfirmed);
                             this.clear_background();
                             if this.is_remote() {
                                 this.refresh_remote_snapshot(cx);
@@ -1504,7 +1515,7 @@ impl Conversation {
                             let model_id = turn_model_id.clone();
                             // The runtime saved the receipt's stop; settings save the
                             // view's copy next, so it must agree.
-                            let stopped = !update.goal_pause_unconfirmed
+                            let stopped = !unconfirmed
                                 && (stopping || this.notification_cancelled);
                             this.transcript.update(cx, |view, _| {
                                 if let Some(turn) = view.active_turn()
@@ -1550,6 +1561,8 @@ impl Conversation {
         self.mono_ui.goal_pause_unconfirmed = goal_pause_unconfirmed;
         if goal_pause_unconfirmed {
             self.notification_cancelled = false;
+        } else {
+            self.mono_ui.goal_request = None;
         }
         self.busy = false;
         self.stopping = false;
@@ -2745,6 +2758,19 @@ impl Conversation {
     fn stop(&mut self, cx: &mut Context<Self>) {
         if !self.busy || self.stopping {
             return;
+        }
+        if let Some(request) = &self.mono_ui.goal_request {
+            if let Err(error) = locked(&self.store).and_then(|db| {
+                db.save_setting(
+                    &monocode_core::mono::goal_stop_key(self.summary.id),
+                    request,
+                )
+            }) {
+                self.status =
+                    format!("Could not save Stop. The goal may still be running. {error}");
+                cx.notify();
+                return;
+            }
         }
         self.stopping = true;
         self.busy = false;

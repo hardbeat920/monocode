@@ -107,6 +107,12 @@ impl Protocol {
         Ok(events)
     }
 
+    pub(super) fn must_settle_goal_stop(&self) -> bool {
+        self.request.kind == Kind::Codex
+            && self.request.settings.mono_goal.is_some()
+            && (self.goal_active || self.active_turn.is_some())
+    }
+
     pub(super) fn confirm_goal_pause(
         &mut self,
         stdin: &mut impl Write,
@@ -119,11 +125,11 @@ impl Protocol {
         let binding = self.request.provider_id.clone();
         let thread = binding.as_deref();
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut paused = false;
+        let mut pause_pending = self.goal_active;
         let mut turn = self.active_turn.clone();
-        while !paused || turn.is_some() {
-            let timeout = if paused {
-                "Goal pause confirmed, but waiting for the turn to finish timed out."
+        while pause_pending || turn.is_some() {
+            let timeout = if !pause_pending {
+                "Waiting for the final goal turn to finish timed out."
             } else {
                 "Waiting for Codex to confirm the goal pause timed out."
             };
@@ -140,7 +146,7 @@ impl Protocol {
                 continue;
             };
             let id = reply["id"].as_str();
-            if id == self.interrupt_id.as_deref() {
+            if pause_pending && id == self.interrupt_id.as_deref() {
                 if let Some(error) = reply.get("error").filter(|v| !v.is_null()) {
                     return Err(codex_error(error, "Codex rejected the pause request."));
                 }
@@ -148,7 +154,7 @@ impl Protocol {
                 if goal["threadId"].as_str() != thread || goal["status"] != "paused" {
                     return Err("Codex did not return a paused goal for this thread.".into());
                 }
-                paused = true;
+                pause_pending = false;
             } else if id
                 .and_then(|id| id.strip_prefix("goal-turn-stop-"))
                 .is_some_and(|interrupted| turn.as_deref() == Some(interrupted))
@@ -216,12 +222,14 @@ impl Protocol {
                     .request
                     .provider_id
                     .as_ref()
-                    .filter(|_| self.goal_active)
+                    .filter(|_| self.must_settle_goal_stop())
                 {
-                    write_json(
-                        stdin,
-                        json!({"id":interrupt_id,"method":"thread/goal/set","params":{"threadId":thread,"origin":"user","status":"paused"}}),
-                    )?;
+                    if self.goal_active {
+                        write_json(
+                            stdin,
+                            json!({"id":interrupt_id,"method":"thread/goal/set","params":{"threadId":thread,"origin":"user","status":"paused"}}),
+                        )?;
+                    }
                     if let Some(turn) = &self.active_turn {
                         write_json(
                             stdin,

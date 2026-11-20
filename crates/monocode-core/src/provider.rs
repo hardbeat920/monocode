@@ -100,6 +100,8 @@ pub enum Event {
     /// What the turn still waits on after the provider yielded; empty clears it.
     Background(Vec<BackgroundTask>),
     UsageLimited(crate::usage::Limit),
+    GoalStopRequested,
+    GoalStopConfirmed,
     GoalPauseUnconfirmed,
     GoalAccepted,
     Interjection {
@@ -880,7 +882,7 @@ impl Protocol {
                                 // compaction item in the final snapshot.
                                 continue;
                             }
-                            if self.goal_active {
+                            if self.request.settings.mono_goal.is_some() {
                                 self.goal_turn_used_tool |= goal_tool_item(item);
                                 if item["type"] == "agentMessage" {
                                     self.text(
@@ -1866,7 +1868,7 @@ fn run_operation(
             if cancel.load(Ordering::Relaxed) && !interrupted {
                 interrupted = true;
                 // Settle goal cancellation below, including stops from the emit callback.
-                if protocol.goal_active {
+                if protocol.must_settle_goal_stop() {
                     return Err("Stopped".into());
                 }
                 if !protocol.interrupt(&mut stdin)? {
@@ -2073,13 +2075,16 @@ fn run_operation(
     })();
     // Cancellation can arrive while publishing an event batch. Its callback
     // then returns Stopped before the next receive-loop iteration can interrupt.
-    if cancel.load(Ordering::Relaxed) && protocol.goal_active {
+    if cancel.load(Ordering::Relaxed) && protocol.must_settle_goal_stop() {
         if !pending.is_empty() {
             // Keep the thread binding and output already received before Stop.
             let _ = emit(std::mem::take(&mut pending));
         }
         // The worker owns the wire until the durable pause is acknowledged, even between turns.
-        if let Err(reason) = protocol.confirm_goal_pause(&mut wire.stdin, &wire.rx, &mut emit) {
+        let settlement = emit(vec![Event::GoalStopRequested])
+            .and_then(|()| protocol.confirm_goal_pause(&mut wire.stdin, &wire.rx, &mut emit))
+            .and_then(|()| emit(vec![Event::GoalStopConfirmed]));
+        if let Err(reason) = settlement {
             let _ = emit(vec![Event::GoalPauseUnconfirmed]);
             return Err(format!(
                 "Codex could not confirm Stop. The goal or its current turn may still be active. {reason}"
