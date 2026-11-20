@@ -1210,6 +1210,73 @@ fn mono_launches_ignore_tab_reveal_and_keep_the_current_chat(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn mono_goal_stop_keeps_the_outbox_until_settled_and_retries_only_pause(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        let view = m.chats[&s.id].clone();
+        let goal = Message {
+            id: "delivered".into(),
+            text: "/goal fix build".into(),
+            error: None,
+            internal: false,
+            sent_at: None,
+            attachments: Vec::new(),
+        };
+        let queued = Message {
+            id: "later".into(),
+            text: "next request".into(),
+            ..goal.clone()
+        };
+        m.inflight.insert(s.id.clone(), goal);
+        m.roster.get_mut(&s.id).unwrap().outbox.push(queued);
+        view.update(cx, |chat, cx| {
+            chat.busy = true;
+            chat.mono_stop(cx);
+        });
+        m.chat_changed(&s.id, cx);
+        assert!(m.inflight.contains_key(&s.id));
+        assert_eq!(view.read(cx).mono_status(), "working");
+        assert!(
+            view.read(cx)
+                .external_outcome(cx)
+                .1
+                .starts_with("Stopping…")
+        );
+        assert_eq!(m.roster.get(&s.id).unwrap().outbox.len(), 1);
+
+        view.update(cx, |chat, _| {
+            chat.settle_runtime("Codex rejected the pause".into(), true)
+        });
+        m.chat_changed(&s.id, cx);
+        assert!(!m.inflight.contains_key(&s.id));
+        assert!(!view.read(cx).notification_was_cancelled());
+        assert!(!view.read(cx).busy);
+        assert_eq!(view.read(cx).mono_status(), "needs-you");
+        assert!(
+            view.read(cx)
+                .external_outcome(cx)
+                .1
+                .starts_with("Codex rejected the pause")
+        );
+    });
+    cx.run_until_parked();
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    let outbox = &saved.get(&s.id).unwrap().outbox;
+    assert_eq!(outbox.len(), 2);
+    assert_eq!(outbox[0].text, "/goal pause");
+    assert!(
+        outbox[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Codex rejected the pause")
+    );
+    assert_eq!(outbox[1].id, "later");
+    assert_eq!(outbox[1].text, "next request");
+    assert!(outbox[1].error.is_none());
+}
+
+#[gpui::test]
 fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppContext) {
     let s = setup(cx);
     let handle: gpui::AnyWindowHandle = s.window.into();

@@ -100,6 +100,7 @@ pub enum Event {
     /// What the turn still waits on after the provider yielded; empty clears it.
     Background(Vec<BackgroundTask>),
     UsageLimited(crate::usage::Limit),
+    GoalPauseUnconfirmed,
     Interjection {
         text: String,
         custom_type: String,
@@ -1939,22 +1940,22 @@ fn run_operation(
     })();
     // Cancellation can arrive while publishing an event batch. Its callback
     // then returns Stopped before the next receive-loop iteration can interrupt.
-    if cancel.load(Ordering::Relaxed) && protocol.interrupt_id.is_none() {
-        if protocol.interrupt(&mut wire.stdin).unwrap_or(false) && protocol.goal_active {
-            // A turn interrupt can finish before the durable goal pause is recorded.
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while let Ok(Ok(frame)) = wire
-                .rx
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            {
-                if serde_json::from_slice::<Value>(&frame)
-                    .is_ok_and(|reply| reply["id"].as_str() == protocol.interrupt_id.as_deref())
-                    || Instant::now() >= deadline
-                {
-                    break;
-                }
-            }
+    if cancel.load(Ordering::Relaxed) && protocol.goal_active {
+        if !pending.is_empty() {
+            // Keep the thread binding and output already received before Stop.
+            let _ = emit(std::mem::take(&mut pending));
         }
+        // The worker owns the wire until the durable pause is acknowledged, even between turns.
+        if let Err(reason) = protocol.confirm_goal_pause(&mut wire.stdin, &wire.rx) {
+            let _ = emit(vec![Event::GoalPauseUnconfirmed]);
+            return Err(format!(
+                "Codex could not confirm Stop. The goal or its current turn may still be active. {reason}"
+            ));
+        }
+        return Err("Stopped".into());
+    }
+    if cancel.load(Ordering::Relaxed) && protocol.interrupt_id.is_none() {
+        let _ = protocol.interrupt(&mut wire.stdin);
     }
     if cancel.load(Ordering::Relaxed) && protocol.done {
         stop_confirmed = true;

@@ -147,14 +147,38 @@ for line in sys.stdin:
 
 #[test]
 fn mono_goal_keeps_one_delivery_and_the_final_continuation_output() {
+    run_mono_goal("complete", None);
+}
+
+#[test]
+fn mono_goal_stop_requires_a_confirmed_pause_between_turns() {
+    for (mode, error) in [
+        ("paused", None),
+        ("in-flight", None),
+        ("turn-rejected", Some("interrupt rejected")),
+        ("rpc-error", Some("pause rejected")),
+        ("timeout", Some("timed out")),
+        ("disconnect", Some("disconnected")),
+        ("write-error", Some("Broken pipe")),
+        ("wrong-thread", Some("for this thread")),
+        ("still-active", Some("paused goal")),
+    ] {
+        run_mono_goal(mode, error);
+    }
+}
+
+fn run_mono_goal(mode: &str, error: Option<&str>) {
     let fixture = Fixture(std::env::temp_dir().join(format!(
         "monocode-runtime-goal-{}",
         monocode_core::mono::new_id()
     )));
     std::fs::create_dir_all(&fixture.0).unwrap();
     let binary = fixture.0.join("codex");
+    std::fs::write(fixture.0.join("mode"), mode).unwrap();
     std::fs::write(&binary, r#"#!/usr/bin/env python3
-import json, sys
+import json, os, signal, sys, time
+signal.alarm(20)
+mode = open("mode").read()
 def send(frame):
     print(json.dumps(frame), flush=True)
 for line in sys.stdin:
@@ -164,18 +188,52 @@ for line in sys.stdin:
         send({'id': request['id'], 'result': {}})
     elif method == 'thread/start':
         send({'id': request['id'], 'result': {'thread': {'id': 'main'}}})
+    elif method == 'turn/interrupt':
+        assert request['params'] == {'threadId':'main','turnId':'continuation'}
+        if mode == 'turn-rejected':
+            send({'id':request['id'],'error':{'message':'interrupt rejected'}})
+        else:
+            send({'id':request['id'],'result':{}})
+        break
     elif method == 'thread/goal/set':
+        if request['params'].get('status') == 'paused':
+            assert request['params'] == {'origin':'user','status':'paused','threadId':'main'}
+            reply = {'id':request['id'],'result':{'goal':{'threadId':'main','status':'paused'}}}
+            if mode == 'rpc-error':
+                reply = {'id':request['id'],'error':{'message':'pause rejected'}}
+            elif mode == 'disconnect':
+                break
+            elif mode == 'timeout':
+                send({**reply, 'id':'unrelated'})
+                time.sleep(10)
+            elif mode == 'wrong-thread':
+                reply['result']['goal']['threadId'] = 'another'
+            elif mode == 'still-active':
+                reply['result']['goal']['status'] = 'active'
+            if mode in ('in-flight', 'turn-rejected'):
+                send({'method':'turn/started','params':{'threadId':'main','turn':{'id':'continuation'}}})
+                send(reply)
+                continue
+            send(reply)
+            break
         assert request['params']['objective'] == 'fix build'
         goal = {'objective': 'fix build', 'status': 'active'}
         send({'id': request['id'], 'result': {'goal': goal}})
-        for turn in ['first', 'second']:
+        if mode == 'write-error':
+            os.close(0)
+        for turn in (['first', 'second'] if mode == 'complete' else ['first']):
             send({'method':'turn/started','params':{'threadId':'main','turn':{'id':turn}}})
             if turn == 'second':
                 goal['status'] = 'complete'
                 send({'method':'thread/goal/updated','params':{'threadId':'main','goal':goal}})
             send({'method':'item/agentMessage/delta','params':{'itemId':turn,'delta':turn}})
             send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':turn,'status':'completed'}}})
-        break
+        if mode == 'complete':
+            break
+        # A post-completion usage update tells the test the first turn has drained.
+        send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'last':{'totalTokens':123},'modelContextWindow':1024}}})
+        if mode == 'write-error':
+            time.sleep(10)
     else:
         assert method == 'initialized', method
 "#).unwrap();
@@ -186,36 +244,75 @@ for line in sys.stdin:
     let store = Arc::new(Mutex::new(store));
     let (updates, received) = async_channel::unbounded();
     let (_controls, control_rx) = std::sync::mpsc::channel();
-    run_turn_using(
-        TurnInput {
-            summary,
-            prompt: "/goal fix build".into(),
-            settings: Settings {
-                mono: Some(monocode_core::agent::MonoContext {
-                    mono: Default::default(),
-                    root: fixture.0.clone(),
-                    executable: binary.clone(),
-                }),
-                mono_message_id: Some("goal-message".into()),
-                prepared_prompt: Some("expanded skill".into()),
-                ..Default::default()
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let worker_store = store.clone();
+    let worker = std::thread::spawn(move || {
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: "/goal fix build".into(),
+                settings: Settings {
+                    mono: Some(monocode_core::agent::MonoContext {
+                        mono: Default::default(),
+                        root: fixture.0.clone(),
+                        executable: binary.clone(),
+                    }),
+                    mono_message_id: Some("goal-message".into()),
+                    prepared_prompt: Some("expanded skill".into()),
+                    ..Default::default()
+                },
             },
-        },
-        control_rx,
-        store.clone(),
-        Arc::new(AtomicBool::new(false)),
-        updates,
-        |_| Some(binary),
-    );
+            control_rx,
+            worker_store,
+            cancel,
+            updates,
+            |_| Some(binary),
+        )
+    });
     let mut final_update = None;
-    while let Ok(update) = received.try_recv() {
+    while let Ok(update) = received.recv_blocking() {
+        if mode != "complete" && update.context.is_some_and(|usage| usage.used == 123) {
+            stop.store(true, Ordering::Relaxed);
+        }
         final_update = Some(update);
     }
+    worker.join().unwrap();
     let finished = final_update.unwrap();
     assert!(finished.finished);
-    assert_eq!(finished.status, "Ready");
+    assert_eq!(
+        finished.goal_pause_unconfirmed,
+        error.is_some(),
+        "{mode}: {}",
+        finished.status
+    );
+    if let Some(error) = error {
+        assert!(
+            finished.status.contains(error),
+            "{mode}: {}",
+            finished.status
+        );
+    } else {
+        assert_eq!(finished.status, "Ready");
+    }
     assert_eq!(finished.delivered.as_deref(), Some("goal-message"));
     let saved = locked(&store).unwrap().load(session).unwrap();
     assert_eq!(saved.rows.iter().filter(|row| row.is_prompt()).count(), 1);
-    assert_eq!(saved.rows.last().unwrap().text, "second");
+    assert!(saved.rows.iter().any(|row| row.text == "first"));
+    if error.is_some() {
+        let last = saved.rows.last().unwrap();
+        assert_eq!(last.role, "error");
+        assert_eq!(last.text, finished.status);
+    } else if mode == "complete" {
+        assert_eq!(saved.rows.last().unwrap().text, "second");
+    }
+    let settings = locked(&store)
+        .unwrap()
+        .agent_settings(session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        settings.turns.values().next().unwrap().stopped,
+        matches!(mode, "paused" | "in-flight")
+    );
 }

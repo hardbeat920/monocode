@@ -4,6 +4,7 @@ use monocode_core::mono::{Message, Mono};
 use std::path::PathBuf;
 #[derive(Default)]
 pub(super) struct ChatState {
+    pub(super) goal_pause_unconfirmed: bool,
     pub(super) pending: Vec<Message>,
     queue_scroll: gpui::ScrollHandle,
     queue_ids: Vec<String>,
@@ -91,8 +92,10 @@ impl Conversation {
         });
         window.focus(&self.input.focus_handle(cx), cx);
     }
-    /// A stop was requested and the runtime hasn't settled the turn yet: its
-    /// rows and receipt aren't final, so completion reports must wait.
+    pub(crate) fn mono_goal_pause_unconfirmed(&self) -> bool {
+        self.mono_ui.goal_pause_unconfirmed
+    }
+    /// Completion reports wait for the final receipt and settled rows.
     pub(crate) fn mono_stopping(&self) -> bool {
         self.stopping
     }
@@ -294,9 +297,12 @@ impl Conversation {
         Ok(())
     }
     pub(crate) fn mono_status(&self) -> &str {
-        if self.needs_approval() || self.settings.usage_limit.is_some() {
+        if self.mono_goal_pause_unconfirmed()
+            || self.needs_approval()
+            || self.settings.usage_limit.is_some()
+        {
             "needs-you"
-        } else if self.responding() {
+        } else if self.stopping || self.responding() {
             "working"
         } else {
             "idle"

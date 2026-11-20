@@ -1036,7 +1036,7 @@ impl Monos {
         };
         let view = view.read(cx);
         let row_count = view.mono_rows(cx).len();
-        let finished = !view.busy;
+        let finished = !view.busy && !view.mono_stopping();
         let completion =
             (finished && self.inflight.contains_key(id)).then(|| NotificationFinished {
                 summary: view.summary.clone(),
@@ -1058,6 +1058,12 @@ impl Monos {
                 let (ok, status) = self.chats[id].read(cx).external_outcome(cx);
                 if !ok && !status.starts_with("Stopped") {
                     if let Some(mono) = self.roster.get_mut(id) {
+                        if self.chats[id].read(cx).mono_goal_pause_unconfirmed() {
+                            // Retrying the original objective could restart a goal the user stopped.
+                            mono.outbox.retain(|m| m.id != sent.id);
+                            sent.text = "/goal pause".into();
+                            sent.attachments.clear();
+                        }
                         if let Some(queued) = mono.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(status);
                         } else {

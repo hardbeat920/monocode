@@ -94,6 +94,76 @@ impl Protocol {
         Ok(events)
     }
 
+    pub(super) fn confirm_goal_pause(
+        &mut self,
+        stdin: &mut impl Write,
+        replies: &mpsc::Receiver<Result<Vec<u8>, String>>,
+    ) -> Result<(), String> {
+        if !self.interrupt(stdin)? {
+            return Err("Missing active goal thread.".into());
+        }
+        let thread = self.request.provider_id.as_deref();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut paused = false;
+        let mut turn = self.active_turn.clone();
+        while !paused || turn.is_some() {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or("Stop request timed out.")?;
+            let line = replies.recv_timeout(remaining).map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => "Stop request timed out.",
+                mpsc::RecvTimeoutError::Disconnected => {
+                    "Codex disconnected before confirming Stop."
+                }
+            })??;
+            let Ok(reply) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            let id = reply["id"].as_str();
+            if id == self.interrupt_id.as_deref() {
+                if let Some(error) = reply.get("error").filter(|v| !v.is_null()) {
+                    return Err(codex_error(error, "Codex rejected the pause request."));
+                }
+                let goal = &reply["result"]["goal"];
+                if goal["threadId"].as_str() != thread || goal["status"] != "paused" {
+                    return Err("Codex did not return a paused goal for this thread.".into());
+                }
+                paused = true;
+            } else if id
+                .and_then(|id| id.strip_prefix("goal-turn-stop-"))
+                .is_some_and(|interrupted| turn.as_deref() == Some(interrupted))
+            {
+                if let Some(error) = reply.get("error").filter(|v| !v.is_null()) {
+                    return Err(codex_error(error, "Codex rejected the turn interrupt."));
+                }
+                if !reply["result"].is_object() {
+                    return Err("Codex did not acknowledge the turn interrupt.".into());
+                }
+                turn = None;
+            } else if reply["params"]["threadId"].as_str() == thread {
+                if let Some(started) = reply["params"]["turn"]["id"].as_str() {
+                    match reply["method"].as_str() {
+                        Some("turn/started") if turn.as_deref() != Some(started) => {
+                            // A continuation may have started while the pause was in flight.
+                            write_json(
+                                stdin,
+                                json!({"id":format!("goal-turn-stop-{started}"),"method":"turn/interrupt","params":{"threadId":thread,"turnId":started}}),
+                            )?;
+                            turn = Some(started.to_owned());
+                        }
+                        Some("turn/completed" | "turn/aborted")
+                            if turn.as_deref() == Some(started) =>
+                        {
+                            turn = None
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A user Stop uses the provider's cancellation API before transport teardown.
     /// Returns whether there is an active request whose acknowledgement can settle.
     pub(super) fn interrupt(&mut self, stdin: &mut impl Write) -> Result<bool, String> {
@@ -117,7 +187,7 @@ impl Protocol {
                     if let Some(turn) = &self.active_turn {
                         write_json(
                             stdin,
-                            json!({"id":"goal-turn-stop","method":"turn/interrupt","params":{"threadId":thread,"turnId":turn}}),
+                            json!({"id":format!("goal-turn-stop-{turn}"),"method":"turn/interrupt","params":{"threadId":thread,"turnId":turn}}),
                         )?;
                     }
                     return Ok(true);

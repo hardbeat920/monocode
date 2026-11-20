@@ -38,6 +38,7 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
         handoff: None,
         status: status.into(),
         finished,
+        goal_pause_unconfirmed: false,
     }
 }
 fn command(kind: &str, session_id: Option<&str>) -> Value {

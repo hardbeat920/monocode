@@ -55,6 +55,7 @@ pub(crate) struct Update {
     pub(crate) handoff: Option<Option<monocode_core::agent::Handoff>>,
     pub(crate) status: String,
     pub(crate) finished: bool,
+    pub(crate) goal_pause_unconfirmed: bool,
 }
 fn publish(
     tx: &async_channel::Sender<Update>,
@@ -134,6 +135,7 @@ fn run_turn_using(
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
     pending.own_context(&summary.provider, &source_account);
     let mut initial_delivery = None;
+    let mut goal_pause_unconfirmed = false;
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
     let mut turn_start = 0;
@@ -263,6 +265,7 @@ fn run_turn_using(
                 }
                 .into(),
                 finished: false,
+                goal_pause_unconfirmed: false,
             },
         )?;
         if creating_worktree {
@@ -311,6 +314,7 @@ fn run_turn_using(
                     handoff: None,
                     status: "Connecting…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
         }
@@ -359,6 +363,7 @@ fn run_turn_using(
                     handoff: None,
                     status: "Preparing handoff…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
@@ -419,6 +424,7 @@ fn run_turn_using(
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
         }
@@ -609,6 +615,7 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
+        let codex_goal = kind == Kind::Codex && settings.mono_goal.is_some();
         let request = Request {
             kind,
             binary,
@@ -626,9 +633,9 @@ fn run_turn_using(
         // The running-work list attributes the provider and its tools to this session.
         let result = monocode_core::process::owned_by(summary.id, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
-                // Cancellation freezes the transcript, even while the native
-                // provider drains its interrupt acknowledgement.
-                if cancel.load(Ordering::Relaxed) {
+                // Goal Stop can flush already received output and its thread binding.
+                // The final update replays those rows after the pause settles.
+                if cancel.load(Ordering::Relaxed) && !codex_goal {
                     return Err("Stopped".into());
                 }
                 let publications = visual_bridge
@@ -874,6 +881,7 @@ fn run_turn_using(
                         }
                         Event::Status(text) => status = text,
                         Event::Background(tasks) => background = Some(tasks),
+                        Event::GoalPauseUnconfirmed => goal_pause_unconfirmed = true,
                         Event::UsageLimited(limit) => usage_limit = Some(limit),
                         Event::Done => {
                             status = "Ready".into();
@@ -924,6 +932,7 @@ fn run_turn_using(
                             handoff,
                             status,
                             finished: false,
+                            goal_pause_unconfirmed: false,
                         },
                     )
                 })();
@@ -955,8 +964,9 @@ fn run_turn_using(
         }
         result
     })();
-    let cancelled =
-        cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    let cancelled = !goal_pause_unconfirmed
+        && (cancel.load(Ordering::Relaxed)
+            || result.as_ref().is_err_and(|error| error == "Stopped"));
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -1117,6 +1127,7 @@ fn run_turn_using(
         handoff,
         status,
         finished: true,
+        goal_pause_unconfirmed,
     });
 }
 

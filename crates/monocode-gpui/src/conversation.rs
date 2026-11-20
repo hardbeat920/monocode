@@ -1369,8 +1369,8 @@ impl Conversation {
                                 this.follow_up_delivered(&id, cx);
                             }
                         }
-                        if !stopping || finished {
-                            this.status = update.status;
+                        if !finished && !stopping {
+                            this.status = update.status.clone();
                         }
                         if let Some(tasks) = update.background.filter(|_| !stopping) {
                             this.set_background(tasks, cx);
@@ -1460,8 +1460,7 @@ impl Conversation {
                                 this.remote_state.refreshing = false;
                             }
                             this.summary.updated_at = monocode_core::time::now_ms();
-                            this.busy = false;
-                            this.stopping = false;
+                            this.settle_runtime(update.status, update.goal_pause_unconfirmed);
                             this.clear_background();
                             if this.is_remote() {
                                 this.refresh_remote_snapshot(cx);
@@ -1505,7 +1504,8 @@ impl Conversation {
                             let model_id = turn_model_id.clone();
                             // The runtime saved the receipt's stop; settings save the
                             // view's copy next, so it must agree.
-                            let stopped = stopping || this.notification_cancelled;
+                            let stopped = !update.goal_pause_unconfirmed
+                                && (stopping || this.notification_cancelled);
                             this.transcript.update(cx, |view, _| {
                                 if let Some(turn) = view.active_turn()
                                     && let Some(info) = view.turns.get_mut(&turn)
@@ -1545,6 +1545,15 @@ impl Conversation {
         cx.emit(SessionChanged);
         cx.notify();
     }
+    pub(crate) fn settle_runtime(&mut self, status: String, goal_pause_unconfirmed: bool) {
+        self.status = status;
+        self.mono_ui.goal_pause_unconfirmed = goal_pause_unconfirmed;
+        if goal_pause_unconfirmed {
+            self.notification_cancelled = false;
+        }
+        self.busy = false;
+        self.stopping = false;
+    }
     fn begin_turn(&mut self, cx: &mut Context<Self>) {
         self.submission_generation = self.submission_generation.wrapping_add(1);
         if !self.summary.has_messages {
@@ -1553,6 +1562,7 @@ impl Conversation {
         self.busy = true;
         self.stopping = false;
         self.notification_cancelled = false;
+        self.mono_ui.goal_pause_unconfirmed = false;
         self.review
             .update(cx, |review, cx| review.set_busy(true, cx));
         self.follow_ups.ready = false;
@@ -2752,7 +2762,12 @@ impl Conversation {
         self.approvals.clear();
         self.questions.clear();
         self.controls = None;
-        self.status = "Ready".into();
+        self.status = if self.settings.mono.is_some() {
+            "Stopping…"
+        } else {
+            "Ready"
+        }
+        .into();
         self.transcript
             .update(cx, |view, cx| view.stop_streaming(cx));
         self.review
