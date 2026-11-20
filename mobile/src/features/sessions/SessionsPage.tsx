@@ -16,6 +16,7 @@ import type { Harness, SessionSummary, Worktree } from "@/features/workspace/typ
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { AnimationsPaused } from "@/ui/AnimationsPaused";
 import { GradualBlur } from "@/ui/GradualBlur";
+import { HorizontalSafeArea } from "@/ui/HorizontalSafeArea";
 import { themedStyles, useColors } from "@/ui/theme";
 
 import { SessionCard } from "./SessionCard";
@@ -113,42 +114,44 @@ export function SessionsPage({
 
   return (
     <AnimationsPaused value={!active}>
-      <View style={styles.page}>
-        <Animated.FlatList
-          itemLayoutAnimation={
-            actions.removing
-              ? LinearTransition.duration(REMOVE_MS)
-              : moving
-                ? LinearTransition.duration(ARRIVE_MS)
-                : undefined
-          }
-          data={arrivals.sessions}
-          // Re-renders the rows when they start or stop moving, so each takes up the transition.
-          extraData={moving}
-          keyExtractor={(session) => session.id}
-          renderItem={renderItem}
-          ItemSeparatorComponent={Divider}
-          ListEmptyComponent={
-            pages ? (
-              <Text style={styles.empty}>
-                {narrowed ? "No matching sessions." : "No sessions yet."}
-              </Text>
-            ) : null
-          }
-          ListFooterComponent={
-            pages?.loadingMore ? <ActivityIndicator style={styles.more} color={colors.muted} /> : null
-          }
-          onScrollBeginDrag={closeOpenRow}
-          onEndReached={pages?.loadMore}
-          onEndReachedThreshold={0.5}
-          initialNumToRender={12}
-          windowSize={7}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.list, { paddingTop: pageTop, paddingBottom: bottom }]}
-          scrollIndicatorInsets={{ top: pageTop, bottom }}
-          showsVerticalScrollIndicator={false}
-        />
+      <View style={{ flex: 1 }}>
+        <HorizontalSafeArea>
+          <Animated.FlatList
+            itemLayoutAnimation={
+              actions.removing
+                ? LinearTransition.duration(REMOVE_MS)
+                : moving
+                  ? LinearTransition.duration(ARRIVE_MS)
+                  : undefined
+            }
+            data={arrivals.sessions}
+            // Re-renders the rows when they start or stop moving, so each takes up the transition.
+            extraData={moving}
+            keyExtractor={(session) => session.id}
+            renderItem={renderItem}
+            ItemSeparatorComponent={Divider}
+            ListEmptyComponent={
+              pages ? (
+                <Text style={styles.empty}>
+                  {narrowed ? "No matching sessions." : "No sessions yet."}
+                </Text>
+              ) : null
+            }
+            ListFooterComponent={
+              pages?.loadingMore ? <ActivityIndicator style={styles.more} color={colors.muted} /> : null
+            }
+            onScrollBeginDrag={closeOpenRow}
+            onEndReached={pages?.loadMore}
+            onEndReachedThreshold={0.5}
+            initialNumToRender={12}
+            windowSize={7}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[styles.list, { paddingTop: pageTop, paddingBottom: bottom }]}
+            scrollIndicatorInsets={{ top: pageTop, bottom }}
+            showsVerticalScrollIndicator={false}
+          />
+        </HorizontalSafeArea>
         <GradualBlur edge="bottom" height={bottom} color={colors.background} />
         <FileSearchBar
           value={query}
@@ -241,9 +244,6 @@ const SessionRow = memo(function SessionRow({
   sameRow(before.session, after.session));
 
 const useStyles = themedStyles((colors) => ({
-  page: {
-    flex: 1,
-  },
   list: {
     paddingHorizontal: 10,
   },

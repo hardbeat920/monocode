@@ -38,7 +38,7 @@ vi.mock("react-native", () => {
     if (onLayout && Array.isArray(style) && style.some((entry) => entry?.minHeight === 22)) {
       layout.onBelowLayout = onLayout;
     }
-    return <div>{children}</div>;
+    return <div style={Array.isArray(style) ? Object.assign({}, ...style) : style as object}>{children}</div>;
   };
   return {
     Platform: { get OS() { return layout.OS; } },
@@ -71,7 +71,17 @@ vi.mock("react-native-reanimated", () => ({
   withTiming: (value: number) => value,
 }));
 vi.mock("react-native-safe-area-context", () => ({
+  // Match the web provider: only children and style reach its underlying View.
+  SafeAreaProvider: ({ children, style }: { children?: ReactNode; style: object | object[] }) => (
+    <div data-local-safe-area data-pointer-events={Object.assign({}, ...[style].flat()).pointerEvents}>{children}</div>
+  ),
+  SafeAreaView: ({ children, edges, style }: {
+    children?: ReactNode; edges: string[]; style: object;
+  }) => <div data-safe-edges={edges.join(",")} style={style}>{children}</div>,
   useSafeAreaInsets: () => ({ top: 20, bottom: 0, left: 0, right: 0 }),
+}));
+vi.mock("@/ui/FloatingSafeArea", () => ({
+  FloatingSafeArea: ({ children }: { children?: ReactNode }) => <div data-floating-safe-area>{children}</div>,
 }));
 vi.mock("@/ui/CircleButton", () => ({ CircleButton: () => null }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
@@ -121,6 +131,29 @@ vi.mock("expo-router", () => ({
 vi.stubGlobal("__DEV__", false);
 
 describe("persistent session frame", () => {
+  it("keeps the composer inside the screen's horizontal safe area with its existing keyboard gap", () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      act(() => root.render(
+        <SessionFrame nativeHeaderHeight={80}>
+          <SessionScreen composer={<button data-send>Send</button>}>
+            <span data-transcript>Transcript</span>
+          </SessionScreen>
+        </SessionFrame>,
+      ));
+      const send = container.querySelector("[data-send]")!;
+      const safeArea = send.closest<HTMLElement>("[data-floating-safe-area]")!;
+      expect(safeArea.parentElement!.style.paddingBottom).toBe("12px");
+      // The native screen's provider includes its navigation controls, unlike
+      // the window provider above the navigator. The transcript stays full-bleed.
+      expect(safeArea.closest<HTMLElement>("[data-local-safe-area]")?.dataset.pointerEvents).toBe("box-none");
+      expect(container.querySelector("[data-transcript]")!.closest("[data-local-safe-area]")).toBeNull();
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
   it("samples Android page content without including the composer in its blur target", () => {
     layout.OS = "android";
     let target: unknown;
