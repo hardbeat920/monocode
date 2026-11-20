@@ -36,6 +36,7 @@ import Notification01Icon from "@hugeicons/core-free-icons/Notification01Icon";
 import PencilEdit01Icon from "@hugeicons/core-free-icons/PencilEdit01Icon";
 import PencilEdit02Icon from "@hugeicons/core-free-icons/PencilEdit02Icon";
 import Robot01Icon from "@hugeicons/core-free-icons/Robot01Icon";
+import ReplaceIcon from "@hugeicons/core-free-icons/ReplaceIcon";
 import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
@@ -88,6 +89,7 @@ const icons = {
   wrench: Wrench01Icon,
   minus: MinusSignIcon,
   copy: Copy01Icon,
+  handoff: ReplaceIcon,
   trash: Delete02Icon,
   check: Tick02Icon,
   refresh: Refresh01Icon,

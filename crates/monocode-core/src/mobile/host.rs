@@ -24,6 +24,7 @@ const APP_METHODS: &[&str] = &[
     "models.list",
     "accounts.usage",
     "session.configure",
+    "session.handoff",
     "project.changes",
     "project.worktrees",
     "project.files",

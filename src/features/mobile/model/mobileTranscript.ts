@@ -1,3 +1,4 @@
+import { harnessForTurn } from "../../sessions/model/secondOpinion";
 import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import {
   launchAnchors,
@@ -108,6 +109,7 @@ export type MobileTurn = {
   /** When the answer landed, for the line under a settled turn. */
   completedAt?: number;
   footer?: boolean;
+  handoffFrom?: HarnessId;
   /** What the footer's copy button copies: the turn's replies, as on desktop. */
   copyText?: string;
   /** Token accounting for the footer's metrics button; Monos leave it out. */
@@ -361,6 +363,9 @@ export function mobileTranscript(
       ...(footer
         ? {
             footer: true,
+            ...(!inlineWork
+              ? { handoffFrom: harnessForTurn(session.blocks, turn, session.harness) }
+              : {}),
             completedAt,
             copyText: turnCopyText(
               inlineWork

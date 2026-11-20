@@ -234,6 +234,7 @@ export type Turn = {
   items: TurnItem[];
   completedAt?: number;
   footer?: boolean;
+  handoffFrom?: Harness;
   /** What the footer's copy button copies: the turn's replies, as on desktop. */
   copyText?: string;
   /** Token accounting for the footer's metrics button; Monos leave it out. */
