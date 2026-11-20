@@ -297,6 +297,18 @@ fn stopping_before_the_worker_runs_keeps_the_optimistic_message(cx: &mut TestApp
                         .unwrap()
                         .rows
                 );
+                let turns = locked(&view.store)
+                    .unwrap()
+                    .agent_settings(view.summary.id)
+                    .unwrap()
+                    .unwrap_or_default()
+                    .turns;
+                // Native stops leave no row; the closed receipt keeps the stop
+                // for completion reports after a reload.
+                assert_eq!(
+                    monocode_core::response::turn_end(rows, &turns),
+                    monocode_core::response::TurnEnd::Stopped
+                );
             })
             .unwrap();
     }
