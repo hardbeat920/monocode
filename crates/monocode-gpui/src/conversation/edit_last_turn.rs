@@ -76,7 +76,7 @@ impl Conversation {
             && self.follow_ups.sending.is_none()
             && self.follow_ups.requested.is_none()
             && self.follow_ups.state.revision == self.follow_ups.persisted
-            && self.input.read(cx).content.is_empty()
+            && !self.has_composer_content(cx)
             && !self.input.read(cx).is_composing()
             && self.attachments.is_empty()
     }
@@ -124,7 +124,7 @@ impl Conversation {
                     Ok(edit)
                         if this.summary.provider_id == binding
                             && edit.matches(this.transcript.read(cx).source_rows())
-                            && this.input.read(cx).content.is_empty()
+                            && !this.has_composer_content(cx)
                             && this.attachments.is_empty()
                             && !this.busy
                             && !this.input.read(cx).is_composing() =>

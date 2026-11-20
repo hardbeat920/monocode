@@ -433,9 +433,7 @@ impl Shell {
                     this.add(summary, cx);
                     this.sessions[&id].update(cx, |view, cx| {
                         view.seed_new_settings(settings, cx);
-                        view.input.update(cx, |input, cx| {
-                            input.set_text(format!("@note/{} ", note.slug), cx)
-                        });
+                        view.attach_composer_note(note, cx);
                     });
                     if this.navigation_revision == revision {
                         this.activate_session(id, window, cx);

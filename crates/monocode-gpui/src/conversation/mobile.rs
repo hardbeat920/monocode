@@ -112,9 +112,8 @@ impl Conversation {
             );
             return;
         }
-        let composer_busy = self.attaching
-            || !self.input.read(cx).content.is_empty()
-            || !self.attachments.is_empty();
+        let composer_busy =
+            self.attaching || self.has_composer_content(cx) || !self.attachments.is_empty();
         if self.busy
             || self.stopping
             || self.preparing_worktree

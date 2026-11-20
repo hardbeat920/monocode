@@ -23,6 +23,134 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     })
 }
 
+fn saved_note(view: &Conversation, title: &str, body: &str) -> monocode_core::notes::Note {
+    let store = locked(&view.store).unwrap();
+    let mut note = store.create_note(None).unwrap();
+    note.title = title.into();
+    note.body = body.into();
+    store.upsert_note(&note.upsert(true)).unwrap()
+}
+
+#[gpui::test]
+fn composer_note_is_sent_without_typed_text(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            let note = saved_note(view, "Release checklist", "Run the smoke tests.");
+            let mention = format!("@note/{}", note.slug);
+            view.attach_composer_note(note, cx);
+            assert!(view.input.read(cx).content.is_empty());
+            assert!(view.composer_note_card(cx).is_some());
+            assert!(!view.available_for_managed_run(cx));
+
+            view.send(cx);
+            assert!(view.busy);
+            assert!(view.composer_note_card(cx).is_none());
+            assert_eq!(view.transcript.read(cx).source_rows()[0].text, mention);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn composer_note_is_saved_and_queued_with_prepared_context(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let mention = window
+        .update(cx, |view, _, cx| {
+            let note = saved_note(view, "Release checklist", "Run the smoke tests.");
+            let mention = format!("@note/{} Prepare a release summary", note.slug);
+            view.attach_composer_note(note, cx);
+            view.input.update(cx, |input, cx| {
+                input.set_text("/draft Prepare a release summary".into(), cx)
+            });
+            view.send(cx);
+            assert!(!view.busy);
+            assert!(view.composer_note_card(cx).is_none());
+            mention
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let draft = locked(&view.store)
+                .unwrap()
+                .follow_ups(view.summary.id)
+                .unwrap()
+                .draft
+                .unwrap();
+            assert_eq!(draft.text, mention);
+            assert!(
+                draft
+                    .prepared_prompt
+                    .unwrap()
+                    .contains("Run the smoke tests.")
+            );
+
+            view.busy = true;
+            view.draft_action(true, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let queue = locked(&view.store)
+                .unwrap()
+                .follow_ups(view.summary.id)
+                .unwrap();
+            assert!(queue.draft.is_none());
+            assert_eq!(queue.messages[0].text, mention);
+            assert!(
+                queue.messages[0]
+                    .prepared_prompt
+                    .as_deref()
+                    .unwrap()
+                    .contains("Run the smoke tests.")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn keyboard_dismissal_of_composer_note_preserves_typed_note_mentions(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let prompt = window
+        .update(cx, |view, window, cx| {
+            let attached = saved_note(view, "Release checklist", "Run the smoke tests.");
+            let typed = saved_note(view, "Deploy guide", "Wait for the review.");
+            let prompt = format!("Read @note/{} first", typed.slug);
+            view.attach_composer_note(attached, cx);
+            view.input
+                .update(cx, |input, cx| input.set_text(prompt.clone(), cx));
+            window.focus(&view.input.focus_handle(cx), cx);
+            prompt
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.refresh().unwrap();
+    window
+        .update(visual, |_, window, cx| window.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("enter");
+    visual.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("enter").unwrap(),
+    });
+    window
+        .update(visual, |view, window, cx| {
+            assert!(view.composer_note_card(cx).is_none());
+            assert!(view.input.focus_handle(cx).is_focused(window));
+            assert_eq!(view.input.read(cx).content.as_ref(), prompt);
+
+            view.busy = true;
+            view.send(cx);
+            let message = &view.follow_ups.state.messages[0];
+            assert_eq!(message.text, prompt);
+            let prepared = message.prepared_prompt.as_deref().unwrap();
+            assert!(prepared.contains("Wait for the review."));
+            assert!(!prepared.contains("Run the smoke tests."));
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut TestAppContext) {
     let window = conversation(cx);

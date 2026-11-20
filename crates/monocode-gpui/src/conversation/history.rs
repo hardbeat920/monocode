@@ -29,7 +29,7 @@ impl Conversation {
 
     pub(super) fn preserve_new_composer(&self, cx: &gpui::App) -> bool {
         self.settings.mono.is_none()
-            && (!self.input.read(cx).content.is_empty() || !self.attachments.is_empty())
+            && (self.has_composer_content(cx) || !self.attachments.is_empty())
     }
     pub(super) fn enqueue_restored_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         // The accepted prompt predates this composer draft. Queue it without
@@ -81,7 +81,7 @@ impl Conversation {
             || self.needs_approval()
             || self.attaching
             || !self.attachments.is_empty()
-            || !self.input.read(cx).content.is_empty()
+            || self.has_composer_content(cx)
             || self.input.read(cx).is_composing()
             || self.follow_ups.state.revision != self.follow_ups.persisted
             || !self.follow_ups.state.messages.is_empty()

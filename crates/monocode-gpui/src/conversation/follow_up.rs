@@ -155,10 +155,11 @@ impl Conversation {
         let text = monocode_core::composer::consume_command(&raw, "draft")
             .unwrap_or(&raw)
             .to_owned();
-        if text.trim().is_empty() && self.attachments.is_empty() {
+        if text.trim().is_empty() && self.composer_note.is_none() && self.attachments.is_empty() {
             return;
         }
         self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
+        let text = self.take_composer_note(text);
         let attachments = std::mem::take(&mut self.attachments);
         let mut message = self.message(text, attachments, None, cx);
         message.at = self.transcript.read(cx).source_rows().len();

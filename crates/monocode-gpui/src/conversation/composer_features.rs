@@ -1,9 +1,115 @@
 use super::*;
+use gpui::App;
 use std::path::PathBuf;
 pub(crate) struct StartOrchestration(pub monocode_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
+pub(super) struct ComposerNote {
+    title: String,
+    slug: String,
+}
+
 impl Conversation {
+    pub(crate) fn attach_composer_note(
+        &mut self,
+        note: monocode_core::notes::Note,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_note = Some(ComposerNote {
+            title: note.title,
+            slug: note.slug,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn has_composer_content(&self, cx: &App) -> bool {
+        self.composer_note.is_some() || !self.input.read(cx).content.is_empty()
+    }
+
+    pub(super) fn has_sendable_composer_content(&self, cx: &App) -> bool {
+        self.composer_note.is_some()
+            || self.input.read(cx).has_message_text()
+            || !self.attachments.is_empty()
+    }
+
+    pub(super) fn take_composer_note(&mut self, prompt: String) -> String {
+        let Some(note) = self.composer_note.take() else {
+            return prompt;
+        };
+        // Keep the same note mention for provider preparation, history and the
+        // durable queue. The card separates it from the editable input only.
+        if prompt.trim().is_empty() {
+            format!("@note/{}", note.slug)
+        } else {
+            format!("@note/{} {prompt}", note.slug)
+        }
+    }
+
+    pub(super) fn dismiss_composer_note(&mut self, cx: &mut Context<Self>) {
+        self.composer_note = None;
+        cx.notify();
+    }
+
+    pub(super) fn composer_note_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let note = self.composer_note.as_ref()?;
+        let title = if note.title.trim().is_empty() {
+            "Untitled"
+        } else {
+            note.title.trim()
+        };
+        Some(
+            div()
+                .id("composer-note")
+                .role(Role::Group)
+                .aria_label(format!("Attached note {title}"))
+                .mx_3()
+                .mt_2()
+                .px_2p5()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .border_color(content(0.1))
+                .bg(content(0.06))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon("note", 14.).text_color(content(0.5)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(content(0.5))
+                                .child(format!("Note · {}", note.slug)),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(content(1.))
+                                .child(title.to_owned()),
+                        ),
+                )
+                .child(
+                    tool_pill("remove-composer-note", "Remove note")
+                        .aria_label(format!("Remove note {title}"))
+                        .tab_index(0)
+                        .border_1()
+                        .border_color(gpui::transparent_black())
+                        .focus(|style| style.border_color(accent_color()))
+                        .child(icon("close", 12.))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.dismiss_composer_note(cx);
+                            window.focus(&this.input.focus_handle(cx), cx);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn request_folder(&mut self, cx: &mut Context<Self>) {
         if self.settings.mono.is_none() {
             self.completion
@@ -464,7 +570,7 @@ impl Conversation {
             && !self.stopping
             && !self.preparing_worktree
             && !self.attaching
-            && self.input.read(cx).content.is_empty()
+            && !self.has_composer_content(cx)
             && self.attachments.is_empty()
     }
     /// Managed runs must wait for history restoration and worktree setup as
@@ -490,7 +596,7 @@ impl Conversation {
             && !self.account_switching
             && !self.editing_last_turn.pending()
             && !self.mono_external_pending()
-            && self.input.read(cx).content.is_empty()
+            && !self.has_composer_content(cx)
             && self.attachments.is_empty()
             && self.follow_ups.state.messages.is_empty()
             && self.follow_ups.state.draft.is_none()

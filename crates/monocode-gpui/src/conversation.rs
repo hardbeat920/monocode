@@ -149,6 +149,7 @@ pub(crate) struct Conversation {
     _draft_observation: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
+    composer_note: Option<composer_features::ComposerNote>,
     folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     background: background_tasks::BackgroundTasks,
@@ -610,6 +611,7 @@ impl Conversation {
             _draft_observation: draft_observation,
             _input_focus: None,
             draft_has_value: false,
+            composer_note: None,
             folder_selected: false,
             follow_ups: Default::default(),
             background: Default::default(),
@@ -937,9 +939,7 @@ impl Conversation {
             self.request_folder(cx);
             return;
         }
-        if self.attaching
-            || (!self.input.read(cx).has_message_text() && self.attachments.is_empty())
-        {
+        if self.attaching || !self.has_sendable_composer_content(cx) {
             return;
         }
         if self.input.read(cx).is_composing() {
@@ -954,6 +954,7 @@ impl Conversation {
             .unwrap_or(raw);
         self.folder_selected = false;
         let prompt = self.consume_mode_command(raw, cx);
+        let prompt = self.take_composer_note(prompt);
         if prompt.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
@@ -2811,8 +2812,7 @@ impl Conversation {
         } else {
             Vec::new()
         };
-        let input = self.input.read(cx);
-        let has_value = input.has_message_text() || !self.attachments.is_empty();
+        let has_value = self.has_sendable_composer_content(cx);
         self.completion.update(cx, |completion, cx| {
             completion.set_cwd(
                 self.settings
@@ -2932,6 +2932,7 @@ impl Conversation {
                     .child(self.completion.read(cx).composer_probe())
                     .child(self.btw_home.0.probe())
                     .child(composer_surface(radius))
+                    .children(self.composer_note_card(cx))
                     .children(self.attachment_chips(cx))
                     .child(
                         div()
