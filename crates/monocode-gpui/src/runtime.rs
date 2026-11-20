@@ -55,6 +55,7 @@ pub(crate) struct Update {
     pub(crate) handoff: Option<Option<monocode_core::agent::Handoff>>,
     pub(crate) status: String,
     pub(crate) finished: bool,
+    pub(crate) goal_pause_unconfirmed: bool,
 }
 fn publish(
     tx: &async_channel::Sender<Update>,
@@ -133,7 +134,16 @@ fn run_turn_using(
         .unwrap_or(false);
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
     pending.own_context(&summary.provider, &source_account);
+    let goal_message = settings.mono_message_id.clone().filter(|_| {
+        settings.mono.is_some()
+            && !settings.internal_message
+            && monocode_core::composer::consume_command(&prompt, "goal").is_some()
+    });
+    let goal_key = goal_message
+        .as_ref()
+        .map(|id| monocode_core::mono::goal_delivery_key(summary.id, id));
     let mut initial_delivery = None;
+    let mut goal_pause_unconfirmed = false;
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
     let mut turn_start = 0;
@@ -201,11 +211,18 @@ fn run_turn_using(
         // Keep the already painted prompt in the failure replay even if saving
         // the turn's configuration fails before its first transcript write.
         locked(&store)?.configure_agent(summary.id, &summary.provider, &persisted)?;
+        if let Some(key) = &goal_key {
+            locked(&store)?.save_setting(key, "pending")?;
+        }
+        let transcript_delivery = settings
+            .mono_message_id
+            .clone()
+            .filter(|_| goal_key.is_none());
         locked(&store)?.write_rows_with_message(
             summary.id,
             start,
             &transcript.rows[start..],
-            settings.mono_message_id.as_deref(),
+            transcript_delivery.as_deref(),
         )?;
         let mut info =
             settings
@@ -225,7 +242,7 @@ fn run_turn_using(
             .map_or(0, |at| at + 1);
         persistence::save_turn_receipt(&store, summary.id, turn, info.clone())?;
         turn_receipt = Some((turn, info));
-        initial_delivery = settings.mono_message_id.clone();
+        initial_delivery = transcript_delivery;
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
         publish(
             &tx,
@@ -237,7 +254,7 @@ fn run_turn_using(
                 turn_ready: false,
                 follow_up_delivered: Vec::new(),
                 follow_up_errors: Vec::new(),
-                delivered: settings.mono_message_id.clone(),
+                delivered: initial_delivery.clone(),
                 start,
                 rows: transcript.rows[start..].to_vec(),
                 provider_id: None,
@@ -263,6 +280,7 @@ fn run_turn_using(
                 }
                 .into(),
                 finished: false,
+                goal_pause_unconfirmed: false,
             },
         )?;
         if creating_worktree {
@@ -311,6 +329,7 @@ fn run_turn_using(
                     handoff: None,
                     status: "Connecting…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
         }
@@ -359,6 +378,7 @@ fn run_turn_using(
                     handoff: None,
                     status: "Preparing handoff…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
             let root = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
@@ -419,6 +439,7 @@ fn run_turn_using(
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
                     finished: false,
+                    goal_pause_unconfirmed: false,
                 },
             )?;
         }
@@ -433,11 +454,35 @@ fn run_turn_using(
         })?;
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
-        let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
-        let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
-            && provider::native_prompt(kind, &prompt)
-                .trim_start()
-                .starts_with('/');
+        if settings.mono.is_some()
+            && !settings.internal_message
+            && let Some(argument) = monocode_core::composer::consume_command(&prompt, "goal")
+        {
+            if !matches!(kind, Kind::Codex | Kind::Claude) {
+                return Err(format!(
+                    "{} does not support native Mono goals.",
+                    kind.label()
+                ));
+            }
+            if !settings.attachments.is_empty() {
+                return Err("Send goal attachments in a separate message.".into());
+            }
+            let argument = argument.trim();
+            if kind == Kind::Claude && matches!(argument, "pause" | "resume") {
+                return Err("Claude supports /goal, /goal <condition>, and /goal clear.".into());
+            }
+            settings.mono_goal = Some(if argument == "status" { "" } else { argument }.into());
+        }
+        let prompt = if settings.mono_goal.is_some() {
+            prompt
+        } else {
+            settings.prepared_prompt.take().unwrap_or(prompt)
+        };
+        let raw_native_command = settings.mono_goal.is_some()
+            || matches!(kind, Kind::Omp | Kind::Devin)
+                && provider::native_prompt(kind, &prompt)
+                    .trim_start()
+                    .starts_with('/');
         let prompt = if raw_native_command {
             prompt
         } else if let Some(mono) = &settings.mono {
@@ -524,7 +569,11 @@ fn run_turn_using(
             });
             checkpoint = Some((cwd.to_owned(), id));
         }
-        let mut prompt = provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?;
+        let mut prompt = if settings.mono_goal.is_some() {
+            prompt
+        } else {
+            provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?
+        };
         if !raw_native_command && prompt.contains("@note:") {
             let notes = locked(&store)?.notes()?;
             for note in notes {
@@ -581,6 +630,12 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
+        let codex_goal = kind == Kind::Codex && settings.mono_goal.is_some();
+        let stop_request = codex_goal.then(|| {
+            goal_message
+                .clone()
+                .unwrap_or_else(monocode_core::mono::new_id)
+        });
         let request = Request {
             kind,
             binary,
@@ -598,9 +653,9 @@ fn run_turn_using(
         // The running-work list attributes the provider and its tools to this session.
         let result = monocode_core::process::owned_by(summary.id, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
-                // Cancellation freezes the transcript, even while the native
-                // provider drains its interrupt acknowledgement.
-                if cancel.load(Ordering::Relaxed) {
+                // Goal Stop can flush already received output and its thread binding.
+                // The final update replays those rows after the pause settles.
+                if cancel.load(Ordering::Relaxed) && !codex_goal {
                     return Err("Stopped".into());
                 }
                 let publications = visual_bridge
@@ -846,6 +901,36 @@ fn run_turn_using(
                         }
                         Event::Status(text) => status = text,
                         Event::Background(tasks) => background = Some(tasks),
+                        Event::GoalAccepted => {
+                            if let (Some(key), Some(id)) = (&goal_key, &goal_message) {
+                                locked(&store)?.save_setting(key, "accepted")?;
+                                initial_delivery = Some(id.clone());
+                                follow_up_delivered.push(id.clone());
+                            }
+                        }
+                        Event::GoalStopRequested | Event::GoalStopConfirmed => {
+                            // The provider sends these individually and waits for durable storage.
+                            let id = stop_request
+                                .as_deref()
+                                .ok_or("Missing Codex goal operation")?;
+                            return if event == Event::GoalStopRequested {
+                                locked(&store)?.save_setting(
+                                    &monocode_core::mono::goal_stop_key(summary.id),
+                                    id,
+                                )
+                            } else {
+                                pending.flush(
+                                    &store,
+                                    summary.id,
+                                    &transcript,
+                                    &context,
+                                    std::time::Instant::now(),
+                                )?;
+                                let db = locked(&store)?;
+                                monocode_core::mono::clear_goal_stop(&db, summary.id, id)
+                            };
+                        }
+                        Event::GoalPauseUnconfirmed => goal_pause_unconfirmed = true,
                         Event::UsageLimited(limit) => usage_limit = Some(limit),
                         Event::Done => {
                             status = "Ready".into();
@@ -896,6 +981,7 @@ fn run_turn_using(
                             handoff,
                             status,
                             finished: false,
+                            goal_pause_unconfirmed: false,
                         },
                     )
                 })();
@@ -927,8 +1013,22 @@ fn run_turn_using(
         }
         result
     })();
-    let cancelled =
-        cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    // An explicit Stop cancels an unacknowledged outbox submission too.
+    // Never allow the next dispatch to replay it as a fresh objective.
+    let interrupted_delivery =
+        goal_key.is_some() && initial_delivery.is_none() && cancel.load(Ordering::Relaxed);
+    let result = if interrupted_delivery && !goal_pause_unconfirmed {
+        Err(
+            "Goal delivery was interrupted. Check the provider goal before retrying this command."
+                .into(),
+        )
+    } else {
+        result
+    };
+    let cancelled = !interrupted_delivery
+        && !goal_pause_unconfirmed
+        && (cancel.load(Ordering::Relaxed)
+            || result.as_ref().is_err_and(|error| error == "Stopped"));
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -1089,6 +1189,7 @@ fn run_turn_using(
         handoff,
         status,
         finished: true,
+        goal_pause_unconfirmed,
     });
 }
 

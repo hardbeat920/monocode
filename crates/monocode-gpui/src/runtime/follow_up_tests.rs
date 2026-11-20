@@ -144,3 +144,444 @@ for line in sys.stdin:
     assert_eq!(after.role, "assistant");
     assert_eq!(saved.rows.last(), Some(after));
 }
+
+#[test]
+fn mono_goal_keeps_one_delivery_and_the_final_continuation_output() {
+    run_mono_goal("complete", None);
+}
+
+#[test]
+fn mono_goal_settles_idle_without_losing_a_racing_continuation() {
+    run_mono_goal("idle", None);
+    run_mono_goal("racing-read", None);
+}
+
+#[test]
+fn mono_goal_stop_requires_a_confirmed_pause_between_turns() {
+    for (mode, error) in [
+        ("paused", None),
+        ("inactive-stop", None),
+        ("inactive-storage", Some("terminal write failed")),
+        ("inactive-timeout", Some("timed out")),
+        ("in-flight", None),
+        ("turn-rejected", Some("interrupt rejected")),
+        ("ack-only", Some("timed out")),
+        ("rpc-error", Some("pause rejected")),
+        ("timeout", Some("timed out")),
+        ("disconnect", Some("disconnected")),
+        ("write-error", Some("Broken pipe")),
+        ("wrong-thread", Some("for this thread")),
+        ("still-active", Some("paused goal")),
+    ] {
+        run_mono_goal(mode, error);
+    }
+}
+
+fn run_mono_goal(mode: &str, error: Option<&str>) {
+    let fixture = Fixture(
+        std::env::var_os("MONOCODE_TEST_STOP_CRASH_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "monocode-runtime-goal-{}",
+                    monocode_core::mono::new_id()
+                ))
+            }),
+    );
+    std::fs::create_dir_all(&fixture.0).unwrap();
+    let binary = fixture.0.join("codex");
+    std::fs::write(fixture.0.join("mode"), mode).unwrap();
+    std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, os, signal, sys, time
+signal.alarm(20)
+mode = open("mode").read()
+def send(frame):
+    print(json.dumps(frame), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method == 'initialize':
+        send({'id': request['id'], 'result': {}})
+    elif method == 'thread/start':
+        send({'id': request['id'], 'result': {'thread': {'id': 'main'}}})
+    elif method == 'thread/read':
+        assert mode in ('idle','racing-read') and request['params'] == {'threadId':'main'}
+        if mode == 'racing-read':
+            send({'method':'turn/started','params':{'threadId':'main','turn':{'id':'second'}}})
+        send({'id':request['id'],'result':{'thread':{'id':'main','status':{'type':'idle'}}}})
+        if mode == 'racing-read':
+            send({'method':'thread/goal/updated','params':{'threadId':'main','goal':{'status':'complete','objective':'fix build'}}})
+            send({'method':'item/agentMessage/delta','params':{'threadId':'main','turnId':'second','itemId':'tail','delta':'second'}})
+            send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':'second','status':'completed'}}})
+        break
+    elif method == 'turn/interrupt':
+        terminal = 'first' if mode.startswith('inactive-') else 'continuation'
+        assert request['params'] == {'threadId':'main','turnId':terminal}
+        if mode == 'turn-rejected':
+            send({'id':request['id'],'error':{'message':'interrupt rejected'}})
+        else:
+            send({'id':request['id'],'result':{}})
+            send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':'wrong','status':'completed'}}})
+            send({'method':'item/agentMessage/delta','params':{'threadId':'main','turnId':terminal,'itemId':'tail','delta':'post-ack output'}})
+            send({'method':'item/completed','params':{'threadId':'main','turnId':terminal,'item':{'id':'late-tool','type':'commandExecution','command':'pwd','status':'completed','aggregatedOutput':'post-ack tool'}}})
+            if mode == 'inactive-storage':
+                import sqlite3
+                with sqlite3.connect('sessions.db') as db:
+                    db.execute("""CREATE TRIGGER fail_terminal BEFORE UPDATE OF blocks_json ON sessions
+                        WHEN instr(NEW.blocks_json, 'terminal snapshot') AND NOT instr(NEW.blocks_json, 'could not confirm Stop')
+                        BEGIN SELECT RAISE(FAIL, 'terminal write failed'); END""")
+            if mode in ('ack-only','inactive-timeout'):
+                time.sleep(10)
+            send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':terminal,'status':'interrupted','items':[{'type':'agentMessage','id':'snapshot','text':'terminal snapshot'}]}}})
+        break
+    elif method == 'thread/goal/set':
+        if request['params'].get('status') == 'paused':
+            assert not mode.startswith('inactive-'), 'must not rewrite an inactive goal'
+            assert request['params'] == {'origin':'user','status':'paused','threadId':'main'}
+            if mode == 'crash-stop':
+                open('pause-on-wire','w').close()
+                sys.stdin.read()
+                break
+            reply = {'id':request['id'],'result':{'goal':{'threadId':'main','status':'paused'}}}
+            if mode == 'rpc-error':
+                reply = {'id':request['id'],'error':{'message':'pause rejected'}}
+            elif mode == 'disconnect':
+                break
+            elif mode == 'timeout':
+                send({**reply, 'id':'unrelated'})
+                time.sleep(10)
+            elif mode == 'wrong-thread':
+                reply['result']['goal']['threadId'] = 'another'
+            elif mode == 'still-active':
+                reply['result']['goal']['status'] = 'active'
+            if mode in ('in-flight', 'turn-rejected', 'ack-only'):
+                send({'method':'turn/started','params':{'threadId':'main','turn':{'id':'continuation'}}})
+                send(reply)
+                continue
+            send(reply)
+            break
+        assert request['params']['objective'] == 'fix build'
+        goal = {'threadId':'main','objective':'fix build','status':'active'}
+        send({'id': request['id'], 'result': {'goal': goal}})
+        if mode == 'write-error':
+            os.close(0)
+        for turn in (['first', 'second'] if mode == 'complete' else ['first']):
+            send({'method':'turn/started','params':{'threadId':'main','turn':{'id':turn}}})
+            if turn == 'second':
+                goal['status'] = 'complete'
+                send({'method':'thread/goal/updated','params':{'threadId':'main','goal':goal}})
+            send({'method':'item/agentMessage/delta','params':{'itemId':turn,'delta':turn}})
+            if mode.startswith('inactive-'):
+                send({'method':'thread/goal/updated','params':{'threadId':'main','goal':{'status':'complete','objective':'fix build'}}})
+            else:
+                send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':turn,'status':'completed'}}})
+        if mode == 'complete':
+            break
+        # A post-completion usage update tells the test the first turn has drained.
+        send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'last':{'totalTokens':123},'modelContextWindow':1024}}})
+        if mode == 'write-error':
+            time.sleep(10)
+    else:
+        assert method == 'initialized', method
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = Store::open_monocode(&fixture.0.join("sessions.db")).unwrap();
+    let summary = store.create("codex", fixture.0.to_str().unwrap()).unwrap();
+    let session = summary.id;
+    if matches!(mode, "crash-stop" | "inactive-storage") {
+        use monocode_core::mono::{Message, Mono, Roster};
+        let mut roster = Roster::default();
+        let goal = Message {
+            id: "goal-message".into(),
+            text: "/goal fix build".into(),
+            internal: false,
+            sent_at: None,
+            error: None,
+            attachments: Vec::new(),
+        };
+        roster.monos.push(Mono {
+            id: "test".into(),
+            session_id: Some(session),
+            outbox: vec![
+                goal.clone(),
+                Message {
+                    id: "later".into(),
+                    text: "next request".into(),
+                    ..goal
+                },
+            ],
+            ..Default::default()
+        });
+        roster.save(&store).unwrap();
+    }
+
+    let store = Arc::new(Mutex::new(store));
+    let (updates, received) = async_channel::unbounded();
+    let (_controls, control_rx) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let worker_store = store.clone();
+    let root = fixture.0.clone();
+    let worker = std::thread::spawn(move || {
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: "/goal fix build".into(),
+                settings: Settings {
+                    mono: Some(monocode_core::agent::MonoContext {
+                        mono: Default::default(),
+                        root,
+                        executable: binary.clone(),
+                    }),
+                    mono_message_id: Some("goal-message".into()),
+                    prepared_prompt: Some("expanded skill".into()),
+                    ..Default::default()
+                },
+            },
+            control_rx,
+            worker_store,
+            cancel,
+            updates,
+            |_| Some(binary),
+        )
+    });
+    let mut final_update = None;
+    while let Ok(update) = received.recv_blocking() {
+        if !matches!(mode, "complete" | "idle" | "racing-read")
+            && update.context.is_some_and(|usage| usage.used == 123)
+        {
+            if mode == "crash-stop" {
+                let db = locked(&store).unwrap();
+                let mut roster = monocode_core::mono::Roster::load(&db).unwrap();
+                assert!(
+                    roster.monos[0].outbox[0]
+                        .reconcile_delivery(&db, session)
+                        .unwrap()
+                );
+                roster.monos[0].outbox.remove(0);
+                roster.save(&db).unwrap();
+                drop(db);
+            }
+            stop.store(true, Ordering::Relaxed);
+            if mode == "crash-stop" {
+                let deadline = std::time::Instant::now() + Duration::from_secs(4);
+                while !fixture.0.join("pause-on-wire").exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "pause request never reached mock Codex"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::process::exit(74);
+            }
+        }
+        final_update = Some(update);
+    }
+    worker.join().unwrap();
+    let finished = final_update.unwrap();
+    assert!(finished.finished);
+    assert_eq!(
+        finished.goal_pause_unconfirmed,
+        error.is_some(),
+        "{mode}: {}",
+        finished.status
+    );
+    if let Some(error) = error {
+        assert!(
+            finished.status.contains(error),
+            "{mode}: {}",
+            finished.status
+        );
+    } else {
+        assert_eq!(finished.status, "Ready");
+    }
+    assert_eq!(finished.delivered.as_deref(), Some("goal-message"));
+    let reopened = Store::open_monocode(&fixture.0.join("sessions.db")).unwrap();
+    let intent = reopened
+        .setting(&monocode_core::mono::goal_stop_key(session))
+        .unwrap();
+    assert_eq!(
+        intent.as_deref().filter(|s| !s.is_empty()),
+        error.map(|_| "goal-message"),
+        "{mode}"
+    );
+    let mut delivered = monocode_core::mono::Message {
+        id: "goal-message".into(),
+        text: "/goal fix build".into(),
+        internal: false,
+        sent_at: None,
+        attachments: Vec::new(),
+        error: None,
+    };
+    assert!(delivered.reconcile_delivery(&reopened, session).unwrap());
+    let saved = locked(&store).unwrap().load(session).unwrap();
+    assert_eq!(saved.rows.iter().filter(|row| row.is_prompt()).count(), 1);
+    assert!(saved.rows.iter().any(|row| row.text == "first"));
+    if matches!(
+        mode,
+        "in-flight" | "ack-only" | "inactive-stop" | "inactive-timeout"
+    ) {
+        assert!(saved.rows.iter().any(|r| r.text == "post-ack output"));
+        assert!(
+            saved
+                .rows
+                .iter()
+                .any(|r| r.role == "tool" && r.text.contains("post-ack tool"))
+        );
+    }
+    if mode == "inactive-storage" {
+        let roster = monocode_core::mono::Roster::load(&reopened).unwrap();
+        let queue = &roster.monos[0].outbox;
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].text, "/goal pause");
+        assert!(queue[0].error.is_some());
+        assert_eq!(queue[1].id, "later");
+    }
+    if matches!(mode, "inactive-stop" | "inactive-storage") {
+        assert!(saved.rows.iter().any(|r| r.text == "terminal snapshot"));
+    }
+    if mode == "idle" {
+        assert!(saved.rows.last().unwrap().text.contains("still active"));
+        assert_eq!(finished.status, "Ready");
+    }
+    if error.is_some() {
+        let last = saved.rows.last().unwrap();
+        assert_eq!(last.role, "error");
+        assert_eq!(last.text, finished.status);
+    } else if matches!(mode, "complete" | "racing-read") {
+        assert_eq!(saved.rows.last().unwrap().text, "second");
+    }
+    let settings = locked(&store)
+        .unwrap()
+        .agent_settings(session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        settings.turns.values().next().unwrap().stopped,
+        matches!(mode, "paused" | "in-flight" | "inactive-stop")
+    );
+}
+
+#[test]
+fn mono_goal_restart_before_provider_request_preserves_the_command_for_review() {
+    use monocode_core::mono::{Message as OutboxMessage, Mono, Roster};
+    const CHILD: &str = "MONOCODE_TEST_GOAL_CRASH_DIR";
+    if let Some(dir) = std::env::var_os(CHILD) {
+        let root = PathBuf::from(dir);
+        let store = Store::open_monocode(&root.join("sessions.db")).unwrap();
+        let summary = store.sessions().unwrap().remove(0);
+        let mono = Roster::load(&store).unwrap().monos.remove(0);
+        let message = &mono.outbox[0];
+        let (tx, _rx) = async_channel::unbounded();
+        let (_controls, control_rx) = std::sync::mpsc::channel();
+        run_turn_using(
+            TurnInput {
+                summary,
+                prompt: message.text.clone(),
+                settings: Settings {
+                    mono_message_id: Some(message.id.clone()),
+                    mono: Some(monocode_core::agent::MonoContext {
+                        mono,
+                        root,
+                        executable: "unused".into(),
+                    }),
+                    ..Default::default()
+                },
+            },
+            control_rx,
+            Arc::new(Mutex::new(store)),
+            Arc::new(AtomicBool::new(false)),
+            tx,
+            |_| std::process::exit(73),
+        );
+        panic!("never reached provider resolution");
+    }
+    for command in ["/goal repair build", "/goal pause"] {
+        let dir = Fixture(std::env::temp_dir().join(monocode_core::mono::new_id()));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("sessions.db");
+        let store = Store::open_monocode(&path).unwrap();
+        let session = store.create("codex", dir.0.to_str().unwrap()).unwrap().id;
+        let message = OutboxMessage {
+            id: "operation".into(),
+            text: command.into(),
+            internal: false,
+            sent_at: None,
+            attachments: Vec::new(),
+            error: None,
+        };
+        let later = OutboxMessage {
+            id: "later".into(),
+            text: "next request".into(),
+            ..message.clone()
+        };
+        let mut roster = Roster::default();
+        roster.monos.push(Mono {
+            id: "test".into(),
+            session_id: Some(session),
+            outbox: vec![message, later],
+            ..Default::default()
+        });
+        roster.save(&store).unwrap();
+        drop(store);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","runtime::follow_up_tests::mono_goal_restart_before_provider_request_preserves_the_command_for_review"])
+            .env(CHILD,&dir.0).status().unwrap();
+        assert_eq!(status.code(), Some(73));
+        let reopened = Store::open_monocode(&path).unwrap();
+        assert!(
+            reopened
+                .load(session)
+                .unwrap()
+                .rows
+                .iter()
+                .any(|row| row.text == command)
+        );
+        let mut recovered = Roster::load(&reopened).unwrap().monos.remove(0).outbox;
+        assert!(!recovered[0].reconcile_delivery(&reopened, session).unwrap());
+        assert_eq!(recovered[0].text, command);
+        assert!(recovered[0].error.as_ref().unwrap().contains("interrupted"));
+        assert!(!recovered[1].reconcile_delivery(&reopened, session).unwrap());
+        assert!(recovered[1].error.is_none());
+    }
+}
+
+#[test]
+fn mono_goal_crash_after_pause_request_recovers_only_a_blocked_pause() {
+    use monocode_core::mono::Roster;
+    const CHILD: &str = "MONOCODE_TEST_STOP_CRASH_DIR";
+    if std::env::var_os(CHILD).is_some() {
+        run_mono_goal("crash-stop", None);
+        panic!("worker survived");
+    }
+    let dir = Fixture(std::env::temp_dir().join(monocode_core::mono::new_id()));
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact","runtime::follow_up_tests::mono_goal_crash_after_pause_request_recovers_only_a_blocked_pause"])
+        .env(CHILD,&dir.0).status().unwrap();
+    assert_eq!(status.code(), Some(74));
+    for _ in 0..2 {
+        let db = Store::open_monocode(&dir.0.join("sessions.db")).unwrap();
+        let roster = Roster::load(&db).unwrap();
+        let mono = &roster.monos[0];
+        assert_eq!(mono.outbox.len(), 2);
+        assert_eq!(mono.outbox[0].text, "/goal pause");
+        assert!(
+            mono.outbox[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("interrupted")
+        );
+        assert_eq!(mono.outbox[1].id, "later");
+        assert!(mono.outbox[1].error.is_none());
+        let session = mono.session_id.unwrap();
+        assert_eq!(
+            db.setting(&monocode_core::mono::goal_stop_key(session))
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+        let saved = db.load(session).unwrap();
+        assert_eq!(saved.rows.iter().filter(|r| r.is_prompt()).count(), 1);
+    }
+}

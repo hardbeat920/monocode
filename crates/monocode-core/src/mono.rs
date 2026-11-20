@@ -248,6 +248,63 @@ pub struct Message {
     #[serde(default)]
     pub attachments: Vec<String>,
 }
+/// The outbox owns a goal until the provider acknowledges the command.
+pub fn goal_delivery_key(session: i64, message: &str) -> String {
+    format!("mono-goal-delivery:{session}:{message}")
+}
+
+pub fn goal_stop_key(session: i64) -> String {
+    format!("mono-goal-stop:{session}")
+}
+
+pub fn clear_goal_stop(db: &Store, session: i64, request: &str) -> Result<(), String> {
+    let key = goal_stop_key(session);
+    if db.setting(&key)?.as_deref() == Some(request) {
+        db.save_setting(&key, "")?;
+    }
+    Ok(())
+}
+
+impl Mono {
+    pub fn hold_goal_stop(&mut self, request: &str, reason: String) {
+        let retry = format!("goal-stop:{request}");
+        self.outbox.retain(|m| m.id != request && m.id != retry);
+        self.outbox.insert(
+            0,
+            Message {
+                id: retry,
+                text: "/goal pause".into(),
+                error: Some(reason),
+                internal: false,
+                attachments: Vec::new(),
+                sent_at: Some(crate::time::now_ms()),
+            },
+        );
+    }
+}
+
+impl Message {
+    pub fn reconcile_delivery(&mut self, db: &Store, session: i64) -> Result<bool, String> {
+        let legacy = db
+            .setting(&format!("mono-delivered:{session}:{}", self.id))?
+            .is_some();
+        if self.internal || crate::composer::consume_command(&self.text, "goal").is_none() {
+            return Ok(legacy);
+        }
+        match db
+            .setting(&goal_delivery_key(session, &self.id))?
+            .as_deref()
+        {
+            Some("accepted") => Ok(true),
+            None if !legacy => Ok(false),
+            _ => {
+                self.error.get_or_insert_with(|| "Goal delivery was interrupted. Check the provider goal before retrying this command.".into());
+                Ok(false)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Roster {
@@ -278,8 +335,25 @@ impl Roster {
                 && m.id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
                 && ids.insert(m.id.clone())
         });
+        let mut recovered_stop = false;
         for mono in &mut roster.monos {
             mono.normalize();
+            if let Some(session) = mono.session_id {
+                if let Some(id) = store
+                    .setting(&goal_stop_key(session))?
+                    .filter(|id| !id.is_empty())
+                {
+                    mono.hold_goal_stop(
+                        &id,
+                        "Goal Stop was interrupted. Check the provider before retrying the pause."
+                            .into(),
+                    );
+                    recovered_stop = true;
+                }
+            }
+        }
+        if recovered_stop {
+            roster.save(store)?;
         }
         Ok(roster)
     }
@@ -287,7 +361,18 @@ impl Roster {
         store.save_setting(
             "mono-roster",
             &serde_json::to_string(self).map_err(|e| e.to_string())?,
-        )
+        )?;
+        // Transfer the Stop intent only after its blocked retry is durable.
+        for mono in &self.monos {
+            if let Some(session) = mono.session_id {
+                for message in &mono.outbox {
+                    if let Some(request) = message.id.strip_prefix("goal-stop:") {
+                        clear_goal_stop(store, session, request)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
     pub fn create(&mut self, projects: Vec<String>) -> &Mono {
         let mut mono = Mono {

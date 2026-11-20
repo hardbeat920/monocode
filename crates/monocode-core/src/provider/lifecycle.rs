@@ -41,7 +41,12 @@ impl Protocol {
         if self.claude_prompt_sent {
             return Ok(());
         }
-        let prompt = if self.request.settings.effort.as_deref() == Some("ultrathink") {
+        let prompt = if let Some(argument) = &self.request.settings.mono_goal {
+            if !self.claude_goal_supported {
+                return Err("This Claude CLI did not advertise its built-in /goal command.".into());
+            }
+            format!("/goal {argument}").trim_end().to_owned()
+        } else if self.request.settings.effort.as_deref() == Some("ultrathink") {
             if self.request.prompt.is_empty() {
                 "Ultrathink:".into()
             } else {
@@ -66,6 +71,19 @@ impl Protocol {
         stdin: &mut impl Write,
     ) -> Result<Vec<Event>, String> {
         let mut events = self.expire_questions(stdin)?;
+        if let Some(check) = self.goal_idle_check.as_mut().filter(|_| self.goal_ack) {
+            if check.requested && check.since.elapsed() >= Duration::from_secs(5) {
+                return Err("Codex did not answer the goal thread status request.".into());
+            }
+            if !check.requested && check.since.elapsed() >= Duration::from_secs(1) {
+                write_json(
+                    stdin,
+                    json!({"id":format!("goal-idle-{}",check.turn),"method":"thread/read","params":{"threadId":self.request.provider_id}}),
+                )?;
+                check.requested = true;
+                check.since = Instant::now();
+            }
+        }
         if self.request.kind.is_acp() {
             events.extend(self.acp_tick(stdin)?);
         } else if self.request.kind.is_pi() {
@@ -89,6 +107,107 @@ impl Protocol {
         Ok(events)
     }
 
+    pub(super) fn must_settle_goal_stop(&self) -> bool {
+        self.request.kind == Kind::Codex
+            && self.request.settings.mono_goal.is_some()
+            && (self.goal_active || self.active_turn.is_some())
+    }
+
+    pub(super) fn confirm_goal_pause(
+        &mut self,
+        stdin: &mut impl Write,
+        replies: &mpsc::Receiver<Result<Vec<u8>, String>>,
+        emit: &mut impl FnMut(Vec<Event>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.interrupt(stdin)? {
+            return Err("Missing active goal thread.".into());
+        }
+        let binding = self.request.provider_id.clone();
+        let thread = binding.as_deref();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pause_pending = self.goal_active;
+        let mut turn = self.active_turn.clone();
+        while pause_pending || turn.is_some() {
+            let timeout = if !pause_pending {
+                "Waiting for the final goal turn to finish timed out."
+            } else {
+                "Waiting for Codex to confirm the goal pause timed out."
+            };
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(timeout)?;
+            let line = replies.recv_timeout(remaining).map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => timeout,
+                mpsc::RecvTimeoutError::Disconnected => {
+                    "Codex disconnected before confirming Stop."
+                }
+            })??;
+            let Ok(reply) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            let id = reply["id"].as_str();
+            if pause_pending && id == self.interrupt_id.as_deref() {
+                if let Some(error) = reply.get("error").filter(|v| !v.is_null()) {
+                    return Err(codex_error(error, "Codex rejected the pause request."));
+                }
+                let goal = &reply["result"]["goal"];
+                if goal["threadId"].as_str() != thread || goal["status"] != "paused" {
+                    return Err("Codex did not return a paused goal for this thread.".into());
+                }
+                pause_pending = false;
+            } else if id
+                .and_then(|id| id.strip_prefix("goal-turn-stop-"))
+                .is_some_and(|interrupted| turn.as_deref() == Some(interrupted))
+            {
+                if let Some(error) = reply.get("error").filter(|v| !v.is_null()) {
+                    return Err(codex_error(error, "Codex rejected the turn interrupt."));
+                }
+                if !reply["result"].is_object() {
+                    return Err("Codex did not acknowledge the turn interrupt.".into());
+                }
+                // The interrupt reply acknowledges the request. The turn can still emit output.
+            } else if reply["params"]["threadId"].as_str() == thread {
+                let method = reply["method"].as_str().unwrap_or("");
+                let incoming_turn = reply["params"]["turnId"]
+                    .as_str()
+                    .or_else(|| reply["params"]["turn"]["id"].as_str());
+                let turn_output = turn.is_some()
+                    && incoming_turn == turn.as_deref()
+                    && (method.starts_with("item/")
+                        || matches!(method, "turn/completed" | "turn/aborted"));
+                if method == "turn/started" || turn_output {
+                    let mut events = self.frame(reply.clone(), stdin)?;
+                    events.retain(|event| !matches!(event, Event::Done));
+                    if !events.is_empty() {
+                        match emit(events) {
+                            Err(error) if error != "Stopped" => return Err(error),
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(started) = reply["params"]["turn"]["id"].as_str() {
+                    match reply["method"].as_str() {
+                        Some("turn/started") if turn.as_deref() != Some(started) => {
+                            // A continuation may have started while the pause was in flight.
+                            write_json(
+                                stdin,
+                                json!({"id":format!("goal-turn-stop-{started}"),"method":"turn/interrupt","params":{"threadId":thread,"turnId":started}}),
+                            )?;
+                            turn = Some(started.to_owned());
+                        }
+                        Some("turn/completed" | "turn/aborted")
+                            if turn.as_deref() == Some(started) =>
+                        {
+                            turn = None
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A user Stop uses the provider's cancellation API before transport teardown.
     /// Returns whether there is an active request whose acknowledgement can settle.
     pub(super) fn interrupt(&mut self, stdin: &mut impl Write) -> Result<bool, String> {
@@ -99,6 +218,26 @@ impl Protocol {
         self.interrupt_id = Some(interrupt_id.clone());
         match self.request.kind {
             Kind::Codex => {
+                if let Some(thread) = self
+                    .request
+                    .provider_id
+                    .as_ref()
+                    .filter(|_| self.must_settle_goal_stop())
+                {
+                    if self.goal_active {
+                        write_json(
+                            stdin,
+                            json!({"id":interrupt_id,"method":"thread/goal/set","params":{"threadId":thread,"origin":"user","status":"paused"}}),
+                        )?;
+                    }
+                    if let Some(turn) = &self.active_turn {
+                        write_json(
+                            stdin,
+                            json!({"id":format!("goal-turn-stop-{turn}"),"method":"turn/interrupt","params":{"threadId":thread,"turnId":turn}}),
+                        )?;
+                    }
+                    return Ok(true);
+                }
                 self.approvals.clear();
                 self.questions.clear();
                 if let (Some(thread), Some(turn)) = (&self.request.provider_id, &self.active_turn) {

@@ -4,6 +4,8 @@ use monocode_core::mono::{Message, Mono};
 use std::path::PathBuf;
 #[derive(Default)]
 pub(super) struct ChatState {
+    pub(super) goal_request: Option<String>,
+    pub(super) goal_pause_unconfirmed: bool,
     pub(super) pending: Vec<Message>,
     queue_scroll: gpui::ScrollHandle,
     queue_ids: Vec<String>,
@@ -91,8 +93,36 @@ impl Conversation {
         });
         window.focus(&self.input.focus_handle(cx), cx);
     }
-    /// A stop was requested and the runtime hasn't settled the turn yet: its
-    /// rows and receipt aren't final, so completion reports must wait.
+    pub(crate) fn track_mono_goal(&mut self, prompt: &str) {
+        self.mono_ui.goal_request = (!self.is_remote()
+            && self.settings.mono.is_some()
+            && !self.settings.internal_message
+            && self.summary.provider == "codex"
+            && monocode_core::composer::consume_command(prompt, "goal").is_some())
+        .then(|| {
+            self.settings
+                .mono_message_id
+                .clone()
+                .unwrap_or_else(monocode_core::mono::new_id)
+        });
+    }
+
+    pub(super) fn goal_stop_still_pending(&self) -> bool {
+        self.mono_ui.goal_request.as_ref().is_some_and(|id| {
+            locked(&self.store)
+                .and_then(|db| db.setting(&monocode_core::mono::goal_stop_key(self.summary.id)))
+                .map_or(true, |pending| pending.as_ref() == Some(id))
+        })
+    }
+
+    pub(crate) fn take_unconfirmed_goal_stop(&mut self) -> Option<String> {
+        self.mono_ui.goal_request.take()
+    }
+
+    pub(crate) fn mono_goal_pause_unconfirmed(&self) -> bool {
+        self.mono_ui.goal_pause_unconfirmed
+    }
+    /// Completion reports wait for the final receipt and settled rows.
     pub(crate) fn mono_stopping(&self) -> bool {
         self.stopping
     }
@@ -190,7 +220,10 @@ impl Conversation {
             .update(cx, |t, cx| t.set_pending(pending, cx));
     }
     pub(crate) fn mono_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
-        if self.mono_ui.delivered.contains(&message.id) || (self.busy && message.internal) {
+        if self.mono_ui.delivered.contains(&message.id)
+            || (self.busy && message.internal)
+            || (self.mono_ui.goal_pause_unconfirmed && self.mono_ui.goal_request.is_some())
+        {
             return false;
         }
         // Its own turn is already running and hasn't reported it delivered.
@@ -215,7 +248,8 @@ impl Conversation {
             return false;
         }
         if self.busy {
-            if self.mono_ui.sending.is_some()
+            if monocode_core::composer::consume_command(&message.text, "goal").is_some()
+                || self.mono_ui.sending.is_some()
                 || !self.follow_ups.ready
                 || !Kind::from_id(&self.summary.provider).can_steer()
                 || self
@@ -293,9 +327,12 @@ impl Conversation {
         Ok(())
     }
     pub(crate) fn mono_status(&self) -> &str {
-        if self.needs_approval() || self.settings.usage_limit.is_some() {
+        if self.mono_goal_pause_unconfirmed()
+            || self.needs_approval()
+            || self.settings.usage_limit.is_some()
+        {
             "needs-you"
-        } else if self.responding() {
+        } else if self.stopping || self.responding() {
             "working"
         } else {
             "idle"
