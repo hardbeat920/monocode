@@ -8,13 +8,13 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .map_err(FetchError::failed)?
         .or_else(config_dir);
     let credentials = credentials(config).ok_or_else(|| {
-        FetchError::unavailable("Sign in with claude auth login, then refresh usage.")
+        FetchError::authentication_required("Sign in with claude auth login, then refresh usage.")
     })?;
     let oauth = credentials.get("claudeAiOauth").unwrap_or(&credentials);
     let token = oauth["accessToken"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| FetchError::unavailable("Claude is not signed in."))?;
+        .ok_or_else(|| FetchError::authentication_required("Claude is not signed in."))?;
     let expiry = oauth["expiresAt"]
         .as_i64()
         .or_else(|| oauth["expiresAt"].as_str()?.parse::<i64>().ok());
@@ -62,7 +62,9 @@ fn expired_error(oauth: &Value) -> FetchError {
     {
         FetchError::failed("Claude usage updates after your next Claude message.")
     } else {
-        FetchError::unavailable("Claude sign-in expired. Run claude auth login, then refresh.")
+        FetchError::authentication_required(
+            "Claude sign-in expired. Run claude auth login, then refresh.",
+        )
     }
 }
 
@@ -202,10 +204,13 @@ mod tests {
     fn an_expired_access_token_with_a_refresh_token_is_not_a_sign_out() {
         let renewable = serde_json::json!({"accessToken":"a","refreshToken":"r","expiresAt":1});
         assert!(!expired_error(&renewable).unavailable);
+        assert!(!expired_error(&renewable).authentication_required);
         // Claude Code blanks both tokens when a refresh fails.
         let wiped = serde_json::json!({"accessToken":"","refreshToken":"","expiresAt":0});
         assert!(expired_error(&wiped).unavailable);
+        assert!(expired_error(&wiped).authentication_required);
         assert!(expired_error(&serde_json::json!({"accessToken":"a"})).unavailable);
+        assert!(expired_error(&serde_json::json!({"accessToken":"a"})).authentication_required);
     }
     #[test]
     fn accepts_nested_and_legacy_credentials_without_logging_secrets() {

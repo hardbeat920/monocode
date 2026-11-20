@@ -64,6 +64,7 @@ fn launch(value: &Value) -> Option<Value> {
             "fx",
             "hermes",
             "antigravity",
+            "copilot",
             "devin",
             "grok",
         ]

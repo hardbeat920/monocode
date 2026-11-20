@@ -1,5 +1,6 @@
 use super::*;
 use chrono::{Local, TimeZone};
+use monocode_core::agent::AccessMode;
 
 pub(super) fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
     div()
@@ -95,6 +96,27 @@ fn settings_row(label: &'static str, hint: &'static str, control: impl IntoEleme
         .child(control)
 }
 impl Automations {
+    /// The access a run gets for the draft's model, with the modes it offers.
+    /// The saved mode is the user's choice; a model that can't do it shows
+    /// (and runs with) the closest preceding mode it supports.
+    fn draft_access(&self, cx: &gpui::App) -> Option<(AccessMode, Vec<AccessMode>)> {
+        let draft = &self.editor.as_ref()?.draft;
+        let kind = Kind::from_id(&draft.harness);
+        let model = monocode_core::store::native_model(&draft.model, &draft.harness);
+        let profile = crate::accounts::get(cx)
+            .map(|a| a.read(cx).selected(kind, &draft.cwd))
+            .unwrap_or_default();
+        let models = monocode_core::catalog::cached_models_for(kind, &profile).unwrap_or_default();
+        let model = monocode_core::catalog::launch_model(&models, model.as_deref());
+        Some((
+            monocode_core::catalog::supported_access(
+                kind,
+                model,
+                AccessMode::from_id(&draft.runtime_mode),
+            ),
+            monocode_core::catalog::access_modes(kind, model),
+        ))
+    }
     fn select_control(
         &self,
         id: impl Into<gpui::ElementId>,
@@ -123,15 +145,13 @@ impl Automations {
             .child(anchor.probe())
             .when(matches!(field, Choice::Access), |d| {
                 let mode = self
-                    .editor
-                    .as_ref()
-                    .map(|e| e.draft.runtime_mode.as_str())
-                    .unwrap_or("auto");
+                    .draft_access(cx)
+                    .map_or(AccessMode::Auto, |(mode, _)| mode);
                 d.child(icon(
                     match mode {
-                        "supervised" => "lock",
-                        "auto-accept-edits" => "pencil",
-                        "full-access" => "shield",
+                        AccessMode::Supervised => "lock",
+                        AccessMode::AutoAcceptEdits => "pencil",
+                        AccessMode::FullAccess => "shield",
                         _ => "sparkles",
                     },
                     14.,
@@ -743,12 +763,7 @@ impl Automations {
         );
         let kind = Kind::from_id(&draft.harness);
         let model = monocode_core::store::native_model(&draft.model, &draft.harness);
-        let access = match draft.runtime_mode.as_str() {
-            "supervised" => "Supervised",
-            "auto-accept-edits" => "Auto-accept edits",
-            "full-access" => "Full access",
-            _ => "Auto",
-        };
+        let (access, offered) = self.draft_access(cx).unwrap_or_default();
         let beside = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
@@ -811,18 +826,16 @@ impl Automations {
                 .text_size(px(11.)),
             );
         }
-        if draft.harness != "fx" {
+        if offered.len() > 1 {
             controls = controls.child(
                 self.select_control(
                     "automation-access",
-                    access.into(),
+                    access.label().into(),
                     Choice::Access,
-                    options(&[
-                        ("supervised", "Supervised"),
-                        ("auto-accept-edits", "Auto-accept edits"),
-                        ("auto", "Auto"),
-                        ("full-access", "Full access"),
-                    ]),
+                    offered
+                        .iter()
+                        .map(|mode| (mode.id().to_owned(), mode.label().to_owned()))
+                        .collect(),
                     cx,
                 )
                 .h(px(26.))

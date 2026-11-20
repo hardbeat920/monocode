@@ -440,7 +440,9 @@ impl Completion {
         if self.native_loading
             || !matches!(
                 self.provider,
-                monocode_core::provider::Kind::Pi | monocode_core::provider::Kind::Omp
+                monocode_core::provider::Kind::Pi
+                    | monocode_core::provider::Kind::Omp
+                    | monocode_core::provider::Kind::Copilot
             )
         {
             return;

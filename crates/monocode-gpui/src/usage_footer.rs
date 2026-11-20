@@ -287,7 +287,10 @@ impl UsageFooter {
         )
         .is_some()
             && state.snapshot.as_ref().is_none_or(|s| s.windows.is_empty())
-            && (state.error.as_ref().is_some_and(|e| e.unavailable)
+            && (state
+                .error
+                .as_ref()
+                .is_some_and(|e| e.authentication_required)
                 || crate::accounts::get(cx).is_some_and(|center| {
                     center
                         .read(cx)
@@ -380,6 +383,7 @@ impl UsageFooter {
             });
             return div()
                 .id("usage-details-content")
+                .debug_selector(|| "usage-auth-panel".into())
                 .role(Role::Dialog)
                 .aria_label(format!("{} usage details", self.kind.label()))
                 .track_focus(&self.details)
@@ -414,6 +418,7 @@ impl UsageFooter {
             .is_some_and(|s| !s.windows.is_empty());
         div()
             .id("usage-details-content")
+            .debug_selector(|| "usage-details-content".into())
             .role(Role::Dialog)
             .aria_label(format!("{} usage details", self.kind.label()))
             .track_focus(&self.details)
@@ -519,7 +524,11 @@ impl UsageFooter {
                                 .text_color(content(0.65))
                                 .child(if loading {
                                     "Loading usage…"
-                                } else if state.error.as_ref().is_some_and(|e| e.unavailable) {
+                                } else if state
+                                    .error
+                                    .as_ref()
+                                    .is_some_and(|e| e.authentication_required)
+                                {
                                     "Not connected"
                                 } else {
                                     "Usage unavailable"
@@ -830,7 +839,11 @@ impl Render for UsageFooter {
                 .join(" · ")
         } else if state.fetching || state.error.is_none() {
             "···".into()
-        } else if state.error.as_ref().is_some_and(|e| e.unavailable) {
+        } else if state
+            .error
+            .as_ref()
+            .is_some_and(|e| e.authentication_required)
+        {
             "not connected".into()
         } else {
             "usage unavailable".into()
@@ -973,6 +986,51 @@ impl Render for UsageFooter {
 mod tests {
     use super::*;
     #[gpui::test]
+    fn unsupported_copilot_usage_does_not_render_an_authentication_warning(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            crate::accounts::install(
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    monocode_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                )),
+                cx,
+            );
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| UsageFooter::new(Kind::Copilot, cx))
+            })
+            .unwrap()
+        });
+        cx.refresh().unwrap();
+        window
+            .update(cx, |footer, window, cx| {
+                footer.cache[index(Kind::Copilot)].complete(usage::fetch(Kind::Copilot));
+                assert!(!footer.login_view(cx));
+                footer.toggle(window, cx);
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("usage-details-content").is_some());
+        assert!(visual.debug_bounds("usage-auth-panel").is_none());
+
+        // An actual authentication failure must still offer the sign-in action.
+        window
+            .update(visual, |footer, _, cx| {
+                footer.cache[index(Kind::Copilot)].complete(Err(FetchError {
+                    message: "Copilot is not authenticated".into(),
+                    unavailable: true,
+                    authentication_required: true,
+                }));
+                assert!(footer.login_view(cx));
+                cx.notify();
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("usage-auth-panel").is_some());
+    }
+
+    #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -1044,12 +1102,14 @@ mod tests {
         state.complete(Err(FetchError {
             message: "Offline".into(),
             unavailable: false,
+            authentication_required: false,
         }));
         assert!(state.snapshot.is_some());
         assert!(!state.fetching);
         state.complete(Err(FetchError {
             message: "Signed out".into(),
             unavailable: true,
+            authentication_required: true,
         }));
         assert!(state.snapshot.is_none());
         state.complete(Ok(Snapshot::default()));

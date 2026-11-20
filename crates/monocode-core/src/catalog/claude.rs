@@ -75,6 +75,8 @@ pub(super) fn models(rows: &Value) -> Vec<Model> {
                 model.thinking = row["supportsAdaptiveThinking"] == true;
             }
             model.fast = row["supportsFastMode"] == true;
+            // The CLI only sends this when true, so absent means unsupported.
+            model.supports_auto = Some(row["supportsAutoMode"] == true);
             if context || resolved_context {
                 model.controls.push(ModelControl {
                     id: "context".into(),
@@ -207,6 +209,16 @@ mod tests {
         assert!(models[2].default);
         assert_eq!(models[1].controls[0].current, "1m");
         assert!(models[3].thinking);
+    }
+
+    #[test]
+    fn auto_support_is_only_confirmed_when_the_cli_reports_it() {
+        let models = models(&json!([
+            {"value":"opus","resolvedModel":"claude-opus-5-5","supportsAutoMode":true},
+            {"value":"haiku","resolvedModel":"claude-haiku-4-5-20251001"}
+        ]));
+        assert_eq!(models[0].supports_auto, Some(true));
+        assert_eq!(models[1].supports_auto, Some(false));
     }
 
     #[test]

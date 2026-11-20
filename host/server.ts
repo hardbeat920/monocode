@@ -43,6 +43,7 @@ import {
 import { WorkspaceCommands } from "./workspace-commands";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
+import { discoverCopilotModels } from "../src/integrations/harness/providers/copilot/copilotCatalog";
 import { discoverCursorModels } from "../src/integrations/harness/providers/cursor/cursorCatalog";
 import { discoverGrokModels } from "../src/integrations/harness/providers/grok/grokCatalog";
 import { discoverOpenCodeModels } from "../src/integrations/harness/providers/opencode/opencodeCatalog";
@@ -56,6 +57,7 @@ import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
   resolveCodexBinary,
+  resolveCopilotBinary,
   resolveCursorBinary,
   resolveDevinBinary,
   resolveFxBinary,
@@ -79,6 +81,7 @@ const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
   omp: () => resolveOmpBinary(),
   fx: () => resolveFxBinary(),
   hermes: () => resolveHermesBinary(),
+  copilot: () => resolveCopilotBinary(),
   antigravity: () => resolveAntigravityBinary(),
   devin: () => resolveDevinBinary(),
 };
@@ -95,6 +98,7 @@ const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel
   omp: discoverOmpModels,
   fx: discoverFxModels,
   hermes: discoverHermesModels,
+  copilot: discoverCopilotModels,
   antigravity: discoverAntigravityModels,
   devin: discoverDevinModels,
 };

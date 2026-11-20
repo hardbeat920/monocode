@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   RUNTIME_MODE_LABEL,
   RUNTIME_MODES,
+  type HarnessId,
   type RuntimeMode,
 } from "../../sessions/model/session";
 import { MonoSettingsDialog } from "./MonoSettingsDialog";
@@ -64,6 +65,7 @@ async function render(
   runtimeMode: RuntimeMode = "auto",
   busy = false,
   onReset?: () => Promise<void>,
+  harness: HarnessId = "codex",
 ) {
   await act(async () =>
     root.render(
@@ -72,8 +74,8 @@ async function render(
         agent: { name: "Broski", mascot: "cat", color: "#9c9", projects: [] },
         status: busy ? "working" : "idle",
         cwd: "/home",
-        harness: "codex",
-        model: "codex:gpt-5.4",
+        harness,
+        model: harness === "codex" ? "codex:gpt-5.4" : `${harness}:test`,
         modelSettings: {},
         runtimeMode,
         busy,
@@ -199,4 +201,25 @@ it("explains when permissions take effect while the Mono is working", async () =
   expect(document.querySelector("[data-access-picker]")?.textContent).toContain(
     "Access changes apply to the next turn. Stop and resend to apply them now.",
   );
+});
+
+it("hides the permissions row for harnesses without approval levels", async () => {
+  await render("auto", false, undefined, "pi");
+  expect(trigger()).toBeNull();
+  expect(dialog().textContent).not.toContain("Permissions");
+});
+
+it("offers only the selected harness's supported permission modes", async () => {
+  await render("auto", false, undefined, "cursor");
+  expect(trigger().textContent).toBe("Auto-accept edits");
+  act(() => trigger().click());
+  const options = document.querySelectorAll<HTMLButtonElement>(
+    '[data-access-picker] [role="option"]',
+  );
+  expect(
+    [...options].map((option) => option.getAttribute("aria-selected")),
+  ).toEqual(["false", "true", "false"]);
+  expect(options).toHaveLength(3);
+  act(() => options[2].click());
+  expect(onRuntimeModeChange).toHaveBeenLastCalledWith("full-access");
 });

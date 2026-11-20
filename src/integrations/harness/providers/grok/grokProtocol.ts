@@ -184,7 +184,9 @@ export function pickAutoOption(
 ): string | null {
   if (optionIds.length === 0) return null;
   const tool = (kind ?? "").toLowerCase();
-  if (runtimeMode === "supervised") return null;
+  // Auto leaves approvals to Grok's classifier; whatever it still asks about
+  // reaches the user.
+  if (runtimeMode === "supervised" || runtimeMode === "auto") return null;
   if (
     runtimeMode === "auto-accept-edits" &&
     (tool === "execute" || tool === "other" || tool === "fetch")

@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -7,9 +7,9 @@ import {
   readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { providerLaunch } from "./process";
+import { providerLaunch, resolveProvider } from "./process";
 import {
   powershell,
   powershellArgs,
@@ -23,6 +23,8 @@ import {
 
 const directories: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   for (const dir of directories.splice(0))
     rmSync(dir, { recursive: true, force: true });
 });
@@ -61,6 +63,68 @@ it("runs npm provider entry points directly with literal arguments and bundled N
     providerLaunch(join(directory, "unknown.cmd"), args, "win32"),
   ).rejects.toThrow("Unsupported");
 });
+
+// Exercise Windows discovery on any OS, using the host's real filesystem and
+// Node runtime. The .cmd/.bat content must never be interpreted or executed.
+it.each(
+  ["cmd", "bat"].flatMap((extension) =>
+    ["npm-loader.js", "index.js"].map((entryName) => ({
+      extension,
+      entryName,
+    })),
+  ),
+)(
+  "resolves and runs a Windows Copilot .$extension launcher via $entryName with literal arguments",
+  async ({ extension, entryName }) => {
+    const directory = join(temporary(), "npm with spaces");
+    const entry = join(directory, "node_modules/@github/copilot", entryName);
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "console.log(JSON.stringify(process.argv.slice(2)))");
+    if (entryName === "npm-loader.js")
+      writeFileSync(
+        join(dirname(entry), "index.js"),
+        'throw new Error("Use the current loader")',
+      );
+    const candidate = join(directory, `copilot.${extension}`);
+    writeFileSync(candidate, "This wrapper must not be executed");
+
+    // A broken earlier installation must not hide the usable npm launcher.
+    const brokenDirectory = temporary();
+    const brokenCandidate = join(brokenDirectory, `copilot.${extension}`);
+    writeFileSync(brokenCandidate, "This wrapper must not be executed");
+    await expect(providerLaunch(brokenCandidate, [], "win32")).rejects.toThrow(
+      "Missing npm provider entry point",
+    );
+
+    vi.stubEnv("PATH", [brokenDirectory, directory].join(delimiter));
+    const windowsProcess = Object.create(process);
+    Object.defineProperty(windowsProcess, "platform", { value: "win32" });
+    vi.stubGlobal("process", windowsProcess);
+    expect(await resolveProvider("copilot")).toBe(candidate);
+
+    const args = [
+      "--acp",
+      "--stdio",
+      "path with spaces",
+      "a&b",
+      "a|b",
+      "%USERPROFILE%",
+      "$(whoami)",
+      'a"b',
+      "line\nbreak",
+    ];
+    const launch = await providerLaunch(candidate, args);
+    expect(launch).toEqual({
+      command: process.execPath,
+      args: [entry, ...args],
+    });
+    expect(
+      JSON.parse(
+        execFileSync(launch.command, launch.args, { encoding: "utf8" }),
+      ),
+    ).toEqual(args);
+  },
+);
 
 it("uses an unlimited, unelevated per-user task and preserves literal paths", () => {
   const options = {

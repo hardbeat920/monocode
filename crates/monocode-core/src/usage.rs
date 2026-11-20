@@ -109,18 +109,29 @@ impl Limit {
 pub struct FetchError {
     pub message: String,
     pub unavailable: bool,
+    /// Missing usage data alone says nothing about the provider's sign-in.
+    pub authentication_required: bool,
 }
 impl FetchError {
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             unavailable: true,
+            authentication_required: false,
         }
     }
     fn failed(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             unavailable: false,
+            authentication_required: false,
+        }
+    }
+    fn authentication_required(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            unavailable: true,
+            authentication_required: true,
         }
     }
 }
@@ -155,7 +166,6 @@ pub fn fetch_for(
         .map_err(|message| {
         let lower = message.to_lowercase();
         if [
-            "not installed",
             "not signed in",
             "not authenticated",
             "authentication required",
@@ -163,7 +173,7 @@ pub fn fetch_for(
         .iter()
         .any(|s| lower.contains(s))
         {
-            FetchError::unavailable("Sign in with codex login, then refresh usage.")
+            FetchError::authentication_required("Sign in with codex login, then refresh usage.")
         } else {
             FetchError::failed(message)
         }
@@ -192,11 +202,13 @@ fn fetch_devin() -> Result<Snapshot, FetchError> {
         let message = result
             .error
             .unwrap_or_else(|| "Devin usage unavailable".into());
-        return Err(if result.status == "unavailable" {
-            FetchError::unavailable(message)
-        } else {
-            FetchError::failed(message)
-        });
+        return Err(
+            if result.status == "unavailable" || result.http_status == Some(401) {
+                FetchError::authentication_required(message)
+            } else {
+                FetchError::failed(message)
+            },
+        );
     };
     let mut windows = Vec::new();
     for (remaining, resets_at, minutes) in [
@@ -505,6 +517,24 @@ fn parse_reset_credits(value: &Value) -> Option<ResetCredits> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn missing_usage_is_not_evidence_that_signin_is_required() {
+        let error = fetch(Kind::Copilot).unwrap_err();
+        assert!(error.unavailable);
+        assert!(!error.authentication_required);
+        assert_eq!(
+            error.message,
+            "No subscription usage is available for GitHub Copilot."
+        );
+        let error = parse_claude(&json!({})).unwrap_err();
+        assert!(error.unavailable);
+        assert!(!error.authentication_required);
+        let error = FetchError::authentication_required("Sign in again");
+        assert!(error.unavailable);
+        assert!(error.authentication_required);
+        assert!(!FetchError::failed("Offline").authentication_required);
+    }
 
     #[test]
     fn explicit_codex_windows_win_before_positional_fallbacks() {
