@@ -248,6 +248,33 @@ pub struct Message {
     #[serde(default)]
     pub attachments: Vec<String>,
 }
+/// The outbox owns a goal until the provider acknowledges the command.
+pub fn goal_delivery_key(session: i64, message: &str) -> String {
+    format!("mono-goal-delivery:{session}:{message}")
+}
+
+impl Message {
+    pub fn reconcile_delivery(&mut self, db: &Store, session: i64) -> Result<bool, String> {
+        let legacy = db
+            .setting(&format!("mono-delivered:{session}:{}", self.id))?
+            .is_some();
+        if self.internal || crate::composer::consume_command(&self.text, "goal").is_none() {
+            return Ok(legacy);
+        }
+        match db
+            .setting(&goal_delivery_key(session, &self.id))?
+            .as_deref()
+        {
+            Some("accepted") => Ok(true),
+            None if !legacy => Ok(false),
+            _ => {
+                self.error.get_or_insert_with(|| "Goal delivery was interrupted. Check the provider goal before retrying this command.".into());
+                Ok(false)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Roster {

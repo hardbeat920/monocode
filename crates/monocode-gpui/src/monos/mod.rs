@@ -688,18 +688,16 @@ impl Monos {
             if let Some(session) = mono.session_id {
                 let summary = db.mono_session(session)?
                     .ok_or("This Mono's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
-                let delivered = mono
-                    .outbox
-                    .iter()
-                    .filter(|q| {
-                        db.setting(&format!("mono-delivered:{}:{}", summary.id, q.id))
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    })
-                    .map(|q| q.id.clone())
-                    .collect::<Vec<_>>();
-                return Ok::<_, String>((summary, None, delivered));
+                let mut delivered = Vec::new();
+                let mut uncertain = HashMap::new();
+                for mut message in mono.outbox {
+                    if message.reconcile_delivery(&db, session)? {
+                        delivered.push(message.id);
+                    } else if let Some(error) = message.error {
+                        uncertain.insert(message.id, error);
+                    }
+                }
+                return Ok::<_, String>((summary, None, delivered, uncertain));
             }
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
@@ -722,13 +720,13 @@ impl Monos {
                 ..Default::default()
             };
             db.configure_agent(summary.id, provider.id(), &settings)?;
-            Ok((summary, Some(settings), Vec::new()))
+            Ok((summary, Some(settings), Vec::new(), HashMap::new()))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_chats.remove(&id);
-                let (summary, settings, delivered) = match result {
+                let (summary, settings, delivered, mut uncertain) = match result {
                     Ok(value) => value,
                     Err(e) => {
                         this.error = Some(e);
@@ -744,6 +742,11 @@ impl Monos {
                 };
                 mono.session_id = Some(summary.id);
                 mono.outbox.retain(|q| !delivered.contains(&q.id));
+                for message in &mut mono.outbox {
+                    if let Some(error) = uncertain.remove(&message.id) {
+                        message.error = Some(error);
+                    }
+                }
                 let mono = mono.clone();
                 let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
                 let root = this.root.clone();
@@ -803,7 +806,14 @@ impl Monos {
                         } else {
                             if let Some(mono) = this.roster.get_mut(&source) {
                                 for message in &mut mono.outbox {
-                                    message.error = None;
+                                    if monocode_core::composer::consume_command(
+                                        &message.text,
+                                        "goal",
+                                    )
+                                    .is_none()
+                                    {
+                                        message.error = None;
+                                    }
                                 }
                             }
                             this.save(cx);

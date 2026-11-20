@@ -101,6 +101,7 @@ pub enum Event {
     Background(Vec<BackgroundTask>),
     UsageLimited(crate::usage::Limit),
     GoalPauseUnconfirmed,
+    GoalAccepted,
     Interjection {
         text: String,
         custom_type: String,
@@ -253,10 +254,36 @@ fn write_json(out: &mut impl Write, value: Value) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn goal_tool_item(item: &Value) -> bool {
+    // Treat unknown item kinds as work: a future tool must not detach a continuing goal.
+    !matches!(
+        item["type"].as_str(),
+        Some(
+            "userMessage"
+                | "agentMessage"
+                | "reasoning"
+                | "plan"
+                | "hookPrompt"
+                | "contextCompaction"
+                | "subAgentActivity"
+                | "enteredReviewMode"
+                | "exitedReviewMode"
+        )
+    )
+}
+
+struct GoalIdleCheck {
+    turn: String,
+    since: Instant,
+    requested: bool,
+}
+
 /// State machine is deliberately testable without spawning a provider.
 struct Protocol {
     goal_active: bool,
     goal_ack: bool,
+    goal_idle_check: Option<GoalIdleCheck>,
+    goal_turn_used_tool: bool,
     claude_goal_supported: bool,
     initialized: bool,
     compact: bool,
@@ -301,6 +328,8 @@ impl Protocol {
             request,
             goal_active: false,
             goal_ack: false,
+            goal_idle_check: None,
+            goal_turn_used_tool: false,
             claude_goal_supported: false,
             initialized: false,
             compact: false,
@@ -440,6 +469,15 @@ impl Protocol {
                 self.text_key = None;
             }
         }
+        if self.goal_active
+            && matches!(
+                v["method"].as_str(),
+                Some("item/started" | "item/completed")
+            )
+            && v["params"]["threadId"].as_str() == self.request.provider_id.as_deref()
+        {
+            self.goal_turn_used_tool |= goal_tool_item(&v["params"]["item"]);
+        }
         let mut activity_events = Vec::new();
         if self.activity(&v, &mut activity_events) {
             return Ok(activity_events);
@@ -462,8 +500,10 @@ impl Protocol {
                 };
                 if let Some(id) = turn["id"].as_str() {
                     if self.active_turn.as_deref() != Some(id) {
+                        self.goal_turn_used_tool = false;
                         started_turn = Some(id.to_owned());
                     }
+                    self.goal_idle_check = None;
                     self.active_turn = Some(id.into());
                 }
             }
@@ -504,6 +544,42 @@ impl Protocol {
         }
         match self.request.kind {
             Kind::Codex => {
+                if let Some(turn) = v["id"]
+                    .as_str()
+                    .and_then(|id| id.strip_prefix("goal-idle-"))
+                {
+                    let Some(check) = self.goal_idle_check.as_mut().filter(|c| c.turn == turn)
+                    else {
+                        return Ok(events);
+                    };
+                    let thread = &v["result"]["thread"];
+                    if thread["id"].as_str() != self.request.provider_id.as_deref() {
+                        return Err(
+                            "Codex could not confirm whether the goal thread is idle.".into()
+                        );
+                    }
+                    match thread["status"]["type"].as_str() {
+                        Some("idle") => {
+                            events.push(Event::BeginAssistant);
+                            events.push(Event::Text(
+                                "The goal is still active. Codex is idle and waiting for input."
+                                    .into(),
+                            ));
+                            events.push(Event::Done);
+                            self.done = true;
+                        }
+                        Some("active") => {
+                            check.since = Instant::now();
+                            check.requested = false;
+                        }
+                        _ => {
+                            return Err(
+                                "Codex could not confirm whether the goal thread is idle.".into()
+                            )
+                        }
+                    }
+                    return Ok(events);
+                }
                 if let Some(error) = v.get("error").filter(|e| !e.is_null()) {
                     let message = codex_error(error, "RPC request failed");
                     if v["id"] == 2
@@ -680,6 +756,24 @@ impl Protocol {
                         &v["params"]["goal"]
                     };
                     let status = goal["status"].as_str();
+                    if response {
+                        let same_thread =
+                            goal["threadId"].as_str() == self.request.provider_id.as_deref();
+                        let confirmed = match self.request.settings.mono_goal.as_deref() {
+                            Some("clear") => v["result"]["cleared"].is_boolean(),
+                            Some("" | "status")
+                                if v["result"].get("goal").is_some_and(Value::is_null) =>
+                            {
+                                true
+                            }
+                            Some("pause") => same_thread && status == Some("paused"),
+                            _ => same_thread && status.is_some(),
+                        };
+                        if !confirmed {
+                            return Err("Codex did not confirm the requested goal operation for this thread.".into());
+                        }
+                        events.push(Event::GoalAccepted);
+                    }
                     self.goal_ack |= response;
                     self.goal_active &= status == Some("active");
                     if !response && self.goal_active {
@@ -786,6 +880,17 @@ impl Protocol {
                                 // compaction item in the final snapshot.
                                 continue;
                             }
+                            if self.goal_active {
+                                self.goal_turn_used_tool |= goal_tool_item(item);
+                                if item["type"] == "agentMessage" {
+                                    self.text(
+                                        item["id"].as_str().unwrap_or("assistant"),
+                                        item["text"].as_str().unwrap_or(""),
+                                        true,
+                                        &mut events,
+                                    );
+                                }
+                            }
                             self.codex_tool(item, true, &mut events);
                         }
                         if interrupted {
@@ -799,7 +904,19 @@ impl Protocol {
                             }
                         }
                         if self.request.settings.mono_goal.is_some() {
-                            self.active_turn = None;
+                            let turn = self.active_turn.take();
+                            if self.goal_active
+                                && !interrupted
+                                && (!self.goal_turn_used_tool || self.request.settings.plan)
+                            {
+                                self.goal_idle_check = Some(GoalIdleCheck {
+                                    turn: turn
+                                        .or_else(|| p["turn"]["id"].as_str().map(str::to_owned))
+                                        .unwrap_or_default(),
+                                    since: Instant::now(),
+                                    requested: false,
+                                });
+                            }
                             if !interrupted && (self.goal_active || !self.goal_ack) {
                                 return Ok(events);
                             }
@@ -1042,6 +1159,9 @@ impl Protocol {
                                 .map(str::to_owned)
                                 .unwrap_or_else(|| v["errors"].to_string());
                             return Err(self.claude_error(&error, &v));
+                        }
+                        if self.request.settings.mono_goal.is_some() {
+                            events.push(Event::GoalAccepted);
                         }
                         // Some versions omit partial/assistant frames in simple turns.
                         if !self.begun {
@@ -1696,7 +1816,11 @@ fn run_operation(
     let mut pending = Vec::new();
     if let Some(id) = claude_new_session {
         protocol.request.provider_id = Some(id.clone());
-        pending.push(Event::SessionId(id));
+        if protocol.request.settings.mono_goal.is_some() {
+            emit(vec![Event::SessionId(id)])?;
+        } else {
+            pending.push(Event::SessionId(id));
+        }
     }
     let mut stop_confirmed = false;
     let result = (|| {
@@ -1843,6 +1967,15 @@ fn run_operation(
                             return Err("Stopped".into());
                         }
                     }
+                    // Bind a new goal thread durably before a mutation can reach Codex.
+                    if protocol.request.kind == Kind::Codex
+                        && protocol.request.settings.mono_goal.is_some()
+                        && value["id"] == 2
+                    {
+                        if let Some(thread) = value["result"]["thread"]["id"].as_str() {
+                            emit(vec![Event::SessionId(thread.into())])?;
+                        }
+                    }
                     let events = match protocol.frame(value, &mut stdin) {
                         Ok(events) => events,
                         Err(_) if interrupted => return Err("Stopped".into()),
@@ -1946,7 +2079,7 @@ fn run_operation(
             let _ = emit(std::mem::take(&mut pending));
         }
         // The worker owns the wire until the durable pause is acknowledged, even between turns.
-        if let Err(reason) = protocol.confirm_goal_pause(&mut wire.stdin, &wire.rx) {
+        if let Err(reason) = protocol.confirm_goal_pause(&mut wire.stdin, &wire.rx, &mut emit) {
             let _ = emit(vec![Event::GoalPauseUnconfirmed]);
             return Err(format!(
                 "Codex could not confirm Stop. The goal or its current turn may still be active. {reason}"
@@ -1977,6 +2110,7 @@ fn run_operation(
     {
         parked::settle_cancelled(wire, protocol);
     } else if eligible
+        && protocol.goal_idle_check.is_none()
         && !(cancel.load(Ordering::Relaxed) && protocol.request.settings.mono_goal.is_some())
         && ((result.is_ok() && !cancel.load(Ordering::Relaxed))
             || (stop_confirmed && protocol.request.kind != Kind::Antigravity))
@@ -2128,7 +2262,7 @@ mod tests {
             json!({"objective":"fix build","threadId":"main","origin":"user","status":"active"})
         );
         p.frame(
-            json!({"id":4,"result":{"goal":{"status":"active"}}}),
+            json!({"id":4,"result":{"goal":{"threadId":"main","status":"active"}}}),
             &mut wire,
         )
         .unwrap();

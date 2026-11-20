@@ -71,6 +71,19 @@ impl Protocol {
         stdin: &mut impl Write,
     ) -> Result<Vec<Event>, String> {
         let mut events = self.expire_questions(stdin)?;
+        if let Some(check) = self.goal_idle_check.as_mut().filter(|_| self.goal_ack) {
+            if check.requested && check.since.elapsed() >= Duration::from_secs(5) {
+                return Err("Codex did not answer the goal thread status request.".into());
+            }
+            if !check.requested && check.since.elapsed() >= Duration::from_secs(1) {
+                write_json(
+                    stdin,
+                    json!({"id":format!("goal-idle-{}",check.turn),"method":"thread/read","params":{"threadId":self.request.provider_id}}),
+                )?;
+                check.requested = true;
+                check.since = Instant::now();
+            }
+        }
         if self.request.kind.is_acp() {
             events.extend(self.acp_tick(stdin)?);
         } else if self.request.kind.is_pi() {
@@ -98,20 +111,27 @@ impl Protocol {
         &mut self,
         stdin: &mut impl Write,
         replies: &mpsc::Receiver<Result<Vec<u8>, String>>,
+        emit: &mut impl FnMut(Vec<Event>) -> Result<(), String>,
     ) -> Result<(), String> {
         if !self.interrupt(stdin)? {
             return Err("Missing active goal thread.".into());
         }
-        let thread = self.request.provider_id.as_deref();
+        let binding = self.request.provider_id.clone();
+        let thread = binding.as_deref();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut paused = false;
         let mut turn = self.active_turn.clone();
         while !paused || turn.is_some() {
+            let timeout = if paused {
+                "Goal pause confirmed, but waiting for the turn to finish timed out."
+            } else {
+                "Waiting for Codex to confirm the goal pause timed out."
+            };
             let remaining = deadline
                 .checked_duration_since(Instant::now())
-                .ok_or("Stop request timed out.")?;
+                .ok_or(timeout)?;
             let line = replies.recv_timeout(remaining).map_err(|e| match e {
-                mpsc::RecvTimeoutError::Timeout => "Stop request timed out.",
+                mpsc::RecvTimeoutError::Timeout => timeout,
                 mpsc::RecvTimeoutError::Disconnected => {
                     "Codex disconnected before confirming Stop."
                 }
@@ -139,8 +159,26 @@ impl Protocol {
                 if !reply["result"].is_object() {
                     return Err("Codex did not acknowledge the turn interrupt.".into());
                 }
-                turn = None;
+                // The interrupt reply acknowledges the request. The turn can still emit output.
             } else if reply["params"]["threadId"].as_str() == thread {
+                let method = reply["method"].as_str().unwrap_or("");
+                let incoming_turn = reply["params"]["turnId"]
+                    .as_str()
+                    .or_else(|| reply["params"]["turn"]["id"].as_str());
+                let turn_output = turn.is_some()
+                    && incoming_turn == turn.as_deref()
+                    && (method.starts_with("item/")
+                        || matches!(method, "turn/completed" | "turn/aborted"));
+                if method == "turn/started" || turn_output {
+                    let mut events = self.frame(reply.clone(), stdin)?;
+                    events.retain(|event| !matches!(event, Event::Done));
+                    if !events.is_empty() {
+                        match emit(events) {
+                            Err(error) if error != "Stopped" => return Err(error),
+                            _ => {}
+                        }
+                    }
+                }
                 if let Some(started) = reply["params"]["turn"]["id"].as_str() {
                     match reply["method"].as_str() {
                         Some("turn/started") if turn.as_deref() != Some(started) => {

@@ -134,6 +134,14 @@ fn run_turn_using(
         .unwrap_or(false);
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
     pending.own_context(&summary.provider, &source_account);
+    let goal_message = settings.mono_message_id.clone().filter(|_| {
+        settings.mono.is_some()
+            && !settings.internal_message
+            && monocode_core::composer::consume_command(&prompt, "goal").is_some()
+    });
+    let goal_key = goal_message
+        .as_ref()
+        .map(|id| monocode_core::mono::goal_delivery_key(summary.id, id));
     let mut initial_delivery = None;
     let mut goal_pause_unconfirmed = false;
     let mut accepted_messages = Vec::new();
@@ -203,11 +211,18 @@ fn run_turn_using(
         // Keep the already painted prompt in the failure replay even if saving
         // the turn's configuration fails before its first transcript write.
         locked(&store)?.configure_agent(summary.id, &summary.provider, &persisted)?;
+        if let Some(key) = &goal_key {
+            locked(&store)?.save_setting(key, "pending")?;
+        }
+        let transcript_delivery = settings
+            .mono_message_id
+            .clone()
+            .filter(|_| goal_key.is_none());
         locked(&store)?.write_rows_with_message(
             summary.id,
             start,
             &transcript.rows[start..],
-            settings.mono_message_id.as_deref(),
+            transcript_delivery.as_deref(),
         )?;
         let mut info =
             settings
@@ -227,7 +242,7 @@ fn run_turn_using(
             .map_or(0, |at| at + 1);
         persistence::save_turn_receipt(&store, summary.id, turn, info.clone())?;
         turn_receipt = Some((turn, info));
-        initial_delivery = settings.mono_message_id.clone();
+        initial_delivery = transcript_delivery;
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
         publish(
             &tx,
@@ -239,7 +254,7 @@ fn run_turn_using(
                 turn_ready: false,
                 follow_up_delivered: Vec::new(),
                 follow_up_errors: Vec::new(),
-                delivered: settings.mono_message_id.clone(),
+                delivered: initial_delivery.clone(),
                 start,
                 rows: transcript.rows[start..].to_vec(),
                 provider_id: None,
@@ -881,6 +896,13 @@ fn run_turn_using(
                         }
                         Event::Status(text) => status = text,
                         Event::Background(tasks) => background = Some(tasks),
+                        Event::GoalAccepted => {
+                            if let (Some(key), Some(id)) = (&goal_key, &goal_message) {
+                                locked(&store)?.save_setting(key, "accepted")?;
+                                initial_delivery = Some(id.clone());
+                                follow_up_delivered.push(id.clone());
+                            }
+                        }
                         Event::GoalPauseUnconfirmed => goal_pause_unconfirmed = true,
                         Event::UsageLimited(limit) => usage_limit = Some(limit),
                         Event::Done => {
@@ -964,7 +986,20 @@ fn run_turn_using(
         }
         result
     })();
-    let cancelled = !goal_pause_unconfirmed
+    // An explicit Stop cancels an unacknowledged outbox submission too.
+    // Never allow the next dispatch to replay it as a fresh objective.
+    let interrupted_delivery =
+        goal_key.is_some() && initial_delivery.is_none() && cancel.load(Ordering::Relaxed);
+    let result = if interrupted_delivery && !goal_pause_unconfirmed {
+        Err(
+            "Goal delivery was interrupted. Check the provider goal before retrying this command."
+                .into(),
+        )
+    } else {
+        result
+    };
+    let cancelled = !interrupted_delivery
+        && !goal_pause_unconfirmed
         && (cancel.load(Ordering::Relaxed)
             || result.as_ref().is_err_and(|error| error == "Stopped"));
     let handoff = prepared_handoff.map(|mut ready| {
