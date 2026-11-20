@@ -324,14 +324,45 @@ fn bounded(
     }
     Ok(value as usize)
 }
-fn capped(text: &str, max: usize) -> Value {
-    let text = text.trim();
-    json!({"text":text.chars().take(max).collect::<String>(),"truncated":text.chars().count()>max})
+/// `offset` pages through a long message; `nextCharOffset` is set while more
+/// remains. Text is counted as completion reports count it (see
+/// `response::normalized`), so their offsets agree. Past the end, `pastEnd` says so.
+fn capped(text: &str, max: usize, offset: usize) -> Value {
+    let text = crate::response::normalized(text);
+    let total = text.chars().count();
+    let mut value = json!({"text":text.chars().skip(offset).take(max).collect::<String>(),"truncated":total>offset.saturating_add(max)});
+    if offset > 0 {
+        value["charOffset"] = json!(offset);
+        value["totalChars"] = json!(total);
+        if offset >= total {
+            value["pastEnd"] = json!(true);
+        }
+    }
+    if total > offset.saturating_add(max) {
+        value["nextCharOffset"] = json!(offset + max);
+        value["totalChars"] = json!(total);
+    }
+    value
+}
+/// Blocks the desktop projection shows as assistant prose (see
+/// `store::shared::blocks`): plans, and task lists without a structured panel,
+/// as well as assistant text. Completion reports read those projected rows,
+/// so counting the same blocks here keeps their read-more call on their message.
+fn assistant_message(block: &Value) -> bool {
+    match block["role"].as_str() {
+        Some("assistant") => true,
+        Some("plan") => block["nativeRemotePlan"] != true,
+        Some("tasks") => crate::tool::tasks::from_desktop(block).is_none(),
+        _ => false,
+    }
 }
 /// Tauri's prose-only exchanges, with canonical source block IDs as cursors.
 pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, String> {
-    let limit = bounded(input, "limit", 3, 1, 3)?;
     let max = bounded(input, "maxChars", 1200, 200, 6000)?;
+    let offset = bounded(input, "charOffset", 0, 0, usize::MAX)?;
+    // Reading on through a long message defaults to the latest exchange, which
+    // is the one completion reports cut; an explicit limit still pages several.
+    let limit = bounded(input, "limit", if offset > 0 { 1 } else { 3 }, 1, 3)?;
     let mut turns: Vec<(&Value, Vec<&Value>)> = Vec::new();
     for block in blocks {
         if block["role"] == "user"
@@ -339,7 +370,7 @@ pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, Strin
             && block["draft"] != true
         {
             turns.push((block, Vec::new()));
-        } else if block["role"] == "assistant"
+        } else if assistant_message(block)
             && block["internal"] != true
             && block["text"].as_str().is_some_and(|s| !s.trim().is_empty())
         {
@@ -364,7 +395,7 @@ pub fn conversation_page(blocks: &[Value], input: &Value) -> Result<Value, Strin
     Ok(json!({"turns":selected.iter().map(|(user,answers)|{
         let text=user["text"].as_str().unwrap_or("");
         let text=crate::composer::consume_command(text,"operator").unwrap_or(text);
-        json!({"turnId":user["id"],"user":capped(text,max),"assistant":answers.last().map(|b|capped(b["text"].as_str().unwrap_or(""),max)),"earlierAssistantMessages":answers.len().saturating_sub(1)})
+        json!({"turnId":user["id"],"user":capped(text,max,offset),"assistant":answers.last().map(|b|capped(b["text"].as_str().unwrap_or(""),max,offset)),"earlierAssistantMessages":answers.len().saturating_sub(1)})
     }).collect::<Vec<_>>(),"nextBefore":if start>0 {selected.first().map(|(b,_)|b["id"].clone())}else{None}}))
 }
 

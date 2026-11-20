@@ -1,7 +1,7 @@
 //! Native transcript projection. Neither watch frames nor parsed text cross JS.
 //! Row IDs survive appends, so the platform only measures changed blocks.
 use crate::LinkResult;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -171,6 +171,10 @@ fn parse_blocks(id: &str, text: &str, offset: usize) -> Vec<Block> {
                             code_group = format!("{id}:{}:code", offset + range.start);
                             code_line = 0;
                             current.as_mut().unwrap().presentation["group"] = json!(code_group);
+                            if let Tag::CodeBlock(CodeBlockKind::Fenced(info)) = &tag {
+                                current.as_mut().unwrap().presentation["language"] =
+                                    json!(info.split_whitespace().next().unwrap_or(""));
+                            }
                         }
                         if kind == "table" {
                             let row = current.as_mut().unwrap();
@@ -219,6 +223,33 @@ fn parse_blocks(id: &str, text: &str, offset: usize) -> Vec<Block> {
                             current = None;
                         }
                         flush(&mut current, &mut block);
+                        if tag == TagEnd::CodeBlock {
+                            if let Some(block) = block.as_mut() {
+                                let rows: Vec<_> = block
+                                    .rows
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, row)| {
+                                        row.presentation["group"].as_str() == Some(&code_group)
+                                    })
+                                    .collect();
+                                let text = rows
+                                    .iter()
+                                    .map(|(_, row)| {
+                                        row.runs
+                                            .iter()
+                                            .map(|run| run.text.as_str())
+                                            .collect::<String>()
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                if let Some((first, _)) = rows.first() {
+                                    let first = *first;
+                                    Arc::make_mut(&mut block.rows[first]).action =
+                                        json!({"type":"copy","copyText":text});
+                                }
+                            }
+                        }
                         code = false;
                     }
                     TagEnd::List(_) => {
@@ -1221,6 +1252,13 @@ mod tests {
         let rows: Vec<_> = md.blocks.iter().flat_map(|b| &b.rows).collect();
         let code: Vec<_> = rows.iter().filter(|r| r.kind == "code").collect();
         assert_eq!(code.len(), 2); // No trailing blank line from the fence.
+        assert_eq!(
+            code[0].action,
+            json!({"type":"copy","copyText":"const a = 1;\nconst b = 2;"})
+        );
+        assert_eq!(code[1].action, Value::Null);
+        assert_eq!(code[0].presentation["language"], "ts");
+        assert!(code[1].presentation.get("language").is_none());
         assert_eq!(code[0].presentation["group"], code[1].presentation["group"]);
         assert_eq!(code[0].presentation["first"], true);
         assert_eq!(code[0].presentation["last"], false);
@@ -1272,14 +1310,40 @@ mod tests {
     }
 
     #[test]
-    fn appending_code_changes_only_the_previous_last_line_and_new_lines() {
+    fn code_copy_actions_keep_fences_separate_and_preserve_literal_contents() {
+        let mut md = Markdown::default();
+        md.update("m", "Prose\n\n```md\n# Heading\n\n  **literal** 👋\n```\n\n> ~~~sh\n> echo hi\n> ~~~\n\n```\n```");
+        let actions: Vec<_> = md
+            .blocks
+            .iter()
+            .flat_map(|b| &b.rows)
+            .filter(|r| r.action["type"] == "copy")
+            .map(|r| &r.action["copyText"])
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                &json!("# Heading\n\n  **literal** 👋"),
+                &json!("echo hi"),
+                &json!("")
+            ]
+        );
+    }
+
+    #[test]
+    fn appending_code_updates_copy_action_and_only_changed_lines() {
         let turn = |text: &str| json!({"id":"t","items":[{"id":"a","type":"text","text":text}]});
         let mut t = Transcript::new(vec![turn("```ts\none\ntwo\nthree")], true);
         t.update(json!({"type":"render"})).unwrap();
         let delta = t.update(json!({"type":"frames","frames":[{"order":["t"],"turns":[turn("```ts\none\ntwo\nthree\nfour")]}]})).unwrap();
         let changed = delta["rows"].as_array().unwrap();
-        assert_eq!(changed.len(), 2);
-        assert!(changed.iter().all(|r| r["id"] != "t/a:0"));
+        assert_eq!(changed.len(), 3);
+        let first = changed.iter().find(|r| r["id"] == "t/a:0").unwrap();
+        assert_eq!(
+            first["action"],
+            json!({"type":"copy","copyText":"one\ntwo\nthree\nfour"})
+        );
+        assert!(changed.iter().all(|r| r["id"] != "t/a:0:code:line1"));
     }
     #[test]
     fn incremental_markdown_matches_complete_parse_at_every_unicode_boundary() {

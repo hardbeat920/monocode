@@ -275,6 +275,7 @@ impl Monos {
             run.view.update(cx, |v, cx| v.mono_stop(cx));
         }
         self.roster.monos.retain(|m| m.id != id);
+        self.panel_views.remove(id);
         if self.active.as_deref() == Some(id) {
             self.active = None;
         }

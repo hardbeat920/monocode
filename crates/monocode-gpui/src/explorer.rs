@@ -151,7 +151,7 @@ enum NameMode {
         is_dir: bool,
     },
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Line {
     Note {
         depth: usize,
@@ -498,9 +498,13 @@ impl Explorer {
         if self.available() && self.expanded.contains(&self.cwd) {
             self.push_children(&self.cwd.clone(), 0, &mut lines, cx);
         }
-        let old = self.lines.len();
+        // Splice only the rows that changed. Replacing the whole range makes
+        // ListState reset its scroll top to row 0 on every toggle/refresh.
+        let (start, old_end, new_end) = changed_range(&self.lines, &lines);
         self.lines = lines;
-        self.list.splice(0..old, self.lines.len());
+        if start < old_end || start < new_end {
+            self.list.splice(start..old_end, new_end - start);
+        }
         cx.notify();
     }
     fn push_children(&self, parent: &str, depth: usize, lines: &mut Vec<Line>, cx: &App) {
@@ -1740,5 +1744,39 @@ impl Render for Explorer {
             )
             .children(menu)
             .into_any_element()
+    }
+}
+
+/// Smallest `old[start..old_end]` -> `new[start..new_end]` replacement that
+/// turns `old` into `new` (common prefix and suffix are left untouched).
+fn changed_range<T: PartialEq>(old: &[T], new: &[T]) -> (usize, usize, usize) {
+    let start = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suffix = old[start..]
+        .iter()
+        .rev()
+        .zip(new[start..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    (start, old.len() - suffix, new.len() - suffix)
+}
+
+#[cfg(test)]
+mod changed_range_tests {
+    use super::changed_range;
+
+    #[test]
+    fn expanding_a_folder_only_touches_the_inserted_rows() {
+        let old = [1, 2, 3, 4];
+        let new = [1, 2, 9, 9, 3, 4];
+        assert_eq!(changed_range(&old, &new), (2, 2, 4));
+    }
+
+    #[test]
+    fn collapsing_and_flipping_a_row() {
+        let old = [1, 2, 5, 6, 3];
+        let new = [1, 7, 3];
+        assert_eq!(changed_range(&old, &new), (1, 4, 2));
+        assert_eq!(changed_range(&old, &old), (5, 5, 5));
+        assert_eq!(changed_range::<i32>(&[], &[1]), (0, 0, 1));
     }
 }

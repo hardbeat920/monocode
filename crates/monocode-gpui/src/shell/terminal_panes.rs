@@ -222,6 +222,17 @@ impl Shell {
     /// Title bar placement, cmd-shift-j: a fresh shell as a pane beside the
     /// focused one. With no focused pane it opens as its own title tab.
     pub(super) fn split_title_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.split_title_terminal_toward(SplitDir::Right, window, cx);
+    }
+
+    /// A fresh shell beside the focused pane, on the side `dir` names: the
+    /// split header's buttons on a terminal pane.
+    pub(super) fn split_title_terminal_toward(
+        &mut self,
+        dir: SplitDir,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.app_view_open() {
             return;
         }
@@ -241,7 +252,7 @@ impl Shell {
             .insert(pane, TerminalPane { owner, cwd });
         self.terminal_pane_views.insert(pane, terminal);
         let before = self.active_leaves();
-        self.workspace.split(pane, SplitDir::Right);
+        self.workspace.split(pane, dir);
         self.begin_pane_motion(before, cx);
         self.fit_sidebar(cx);
         self.open_terminal_pane(pane, window, cx);
@@ -679,6 +690,119 @@ mod tests {
                 assert_eq!(shell.workspace.tab_of(pane), shell.workspace.tab_of(b));
                 assert_eq!(shell.workspace.active, Some(pane));
                 assert_eq!(shell.workspace.terminal_panes[&pane].owner, b);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pane_sashes_snap_to_the_middle_and_even_out_on_double_click(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::terminal::bind(cx);
+            cx.set_reduce_motion(true);
+        });
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.set_terminal_placement("title");
+                shell.open(b, w, cx);
+                shell.focus_active(w, cx);
+            })
+            .unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("cmd-shift-j");
+        visual.run_until_parked();
+        let tab = window
+            .update(&mut visual, |shell, _, _| {
+                shell.workspace.tab_of(b).unwrap()
+            })
+            .unwrap();
+        let boundary = |visual: &mut VisualTestContext| {
+            window
+                .update(visual, |shell, _, _| {
+                    let (at, _, _) = shell.workspace.sash_range(tab, &[], 0).unwrap();
+                    (at, shell.pane_sash.as_ref().is_some_and(|s| s.snapped))
+                })
+                .unwrap()
+        };
+        let sash = visual.debug_bounds("pane-sash-0").unwrap().center();
+        // Well clear of the middle the sash follows the pointer.
+        visual.simulate_mouse_down(sash, MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            sash + point(px(80.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        let (at, snapped) = boundary(&mut visual);
+        assert!(at > 0.55 && !snapped);
+        // Within a few pixels of it, it settles exactly on the middle.
+        visual.simulate_mouse_move(
+            sash + point(px(7.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        let (at, snapped) = boundary(&mut visual);
+        assert_eq!(at, 0.5);
+        assert!(snapped);
+        visual.simulate_mouse_move(
+            sash - point(px(90.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        visual.simulate_mouse_up(
+            sash - point(px(90.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        visual.run_until_parked();
+        assert!(boundary(&mut visual).0 < 0.45);
+        // A double-click on the sash evens the panes back out.
+        let sash = visual.debug_bounds("pane-sash-0").unwrap().center();
+        visual.simulate_event(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position: sash,
+            click_count: 2,
+            ..Default::default()
+        });
+        visual.simulate_mouse_up(sash, MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        assert_eq!(boundary(&mut visual), (0.5, false));
+    }
+
+    #[gpui::test]
+    fn split_header_buttons_split_a_terminal_pane_with_a_fresh_shell(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| {
+            bind_keys(cx);
+            crate::terminal::bind(cx);
+            cx.set_reduce_motion(true);
+        });
+        window
+            .update(cx, |shell, w, cx| {
+                shell.workspace.preferences.set_terminal_placement("title");
+                shell.open(b, w, cx);
+                shell.focus_active(w, cx);
+            })
+            .unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("cmd-shift-j");
+        visual.run_until_parked();
+        let first = window
+            .update(&mut visual, |shell, _, _| shell.workspace.active.unwrap())
+            .unwrap();
+        let selector = Box::leak(format!("split-pane-split-down-{first}").into_boxed_str());
+        let button = visual.debug_bounds(selector).unwrap().center();
+        visual.simulate_click(button, Default::default());
+        visual.run_until_parked();
+        window
+            .update(&mut visual, |shell, _, _| {
+                assert_eq!(shell.workspace.terminal_panes.len(), 2);
+                let second = shell.workspace.active.unwrap();
+                assert_ne!(second, first);
+                assert!(shell.workspace.terminal_panes.contains_key(&second));
+                assert_eq!(shell.workspace.tab_of(second), shell.workspace.tab_of(b));
             })
             .unwrap();
     }
