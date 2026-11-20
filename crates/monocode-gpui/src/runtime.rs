@@ -913,10 +913,20 @@ fn run_turn_using(
                             let id = stop_request
                                 .as_deref()
                                 .ok_or("Missing Codex goal operation")?;
-                            let db = locked(&store)?;
                             return if event == Event::GoalStopRequested {
-                                db.save_setting(&monocode_core::mono::goal_stop_key(summary.id), id)
+                                locked(&store)?.save_setting(
+                                    &monocode_core::mono::goal_stop_key(summary.id),
+                                    id,
+                                )
                             } else {
+                                pending.flush(
+                                    &store,
+                                    summary.id,
+                                    &transcript,
+                                    &context,
+                                    std::time::Instant::now(),
+                                )?;
+                                let db = locked(&store)?;
                                 monocode_core::mono::clear_goal_stop(&db, summary.id, id)
                             };
                         }

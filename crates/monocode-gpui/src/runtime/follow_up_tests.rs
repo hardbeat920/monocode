@@ -161,6 +161,7 @@ fn mono_goal_stop_requires_a_confirmed_pause_between_turns() {
     for (mode, error) in [
         ("paused", None),
         ("inactive-stop", None),
+        ("inactive-storage", Some("terminal write failed")),
         ("inactive-timeout", Some("timed out")),
         ("in-flight", None),
         ("turn-rejected", Some("interrupt rejected")),
@@ -223,6 +224,12 @@ for line in sys.stdin:
             send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':'wrong','status':'completed'}}})
             send({'method':'item/agentMessage/delta','params':{'threadId':'main','turnId':terminal,'itemId':'tail','delta':'post-ack output'}})
             send({'method':'item/completed','params':{'threadId':'main','turnId':terminal,'item':{'id':'late-tool','type':'commandExecution','command':'pwd','status':'completed','aggregatedOutput':'post-ack tool'}}})
+            if mode == 'inactive-storage':
+                import sqlite3
+                with sqlite3.connect('sessions.db') as db:
+                    db.execute("""CREATE TRIGGER fail_terminal BEFORE UPDATE OF blocks_json ON sessions
+                        WHEN instr(NEW.blocks_json, 'terminal snapshot') AND NOT instr(NEW.blocks_json, 'could not confirm Stop')
+                        BEGIN SELECT RAISE(FAIL, 'terminal write failed'); END""")
             if mode in ('ack-only','inactive-timeout'):
                 time.sleep(10)
             send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':terminal,'status':'interrupted','items':[{'type':'agentMessage','id':'snapshot','text':'terminal snapshot'}]}}})
@@ -281,7 +288,7 @@ for line in sys.stdin:
     let store = Store::open_monocode(&fixture.0.join("sessions.db")).unwrap();
     let summary = store.create("codex", fixture.0.to_str().unwrap()).unwrap();
     let session = summary.id;
-    if mode == "crash-stop" {
+    if matches!(mode, "crash-stop" | "inactive-storage") {
         use monocode_core::mono::{Message, Mono, Roster};
         let mut roster = Roster::default();
         let goal = Message {
@@ -422,7 +429,15 @@ for line in sys.stdin:
                 .any(|r| r.role == "tool" && r.text.contains("post-ack tool"))
         );
     }
-    if mode == "inactive-stop" {
+    if mode == "inactive-storage" {
+        let roster = monocode_core::mono::Roster::load(&reopened).unwrap();
+        let queue = &roster.monos[0].outbox;
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].text, "/goal pause");
+        assert!(queue[0].error.is_some());
+        assert_eq!(queue[1].id, "later");
+    }
+    if matches!(mode, "inactive-stop" | "inactive-storage") {
         assert!(saved.rows.iter().any(|r| r.text == "terminal snapshot"));
     }
     if mode == "idle" {
