@@ -148,6 +148,7 @@ struct Snapshot<'a> {
     waiting: Option<&'static str>,
     mono: Option<String>,
     pending: Vec<turns::Pending>,
+    approvals: Value,
     /// A Mono's launched sessions, as the phone's cards show them.
     launches: &'a HashMap<i64, Value>,
     /// The question the agent waits on, as the phone's card shows it; null
@@ -890,6 +891,7 @@ impl Shell {
                 "messages": turns::messages(snapshot.rows),
                 "turns": turns::build(&source, start..ids.len()),
                 "busy": snapshot.busy,
+                "approvals": snapshot.approvals,
                 "usageLimit": snapshot.usage_limit,
                 "older": start > 0 || snapshot.history.is_some(),
                 "question": snapshot.question,
@@ -1009,6 +1011,7 @@ impl Shell {
             waiting,
             mono,
             pending: chat.mobile_pending(cx),
+            approvals: chat.mobile_approvals(),
             launches: &launches,
             question: chat.mobile_question(cx),
             history: chat.transcript.read(cx).older_history_cursor(),
@@ -1166,6 +1169,7 @@ impl Shell {
                     built,
                     snapshot.busy,
                     snapshot.question.clone(),
+                    snapshot.approvals.clone(),
                     snapshot.usage_limit.clone(),
                 )
             };
@@ -1182,16 +1186,19 @@ impl Shell {
             let Some(watch) = self.mobile.watches.get_mut(&id) else {
                 continue;
             };
-            let (from, older, built, busy, question, usage_limit) = built;
+            let (from, older, built, busy, question, approvals, usage_limit) = built;
             watch.from = from;
             let Some((update, baseline)) = watch::update(
                 watch.baseline.as_ref(),
-                busy,
-                older,
-                &question,
-                &built,
+                watch::Conversation {
+                    busy,
+                    older,
+                    question: &question,
+                    turns: &built,
+                    approvals: &approvals,
+                    usage_limit: &usage_limit,
+                },
                 incremental,
-                &usage_limit,
             ) else {
                 continue;
             };
@@ -1338,6 +1345,17 @@ impl Shell {
                 if let Some(chat) = self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono)) {
                     chat.update(cx, |v, cx| v.stop_if_busy(cx));
                 }
+                Ok(reply)
+            }
+            ("session.respondApproval", target) => {
+                let view = match target {
+                    Target::Session(id) => self.sessions.get(id).cloned(),
+                    Target::Mono(mono) => {
+                        self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono))
+                    }
+                }
+                .ok_or("Open this session on the desktop to respond")?;
+                view.update(cx, |v, cx| v.mobile_respond_approval(params, cx))?;
                 Ok(reply)
             }
             ("session.resumeUsage" | "session.resumeUsageAtReset", target) => {
@@ -2290,6 +2308,7 @@ fn older_page(
                 mono: look.mono.clone(),
                 pending: Vec::new(),
                 launches: &look.launches,
+                approvals: json!([]),
                 question: Value::Null,
                 history: page.before,
                 usage_limit: Value::Null,
@@ -2346,6 +2365,7 @@ fn saved_snapshot(saved: &Saved) -> Snapshot<'_> {
         waiting: None,
         mono: saved.mono.clone(),
         pending: Vec::new(),
+        approvals: json!([]),
         launches: &saved.launches,
         question: Value::Null,
         history: saved.history,
@@ -2483,6 +2503,26 @@ fn hidden_providers(prefs: &crate::settings::Preferences, cwd: &str) -> Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn approval_commands_report_missing_sessions_closed_monos_and_stale_requests(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (window, saved, _) = super::super::tests::window(cx);
+        window.update(cx, |shell, window, cx| {
+            let command = "session.respondApproval";
+            shell.mobile.ids.insert(saved, "saved".into());
+            let params = json!({"conversationId":"saved", "requestId":"7", "token":"old", "decision":"allow"});
+            assert!(shell.mobile_session_command(command, &params, window, cx).unwrap_err().contains("resolved or replaced"));
+            let chat = shell.sessions.remove(&saved).unwrap();
+            assert!(shell.mobile_session_command(command, &params, window, cx).unwrap_err().contains("Open this session"));
+            shell.sessions.insert(saved, chat);
+            assert!(shell.mobile_session_command(command, &json!({"conversationId":"missing"}), window, cx).unwrap_err().contains("no longer available"));
+            let manager = shell.monos.clone().unwrap();
+            let id = manager.update(cx, |m, _| m.roster.create(vec!["/work/monocode".into()]).id.clone());
+            assert!(shell.mobile_session_command(command, &json!({"conversationId":format!("mono:{id}")}), window, cx).unwrap_err().contains("Open this session"));
+        }).unwrap();
+    }
 
     #[gpui::test]
     fn mobile_catalog_matches_sidebar_visibility_for_saved_and_open_sessions(

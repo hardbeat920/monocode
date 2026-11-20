@@ -139,6 +139,7 @@ it("routes an answer in the Mono's chat back to the run that asked", () => {
     runId: "run",
     requestId: 7,
     blockId: "b",
+    approval: { requestId: 7 },
   });
   // Its own id, so it cannot collide with the Mono's own requests.
   expect(id).not.toBe(7);
@@ -149,7 +150,7 @@ it("routes an answer in the Mono's chat back to the run that asked", () => {
     requestId: 7,
   });
   expect(takeRelayedApproval("mono", id)).toBeUndefined();
-  relayApproval({ monoId: "mono", runId: "run", requestId: 8, blockId: "c" });
+  relayApproval({ monoId: "mono", runId: "run", requestId: 8, blockId: "c", approval: { requestId: 8 } });
   expect(dropRelays("run").map((relay) => relay.blockId)).toEqual(["c"]);
   expect(isRelayed("run", 8)).toBe(false);
 });

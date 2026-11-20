@@ -1,3 +1,4 @@
+import { mobileApprovals } from "./mobileApprovals";
 import { mobileUsageLimit } from "../../sessions/model/usageLimit";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -301,6 +302,7 @@ export async function mobileConversation(
         })
       : [],
     busy: !!session?.busy,
+    approvals: session ? mobileApprovals(session, live) : [],
     usageLimit: session ? mobileUsageLimit(session) : null,
     // What the agent asks, for the phone to answer as the desktop's card does.
     question: session?.pendingQuestion

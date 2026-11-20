@@ -2,6 +2,7 @@
 import { act, createElement, Fragment } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mobileApprovalDecision, mobileApprovals, respondMobileApproval } from "../../../../features/mobile/model/mobileApprovals";
 import { QuestionForm } from "../../../../features/sessions/ui/QuestionForm";
 import { ApprovalToasts } from "../../../../features/sessions/ui/ApprovalToasts";
 import { AgentTranscript } from "../../../../features/sessions/ui/AgentTranscript";
@@ -298,6 +299,24 @@ describe("Codex requests reach the chat and notifications", () => {
     });
     expect(document.querySelector("[data-question-form]")).toBeNull();
     expect(document.querySelector(".approval-toast")).toBeNull();
+  });
+
+  it.each(["allow", "deny"] as const)("delivers a validated mobile %s decision through the desktop adapter", async (decision) => {
+    await act(async () => onLine(JSON.stringify({ id: 92, method: "item/commandExecution/requestApproval",
+      params: { itemId: "phone-command", command: "git status --short", reason: "Inspect workspace" },
+    })));
+    const [prompt] = mobileApprovals(session);
+    expect(prompt.detail).toContain("git status --short");
+    const params = { token: prompt.token, requestId: prompt.requestId, decision };
+    await act(async () => {
+      respondMobileApproval(session.id, params, [session], (id, requestId, response) => {
+        codexAdapter.respondApproval(id, requestId, response);
+      });
+    });
+    expect(sent.find((m) => m.id === 92)?.result).toEqual({ decision: decision === "allow" ? "accept" : "decline" });
+    expect(mobileApprovals(session)).toEqual([]);
+    expect(document.querySelector(".approval-toast")).toBeNull();
+    expect(() => mobileApprovalDecision(session, params)).toThrow("resolved or replaced");
   });
 
   it("keeps command approval visible and sends Allow from the toast", async () => {

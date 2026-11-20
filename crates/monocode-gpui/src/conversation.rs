@@ -197,6 +197,7 @@ pub(crate) struct Conversation {
     _account_usage: Option<Subscription>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
+    mobile_approval_tokens: std::collections::HashMap<String, String>,
     questions:
         std::collections::VecDeque<(Entity<crate::questions::QuestionCard>, Vec<Subscription>)>,
     question_overlay: crate::questions::Overlay,
@@ -657,6 +658,7 @@ impl Conversation {
             _account_usage: account_usage,
             approvals: Default::default(),
             approval_ui: Default::default(),
+            mobile_approval_tokens: Default::default(),
             questions: Default::default(),
             question_overlay: Default::default(),
             controls: None,
@@ -1376,10 +1378,9 @@ impl Conversation {
                             this.set_background(tasks, cx);
                         }
                         if !stopping {
-                            this.approvals.extend(update.approvals);
-                        }
-                        for id in update.approvals_resolved {
-                            this.approvals.retain(|approval| approval.id != id);
+                            this.sync_approvals(update.approvals, update.approvals_resolved);
+                        } else {
+                            this.sync_approvals(Vec::new(), update.approvals_resolved);
                         }
                         for id in update.questions_resolved {
                             this.questions.retain(|(card, _)| card.read(cx).id() != id);
@@ -1405,6 +1406,7 @@ impl Conversation {
                                     if this.controls.as_ref().is_none_or(|controls| {
                                         controls
                                             .send(Control {
+                                                approval_instance: None,
                                                 id: reply.id.clone(),
                                                 decision,
                                             })
@@ -1438,6 +1440,7 @@ impl Conversation {
                                 |this, _, request: &crate::questions::KeptOpen, cx| {
                                     if let Some(controls) = &this.controls {
                                         let _ = controls.send(Control {
+                                            approval_instance: None,
                                             id: request.id.clone(),
                                             decision: Decision::KeepOpen,
                                         });

@@ -99,6 +99,7 @@ impl Protocol {
         {
             self.respond(
                 Control {
+                    approval_instance: None,
                     id,
                     decision: Decision::Deny,
                 },
@@ -599,6 +600,7 @@ impl Protocol {
                     if self.questions.contains_key(&id) {
                         self.respond(
                             Control {
+                                approval_instance: None,
                                 id: id.clone(),
                                 decision: Decision::Deny,
                             },
@@ -607,11 +609,15 @@ impl Protocol {
                         events.push(Event::QuestionResolved(id));
                     }
                 } else if method == "confirm" {
-                    self.approvals
-                        .insert(id.clone(), (v["id"].clone(), "pi".into(), v.clone()));
+                    let instance = crate::agent::next_approval_instance();
+                    self.approvals.insert(
+                        id.clone(),
+                        (v["id"].clone(), "pi".into(), v.clone(), instance),
+                    );
                     if self.pi.cancelling {
                         self.respond(
                             Control {
+                                approval_instance: None,
                                 id,
                                 decision: Decision::Deny,
                             },
@@ -620,6 +626,7 @@ impl Protocol {
                         return Ok(events);
                     }
                     events.push(Event::Approval(Approval {
+                        instance,
                         id,
                         title: v["title"]
                             .as_str()
@@ -633,6 +640,7 @@ impl Protocol {
                     if self.pi.cancelling {
                         self.respond(
                             Control {
+                                approval_instance: None,
                                 id,
                                 decision: Decision::Deny,
                             },

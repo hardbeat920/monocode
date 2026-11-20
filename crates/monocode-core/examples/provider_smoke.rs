@@ -168,7 +168,7 @@ fn approval(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
         settings: Settings { access:AccessMode::Supervised, effort:Some("low".into()), ..Default::default() },
     }, Arc::new(AtomicBool::new(false)), Some(rx), |events| {
         for event in events { match event {
-            Event::Approval(request) => { asked += 1; println!("APPROVAL {}: {}", request.title, request.detail); tx.send(Control {id:request.id, decision:Decision::Allow}).map_err(|e| e.to_string())?; },
+            Event::Approval(request) => { asked += 1; println!("APPROVAL {}: {}", request.title, request.detail); tx.send(Control {approval_instance: Some(request.instance),id:request.id, decision:Decision::Allow}).map_err(|e| e.to_string())?; },
             Event::Tool(tool) => println!("TOOL {} {:?}", tool.name, tool.state),
             Event::Text(text) => print!("{text}"),
             Event::Done => completed = true,

@@ -353,6 +353,7 @@ impl Conversation {
             if let Some(controls) = &self.controls {
                 if controls
                     .send(Control {
+                        approval_instance: None,
                         id: message.id.clone(),
                         decision: Decision::Steer(message.clone()),
                     })

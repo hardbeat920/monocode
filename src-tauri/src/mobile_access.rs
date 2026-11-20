@@ -742,6 +742,7 @@ async fn handle(
             "models.list",
             "accounts.usage",
             "session.configure",
+            "session.respondApproval",
             "project.changes",
             "project.worktrees",
             "project.files",

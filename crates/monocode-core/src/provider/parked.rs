@@ -453,6 +453,7 @@ pub(super) fn settle_cancelled(mut wire: Wire, mut protocol: Protocol) {
                                 if let Some(id) = id {
                                     let _ = protocol.respond(
                                         Control {
+                                            approval_instance: None,
                                             id,
                                             decision: Decision::Deny,
                                         },

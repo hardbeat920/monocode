@@ -97,12 +97,14 @@ pub(super) fn prepare(
                         Event::SessionId(id) => binding = Some(id),
                         Event::Approval(request) => {
                             let _ = controls.send(Control {
+                                approval_instance: Some(request.instance),
                                 id: request.id,
                                 decision: Decision::Deny,
                             });
                         }
                         Event::Question(request) => {
                             let _ = controls.send(Control {
+                                approval_instance: None,
                                 id: request.id,
                                 decision: Decision::Deny,
                             });
