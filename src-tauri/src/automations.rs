@@ -135,6 +135,9 @@ pub struct AutomationTrigger {
     time: String,
     #[serde(default = "default_day_of_week")]
     day_of_week: i64,
+    /// Written by MonoCode Native for `custom` schedules. Desktop keeps it intact and never evaluates it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    cron: String,
     #[serde(default)]
     repos: Vec<String>,
     #[serde(default)]
@@ -287,7 +290,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -332,8 +335,13 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     }
     if !matches!(
         trigger.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
+        return Err("Invalid automation schedule.".into());
+    }
+    if trigger.schedule_kind == "custom"
+        && (trigger.cron.trim().is_empty() || trigger.cron.len() > 200)
+    {
         return Err("Invalid automation schedule.".into());
     }
     if !(0..=59).contains(&trigger.minute)
@@ -425,6 +433,7 @@ fn trigger_from_fields(
         minute,
         time: time.to_string(),
         day_of_week,
+        cron: String::new(),
         repos: Vec::new(),
         repo: String::new(),
         branch: String::new(),
@@ -1024,6 +1033,21 @@ pub fn automation_run_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_cron_triggers_round_trip_and_validate() {
+        let json = r#"{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 6-20/2 * * *"}"#;
+        let trigger: AutomationTrigger = serde_json::from_str(json).unwrap();
+        assert_eq!(trigger.cron, "0 6-20/2 * * *");
+        assert!(validate_trigger(&trigger).is_ok());
+        let stored = serde_json::to_string(&trigger).unwrap();
+        assert!(stored.contains("\"cron\":\"0 6-20/2 * * *\""));
+        let empty = AutomationTrigger {
+            cron: String::new(),
+            ..trigger
+        };
+        assert!(validate_trigger(&empty).is_err());
+    }
 
     #[test]
     fn validates_time_fields() {

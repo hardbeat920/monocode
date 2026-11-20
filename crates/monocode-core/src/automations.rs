@@ -153,6 +153,9 @@ pub struct AutomationTrigger {
     pub time: String,
     #[serde(default = "default_day_of_week")]
     pub day_of_week: i64,
+    /// Five-field cron expression, used when `schedule_kind` is `custom`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cron: String,
     #[serde(default)]
     pub repos: Vec<String>,
     #[serde(default)]
@@ -305,7 +308,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -320,6 +323,9 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if input.next_run_at <= now {
         return Err("The next automation run must be in the future.".into());
+    }
+    if input.triggers.is_none() && input.schedule_kind == "custom" {
+        return Err("A custom schedule needs a cron expression.".into());
     }
     if let Some(triggers) = &input.triggers {
         if triggers.len() > MAX_TRIGGERS {
@@ -350,9 +356,12 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     }
     if !matches!(
         trigger.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
+    }
+    if trigger.kind == "time" && trigger.schedule_kind == "custom" {
+        parse_cron(&trigger.cron)?;
     }
     if !(0..=59).contains(&trigger.minute)
         || !(0..=6).contains(&trigger.day_of_week)
@@ -406,6 +415,7 @@ fn normalize_triggers(input: &AutomationUpsert) -> Vec<AutomationTrigger> {
             trigger.id = new_id();
         }
         trigger.event = trigger.event.trim().to_string();
+        trigger.cron = trigger.cron.trim().to_string();
         trigger.repo = trigger.repo.trim().to_string();
         trigger.branch = trigger.branch.trim().to_string();
         trigger.actor = trigger.actor.trim().to_string();
@@ -443,6 +453,7 @@ fn trigger_from_fields(
         minute,
         time: time.to_string(),
         day_of_week,
+        cron: String::new(),
         repos: Vec::new(),
         repo: String::new(),
         branch: String::new(),
@@ -1019,6 +1030,33 @@ impl Service {
     }
 }
 
+const MAX_CRON_LEN: usize = 200;
+
+fn cron_parser() -> croner::parser::CronParser {
+    croner::parser::CronParser::builder()
+        .seconds(croner::parser::Seconds::Disallowed)
+        .build()
+}
+
+/// Parses a standard five-field cron expression (minute hour day-of-month month day-of-week).
+pub fn parse_cron(expression: &str) -> Result<croner::Cron, String> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Err("Enter a cron expression, for example 0 9 * * 1-5.".into());
+    }
+    if expression.len() > MAX_CRON_LEN {
+        return Err("The cron expression is too long.".into());
+    }
+    cron_parser()
+        .parse(expression)
+        .map_err(|error| format!("Invalid cron expression: {error}"))
+}
+
+/// Plain-English description of a cron expression, or `None` when it does not parse.
+pub fn describe_cron(expression: &str) -> Option<String> {
+    parse_cron(expression).ok().map(|cron| cron.describe())
+}
+
 pub const WEEKDAYS: [&str; 7] = [
     "Sunday",
     "Monday",
@@ -1035,7 +1073,9 @@ impl AutomationTrigger {
             id: new_id(),
             kind: kind.into(),
             event: event.into(),
-            schedule_kind: if matches!(event, "hourly" | "daily" | "weekdays" | "weekly") {
+            schedule_kind: if kind == "time"
+                && matches!(event, "hourly" | "daily" | "weekdays" | "weekly" | "custom")
+            {
                 event.into()
             } else {
                 "weekdays".into()
@@ -1043,6 +1083,12 @@ impl AutomationTrigger {
             minute: 0,
             time: "09:00".into(),
             day_of_week: 1,
+            // A new custom schedule starts from a valid example instead of an empty field.
+            cron: if kind == "time" && event == "custom" {
+                "0 9 * * 1-5".into()
+            } else {
+                String::new()
+            },
             repos: Vec::new(),
             repo: String::new(),
             branch: String::new(),
@@ -1056,6 +1102,9 @@ impl AutomationTrigger {
         match self.schedule_kind.as_str() {
             "hourly" => format!("Hourly at :{:02}", self.minute),
             "daily" => format!("Daily at {}", self.time),
+            "custom" => {
+                describe_cron(&self.cron).unwrap_or_else(|| format!("Cron: {}", self.cron.trim()))
+            }
             "weekly" => format!(
                 "{} at {}",
                 WEEKDAYS.get(self.day_of_week as usize).unwrap_or(&"Weekly"),
@@ -1069,6 +1118,14 @@ impl AutomationTrigger {
         let Some(start) = Local.timestamp_millis_opt(after).single() else {
             return after.saturating_add(86_400_000);
         };
+        if self.schedule_kind == "custom" {
+            return parse_cron(&self.cron)
+                .ok()
+                .and_then(|cron| cron.find_next_occurrence(&start, false).ok())
+                .map(|next| next.timestamp_millis())
+                // An unparsable or exhausted expression must not fire repeatedly.
+                .unwrap_or_else(|| after.saturating_add(365 * 86_400_000));
+        }
         if self.schedule_kind == "hourly" {
             // Enumerating actual clock minutes also handles repeated/nonexistent DST hours.
             let mut candidate = (after / 60_000 + 1) * 60_000;
@@ -1523,6 +1580,103 @@ mod tests {
             next_run_at(&[weekdays, daily], local_at("2026-09-19T10:00:00")),
             local_at("2026-09-19T18:00:00")
         );
+    }
+
+    fn cron_trigger(expression: &str) -> AutomationTrigger {
+        AutomationTrigger {
+            schedule_kind: "custom".into(),
+            cron: expression.into(),
+            ..AutomationTrigger::new("time", "custom")
+        }
+    }
+
+    #[test]
+    fn custom_cron_finds_windowed_and_weekday_occurrences() {
+        let windowed = cron_trigger("0 6-20/2 * * *");
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T07:10:00")),
+            local_at("2026-09-19T08:00:00")
+        );
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T20:30:00")),
+            local_at("2026-09-20T06:00:00")
+        );
+        // The boundary is exclusive, like the built-in schedules.
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T08:00:00")),
+            local_at("2026-09-19T10:00:00")
+        );
+        let mwf = cron_trigger("0 10 * * 1,3,5");
+        // 2026-09-18 is a Friday.
+        assert_eq!(
+            mwf.next_at(local_at("2026-09-18T11:00:00")),
+            local_at("2026-09-21T10:00:00")
+        );
+        let earliest = next_run_at(
+            &[AutomationTrigger::new("time", "weekdays"), windowed],
+            local_at("2026-09-19T07:10:00"),
+        );
+        assert_eq!(earliest, local_at("2026-09-19T08:00:00"));
+    }
+
+    #[test]
+    fn a_new_custom_trigger_starts_as_custom_with_a_valid_cron() {
+        let trigger = AutomationTrigger::new("time", "custom");
+        assert_eq!(trigger.schedule_kind, "custom");
+        assert!(validate_trigger(&trigger).is_ok());
+        assert_eq!(
+            AutomationTrigger::new("time", "daily").schedule_kind,
+            "daily"
+        );
+        assert_eq!(
+            AutomationTrigger::new("github", "custom").schedule_kind,
+            "weekdays"
+        );
+    }
+
+    #[test]
+    fn custom_cron_is_validated_described_and_labelled() {
+        for bad in ["", "   ", "61 * * * *", "* * * *", "0 0 9 * * *", "nope"] {
+            assert!(parse_cron(bad).is_err(), "{bad:?} should be rejected");
+            assert!(validate_trigger(&cron_trigger(bad)).is_err());
+        }
+        assert!(parse_cron(&"* ".repeat(200)).is_err());
+        assert!(validate_trigger(&cron_trigger("0 6-20/2 * * *")).is_ok());
+        let description = describe_cron("0 6-20/2 * * *").unwrap();
+        assert!(!description.is_empty());
+        assert_eq!(cron_trigger("0 6-20/2 * * *").label(), description);
+        assert_eq!(cron_trigger("nope").label(), "Cron: nope");
+        // An unparsable stored expression never reschedules into the past.
+        let after = local_at("2026-09-19T07:10:00");
+        assert!(cron_trigger("nope").next_at(after) > after);
+    }
+
+    #[test]
+    fn triggers_saved_before_custom_cron_still_load_and_round_trip() {
+        let old = r#"{"id":"t","kind":"time","event":"daily","scheduleKind":"daily","minute":0,"time":"18:00","dayOfWeek":1}"#;
+        let trigger: AutomationTrigger = serde_json::from_str(old).unwrap();
+        assert!(trigger.cron.is_empty());
+        assert!(!serde_json::to_string(&trigger).unwrap().contains("cron"));
+        let custom = serde_json::to_string(&cron_trigger("*/5 * * * *")).unwrap();
+        let back: AutomationTrigger = serde_json::from_str(&custom).unwrap();
+        assert_eq!(back.cron, "*/5 * * * *");
+    }
+
+    #[test]
+    fn custom_cron_automation_is_saved_claimed_when_due_and_rescheduled() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("automations.db")).unwrap();
+        let saved = save(&mut service, vec![cron_trigger("*/2 * * * *")]);
+        assert_eq!(saved.schedule_kind, "custom");
+        let first = saved.next_run_at;
+        assert!(first > now_millis() && first <= now_millis() + 120_000);
+        assert_eq!(first % 60_000, 0);
+        let stored = service.list().unwrap();
+        assert_eq!(stored[0].triggers()[0].cron, "*/2 * * * *");
+        let claimed = service.claim_due(first).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let next = service.list().unwrap()[0].next_run_at;
+        assert_eq!(next, first + 120_000);
     }
 
     #[test]

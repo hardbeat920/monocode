@@ -6,7 +6,13 @@ export const AUTOMATIONS_CHANGED = "monocode:automations-changed";
 const LOCAL_CHANGED = "monocode:automations-local-changed";
 
 export type AutomationWorkspaceMode = "current" | "worktree" | "existing";
-export type AutomationScheduleKind = "hourly" | "daily" | "weekdays" | "weekly";
+export type AutomationScheduleKind =
+  | "hourly"
+  | "daily"
+  | "weekdays"
+  | "weekly"
+  // A cron expression written by MonoCode Native. Desktop shows it but does not schedule it.
+  | "custom";
 export type AutomationTriggerKind =
   "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops";
 
@@ -18,6 +24,8 @@ export type AutomationTrigger = {
   minute: number;
   time: string;
   dayOfWeek: number;
+  /** Cron expression for `custom` schedules; owned by MonoCode Native. */
+  cron?: string;
   repos: string[];
   repo: string;
   branch: string;
@@ -156,7 +164,9 @@ export const AUTOMATION_WEEKDAYS = [
   "Saturday",
 ] as const;
 
-export function isScheduleKind(value: string): value is AutomationScheduleKind {
+export function isScheduleKind(
+  value: string,
+): value is Exclude<AutomationScheduleKind, "custom"> {
   return (
     value === "hourly" ||
     value === "daily" ||
@@ -180,6 +190,7 @@ export function createAutomationTrigger(
     minute: extras.minute ?? 0,
     time: extras.time ?? "09:00",
     dayOfWeek: extras.dayOfWeek ?? 1,
+    ...(extras.cron ? { cron: extras.cron } : {}),
     repos: extras.repos ?? [],
     repo: extras.repo ?? "",
     branch: extras.branch ?? "",
@@ -232,6 +243,14 @@ export function applyTriggers(
     time: primary?.time ?? "09:00",
     dayOfWeek: primary?.dayOfWeek ?? 1,
   };
+}
+
+export function hasCustomSchedule(
+  triggers: readonly Pick<AutomationTrigger, "kind" | "scheduleKind">[],
+): boolean {
+  return triggers.some(
+    (trigger) => trigger.kind === "time" && trigger.scheduleKind === "custom",
+  );
 }
 
 export function nextTriggersRunAt(
@@ -298,6 +317,8 @@ export function nextAutomationRunAt(
   >,
   after = Date.now(),
 ): number {
+  // Cron schedules are evaluated by MonoCode Native; desktop has no cron engine.
+  if (schedule.scheduleKind === "custom") return after + YEAR_MS;
   const start = new Date(after);
   start.setSeconds(0, 0);
   const [hour, minute] = parseTime(schedule.time);
@@ -336,8 +357,11 @@ export function automationScheduleLabel(
   automation: Pick<
     Automation,
     "scheduleKind" | "minute" | "time" | "dayOfWeek"
-  >,
+  > & { cron?: string },
 ): string {
+  if (automation.scheduleKind === "custom") {
+    return automation.cron ? `Cron: ${automation.cron}` : "Custom schedule";
+  }
   const time = formatClock(automation.time);
   if (automation.scheduleKind === "hourly") {
     return `Hourly at :${String(automation.minute).padStart(2, "0")}`;
@@ -455,12 +479,19 @@ export async function listAutomations(): Promise<Automation[]> {
 
 export async function saveAutomation(
   draft: AutomationDraft,
+  keepNextRunAt?: number,
 ): Promise<Automation> {
   const synced = applyTriggers(draft, draft.triggers);
+  // Desktop cannot compute a cron schedule, so it must not rewrite when it runs next.
+  if (hasCustomSchedule(synced.triggers) && keepNextRunAt === undefined) {
+    throw new Error(
+      "This automation uses a custom cron schedule. Edit it in MonoCode Native.",
+    );
+  }
   const automation: AutomationUpsert = {
     ...synced,
     id: synced.id ?? crypto.randomUUID(),
-    nextRunAt: nextTriggersRunAt(synced.triggers),
+    nextRunAt: keepNextRunAt ?? nextTriggersRunAt(synced.triggers),
   };
   const saved = await invoke<Automation>("automations_upsert", { automation });
   emitLocalChange();
@@ -471,7 +502,12 @@ export async function setAutomationEnabled(
   automation: Automation,
   enabled: boolean,
 ): Promise<Automation> {
-  return saveAutomation({ ...draftFromAutomation(automation), enabled });
+  return saveAutomation(
+    { ...draftFromAutomation(automation), enabled },
+    hasCustomSchedule(automationTriggers(automation))
+      ? automation.nextRunAt
+      : undefined,
+  );
 }
 
 export async function deleteAutomation(id: string): Promise<void> {
@@ -511,6 +547,8 @@ export async function claimDueAutomations(
     (automation) =>
       automation.enabled &&
       automationTriggers(automation).some((trigger) => trigger.kind === "time") &&
+      // Native owns cron schedules; desktop would advance them with a wrong next run.
+      !hasCustomSchedule(automationTriggers(automation)) &&
       automation.nextRunAt <= now,
   );
   const claimed: DueAutomationRun[] = [];

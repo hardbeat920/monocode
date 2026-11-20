@@ -9,6 +9,7 @@ import {
   formatAutomationRunAt,
   formatAutomationRunDuration,
   gmtOffsetLabel,
+  hasCustomSchedule,
   newAutomationDraft,
   nextAutomationRunAt,
   nextRunPreview,
@@ -18,6 +19,35 @@ import {
 } from "./automations";
 
 const at = (value: string) => new Date(value).getTime();
+
+describe("custom cron schedules written by Native", () => {
+  const custom = createAutomationTrigger("time", "custom", {
+    scheduleKind: "custom",
+    cron: "0 6-20/2 * * *",
+  });
+
+  it("keeps the cron expression and labels it", () => {
+    expect(custom.cron).toBe("0 6-20/2 * * *");
+    expect(hasCustomSchedule([custom])).toBe(true);
+    expect(hasCustomSchedule([createAutomationTrigger("time", "daily")])).toBe(
+      false,
+    );
+    expect(
+      automationScheduleLabel({
+        scheduleKind: "custom",
+        cron: custom.cron,
+        minute: 0,
+        time: "09:00",
+        dayOfWeek: 1,
+      }),
+    ).toBe("Cron: 0 6-20/2 * * *");
+  });
+
+  it("does not invent a next run that Native would not use", () => {
+    const now = at("2026-09-19T10:00:00");
+    expect(nextTriggersRunAt([custom], now)).toBeGreaterThan(now + 86_400_000);
+  });
+});
 
 describe("automation schedules", () => {
   it("moves hourly schedules to the next occurrence", () => {

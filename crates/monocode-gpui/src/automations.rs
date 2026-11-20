@@ -72,6 +72,7 @@ struct Template {
 struct TriggerFields {
     id: String,
     time: Entity<Input>,
+    cron: Entity<Input>,
     repos: Entity<Input>,
     actor: Entity<Input>,
 }
@@ -452,6 +453,7 @@ impl Automations {
                 })
             };
             let time = field("Trigger time", "09:00", trigger.time, cx);
+            let cron = field("Cron expression", "0 6-20/2 * * *", trigger.cron, cx);
             let repos = field(
                 "Trigger repositories",
                 "Any repository",
@@ -466,7 +468,7 @@ impl Automations {
                 cx,
             );
             let actor = field("Trigger actor", "Anyone", trigger.actor, cx);
-            for input in [&time, &repos, &actor] {
+            for input in [&time, &cron, &repos, &actor] {
                 editor._subscriptions.push(cx.subscribe(
                     input,
                     |this, _, _: &input::Changed, cx| {
@@ -480,6 +482,7 @@ impl Automations {
             editor.fields.push(TriggerFields {
                 id: trigger.id,
                 time,
+                cron,
                 repos,
                 actor,
             });
@@ -497,6 +500,7 @@ impl Automations {
         for trigger in draft.triggers.get_or_insert_with(Vec::new) {
             if let Some(fields) = editor.fields.iter().find(|f| f.id == trigger.id) {
                 trigger.time = fields.time.read(cx).content.trim().to_string();
+                trigger.cron = fields.cron.read(cx).content.trim().to_string();
                 trigger.repo.clear();
                 trigger.repos = fields
                     .repos

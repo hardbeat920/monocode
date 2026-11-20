@@ -1863,6 +1863,17 @@ function TimeTriggerSentence({
     value: String(value),
     label: `:${String(value).padStart(2, "0")}`,
   }));
+  if (trigger.scheduleKind === "custom") {
+    return (
+      <>
+        <span>Custom schedule</span>
+        <code className="rounded bg-content/8 px-1.5 py-0.5 font-mono text-[12px] text-content/75">
+          {trigger.cron ?? ""}
+        </code>
+        <span className="text-content/45">Edit in MonoCode Native</span>
+      </>
+    );
+  }
   const prefix =
     trigger.scheduleKind === "hourly"
       ? "Every hour at"
