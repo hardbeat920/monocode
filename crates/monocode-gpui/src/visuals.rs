@@ -1247,9 +1247,12 @@ fn paint_label(
     let line = window
         .text_system()
         .shape_line(text.into(), px(font_size), &[run], None);
+    // A label's y is its baseline, as in SVG text and canvas fillText. A line
+    // box of ascent + descent has no padding, so its top is one ascent above
+    // the baseline.
     let _ = line.paint(
-        at,
-        px(font_size * 1.4),
+        at - point(px(0.), line.ascent),
+        line.ascent + line.descent,
         gpui::TextAlign::Left,
         None,
         window,

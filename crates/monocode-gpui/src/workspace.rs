@@ -1106,6 +1106,11 @@ impl Workspace {
             layout.place_sash(path, index, boundary);
         }
     }
+    pub fn sash_snaps(&self, tab: i64, path: &[usize], index: usize) -> Vec<f32> {
+        self.layouts
+            .get(&tab)
+            .map_or_else(Vec::new, |layout| layout.sash_snaps(path, index))
+    }
     pub fn sash_range(&self, tab: i64, path: &[usize], index: usize) -> Option<(f32, f32, f32)> {
         self.layouts.get(&tab)?.sash_range(path, index)
     }

@@ -300,6 +300,38 @@ impl PaneNode {
         Some((before + sizes[index], before + min, before + pair - min))
     }
 
+    /// Where the sash likes to rest, within its group: halfway between its
+    /// two panes, and where it sits when the whole split is evenly spaced.
+    /// Only spots inside `sash_range` count.
+    pub fn sash_snaps(&self, path: &[usize], index: usize) -> Vec<f32> {
+        let Some(sizes) = self.sizes(path) else {
+            return Vec::new();
+        };
+        let Some((_, min, max)) = self.sash_range(path, index) else {
+            return Vec::new();
+        };
+        let before: f32 = sizes[..index].iter().sum();
+        let middle = before + (sizes[index] + sizes[index + 1]) / 2.;
+        let even = (index + 1) as f32 / sizes.len() as f32;
+        let mut snaps = vec![middle];
+        if (even - middle).abs() > 0.001 {
+            snaps.push(even);
+        }
+        snaps.retain(|at| (min..=max).contains(at));
+        snaps
+    }
+    fn sizes(&self, path: &[usize]) -> Option<&Vec<f32>> {
+        let PaneNode::Split {
+            children, sizes, ..
+        } = self
+        else {
+            return None;
+        };
+        match path.split_first() {
+            Some((first, rest)) => children.get(*first)?.sizes(rest),
+            None => Some(sizes),
+        }
+    }
     fn sizes_mut(&mut self, path: &[usize]) -> Option<&mut Vec<f32>> {
         let PaneNode::Split {
             children, sizes, ..
@@ -653,6 +685,20 @@ mod tests {
                 assert!((x - y).abs() < 1e-5, "{a:?} != {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn sashes_snap_to_their_pair_middle_and_to_even_spacing() {
+        let mut tree = split(SplitDir::Right, vec![leaf(1), leaf(2), leaf(3)]);
+        tree.place_sash(&[], 1, 0.8);
+        // Halfway between panes 1 and 2 (0 to 0.8), and an even third.
+        let snaps = tree.sash_snaps(&[], 0);
+        assert_eq!(snaps.len(), 2);
+        assert!((snaps[0] - 0.4).abs() < 1e-4);
+        assert!((snaps[1] - 1. / 3.).abs() < 1e-4);
+        let two = split(SplitDir::Down, vec![leaf(1), leaf(2)]);
+        assert_eq!(two.sash_snaps(&[], 0), vec![0.5]);
+        assert!(two.sash_snaps(&[], 1).is_empty());
     }
 
     #[test]

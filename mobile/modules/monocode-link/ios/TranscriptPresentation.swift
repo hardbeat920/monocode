@@ -221,6 +221,7 @@ final class TranscriptRowModel {
   private(set) var marks: [TranscriptMark] = []
   private(set) var hits: [TranscriptHit] = []
   private(set) var liveLabel: TranscriptLiveLabel?
+  private(set) var codeHeader: TranscriptFragment?
   private(set) var mascotRect: CGRect?
   private(set) var reactionBadge: TranscriptReaction?
   /// A visual's dithered cells and lines, drawn by the row's canvas.
@@ -797,11 +798,37 @@ final class TranscriptRowModel {
           runs, style: style, size: 13, line: 19, color: contentColor.withAlphaComponent(0.85),
           mono: true)
         let measured = TranscriptTypography.measure(value, width: 1_000_000, line: style.line(19))
-        let codeTop: CGFloat = first ? 12 : 0
+        let headerHeight = max(44, style.line(18) + 16)
+        let codeTop: CGFloat = first ? headerHeight : 0
         let codeBottom: CGFloat = last ? 12 : 0
         let h = codeTop + style.line(19) + codeBottom
         horizontalRect = CGRect(x: x, y: y, width: width, height: h)
         horizontalWidth = max(width, measured.width + 24)
+        if first {
+          let language = presentation["language"] as? String ?? ""
+          let label = language.isEmpty ? "text" : language
+          // Drop the label first, then compact the inset/icon only when the
+          // block cannot fit both a 16pt icon and the 44pt copy target.
+          let iconSize = min(16, max(0, width - 44))
+          let iconInset = min(12, max(0, width - 44 - iconSize))
+          let labelX = x + iconInset + iconSize + 8
+          let labelWidth = max(0, x + width - 44 - labelX)
+          if iconSize > 0 {
+            mark(TranscriptArtwork.shared.file(TranscriptArtwork.codeFileName(label)),
+              x: x + iconInset, y: y + (headerHeight - iconSize) / 2, size: iconSize)
+          }
+          if labelWidth > 0 {
+            codeHeader = TranscriptFragment(
+              text: string(label, size: 12, line: 18, color: UIColor.transcriptHex(style.muted)),
+              rect: CGRect(x: labelX, y: y + (headerHeight - style.line(18)) / 2,
+                width: labelWidth, height: style.line(18)), maxLines: 1)
+          }
+        }
+        if first && action["type"] as? String == "copy" {
+          let button = CGRect(x: x + max(0, width - 44), y: y, width: min(44, width), height: headerHeight)
+          mark("icon:copy", x: button.midX - 8, y: button.midY - 8, size: 16, alpha: 0.4)
+          hits.append(TranscriptHit(rect: button, action: action, label: "Copy code"))
+        }
         add(value, x: x + 12, y: y + codeTop, width: max(1, measured.width + 1), height: style.line(19))
         height = y + h + bottom
       } else if kind == "table" {

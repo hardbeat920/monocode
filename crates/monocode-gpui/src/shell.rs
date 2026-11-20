@@ -107,6 +107,7 @@ actions!(
         PreviousTab,
         ToggleSidebar,
         FocusSearch,
+        FocusPrompt,
         SearchFiles,
         FocusNext,
         FocusPrevious,
@@ -272,6 +273,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", FocusNext, context),
         KeyBinding::new("shift-tab", FocusPrevious, context),
     ]);
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([KeyBinding::new("cmd-l", FocusPrompt, context)]);
 }
 
 /// Windows has no caption of its own (`appears_transparent`), so the app
@@ -503,7 +506,11 @@ struct SashDrag {
     index: usize,
     dir: SplitDir,
     group: Rect,
+    /// Resting on a snap spot: the sash lights up in the accent.
+    snapped: bool,
 }
+/// How close, in pixels, a dragged sash must come to a snap spot to take it.
+const SASH_SNAP_PX: f32 = 12.;
 /// Something the user resizes by dragging its edge.
 #[derive(Clone, PartialEq)]
 enum ResizeTarget {
@@ -2358,6 +2365,47 @@ impl Shell {
                     .text_color(content(1.))
                     .child(title),
             )
+            .children(
+                [
+                    (SplitDir::Right, "split-right", "Split right"),
+                    (SplitDir::Down, "split-down", "Split down"),
+                ]
+                .map(|(dir, glyph, label)| {
+                    let key = format!("split-pane-{glyph}-{id}");
+                    div()
+                        .id(SharedString::from(key.clone()))
+                        .debug_selector(move || key.clone())
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .group(glyph)
+                        .size(px(20.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(content(0.1)))
+                        .child(
+                            icon(glyph, 13.)
+                                .text_color(content(0.5))
+                                .group_hover(glyph, |s| s.text_color(content(1.))),
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.review_focused = false;
+                            this.focus_pane(id, window, cx);
+                            // A terminal splits off a fresh shell; a chat or a
+                            // Mono, a new session with its provider.
+                            if this.workspace.terminal_panes.contains_key(&id) {
+                                this.split_title_terminal_toward(dir, window, cx);
+                            } else {
+                                this.split_session(dir, cx);
+                            }
+                        }))
+                }),
+            )
             .child(
                 div()
                     .id(("close-chat-pane", id as usize))
@@ -2572,6 +2620,7 @@ impl Shell {
                 let key = sash.path.iter().fold(sash.index, |k, ix| k * 31 + ix + 1);
                 div()
                     .id(("pane-sash", key))
+                    .debug_selector(move || format!("pane-sash-{key}"))
                     .group("resize-handle")
                     .role(Role::Splitter)
                     .aria_label("Resize panes")
@@ -2593,22 +2642,41 @@ impl Shell {
                                 .cursor(CursorStyle::ResizeUpDown)
                         }
                     })
-                    .child(resize_border(
-                        row,
-                        self.pane_sash
+                    .map(|d| {
+                        let drag = self
+                            .pane_sash
                             .as_ref()
-                            .is_some_and(|drag| drag.path == sash.path && drag.index == sash.index),
-                    ))
+                            .filter(|drag| drag.path == sash.path && drag.index == sash.index);
+                        let snapped = drag.is_some_and(|drag| drag.snapped);
+                        d.child(resize_border(row, drag.is_some()))
+                            .when(snapped, |d| d.child(sash_snap_line(row)))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            // A double-click evens out the two panes.
+                            if event.click_count == 2 {
+                                this.pane_sash = None;
+                                if let Some(middle) = this
+                                    .workspace
+                                    .sash_snaps(tab, &sash.path, sash.index)
+                                    .first()
+                                {
+                                    this.workspace
+                                        .place_sash(tab, &sash.path, sash.index, *middle);
+                                    this.persist(cx);
+                                    cx.notify();
+                                }
+                                return;
+                            }
                             this.pane_sash = Some(SashDrag {
                                 tab,
                                 path: sash.path.clone(),
                                 index: sash.index,
                                 dir: sash.dir,
                                 group: g,
+                                snapped: false,
                             });
                         }),
                     )
@@ -3899,10 +3967,33 @@ impl Shell {
             let origin = bounds.top().as_f32() + g.y * bounds.size.height.as_f32();
             (event.position.y.as_f32(), origin)
         };
-        let ResizeTarget::Sash { span, .. } = target else {
+        let ResizeTarget::Sash {
+            tab,
+            ref path,
+            index,
+            span,
+        } = target
+        else {
             return;
         };
-        self.drag_resize(target, (at - origin) / span.max(1.), cx);
+        let span = span.max(1.);
+        let mut value = (at - origin) / span;
+        // Near an even split the sash settles on it.
+        let snap = self
+            .workspace
+            .sash_snaps(tab, path, index)
+            .into_iter()
+            .map(|spot| (spot, (spot - value).abs() * span))
+            .filter(|(_, px)| *px <= SASH_SNAP_PX)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(spot, _)| spot);
+        if let Some(spot) = snap {
+            value = spot;
+        }
+        if let Some(sash) = self.pane_sash.as_mut() {
+            sash.snapped = snap.is_some();
+        }
+        self.drag_resize(target, value, cx);
     }
     fn sash_target(&self) -> Option<ResizeTarget> {
         let sash = self.pane_sash.as_ref()?;
@@ -4331,6 +4422,31 @@ impl Shell {
     }
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_app_search(window, cx);
+    }
+
+    fn focus_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() || self.app_view_open() || self.app_search.is_some() {
+            return;
+        }
+        if let Some(monos) = self.monos.as_ref().filter(|_| self.mono_active(cx)) {
+            monos.update(cx, |monos, cx| monos.focus_active(window, cx));
+            return;
+        }
+        if self.focus_mono_pane(window, cx)
+            || self
+                .active_review(cx)
+                .is_some_and(|review| review.read(cx).state.chat_hidden)
+        {
+            return;
+        }
+        if let Some(view) = self
+            .workspace
+            .active
+            .and_then(|pane| self.sessions.get(&self.workspace.session_for_pane(pane)))
+        {
+            self.review_focused = false;
+            window.focus(&view.read(cx).input.focus_handle(cx), cx);
+        }
     }
 
     pub(super) fn select_project(
@@ -8356,6 +8472,24 @@ impl Shell {
 }
 /// Highlight only the existing hairline; its parent keeps the wider, transparent
 /// grab area centered on that line. The wash brightens the underlying border.
+/// A sash resting on a snap spot: a 2px accent line over its border.
+fn sash_snap_line(vertical: bool) -> gpui::Div {
+    div().absolute().bg(accent_color()).rounded_full().map(|d| {
+        if vertical {
+            d.top_0()
+                .h_full()
+                .left(gpui::relative(0.5))
+                .ml(px(-1.))
+                .w(px(2.))
+        } else {
+            d.left_0()
+                .w_full()
+                .top(gpui::relative(0.5))
+                .mt(px(-1.))
+                .h(px(2.))
+        }
+    })
+}
 fn resize_border(vertical: bool, dragging: bool) -> gpui::Div {
     div()
         .absolute()
@@ -9026,6 +9160,9 @@ impl Render for Shell {
             }))
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusPrompt, window, cx| this.focus_prompt(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
                 // Title bar terminals open a new tab each time.
