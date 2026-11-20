@@ -84,6 +84,10 @@ import {
   AZUREDEVOPS_CHANGE_EVENT,
   azureDevOpsConnected,
 } from "../../inbox/model/azureDevOps";
+import {
+  BITBUCKET_CHANGE_EVENT,
+  bitbucketConnected,
+} from "../../inbox/model/bitbucket";
 import { gitBranches } from "../../../platform/tauri/fs";
 import { formatRelativeTime, githubStatus } from "../../inbox/model/githubTasks";
 import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
@@ -871,6 +875,7 @@ function AutomationEditor({
     jira: false,
     gitlab: false,
     azuredevops: false,
+    bitbucket: false,
   });
   const controlsBeside =
     useSyncExternalStore(subscribeModelControls, loadModelControls) ===
@@ -895,9 +900,19 @@ function AutomationEditor({
         azureDevOpsConnected()
           .then((status) => status.connected)
           .catch(() => false),
-      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
+        bitbucketConnected()
+          .then((status) => status.connected)
+          .catch(() => false),
+      ]).then(([github, linear, jira, gitlab, azuredevops, bitbucket]) => {
         if (!cancelled) {
-          setProviderConnected({ github, linear, jira, gitlab, azuredevops });
+          setProviderConnected({
+            github,
+            linear,
+            jira,
+            gitlab,
+            azuredevops,
+            bitbucket,
+          });
         }
       });
     };
@@ -906,12 +921,14 @@ function AutomationEditor({
     window.addEventListener(JIRA_CHANGE_EVENT, load);
     window.addEventListener(GITLAB_CHANGE_EVENT, load);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
+    window.addEventListener(BITBUCKET_CHANGE_EVENT, load);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, load);
       window.removeEventListener(JIRA_CHANGE_EVENT, load);
       window.removeEventListener(GITLAB_CHANGE_EVENT, load);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
+      window.removeEventListener(BITBUCKET_CHANGE_EVENT, load);
     };
   }, []);
   const triggerReady = (kind: AutomationTriggerKind) => {
@@ -1702,6 +1719,7 @@ const TRIGGER_CATEGORIES: readonly {
   { value: "jira", label: "Jira" },
   { value: "gitlab", label: "GitLab" },
   { value: "azuredevops", label: "Azure DevOps" },
+  { value: "bitbucket", label: "Bitbucket" },
 ];
 
 type TriggerEvent = {
@@ -1730,6 +1748,9 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   azuredevops: [
     { value: "pull_request_appeared", label: "Pull request appeared" },
     { value: "work_item_appeared", label: "Work item appeared" },
+  ],
+  bitbucket: [
+    { value: "pull_request_opened", label: "Pull request opened" },
   ],
 };
 

@@ -161,7 +161,9 @@ export function InboxComments({
           ? "GitLab"
           : provider === "azuredevops"
             ? "ADO"
-            : "GitHub";
+            : provider === "bitbucket"
+              ? "Bitbucket"
+              : "GitHub";
 
   return (
     <section className="flex flex-col gap-3 border-t border-stroke pt-5">
@@ -410,7 +412,9 @@ function InboxComment({
                         ? "Open on GitLab"
                         : provider === "azuredevops"
                           ? "Open on ADO"
-                          : "Open on GitHub"
+                          : provider === "bitbucket"
+                            ? "Open on Bitbucket"
+                            : "Open on GitHub"
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"

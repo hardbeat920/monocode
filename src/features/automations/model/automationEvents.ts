@@ -37,6 +37,7 @@ export const SUPPORTED_INBOX_TRIGGER_EVENTS = {
   linear: ["issue_created"],
   jira: ["issue_created"],
   azuredevops: ["pull_request_appeared", "work_item_appeared"],
+  bitbucket: ["pull_request_opened"],
 } as const;
 
 export function inboxAppearedEvent(
@@ -65,6 +66,9 @@ export function inboxAppearedEvent(
   }
   if (item.provider === "azuredevops" && item.kind === "issue") {
     return { kind: "azuredevops", event: "work_item_appeared" };
+  }
+  if (item.provider === "bitbucket" && item.kind === "pr") {
+    return { kind: "bitbucket", event: "pull_request_opened" };
   }
   return null;
 }

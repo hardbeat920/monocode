@@ -337,3 +337,36 @@ it("never lets requests overlap and drops a queued follow-up on unmount", async 
   expect(fetchGithubPrChecks).toHaveBeenCalledTimes(3);
   expect(maxActive).toBe(1);
 });
+
+it("uses the supplied fetcher instead of the GitHub CLI", async () => {
+  const fetchChecks = vi
+    .fn()
+    .mockResolvedValue(checks("bb1", ["pass", "fail"]));
+  await render({ ...base, source: "bitbucket", fetchChecks });
+  await flush();
+  expect(fetchChecks).toHaveBeenCalledTimes(1);
+  expect(fetchChecks).toHaveBeenCalledWith("/tmp/web", "acme/web", 7);
+  expect(fetchGithubPrChecks).not.toHaveBeenCalled();
+  expect(view?.checks?.headOid).toBe("bb1");
+});
+
+it("treats the same repo and number from another provider as a different PR", async () => {
+  const fetchChecks = vi.fn().mockResolvedValue(checks("bb1", ["fail"]));
+  fetchGithubPrChecks.mockResolvedValue(checks("gh1", ["pass"]));
+  await render(base);
+  await flush();
+  expect(view?.checks?.headOid).toBe("gh1");
+
+  const pending = deferred<GithubPrChecks>();
+  fetchChecks.mockReturnValueOnce(pending.promise);
+  await rerender({ ...base, source: "bitbucket", fetchChecks });
+  // The GitHub result must not linger while the other provider loads.
+  expect(view?.checks).toBeNull();
+  expect(view?.loading).toBe(true);
+  await act(async () => {
+    pending.resolve(checks("bb1", ["fail"]));
+  });
+  await flush();
+  expect(fetchChecks).toHaveBeenCalledTimes(1);
+  expect(view?.checks?.headOid).toBe("bb1");
+});

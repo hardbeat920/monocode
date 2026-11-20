@@ -156,7 +156,9 @@ export function InboxFiltersMenu({
     >
       <FilterItem
         label={
-          source === "gitlab" || source === "azuredevops"
+          source === "gitlab" ||
+          source === "azuredevops" ||
+          source === "bitbucket"
             ? "Needs attention"
             : "Assigned to me"
         }
@@ -200,7 +202,7 @@ export function InboxFiltersMenu({
         />
       ))}
 
-      {!tracker ? (
+      {!tracker && source !== "bitbucket" ? (
         <>
           <SectionLabel>Type</SectionLabel>
           {KIND_OPTIONS.map((option) => (

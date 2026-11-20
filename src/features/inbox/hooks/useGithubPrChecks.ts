@@ -31,8 +31,24 @@ export function useGithubPrChecks(params: {
   open: boolean;
   poll?: boolean;
   revision?: number;
+  /** Which provider's checks these are; keeps two providers' state apart. */
+  source?: string;
+  /** Defaults to the GitHub CLI; other providers supply their own. */
+  fetchChecks?: typeof fetchGithubPrChecks;
 }): GithubPrChecksView {
-  const { cwd, repo, number, enabled, open, poll = true, revision = 0 } = params;
+  const {
+    cwd,
+    repo,
+    number,
+    enabled,
+    open,
+    poll = true,
+    revision = 0,
+    source = "github",
+    fetchChecks = fetchGithubPrChecks,
+  } = params;
+  const fetchRef = useRef(fetchChecks);
+  fetchRef.current = fetchChecks;
   const [checks, setChecks] = useState<GithubPrChecks | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,7 +96,8 @@ export function useGithubPrChecks(params: {
     const initial = !hasDataRef.current;
     if (initial) setLoading(true);
     else setRefreshing(true);
-    fetchGithubPrChecks(cwd, repo, number)
+    fetchRef
+      .current(cwd, repo, number)
       .then((next) => {
         if (!mountedRef.current || ticket.epoch !== epochRef.current) return;
         hasDataRef.current = true;
@@ -130,7 +147,7 @@ export function useGithubPrChecks(params: {
       setStale(false);
       return;
     }
-    const identity = `${cwd}\u0000${repo}\u0000${number}`;
+    const identity = `${source}\u0000${cwd}\u0000${repo}\u0000${number}`;
     if (identityRef.current !== identity) {
       // A different PR: drop the in-flight answer, any queue, and saved results.
       epochRef.current += 1;
@@ -142,7 +159,7 @@ export function useGithubPrChecks(params: {
       setStale(false);
     }
     runRef.current();
-  }, [cwd, repo, number, enabled, revision, manualTick]);
+  }, [cwd, repo, number, source, enabled, revision, manualTick]);
 
   useEffect(() => {
     const resumed = poll && !previousPollRef.current;

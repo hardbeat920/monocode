@@ -296,7 +296,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.trigger_kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -335,7 +335,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
 fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     if !matches!(
         trigger.kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -910,7 +910,7 @@ impl Service {
         validate_event_key(&claim.event_key)?;
         if !matches!(
             claim.event_kind.as_str(),
-            "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+            "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
         ) {
             return Err("Invalid automation trigger.".into());
         }
@@ -1304,6 +1304,7 @@ pub fn claim_inbox_events_retry(
     for item in items {
         let event = match (item.provider.as_str(), item.kind.as_str(), item.draft) {
             ("github", "pr", true) => "draft_opened",
+            ("bitbucket", "pr", _) => "pull_request_opened",
             ("github", "pr", false) => "pull_request_opened",
             ("github" | "gitlab", "issue", _) => "issue_opened",
             ("gitlab", "pr", _) => "merge_request_opened",
@@ -1486,6 +1487,30 @@ mod tests {
             created_at: "2026-09-19T10:00:00Z".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn bitbucket_pull_requests_claim_once_and_keep_the_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("sessions.sqlite")).unwrap();
+        save(
+            &mut service,
+            vec![AutomationTrigger::new("bitbucket", "pull_request_opened")],
+        );
+        let mut pr = item(1);
+        pr.provider = "bitbucket".into();
+        pr.url = "https://bitbucket.org/acme/app/pull-requests/1".into();
+        let claims = claim_inbox_events(&mut service, &[pr.clone()], now_millis()).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].run.event_kind.as_deref(), Some("bitbucket"));
+        assert_eq!(claims[0].run.event.as_deref(), Some("pull_request_opened"));
+        assert_eq!(
+            claims[0].run.event_key.as_deref(),
+            Some("bitbucket:pr:acme/app:1")
+        );
+        assert!(claim_inbox_events(&mut service, &[pr], now_millis())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
