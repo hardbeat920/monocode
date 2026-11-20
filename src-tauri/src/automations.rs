@@ -379,6 +379,15 @@ fn has_time_trigger(automation: &Automation) -> bool {
     }
 }
 
+fn has_custom_time_trigger(automation: &Automation) -> bool {
+    match &automation.triggers {
+        Some(triggers) => triggers
+            .iter()
+            .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom"),
+        None => automation.trigger_kind == "time" && automation.schedule_kind == "custom",
+    }
+}
+
 fn normalize_triggers(input: &AutomationUpsert) -> Vec<AutomationTrigger> {
     let mut triggers = input.triggers.clone().unwrap_or_else(|| {
         vec![trigger_from_fields(
@@ -670,20 +679,19 @@ fn upsert_in(
     now: i64,
 ) -> Result<Automation, String> {
     validate_upsert(&automation, now)?;
-    let triggers = Some(normalize_triggers(&automation));
+    let normalized = normalize_triggers(&automation);
+    if normalized
+        .iter()
+        .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom")
+    {
+        return Err("Custom schedules can only be edited in MonoCode Native.".into());
+    }
+    let triggers = Some(normalized);
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let previous = get(&tx, &automation.id)?;
-    if previous
-        .as_ref()
-        .is_some_and(|value| match &value.triggers {
-            Some(triggers) => triggers
-                .iter()
-                .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom"),
-            None => value.trigger_kind == "time" && value.schedule_kind == "custom",
-        })
-    {
+    if previous.as_ref().is_some_and(has_custom_time_trigger) {
         return Err(
             "This automation has a custom schedule. Refresh it and edit it in MonoCode Native."
                 .into(),
@@ -917,14 +925,35 @@ pub fn automations_claim_due(
     next_run_at: i64,
     now: i64,
 ) -> Result<Option<DueAutomationRun>, String> {
-    validate_id(&automation_id, "automation")?;
+    let mut conn = store.lock_conn()?;
+    let result = claim_due_in(
+        &mut conn,
+        &automation_id,
+        expected_next_run_at,
+        next_run_at,
+        now,
+    )?;
+    drop(conn);
+    if result.is_some() {
+        let _ = app.emit(CHANGED, ());
+    }
+    Ok(result)
+}
+
+fn claim_due_in(
+    conn: &mut Connection,
+    automation_id: &str,
+    expected_next_run_at: i64,
+    next_run_at: i64,
+    now: i64,
+) -> Result<Option<DueAutomationRun>, String> {
+    validate_id(automation_id, "automation")?;
     if next_run_at <= expected_next_run_at {
         return Err("The following automation occurrence must advance the schedule.".into());
     }
-    let mut conn = store.lock_conn()?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let current = get(&tx, &automation_id)?.ok_or_else(|| "Automation not found.".to_string())?;
-    if !has_time_trigger(&current) {
+    if !has_time_trigger(&current) || has_custom_time_trigger(&current) {
         tx.rollback().map_err(|error| error.to_string())?;
         return Ok(None);
     }
@@ -964,8 +993,6 @@ pub fn automations_claim_due(
     write_automation(&tx, &automation)?;
     trim_history(&tx, &automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
-    drop(conn);
-    let _ = app.emit(CHANGED, ());
     Ok(Some(DueAutomationRun { automation, run }))
 }
 
@@ -1176,6 +1203,21 @@ mod tests {
             "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":false,
             "nextRunAt":5000}"#;
         let stale: AutomationUpsert = serde_json::from_str(stale_json).unwrap();
+        let mut legacy_custom = stale.clone();
+        legacy_custom.id = "new-custom".into();
+        legacy_custom.schedule_kind = "custom".into();
+        assert!(upsert_in(&mut conn, legacy_custom, 100).is_err());
+        assert!(get(&conn, "new-custom").unwrap().is_none());
+        let mut explicit_custom = stale.clone();
+        explicit_custom.id = "new-explicit".into();
+        explicit_custom.triggers = stored.triggers.clone();
+        assert!(upsert_in(&mut conn, explicit_custom, 100).is_err());
+        assert!(get(&conn, "new-explicit").unwrap().is_none());
+        assert!(claim_due_in(&mut conn, "a1", 1000, 2000, 1000)
+            .unwrap()
+            .is_none());
+        assert!(list_runs(&conn, "a1").unwrap().is_empty());
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 1000);
         assert!(upsert_in(&mut conn, stale.clone(), 100)
             .unwrap_err()
             .contains("custom schedule"));
@@ -1195,6 +1237,11 @@ mod tests {
             upsert_in(&mut conn, stale, 100).unwrap().schedule_kind,
             "daily"
         );
+        set_enabled_in(&conn, "a1", true, 200).unwrap();
+        assert!(claim_due_in(&mut conn, "a1", 5000, 6000, 5000)
+            .unwrap()
+            .is_some());
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 6000);
     }
 
     #[test]
