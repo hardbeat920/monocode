@@ -52,6 +52,7 @@ mod resources;
 mod search;
 mod session_store;
 mod skills;
+mod sonar;
 pub mod ssh_askpass;
 mod tool_detail;
 #[cfg(target_os = "macos")]
@@ -368,6 +369,7 @@ pub fn run() {
             fs::list_dir,
             fs::list_project_files,
             fs::git_diff_stats,
+            fs::git_repository_names,
             fs::git_diff_index,
             fs::git_diff_files,
             fs::git_file_diff,
@@ -431,6 +433,17 @@ pub fn run() {
             linear::linear_issue_details,
             linear::linear_issue_thread,
             linear::linear_issue_comment,
+            sonar::sonar_status,
+            sonar::sonar_connect,
+            sonar::sonar_disconnect,
+            sonar::sonar_list_organizations,
+            sonar::sonar_list_projects,
+            sonar::sonar_set_organization,
+            sonar::sonar_set_projects,
+            sonar::sonar_select_project,
+            sonar::sonar_list_issues,
+            sonar::sonar_issue_content,
+            sonar::sonar_transition_issue,
             jira::jira_status,
             jira::jira_set_config,
             jira::jira_list_projects,

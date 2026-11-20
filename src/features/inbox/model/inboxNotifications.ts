@@ -40,6 +40,7 @@ export class InboxNotificationTracker {
         inboxNotificationProject(item).id,
         item.kind,
         item.id || item.number,
+        ...(item.provider === "sonar" ? [item.branch] : []),
       ]);
       const updatedAt = Date.parse(item.updatedAt);
       if (!Number.isFinite(updatedAt)) continue;
@@ -61,6 +62,7 @@ export class InboxNotificationTracker {
       "gitlab",
       "linear",
       "jira",
+      "sonar",
       "azuredevops",
     ] as const) {
       if (!failed.has(provider)) this.primed.add(provider);

@@ -7,6 +7,7 @@ import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectNotificationPreferences } from "../hooks/useProjectNotificationPreferences";
 import { useNotificationProjects } from "../hooks/useNotificationProjects";
+import { isTrackerSource } from "../../inbox/model/inboxProviders";
 import {
   NOTIFICATION_CATEGORIES,
   isProjectMuted,
@@ -200,7 +201,7 @@ export function ProjectNotificationSettings({
                   : null;
                 const categories = NOTIFICATION_CATEGORIES.filter(
                   (category) => {
-                    if (project.kind === "linear" || project.kind === "jira")
+                    if (isTrackerSource(project.kind))
                       return category.id === "issues";
                     if (project.kind === "local")
                       return !["pullRequests", "issues"].includes(category.id);

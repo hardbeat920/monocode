@@ -90,3 +90,43 @@ it("does not scroll the page when a compact menu opens", async () => {
   const option = document.body.querySelector('[role="option"]');
   expect(option?.className).toContain("h-7");
 });
+
+it("opens a bar menu as wide as its row, names the selection on hover and picks a searched option", async () => {
+  const onChange = vi.fn();
+  const name = "MonoCode desktop app — Sonar connector branch filters";
+  await act(async () => {
+    root.render(
+      createElement(SearchableSelect, {
+        label: "Sonar project",
+        value: "app",
+        variant: "bar",
+        options: [
+          { value: "app", label: name },
+          { value: "api", label: "Payments API", keywords: "org_payments" },
+        ],
+        onChange,
+      }),
+    );
+  });
+
+  const trigger = container.querySelector<HTMLButtonElement>("button")!;
+  expect(trigger.title).toBe(name);
+  vi.spyOn(trigger.parentElement!, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ width: 400, height: 28 }),
+  );
+  await act(async () => trigger.click());
+  const search =
+    document.body.querySelector<HTMLInputElement>('[role="combobox"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(search, "org_pay");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const options =
+    document.body.querySelectorAll<HTMLButtonElement>('[role="option"]');
+  expect(options).toHaveLength(1);
+  await act(async () => options[0]!.click());
+  expect(onChange).toHaveBeenCalledWith("api");
+});

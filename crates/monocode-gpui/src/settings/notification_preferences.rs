@@ -196,7 +196,7 @@ fn valid_project(p: &Value) -> bool {
         .all(|key| p[*key].is_string())
         && p["kind"]
             .as_str()
-            .is_some_and(|kind| ["repository", "local", "linear", "jira"].contains(&kind))
+            .is_some_and(|kind| ["repository", "local", "linear", "jira", "sonar"].contains(&kind))
         && p["paths"]
             .as_array()
             .is_some_and(|paths| paths.iter().all(Value::is_string))
@@ -677,7 +677,7 @@ impl SettingsView {
             let categories: Vec<_> = CATEGORIES
                 .iter()
                 .filter(|(cat, _)| match project.kind.as_str() {
-                    "linear" | "jira" => *cat == "issues",
+                    "linear" | "jira" | "sonar" => *cat == "issues",
                     "local" => !["pullRequests", "issues"].contains(cat),
                     _ => true,
                 })

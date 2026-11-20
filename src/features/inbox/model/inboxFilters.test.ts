@@ -504,6 +504,7 @@ describe("visibleInboxSources", () => {
         jira: false,
         gitlab: false,
         azuredevops: false,
+        sonar: false,
       }),
     ).toEqual([]);
     expect(
@@ -513,6 +514,7 @@ describe("visibleInboxSources", () => {
         jira: false,
         gitlab: false,
         azuredevops: false,
+        sonar: false,
       }),
     ).toEqual(["github"]);
     expect(
@@ -522,6 +524,7 @@ describe("visibleInboxSources", () => {
         jira: true,
         gitlab: false,
         azuredevops: false,
+        sonar: false,
       }),
     ).toEqual(["linear", "jira"]);
     expect(
@@ -531,8 +534,9 @@ describe("visibleInboxSources", () => {
         jira: true,
         gitlab: true,
         azuredevops: true,
+        sonar: true,
       }),
-    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
+    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops", "sonar"]);
   });
 
   it("keeps unresolved sources visible so tabs do not flash away", () => {
@@ -543,8 +547,9 @@ describe("visibleInboxSources", () => {
         jira: null,
         gitlab: null,
         azuredevops: null,
+        sonar: null,
       }),
-    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
+    ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops", "sonar"]);
   });
 });
 
@@ -613,6 +618,7 @@ describe("resolveInboxSource", () => {
         jira: false,
         gitlab: false,
         azuredevops: false,
+        sonar: false,
       }),
     ).toBe("github");
   });
@@ -672,6 +678,7 @@ describe("inbox connection cache", () => {
       github: true,
       linear: true,
       jira: true,
+      sonar: true,
       gitlab: false,
       azuredevops: false,
     });
@@ -679,6 +686,7 @@ describe("inbox connection cache", () => {
       github: true,
       linear: true,
       jira: true,
+      sonar: true,
       gitlab: false,
       azuredevops: false,
     });
@@ -689,6 +697,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      sonar: null,
       gitlab: null,
       azuredevops: null,
     });
@@ -700,6 +709,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      sonar: null,
       gitlab: null,
       azuredevops: null,
     });
@@ -708,6 +718,7 @@ describe("inbox connection cache", () => {
       github: null,
       linear: null,
       jira: null,
+      sonar: null,
       gitlab: null,
       azuredevops: null,
     });
