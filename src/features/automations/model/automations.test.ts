@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
 import {
   applyTriggers,
   automationScheduleLabel,
@@ -9,15 +13,81 @@ import {
   formatAutomationRunAt,
   formatAutomationRunDuration,
   gmtOffsetLabel,
+  hasCustomSchedule,
   newAutomationDraft,
   nextAutomationRunAt,
   nextRunPreview,
   nextTriggersRunAt,
   overdueTriggerOccurrences,
+  setAutomationEnabled,
   type Automation,
 } from "./automations";
 
 const at = (value: string) => new Date(value).getTime();
+
+describe("custom cron schedules written by Native", () => {
+  const custom = createAutomationTrigger("time", "custom", {
+    scheduleKind: "custom",
+    cron: "0 6-20/2 * * *",
+  });
+
+  it("keeps the cron expression and labels it", () => {
+    expect(custom.cron).toBe("0 6-20/2 * * *");
+    expect(hasCustomSchedule([custom])).toBe(true);
+    expect(hasCustomSchedule([createAutomationTrigger("time", "daily")])).toBe(
+      false,
+    );
+    expect(
+      automationScheduleLabel({
+        scheduleKind: "custom",
+        cron: custom.cron,
+        minute: 0,
+        time: "09:00",
+        dayOfWeek: 1,
+      }),
+    ).toBe("Cron: 0 6-20/2 * * *");
+  });
+
+  describe("pause and resume", () => {
+    const stored = {
+      id: "a1",
+      enabled: false,
+      scheduleKind: "custom",
+      nextRunAt: 1000,
+      triggers: [custom],
+    } as unknown as Automation;
+
+    beforeEach(() => {
+      invoke.mockReset();
+      // The model announces changes on `window`; the test environment is not a browser.
+      vi.stubGlobal("window", new EventTarget());
+    });
+
+    it("only flips the flag, so resuming after the stored run passed still works", async () => {
+      invoke.mockResolvedValue({ ...stored, enabled: true });
+      await setAutomationEnabled(stored, true);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("automations_set_enabled", {
+        id: "a1",
+        enabled: true,
+      });
+    });
+
+    it("never rewrites a cron schedule through the regular save", async () => {
+      await expect(
+        import("./automations").then(({ saveAutomation, draftFromAutomation }) =>
+          saveAutomation(draftFromAutomation(stored)),
+        ),
+      ).rejects.toThrow(/MonoCode Native/);
+      expect(invoke).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not invent a next run that Native would not use", () => {
+    const now = at("2026-09-19T10:00:00");
+    expect(nextTriggersRunAt([custom], now)).toBeGreaterThan(now + 86_400_000);
+  });
+});
 
 describe("automation schedules", () => {
   it("moves hourly schedules to the next occurrence", () => {

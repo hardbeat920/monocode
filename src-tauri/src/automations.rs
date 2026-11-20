@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -135,6 +135,9 @@ pub struct AutomationTrigger {
     time: String,
     #[serde(default = "default_day_of_week")]
     day_of_week: i64,
+    /// Written by MonoCode Native for `custom` schedules. Desktop keeps it intact and never evaluates it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    cron: String,
     #[serde(default)]
     repos: Vec<String>,
     #[serde(default)]
@@ -287,7 +290,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -332,8 +335,13 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     }
     if !matches!(
         trigger.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
+        return Err("Invalid automation schedule.".into());
+    }
+    if trigger.schedule_kind == "custom"
+        && (trigger.cron.trim().is_empty() || trigger.cron.len() > 200)
+    {
         return Err("Invalid automation schedule.".into());
     }
     if !(0..=59).contains(&trigger.minute)
@@ -368,6 +376,15 @@ fn has_time_trigger(automation: &Automation) -> bool {
     match &automation.triggers {
         Some(triggers) => triggers.iter().any(|trigger| trigger.kind == "time"),
         None => automation.trigger_kind == "time",
+    }
+}
+
+fn has_custom_time_trigger(automation: &Automation) -> bool {
+    match &automation.triggers {
+        Some(triggers) => triggers
+            .iter()
+            .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom"),
+        None => automation.trigger_kind == "time" && automation.schedule_kind == "custom",
     }
 }
 
@@ -425,6 +442,7 @@ fn trigger_from_fields(
         minute,
         time: time.to_string(),
         day_of_week,
+        cron: String::new(),
         repos: Vec::new(),
         repo: String::new(),
         branch: String::new(),
@@ -648,11 +666,37 @@ pub fn automations_upsert(
     store: State<'_, SessionStore>,
     automation: AutomationUpsert,
 ) -> Result<Automation, String> {
-    let now = now_millis();
+    let mut conn = store.lock_conn()?;
+    let saved = upsert_in(&mut conn, automation, now_millis())?;
+    drop(conn);
+    let _ = app.emit(CHANGED, ());
+    Ok(saved)
+}
+
+fn upsert_in(
+    conn: &mut Connection,
+    automation: AutomationUpsert,
+    now: i64,
+) -> Result<Automation, String> {
     validate_upsert(&automation, now)?;
-    let triggers = Some(normalize_triggers(&automation));
-    let conn = store.lock_conn()?;
-    let previous = get(&conn, &automation.id)?;
+    let normalized = normalize_triggers(&automation);
+    if normalized
+        .iter()
+        .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom")
+    {
+        return Err("Custom schedules can only be edited in MonoCode Native.".into());
+    }
+    let triggers = Some(normalized);
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let previous = get(&tx, &automation.id)?;
+    if previous.as_ref().is_some_and(has_custom_time_trigger) {
+        return Err(
+            "This automation has a custom schedule. Refresh it and edit it in MonoCode Native."
+                .into(),
+        );
+    }
     let created_at = previous
         .as_ref()
         .map(|value| value.created_at)
@@ -696,10 +740,47 @@ pub fn automations_upsert(
         created_at,
         updated_at: now,
     };
-    write_automation(&conn, &saved)?;
+    write_automation(&tx, &saved)?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(saved)
+}
+
+/// Pauses or resumes an automation without touching its schedule. Desktop cannot compute
+/// every schedule (cron is evaluated by MonoCode Native), so this keeps `next_run_at`
+/// as stored, even when it is already in the past.
+fn set_enabled_in(
+    conn: &Connection,
+    id: &str,
+    enabled: bool,
+    now: i64,
+) -> Result<Automation, String> {
+    let changed = conn
+        .execute(
+            "UPDATE automations SET enabled = ?1, updated_at = ?2,
+         definition_json = json_set(definition_json, '$.enabled', json(?3), '$.updatedAt', ?2)
+         WHERE id = ?4",
+            params![enabled, now, if enabled { "true" } else { "false" }, id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Automation not found.".into());
+    }
+    get(conn, id)?.ok_or_else(|| "Automation not found.".into())
+}
+
+#[tauri::command(async)]
+pub fn automations_set_enabled(
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    id: String,
+    enabled: bool,
+) -> Result<Automation, String> {
+    validate_id(&id, "automation")?;
+    let conn = store.lock_conn()?;
+    let automation = set_enabled_in(&conn, &id, enabled, now_millis())?;
     drop(conn);
     let _ = app.emit(CHANGED, ());
-    Ok(saved)
+    Ok(automation)
 }
 
 #[tauri::command(async)]
@@ -844,14 +925,35 @@ pub fn automations_claim_due(
     next_run_at: i64,
     now: i64,
 ) -> Result<Option<DueAutomationRun>, String> {
-    validate_id(&automation_id, "automation")?;
+    let mut conn = store.lock_conn()?;
+    let result = claim_due_in(
+        &mut conn,
+        &automation_id,
+        expected_next_run_at,
+        next_run_at,
+        now,
+    )?;
+    drop(conn);
+    if result.is_some() {
+        let _ = app.emit(CHANGED, ());
+    }
+    Ok(result)
+}
+
+fn claim_due_in(
+    conn: &mut Connection,
+    automation_id: &str,
+    expected_next_run_at: i64,
+    next_run_at: i64,
+    now: i64,
+) -> Result<Option<DueAutomationRun>, String> {
+    validate_id(automation_id, "automation")?;
     if next_run_at <= expected_next_run_at {
         return Err("The following automation occurrence must advance the schedule.".into());
     }
-    let mut conn = store.lock_conn()?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let current = get(&tx, &automation_id)?.ok_or_else(|| "Automation not found.".to_string())?;
-    if !has_time_trigger(&current) {
+    if !has_time_trigger(&current) || has_custom_time_trigger(&current) {
         tx.rollback().map_err(|error| error.to_string())?;
         return Ok(None);
     }
@@ -891,8 +993,6 @@ pub fn automations_claim_due(
     write_automation(&tx, &automation)?;
     trim_history(&tx, &automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
-    drop(conn);
-    let _ = app.emit(CHANGED, ());
     Ok(Some(DueAutomationRun { automation, run }))
 }
 
@@ -1024,6 +1124,170 @@ pub fn automation_run_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_cron_triggers_round_trip_and_validate() {
+        let json = r#"{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 6-20/2 * * *"}"#;
+        let trigger: AutomationTrigger = serde_json::from_str(json).unwrap();
+        assert_eq!(trigger.cron, "0 6-20/2 * * *");
+        assert!(validate_trigger(&trigger).is_ok());
+        let stored = serde_json::to_string(&trigger).unwrap();
+        assert!(stored.contains("\"cron\":\"0 6-20/2 * * *\""));
+        let empty = AutomationTrigger {
+            cron: String::new(),
+            ..trigger
+        };
+        assert!(validate_trigger(&empty).is_err());
+    }
+
+    #[test]
+    fn pausing_and_resuming_keeps_the_stored_next_run_even_when_overdue() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        let json = r#"{"id":"a1","name":"n","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":true,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1,
+            "triggers":[{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 9 * * *"}]}"#;
+        let automation: Automation = serde_json::from_str(json).unwrap();
+        write_automation(&conn, &automation).unwrap();
+        // A resume before the occurrence also preserves the stored schedule.
+        assert_eq!(
+            set_enabled_in(&conn, "a1", false, 100).unwrap().next_run_at,
+            1000
+        );
+        assert_eq!(
+            set_enabled_in(&conn, "a1", true, 200).unwrap().next_run_at,
+            1000
+        );
+        // Preserve fields written by another connection, including unknown JSON fields.
+        conn.execute("UPDATE automations SET next_run_at = 2000, definition_json = json_set(definition_json, '$.nextRunAt', 2000, '$.otherWriter', 'kept') WHERE id = 'a1'", []).unwrap();
+        set_enabled_in(&conn, "a1", false, 300).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT definition_json FROM automations WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&raw).unwrap()["otherWriter"],
+            "kept"
+        );
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 2000);
+        conn.execute("UPDATE automations SET next_run_at = 1000, definition_json = json_set(definition_json, '$.nextRunAt', 1000) WHERE id = 'a1'", []).unwrap();
+        // The stored occurrence (1000) is long past, like a custom automation paused for days.
+        let paused = set_enabled_in(&conn, "a1", false, 5_000_000).unwrap();
+        assert!(!paused.enabled);
+        let resumed = set_enabled_in(&conn, "a1", true, 9_000_000).unwrap();
+        assert!(resumed.enabled);
+        let stored = get(&conn, "a1").unwrap().unwrap();
+        assert_eq!(stored.next_run_at, 1000);
+        assert_eq!(stored.triggers.unwrap()[0].cron, "0 9 * * *");
+        assert!(set_enabled_in(&conn, "missing", true, 1).is_err());
+    }
+
+    #[test]
+    fn stale_preset_upsert_cannot_overwrite_stored_custom_schedule() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        let stored_json = r#"{"id":"a1","name":"native","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":true,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1,
+            "triggers":[{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 9 * * *"}]}"#;
+        let stored: Automation = serde_json::from_str(stored_json).unwrap();
+        write_automation(&conn, &stored).unwrap();
+        let stale_json = r#"{"id":"a1","name":"desktop","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","runtimeMode":"auto","scheduleKind":"daily",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":false,
+            "nextRunAt":5000}"#;
+        let stale: AutomationUpsert = serde_json::from_str(stale_json).unwrap();
+        let mut legacy_custom = stale.clone();
+        legacy_custom.id = "new-custom".into();
+        legacy_custom.schedule_kind = "custom".into();
+        assert!(upsert_in(&mut conn, legacy_custom, 100).is_err());
+        assert!(get(&conn, "new-custom").unwrap().is_none());
+        let mut explicit_custom = stale.clone();
+        explicit_custom.id = "new-explicit".into();
+        explicit_custom.triggers = stored.triggers.clone();
+        assert!(upsert_in(&mut conn, explicit_custom, 100).is_err());
+        assert!(get(&conn, "new-explicit").unwrap().is_none());
+        assert!(claim_due_in(&mut conn, "a1", 1000, 2000, 1000)
+            .unwrap()
+            .is_none());
+        assert!(list_runs(&conn, "a1").unwrap().is_empty());
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 1000);
+        assert!(upsert_in(&mut conn, stale.clone(), 100)
+            .unwrap_err()
+            .contains("custom schedule"));
+        let untouched = get(&conn, "a1").unwrap().unwrap();
+        assert_eq!(untouched.name, "native");
+        assert_eq!(untouched.next_run_at, 1000);
+        assert_eq!(untouched.triggers.unwrap()[0].cron, "0 9 * * *");
+        let paused = set_enabled_in(&conn, "a1", false, 200).unwrap();
+        let resumed = set_enabled_in(&conn, "a1", true, 2000).unwrap();
+        assert!(!paused.enabled && resumed.enabled);
+        assert_eq!(resumed.next_run_at, 1000);
+        assert_eq!(resumed.triggers.unwrap()[0].cron, "0 9 * * *");
+        // Preset edits remain supported after the custom row is removed.
+        conn.execute("DELETE FROM automations WHERE id = 'a1'", [])
+            .unwrap();
+        assert_eq!(
+            upsert_in(&mut conn, stale, 100).unwrap().schedule_kind,
+            "daily"
+        );
+        set_enabled_in(&conn, "a1", true, 200).unwrap();
+        assert!(claim_due_in(&mut conn, "a1", 5000, 6000, 5000)
+            .unwrap()
+            .is_some());
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 6000);
+    }
+
+    #[test]
+    fn concurrent_schedule_update_survives_resume() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let path =
+            std::env::temp_dir().join(format!("automation-concurrency-{}.sqlite", Uuid::new_v4()));
+        let conn = Connection::open(&path).unwrap();
+        ensure_tables(&conn).unwrap();
+        let json = r#"{"id":"a1","name":"n","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":false,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1}"#;
+        let automation: Automation = serde_json::from_str(json).unwrap();
+        write_automation(&conn, &automation).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE; UPDATE automations SET next_run_at = 2000, definition_json = json_set(definition_json, '$.nextRunAt', 2000, '$.name', 'updated') WHERE id = 'a1';").unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let other_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let other = Connection::open(other_path).unwrap();
+            other.busy_timeout(Duration::from_secs(5)).unwrap();
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(set_enabled_in(&other, "a1", true, 3000))
+                .unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        conn.execute_batch("COMMIT").unwrap();
+        let resumed = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(resumed.enabled);
+        assert_eq!(resumed.next_run_at, 2000);
+        assert_eq!(resumed.name, "updated");
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn validates_time_fields() {

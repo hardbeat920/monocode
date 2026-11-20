@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use chrono::{Datelike, Local, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 use std::path::Path;
 
 fn now_millis() -> i64 {
@@ -153,6 +153,9 @@ pub struct AutomationTrigger {
     pub time: String,
     #[serde(default = "default_day_of_week")]
     pub day_of_week: i64,
+    /// Five-field cron expression, used when `schedule_kind` is `custom`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cron: String,
     #[serde(default)]
     pub repos: Vec<String>,
     #[serde(default)]
@@ -305,7 +308,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -320,6 +323,9 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if input.next_run_at <= now {
         return Err("The next automation run must be in the future.".into());
+    }
+    if input.triggers.is_none() && input.schedule_kind == "custom" {
+        return Err("A custom schedule needs a cron expression.".into());
     }
     if let Some(triggers) = &input.triggers {
         if triggers.len() > MAX_TRIGGERS {
@@ -350,9 +356,12 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     }
     if !matches!(
         trigger.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "custom"
     ) {
         return Err("Invalid automation schedule.".into());
+    }
+    if trigger.kind == "time" && trigger.schedule_kind == "custom" {
+        parse_cron(&trigger.cron)?;
     }
     if !(0..=59).contains(&trigger.minute)
         || !(0..=6).contains(&trigger.day_of_week)
@@ -406,6 +415,7 @@ fn normalize_triggers(input: &AutomationUpsert) -> Vec<AutomationTrigger> {
             trigger.id = new_id();
         }
         trigger.event = trigger.event.trim().to_string();
+        trigger.cron = trigger.cron.trim().to_string();
         trigger.repo = trigger.repo.trim().to_string();
         trigger.branch = trigger.branch.trim().to_string();
         trigger.actor = trigger.actor.trim().to_string();
@@ -443,6 +453,7 @@ fn trigger_from_fields(
         minute,
         time: time.to_string(),
         day_of_week,
+        cron: String::new(),
         repos: Vec::new(),
         repo: String::new(),
         branch: String::new(),
@@ -1019,6 +1030,78 @@ impl Service {
     }
 }
 
+/// True when the minute and hour fields are plain numbers or lists, like `30 1,3 * * *`.
+/// The built-in daily, weekday and weekly schedules are fixed times of this kind.
+fn is_fixed_time_cron(expression: &str) -> bool {
+    let mut fields = expression.split_whitespace();
+    let plain = |field: Option<&str>| {
+        field.is_some_and(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit() || c == ','))
+    };
+    plain(fields.next()) && plain(fields.next())
+}
+
+/// Next occurrence of a cron expression strictly after `start`, in `start`'s time zone.
+///
+/// A fixed-time expression runs once when its wall-clock time repeats at the end of
+/// daylight-saving time, like the built-in daily schedules. `croner` would run an hour
+/// list such as `30 1,3 * * *` on both passes. Wildcard and step expressions
+/// (`*/30 * * * *`, `0 6-20/2 * * *`) keep running on every pass.
+fn next_cron_at<Tz: TimeZone>(expression: &str, start: &DateTime<Tz>) -> Option<DateTime<Tz>> {
+    let cron = parse_cron(expression).ok()?;
+    if !is_fixed_time_cron(expression) {
+        return cron.find_next_occurrence(start, false).ok();
+    }
+
+    // Croner treats lists as interval jobs. Search each fixed time independently so
+    // repeated and missing wall times follow the same policy as daily schedules.
+    let fields: Vec<_> = expression.split_whitespace().collect();
+    let mut earliest = None;
+    for minute in fields[0].split(',') {
+        for hour in fields[1].split(',') {
+            let single = format!(
+                "{} {} {} {} {}",
+                minute, hour, fields[2], fields[3], fields[4]
+            );
+            if let Some(next) = parse_cron(&single)
+                .ok()
+                .and_then(|cron| cron.find_next_occurrence(start, false).ok())
+            {
+                if earliest.as_ref().is_none_or(|current| next < *current) {
+                    earliest = Some(next);
+                }
+            }
+        }
+    }
+    earliest
+}
+
+const MAX_CRON_LEN: usize = 200;
+
+fn cron_parser() -> croner::parser::CronParser {
+    croner::parser::CronParser::builder()
+        .seconds(croner::parser::Seconds::Disallowed)
+        .build()
+}
+
+/// Parses a standard five-field cron expression (minute hour day-of-month month day-of-week).
+pub fn parse_cron(expression: &str) -> Result<croner::Cron, String> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Err("Enter a cron expression, for example 0 9 * * 1-5.".into());
+    }
+    if expression.len() > MAX_CRON_LEN {
+        return Err("The cron expression is too long.".into());
+    }
+    cron_parser()
+        .parse(expression)
+        .map_err(|error| format!("Invalid cron expression: {error}"))
+}
+
+/// Plain-English description of a cron expression, or `None` when it does not parse.
+pub fn describe_cron(expression: &str) -> Option<String> {
+    parse_cron(expression).ok().map(|cron| cron.describe())
+}
+
 pub const WEEKDAYS: [&str; 7] = [
     "Sunday",
     "Monday",
@@ -1035,7 +1118,9 @@ impl AutomationTrigger {
             id: new_id(),
             kind: kind.into(),
             event: event.into(),
-            schedule_kind: if matches!(event, "hourly" | "daily" | "weekdays" | "weekly") {
+            schedule_kind: if kind == "time"
+                && matches!(event, "hourly" | "daily" | "weekdays" | "weekly" | "custom")
+            {
                 event.into()
             } else {
                 "weekdays".into()
@@ -1043,6 +1128,12 @@ impl AutomationTrigger {
             minute: 0,
             time: "09:00".into(),
             day_of_week: 1,
+            // A new custom schedule starts from a valid example instead of an empty field.
+            cron: if kind == "time" && event == "custom" {
+                "0 9 * * 1-5".into()
+            } else {
+                String::new()
+            },
             repos: Vec::new(),
             repo: String::new(),
             branch: String::new(),
@@ -1056,6 +1147,9 @@ impl AutomationTrigger {
         match self.schedule_kind.as_str() {
             "hourly" => format!("Hourly at :{:02}", self.minute),
             "daily" => format!("Daily at {}", self.time),
+            "custom" => {
+                describe_cron(&self.cron).unwrap_or_else(|| format!("Cron: {}", self.cron.trim()))
+            }
             "weekly" => format!(
                 "{} at {}",
                 WEEKDAYS.get(self.day_of_week as usize).unwrap_or(&"Weekly"),
@@ -1066,14 +1160,24 @@ impl AutomationTrigger {
     }
     /// Calendar arithmetic in the user's time zone, including daylight-saving changes.
     pub fn next_at(&self, after: i64) -> i64 {
-        let Some(start) = Local.timestamp_millis_opt(after).single() else {
+        self.next_at_in_timezone(after, &Local)
+    }
+
+    fn next_at_in_timezone<Tz: TimeZone>(&self, after: i64, timezone: &Tz) -> i64 {
+        let Some(start) = timezone.timestamp_millis_opt(after).single() else {
             return after.saturating_add(86_400_000);
         };
+        if self.schedule_kind == "custom" {
+            return next_cron_at(&self.cron, &start)
+                .map(|next| next.timestamp_millis())
+                // An unparsable or exhausted expression must not fire repeatedly.
+                .unwrap_or_else(|| after.saturating_add(365 * 86_400_000));
+        }
         if self.schedule_kind == "hourly" {
             // Enumerating actual clock minutes also handles repeated/nonexistent DST hours.
             let mut candidate = (after / 60_000 + 1) * 60_000;
             for _ in 0..180 {
-                if Local
+                if timezone
                     .timestamp_millis_opt(candidate)
                     .single()
                     .is_some_and(|date| date.minute() == self.minute.clamp(0, 59) as u32)
@@ -1103,7 +1207,7 @@ impl AutomationTrigger {
                 // valid clock minute after the requested wall time, as Date.setHours does.
                 for gap in 0..=180 {
                     let target = naive + chrono::Duration::minutes(gap);
-                    if let Some(candidate) = Local.from_local_datetime(&target).earliest() {
+                    if let Some(candidate) = timezone.from_local_datetime(&target).earliest() {
                         let at = candidate.timestamp_millis();
                         if at > after {
                             return at;
@@ -1522,6 +1626,177 @@ mod tests {
         assert_eq!(
             next_run_at(&[weekdays, daily], local_at("2026-09-19T10:00:00")),
             local_at("2026-09-19T18:00:00")
+        );
+    }
+
+    fn cron_trigger(expression: &str) -> AutomationTrigger {
+        AutomationTrigger {
+            schedule_kind: "custom".into(),
+            cron: expression.into(),
+            ..AutomationTrigger::new("time", "custom")
+        }
+    }
+
+    #[test]
+    fn custom_cron_finds_windowed_and_weekday_occurrences() {
+        let windowed = cron_trigger("0 6-20/2 * * *");
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T07:10:00")),
+            local_at("2026-09-19T08:00:00")
+        );
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T20:30:00")),
+            local_at("2026-09-20T06:00:00")
+        );
+        // The boundary is exclusive, like the built-in schedules.
+        assert_eq!(
+            windowed.next_at(local_at("2026-09-19T08:00:00")),
+            local_at("2026-09-19T10:00:00")
+        );
+        let mwf = cron_trigger("0 10 * * 1,3,5");
+        // 2026-09-18 is a Friday.
+        assert_eq!(
+            mwf.next_at(local_at("2026-09-18T11:00:00")),
+            local_at("2026-09-21T10:00:00")
+        );
+        let earliest = next_run_at(
+            &[AutomationTrigger::new("time", "weekdays"), windowed],
+            local_at("2026-09-19T07:10:00"),
+        );
+        assert_eq!(earliest, local_at("2026-09-19T08:00:00"));
+    }
+
+    #[test]
+    fn a_new_custom_trigger_starts_as_custom_with_a_valid_cron() {
+        let trigger = AutomationTrigger::new("time", "custom");
+        assert_eq!(trigger.schedule_kind, "custom");
+        assert!(validate_trigger(&trigger).is_ok());
+        assert_eq!(
+            AutomationTrigger::new("time", "daily").schedule_kind,
+            "daily"
+        );
+        assert_eq!(
+            AutomationTrigger::new("github", "custom").schedule_kind,
+            "weekdays"
+        );
+    }
+
+    #[test]
+    fn custom_cron_is_validated_described_and_labelled() {
+        for bad in ["", "   ", "61 * * * *", "* * * *", "0 0 9 * * *", "nope"] {
+            assert!(parse_cron(bad).is_err(), "{bad:?} should be rejected");
+            assert!(validate_trigger(&cron_trigger(bad)).is_err());
+        }
+        assert!(parse_cron(&"* ".repeat(200)).is_err());
+        assert!(validate_trigger(&cron_trigger("0 6-20/2 * * *")).is_ok());
+        let description = describe_cron("0 6-20/2 * * *").unwrap();
+        assert!(!description.is_empty());
+        assert_eq!(cron_trigger("0 6-20/2 * * *").label(), description);
+        assert_eq!(cron_trigger("nope").label(), "Cron: nope");
+        // An unparsable stored expression never reschedules into the past.
+        let after = local_at("2026-09-19T07:10:00");
+        assert!(cron_trigger("nope").next_at(after) > after);
+    }
+
+    #[test]
+    fn triggers_saved_before_custom_cron_still_load_and_round_trip() {
+        let old = r#"{"id":"t","kind":"time","event":"daily","scheduleKind":"daily","minute":0,"time":"18:00","dayOfWeek":1}"#;
+        let trigger: AutomationTrigger = serde_json::from_str(old).unwrap();
+        assert!(trigger.cron.is_empty());
+        assert!(!serde_json::to_string(&trigger).unwrap().contains("cron"));
+        let custom = serde_json::to_string(&cron_trigger("*/5 * * * *")).unwrap();
+        let back: AutomationTrigger = serde_json::from_str(&custom).unwrap();
+        assert_eq!(back.cron, "*/5 * * * *");
+    }
+
+    #[test]
+    fn custom_cron_automation_is_saved_claimed_when_due_and_rescheduled() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("automations.db")).unwrap();
+        let saved = save(&mut service, vec![cron_trigger("*/2 * * * *")]);
+        assert_eq!(saved.schedule_kind, "custom");
+        let first = saved.next_run_at;
+        assert!(first > now_millis() && first <= now_millis() + 120_000);
+        assert_eq!(first % 60_000, 0);
+        let stored = service.list().unwrap();
+        assert_eq!(stored[0].triggers()[0].cron, "*/2 * * * *");
+        let claimed = service.claim_due(first).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let next = service.list().unwrap()[0].next_run_at;
+        assert_eq!(next, first + 120_000);
+    }
+
+    #[test]
+    fn fixed_time_cron_runs_once_in_a_repeated_dst_hour_like_the_built_in_schedules() {
+        use chrono_tz::America::New_York;
+        // 2026-11-01: clocks fall back from 02:00 EDT to 01:00 EST, so 01:30 happens twice.
+        let start = New_York.with_ymd_and_hms(2026, 11, 1, 0, 30, 0).unwrap();
+        let sequence = |expression: &str| {
+            let mut at = start;
+            (0..5)
+                .map(|_| {
+                    at = next_cron_at(expression, &at).unwrap();
+                    at.timestamp()
+                })
+                .collect::<Vec<_>>()
+        };
+        let list = sequence("30 1,3 * * *");
+        // Compare with the actual built-in daily scheduling path in the same timezone.
+        let mut one = AutomationTrigger::new("time", "custom");
+        one.schedule_kind = "daily".into();
+        one.time = "01:30".into();
+        let mut three = one.clone();
+        three.time = "03:30".into();
+        let mut cursor = start.timestamp_millis();
+        let daily: Vec<_> = (0..5)
+            .map(|_| {
+                cursor = one
+                    .next_at_in_timezone(cursor, &New_York)
+                    .min(three.next_at_in_timezone(cursor, &New_York));
+                cursor / 1000
+            })
+            .collect();
+        assert_eq!(list, daily);
+        let first = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
+            .earliest()
+            .unwrap();
+        let repeated = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
+            .latest()
+            .unwrap();
+        let after = New_York.with_ymd_and_hms(2026, 11, 1, 3, 30, 0).unwrap();
+        assert_eq!(list[..2], [first.timestamp(), after.timestamp()]);
+        assert_ne!(first.timestamp(), repeated.timestamp());
+
+        // Wildcard and step expressions still run on both passes.
+        let every_half_hour = sequence("*/30 * * * *");
+        assert!(every_half_hour.contains(&repeated.timestamp()));
+        let windowed = sequence("0 1-3/1 * * *");
+        let repeated_hour = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 0, 0)
+            .latest()
+            .unwrap();
+        assert!(windowed.contains(&repeated_hour.timestamp()));
+    }
+
+    #[test]
+    fn fixed_time_cron_handles_dense_lists_and_spring_gap() {
+        use chrono_tz::America::New_York;
+        let start = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 40, 0)
+            .earliest()
+            .unwrap();
+        let next = next_cron_at("0,5,10,15,20,25,30,35,40 1 * * *", &start).unwrap();
+        assert_eq!(
+            next,
+            New_York.with_ymd_and_hms(2026, 11, 2, 1, 0, 0).unwrap()
+        );
+        let start = New_York.with_ymd_and_hms(2026, 3, 8, 1, 30, 0).unwrap();
+        let next = next_cron_at("30 1,2 * * *", &start).unwrap();
+        assert_eq!(
+            next,
+            New_York.with_ymd_and_hms(2026, 3, 8, 3, 0, 0).unwrap()
         );
     }
 

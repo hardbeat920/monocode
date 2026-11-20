@@ -15,6 +15,7 @@ shlex = "2"
 url = "2"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+croner = "4"
 sha2 = "0.10"
 rand = "0.9"
 regex = "1"
@@ -61,3 +62,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+chrono-tz = "0.10"

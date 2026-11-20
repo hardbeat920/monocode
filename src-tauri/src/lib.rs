@@ -354,6 +354,7 @@ pub fn run() {
             reminders::reminder_open,
             automations::automations_list,
             automations::automations_upsert,
+            automations::automations_set_enabled,
             automations::automations_delete,
             automations::automation_runs_list,
             automations::automation_runs_recover,

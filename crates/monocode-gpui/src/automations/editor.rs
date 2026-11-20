@@ -34,6 +34,7 @@ pub(super) fn events(kind: &str) -> Vec<(String, String)> {
             ("daily", "Daily"),
             ("weekdays", "Weekdays"),
             ("weekly", "Weekly"),
+            ("custom", "Custom"),
         ],
         "github" => &[
             ("draft_opened", "Draft opened"),
@@ -187,6 +188,13 @@ impl Automations {
                 }
             }
             Choice::TriggerEvent(id) | Choice::Schedule(id) => {
+                let mut seeded = None;
+                // Switching back to Custom keeps whatever the user already typed.
+                let typed = editor
+                    .fields
+                    .iter()
+                    .find(|f| f.id == id)
+                    .is_some_and(|f| !f.cron.read(cx).content.trim().is_empty());
                 if let Some(trigger) = editor
                     .draft
                     .triggers
@@ -195,8 +203,17 @@ impl Automations {
                 {
                     trigger.event = value.clone();
                     if trigger.kind == "time" {
+                        // Start a new custom schedule from the one it replaces.
+                        if value == "custom" && trigger.schedule_kind != "custom" && !typed {
+                            seeded = Some(seed_cron(trigger));
+                        }
                         trigger.schedule_kind = value;
                     }
+                }
+                if let (Some(seed), Some(fields)) =
+                    (seeded, editor.fields.iter().find(|f| f.id == id))
+                {
+                    fields.cron.update(cx, |input, cx| input.set_text(seed, cx));
                 }
             }
             Choice::Minute(id) => {
@@ -308,6 +325,7 @@ impl Automations {
                 "hourly" => "Every hour at",
                 "daily" => "Every day at",
                 "weekly" => "Every week on",
+                "custom" => "Custom schedule",
                 _ => "Every weekday at",
             };
             let frequency_anchor = AnchorSlot::default();
@@ -357,8 +375,24 @@ impl Automations {
             let mut preview_trigger = trigger.clone();
             if let Some(fields) = fields {
                 preview_trigger.time = fields.time.read(cx).content.to_string();
+                preview_trigger.cron = fields.cron.read(cx).content.to_string();
             }
-            if trigger.schedule_kind == "hourly" {
+            if trigger.schedule_kind == "custom" {
+                if let Some(fields) = fields {
+                    sentence = sentence.child(
+                        div()
+                            .w(px(180.))
+                            .h(px(28.))
+                            .rounded(px(6.))
+                            .bg(content(0.1))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .font_family("Menlo")
+                            .child(fields.cron.clone()),
+                    );
+                }
+            } else if trigger.schedule_kind == "hourly" {
                 sentence = sentence.child(
                     self.select_control(
                         ("trigger-minute", index),
@@ -391,16 +425,35 @@ impl Automations {
                     cx,
                 ));
             }
-            sentence = sentence
-                .child(div().text_color(content(0.45)).child(gmt_offset()))
-                .child(
+            let cron_check = (trigger.schedule_kind == "custom")
+                .then(|| automations::parse_cron(&preview_trigger.cron));
+            match &cron_check {
+                Some(Err(_)) => {}
+                _ => {
+                    sentence =
+                        sentence
+                            .child(div().text_color(content(0.45)).child(gmt_offset()))
+                            .child(div().ml(px(4.)).text_color(content(0.35)).child(
+                                next_run_preview(
+                                    preview_trigger.next_at(monocode_core::time::now_ms() as i64),
+                                ),
+                            ));
+                }
+            }
+            if let Some(check) = cron_check {
+                // Own full-width line under the field: what the expression means, or why it fails.
+                let (text, color) = match check {
+                    Ok(cron) => (cron.describe(), content(0.5)),
+                    Err(error) => (error, rgb(0xfca5a5).into()),
+                };
+                sentence = sentence.child(
                     div()
-                        .ml(px(4.))
-                        .text_color(content(0.35))
-                        .child(next_run_preview(
-                            preview_trigger.next_at(monocode_core::time::now_ms() as i64),
-                        )),
+                        .w_full()
+                        .text_size(px(12.))
+                        .text_color(color)
+                        .child(text),
                 );
+            }
         } else {
             sentence = sentence
                 .child(self.select_control(
@@ -1263,6 +1316,20 @@ fn set_control_value(draft: &mut AutomationUpsert, key: String, value: String) {
         draft.model_settings.remove(*alias);
     }
     draft.model_settings.insert(canonical.to_string(), value);
+}
+/// Cron equivalent of a built-in schedule, so switching to Custom keeps the same timing.
+fn seed_cron(trigger: &AutomationTrigger) -> String {
+    let (hour, minute) = trigger
+        .time
+        .split_once(':')
+        .and_then(|(h, m)| Some((h.parse::<u32>().ok()?, m.parse::<u32>().ok()?)))
+        .unwrap_or((9, 0));
+    match trigger.schedule_kind.as_str() {
+        "hourly" => format!("{} * * * *", trigger.minute.clamp(0, 59)),
+        "daily" => format!("{minute} {hour} * * *"),
+        "weekly" => format!("{minute} {hour} * * {}", trigger.day_of_week.clamp(0, 6)),
+        _ => format!("{minute} {hour} * * 1-5"),
+    }
 }
 fn gmt_offset() -> String {
     let minutes = Local::now().offset().local_minus_utc() / 60;
