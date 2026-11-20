@@ -526,6 +526,12 @@ impl Protocol {
                         let (policy, sandbox, sandbox_policy, reviewer) = self.codex_access();
                         let mut params = json!({"cwd":self.request.cwd,"approvalPolicy":policy,"sandbox":sandbox,"sandboxPolicy":sandbox_policy,"approvalsReviewer":reviewer,
                             "developerInstructions":format!("You are the coding agent in Monocode. Use the available tools to inspect and work in the supplied cwd. Do not ask the user to paste files or git output you can inspect yourself. Respect the selected access policy and request approval when required. {}", if self.request.settings.plan { "This is a planning turn: inspect and propose a plan without changing files." } else { "" })});
+                        if self.request.settings.mono_goal.is_some() && self.request.settings.plan {
+                            // Autonomous goal turns inherit the thread policy.
+                            params["sandbox"] = "read-only".into();
+                            params["sandboxPolicy"] = json!({"type":"readOnly"});
+                            params["approvalPolicy"] = "never".into();
+                        }
                         if let Some(instructions) = crate::visual_bridge::instructions(
                             &self.request.settings.environment,
                             false,
@@ -1734,6 +1740,10 @@ fn run_operation(
         loop {
             if cancel.load(Ordering::Relaxed) && !interrupted {
                 interrupted = true;
+                // Settle goal cancellation below, including stops from the emit callback.
+                if protocol.goal_active {
+                    return Err("Stopped".into());
+                }
                 if !protocol.interrupt(&mut stdin)? {
                     return Err("Stopped".into());
                 }
@@ -1821,7 +1831,7 @@ fn run_operation(
                             || turn_id.is_none() && protocol.previous_turn.is_none());
                         let codex_ack = protocol.request.kind == Kind::Codex
                             && (reply_id.is_some() && reply_id == protocol.interrupt_id.as_deref()
-                                || terminal && !protocol.goal_active);
+                                || terminal);
                         let claude_end =
                             protocol.request.kind == Kind::Claude && claude_turn_result(&value);
                         if codex_ack || claude_end {
@@ -1930,7 +1940,21 @@ fn run_operation(
     // Cancellation can arrive while publishing an event batch. Its callback
     // then returns Stopped before the next receive-loop iteration can interrupt.
     if cancel.load(Ordering::Relaxed) && protocol.interrupt_id.is_none() {
-        let _ = protocol.interrupt(&mut wire.stdin);
+        if protocol.interrupt(&mut wire.stdin).unwrap_or(false) && protocol.goal_active {
+            // A turn interrupt can finish before the durable goal pause is recorded.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while let Ok(Ok(frame)) = wire
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                if serde_json::from_slice::<Value>(&frame)
+                    .is_ok_and(|reply| reply["id"].as_str() == protocol.interrupt_id.as_deref())
+                    || Instant::now() >= deadline
+                {
+                    break;
+                }
+            }
+        }
     }
     if cancel.load(Ordering::Relaxed) && protocol.done {
         stop_confirmed = true;
@@ -2120,6 +2144,36 @@ mod tests {
         p.frame(json!({"method":"thread/goal/updated","params":{"threadId":"main","goal":{"status":"complete"}}}), &mut wire).unwrap();
         assert!(!p.done);
         assert!(p.frame(end, &mut wire).unwrap().contains(&Event::Done));
+    }
+
+    #[test]
+    fn mono_stop_pauses_the_codex_goal_even_between_continuation_turns() {
+        for turn in [None, Some("running".to_owned())] {
+            let mut p = protocol(Kind::Codex);
+            p.request.settings.mono_goal = Some("resume".into());
+            let mut wire = Vec::new();
+            p.frame(
+                json!({"id":2,"result":{"thread":{"id":"thread"}}}),
+                &mut wire,
+            )
+            .unwrap();
+            wire.clear();
+            p.active_turn = turn.clone();
+            assert!(p.interrupt(&mut wire).unwrap());
+            let frames: Vec<Value> = serde_json::Deserializer::from_slice(&wire)
+                .into_iter()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(frames[0]["method"], "thread/goal/set");
+            assert_eq!(
+                frames[0]["params"],
+                json!({"threadId":"thread","status":"paused","origin":"user"})
+            );
+            assert_eq!(frames.len(), if turn.is_some() { 2 } else { 1 });
+            if turn.is_some() {
+                assert_eq!(frames[1]["method"], "turn/interrupt");
+            }
+        }
     }
 
     #[test]

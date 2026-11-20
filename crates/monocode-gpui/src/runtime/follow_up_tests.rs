@@ -144,3 +144,78 @@ for line in sys.stdin:
     assert_eq!(after.role, "assistant");
     assert_eq!(saved.rows.last(), Some(after));
 }
+
+#[test]
+fn mono_goal_keeps_one_delivery_and_the_final_continuation_output() {
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "monocode-runtime-goal-{}",
+        monocode_core::mono::new_id()
+    )));
+    std::fs::create_dir_all(&fixture.0).unwrap();
+    let binary = fixture.0.join("codex");
+    std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, sys
+def send(frame):
+    print(json.dumps(frame), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method == 'initialize':
+        send({'id': request['id'], 'result': {}})
+    elif method == 'thread/start':
+        send({'id': request['id'], 'result': {'thread': {'id': 'main'}}})
+    elif method == 'thread/goal/set':
+        assert request['params']['objective'] == 'fix build'
+        goal = {'objective': 'fix build', 'status': 'active'}
+        send({'id': request['id'], 'result': {'goal': goal}})
+        for turn in ['first', 'second']:
+            send({'method':'turn/started','params':{'threadId':'main','turn':{'id':turn}}})
+            if turn == 'second':
+                goal['status'] = 'complete'
+                send({'method':'thread/goal/updated','params':{'threadId':'main','goal':goal}})
+            send({'method':'item/agentMessage/delta','params':{'itemId':turn,'delta':turn}})
+            send({'method':'turn/completed','params':{'threadId':'main','turn':{'id':turn,'status':'completed'}}})
+        break
+    else:
+        assert method == 'initialized', method
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = Store::open_monocode(&fixture.0.join("sessions.db")).unwrap();
+    let summary = store.create("codex", fixture.0.to_str().unwrap()).unwrap();
+    let session = summary.id;
+    let store = Arc::new(Mutex::new(store));
+    let (updates, received) = async_channel::unbounded();
+    let (_controls, control_rx) = std::sync::mpsc::channel();
+    run_turn_using(
+        TurnInput {
+            summary,
+            prompt: "/goal fix build".into(),
+            settings: Settings {
+                mono: Some(monocode_core::agent::MonoContext {
+                    mono: Default::default(),
+                    root: fixture.0.clone(),
+                    executable: binary.clone(),
+                }),
+                mono_message_id: Some("goal-message".into()),
+                prepared_prompt: Some("expanded skill".into()),
+                ..Default::default()
+            },
+        },
+        control_rx,
+        store.clone(),
+        Arc::new(AtomicBool::new(false)),
+        updates,
+        |_| Some(binary),
+    );
+    let mut final_update = None;
+    while let Ok(update) = received.try_recv() {
+        final_update = Some(update);
+    }
+    let finished = final_update.unwrap();
+    assert!(finished.finished);
+    assert_eq!(finished.status, "Ready");
+    assert_eq!(finished.delivered.as_deref(), Some("goal-message"));
+    let saved = locked(&store).unwrap().load(session).unwrap();
+    assert_eq!(saved.rows.iter().filter(|row| row.is_prompt()).count(), 1);
+    assert_eq!(saved.rows.last().unwrap().text, "second");
+}
