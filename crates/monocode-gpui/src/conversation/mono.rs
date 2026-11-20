@@ -91,6 +91,15 @@ impl Conversation {
         });
         window.focus(&self.input.focus_handle(cx), cx);
     }
+    /// A stop was requested and the runtime hasn't settled the turn yet: its
+    /// rows and receipt aren't final, so completion reports must wait.
+    pub(crate) fn mono_stopping(&self) -> bool {
+        self.stopping
+    }
+    #[cfg(test)]
+    pub(crate) fn mono_set_stopping(&mut self, stopping: bool) {
+        self.stopping = stopping;
+    }
     pub(crate) fn mono_external_pending(&self) -> bool {
         self.mono_ui.external.is_some()
     }

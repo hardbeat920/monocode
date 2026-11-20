@@ -838,7 +838,23 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                         group,
                         children
                             .iter()
-                            .map(|l| (l.session_id, l.title.clone()))
+                            .map(|l| {
+                                let project = mono.session_project(&l.cwd);
+                                // Any turn started or settled since bumps updated_at.
+                                let generation = views
+                                    .iter()
+                                    .find(|v| v.id == l.session_id)
+                                    .map(|v| v.updated_at);
+                                (
+                                    l.session_id,
+                                    l.title.clone(),
+                                    monocode_core::response::read_call(
+                                        l.session_id,
+                                        project.as_deref(),
+                                    ),
+                                    generation,
+                                )
+                            })
                             .collect::<Vec<_>>(),
                     ));
                 }
@@ -846,15 +862,25 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
         }
         for (id, group, children) in ready {
             self.completion_work.insert((id.clone(), group));
+            let generations: Vec<(i64, Option<u64>)> =
+                children.iter().map(|c| (c.0, c.3)).collect();
             let store = self.store.clone();
             let work = cx.background_executor().spawn(async move {
                 children
                     .into_iter()
-                    .map(|(id, title)| {
+                    .map(|(id, title, read, _)| {
                         let report = locked(&store)
-                            .and_then(|db| db.load(id))
-                            .map(|t| monocode_core::response::completion_report(id, &t.rows, 12000))
-                            .unwrap_or_else(|_| "Session was removed".into());
+                            .and_then(|db| {
+                                let rows = db.load(id)?.rows;
+                                let turns = db.agent_settings(id)?.unwrap_or_default().turns;
+                                Ok(monocode_core::response::completion_report(
+                                    &rows,
+                                    monocode_core::response::turn_end(&rows, &turns),
+                                    read.as_ref(),
+                                    12000,
+                                ))
+                            })
+                            .unwrap_or_else(|_: String| "Session was removed".into());
                         format!("Session {id}: {title}\n{report}")
                     })
                     .collect::<Vec<_>>()
@@ -864,6 +890,11 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                 let report=work.await;
                 let _=this.update(cx,|this,cx|{
                     this.completion_work.remove(&(id.clone(),group));
+                    // The report describes the turns seen at the readiness check. If one
+                    // is running, or a newer turn ran meanwhile, drop it: the next
+                    // check rebuilds it from that turn once it settles.
+                    let views=this.owner.upgrade().map(|o|o.read(cx).mono_session_views(cx)).unwrap_or_default();
+                    if generations.iter().any(|(s,seen)|views.iter().find(|v|v.id==*s).is_some_and(|v|v.busy||Some(v.updated_at)!=*seen)){return;}
                     if let Some(mono)=this.roster.get_mut(&id){for launch in &mut mono.launches{if launch.origin_turn==group{launch.completed=true;}}}
                     let message=format!("[Delegated work completed]\nAll sessions in this group have stopped. Inspect their results and give an integrated update.\n\n{report}");
                     let source=(group>>32) as i64;
