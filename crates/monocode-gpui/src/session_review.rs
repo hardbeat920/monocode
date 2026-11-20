@@ -8,7 +8,7 @@ use crate::{
 use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
-use monocode_core::checkpoint::{CheckpointFile, CheckpointStatus};
+use monocode_core::checkpoint::{CheckpointFile, CheckpointStatus, Store as CheckpointStore};
 
 /// The card shows this many files until expanded.
 const COLLAPSED: usize = 3;
@@ -38,7 +38,9 @@ pub(crate) struct SessionReview {
     /// Another session is running in this project.
     undo_locked: bool,
     generation: u64,
+    store: Option<CheckpointStore>,
     _load: Option<Task<()>>,
+    _action: Option<Task<()>>,
 }
 impl EventEmitter<SessionReviewEvent> for SessionReview {}
 
@@ -54,7 +56,9 @@ impl SessionReview {
             busy: false,
             undo_locked: false,
             generation: 0,
+            store: monocode_core::checkpoint::store().cloned(),
             _load: None,
+            _action: None,
         }
     }
     pub(crate) fn session(&self) -> (i64, &str) {
@@ -67,6 +71,7 @@ impl SessionReview {
     pub(crate) fn set_cwd(&mut self, cwd: String, cx: &mut Context<Self>) {
         if self.cwd != cwd {
             self.cwd = cwd;
+            self.generation += 1;
             self.publish(Ok(CheckpointStatus::default()), cx);
             self.refresh(cx);
         }
@@ -100,7 +105,7 @@ impl SessionReview {
         if !self.valid() || self.busy {
             return;
         }
-        let Some(store) = monocode_core::checkpoint::store() else {
+        let Some(store) = self.store.clone() else {
             return;
         };
         self.generation += 1;
@@ -132,11 +137,27 @@ impl SessionReview {
             cx.notify();
         }
     }
-    fn run(&mut self, action: Action, cx: &mut Context<Self>) {
-        if self.acting.is_some() {
+    fn run(&mut self, action: Action, relative: Option<String>, cx: &mut Context<Self>) {
+        if self.busy
+            || self.acting.is_some()
+            || self.files.is_empty()
+            || !self.valid()
+            || (action == Action::Undo && self.undo_locked)
+        {
             return;
         }
-        let Some(store) = monocode_core::checkpoint::store() else {
+        let applicable = |file: &CheckpointFile| action == Action::Keep || file.undoable;
+        let allowed = match relative.as_deref() {
+            Some(relative) => self
+                .files
+                .iter()
+                .any(|file| file.relative == relative && applicable(file)),
+            None => self.files.iter().all(applicable),
+        };
+        if !allowed {
+            return;
+        }
+        let Some(store) = self.store.clone() else {
             return;
         };
         self.acting = Some(action);
@@ -146,11 +167,12 @@ impl SessionReview {
         let (session, cwd) = (self.session.to_string(), self.cwd.clone());
         let work = cx.background_executor().spawn(async move {
             store.exclusive(|s| match action {
-                Action::Keep => s.keep(&session, &cwd, None),
-                Action::Undo => s.undo(&session, &cwd, None),
+                Action::Keep => s.keep(&session, &cwd, relative.as_deref()),
+                Action::Undo => s.undo(&session, &cwd, relative.as_deref()),
             })
         });
-        self._load = Some(cx.spawn(async move |this, cx| {
+        // Refreshes and new turns can cancel a read, but a write must settle.
+        self._action = Some(cx.spawn(async move |this, cx| {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.acting = None;
@@ -169,12 +191,12 @@ impl SessionReview {
     }
 }
 
-/// The header's text buttons: h-7 px-2.5 at 11px, ink 50%.
 fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .role(Role::Button)
         .aria_label(label)
+        .flex_shrink_0()
         .h(px(28.))
         .px(px(10.))
         .flex()
@@ -185,6 +207,9 @@ fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::St
         .when(!enabled, |d| d.opacity(0.35))
         .when(enabled, |d| {
             d.cursor_pointer()
+                .focusable()
+                .tab_stop(true)
+                .focus(|s| s.bg(content(0.08)).text_color(content(1.)))
                 .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
         })
         .child(label)
@@ -341,7 +366,7 @@ impl SessionReview {
                             })
                             .when(!disabled && can_undo, |d| {
                                 d.on_click(
-                                    cx.listener(|this, _, _, cx| this.run(Action::Undo, cx)),
+                                    cx.listener(|this, _, _, cx| this.run(Action::Undo, None, cx)),
                                 )
                             }),
                     )
@@ -350,7 +375,7 @@ impl SessionReview {
                             .aria_label("Keep the recorded changes and dismiss this card")
                             .when(!disabled, |d| {
                                 d.on_click(
-                                    cx.listener(|this, _, _, cx| this.run(Action::Keep, cx)),
+                                    cx.listener(|this, _, _, cx| this.run(Action::Keep, None, cx)),
                                 )
                             }),
                     )
@@ -384,48 +409,83 @@ impl SessionReview {
                     |n| n.to_string_lossy().into_owned(),
                 );
             let path = file.path.clone();
-            let group: SharedString = format!("session-review-file-{ix}").into();
+            let undo_path = file.relative.clone();
+            let keep_path = file.relative.clone();
+            let undo_enabled = !disabled && !self.undo_locked && file.undoable;
             div()
-                .id(("session-review-file", ix))
-                .role(Role::Button)
-                .aria_label(SharedString::from(file.relative.clone()))
-                .group(group.clone())
+                .id(format!("session-review-file-{}", file.relative))
                 .h(px(32.))
                 .w_full()
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap_2()
                 .px_3()
-                .cursor_pointer()
-                .text_color(content(0.65))
-                .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
-                .child(file_type_icon(&name, false, false, 15.))
                 .child(
                     div()
+                        .id("session-review-file")
+                        .role(Role::Button)
+                        .aria_label(format!("Review {}", file.relative))
+                        .focusable()
+                        .tab_stop(true)
+                        .h_full()
                         .min_w_0()
                         .flex_1()
-                        .truncate()
-                        .font_family(crate::fonts::mono())
-                        .text_size(px(12.))
-                        .child(file.relative.clone()),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pr_2()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .text_color(content(0.65))
+                        .focus(|s| s.bg(content(0.05)).text_color(content(1.)))
+                        .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                        .child(file_type_icon(&name, false, false, 15.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .font_family(crate::fonts::mono())
+                                .text_size(px(12.))
+                                .child(file.relative.clone()),
+                        )
+                        .child(if file.exact {
+                            counts(file.additions, file.deletions, 8.).into_any_element()
+                        } else {
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(content(0.45))
+                                .child("Diff unavailable")
+                                .into_any_element()
+                        })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(SessionReviewEvent::Open {
+                                path: Some(path.clone()),
+                            })
+                        })),
                 )
-                .child(if file.exact {
-                    counts(file.additions, file.deletions, 8.).into_any_element()
-                } else {
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(0.45))
-                        .child("Diff unavailable")
-                        .into_any_element()
-                })
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.emit(SessionReviewEvent::Open {
-                        path: Some(path.clone()),
-                    })
-                }))
+                .child(
+                    text_button("session-review-file-undo", "Undo", undo_enabled)
+                        .debug_selector(move || format!("session-review-file-undo-{ix}"))
+                        .aria_label(format!("Undo changes in {}", file.relative))
+                        .when(undo_enabled, |d| {
+                            d.on_click(cx.listener(move |this, _, _, cx| {
+                                this.run(Action::Undo, Some(undo_path.clone()), cx)
+                            }))
+                        }),
+                )
+                .child(
+                    text_button("session-review-file-keep", "Keep", !disabled)
+                        .debug_selector(move || format!("session-review-file-keep-{ix}"))
+                        .aria_label(format!("Keep changes in {}", file.relative))
+                        .when(!disabled, |d| {
+                            d.on_click(cx.listener(move |this, _, _, cx| {
+                                this.run(Action::Keep, Some(keep_path.clone()), cx)
+                            }))
+                        }),
+                )
         });
         let list = div()
             .id("session-review-files")
@@ -492,5 +552,107 @@ impl SessionReview {
 impl Render for SessionReview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.contents(card(), cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[gpui::test]
+    fn file_review_actions_only_apply_to_the_selected_file(cx: &mut gpui::TestAppContext) {
+        let turn = monocode_core::checkpoint::new_turn_id();
+        let scratch = Scratch(std::env::temp_dir().join(format!("monocode-file-review-{turn}")));
+        let project = scratch.0.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&project)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{:?}", status.stderr);
+        };
+        git(&["init"]);
+        let write_all = |text: &str| {
+            for name in ["a.txt", "b.txt", "c.txt"] {
+                std::fs::write(project.join(name), text).unwrap();
+            }
+        };
+        write_all("base\n");
+        git(&["add", "."]);
+        git(&["commit", "-m", "baseline"]);
+
+        let cwd = project.to_string_lossy().into_owned();
+        let store = CheckpointStore::new(scratch.0.join("checkpoints"));
+        store.begin_turn("1", &cwd, &turn).unwrap();
+        write_all("edited\n");
+        store.finish_turn("1", &cwd, &turn).unwrap();
+        // The review can keep a file with later edits, but cannot undo it.
+        std::fs::write(project.join("b.txt"), "later\n").unwrap();
+        let status = store.status("1", &cwd).unwrap();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    let mut review = SessionReview::new(1, cwd.clone());
+                    review.store = Some(store.clone());
+                    review.set_files(status.files.clone(), cx);
+                    review
+                })
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |review, _, cx| {
+                review.set_busy(true, cx);
+                // A callback from the previous rendered card must not start.
+                review.set_files(status.files.clone(), cx);
+                review.run(Action::Undo, Some("a.txt".into()), cx);
+                review.run(Action::Keep, Some("b.txt".into()), cx);
+                assert!(review.acting.is_none());
+                review.set_busy(false, cx);
+                review.set_undo_locked(true, cx);
+                review.run(Action::Undo, Some("a.txt".into()), cx);
+                assert!(review.acting.is_none());
+                review.set_undo_locked(false, cx);
+                review.run(Action::Undo, Some("b.txt".into()), cx);
+                assert!(review.acting.is_none());
+            })
+            .unwrap();
+
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let undo = visual.debug_bounds("session-review-file-undo-0").unwrap();
+        visual.simulate_click(undo.center(), Default::default());
+        visual.run_until_parked();
+        let contents = |name: &str| std::fs::read_to_string(project.join(name)).unwrap();
+        assert_eq!(contents("a.txt"), "base\n");
+        assert_eq!(contents("b.txt"), "later\n");
+        assert_eq!(contents("c.txt"), "edited\n");
+
+        visual.refresh().unwrap();
+        let keep = visual.debug_bounds("session-review-file-keep-0").unwrap();
+        visual.simulate_click(keep.center(), Default::default());
+        visual.run_until_parked();
+        assert_eq!(contents("b.txt"), "later\n");
+        let remaining = store.status("1", &cwd).unwrap().files;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].relative, "c.txt");
     }
 }
