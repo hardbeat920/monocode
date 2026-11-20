@@ -395,7 +395,6 @@ impl Conversation {
         self.settings.plan = message.mode.as_deref() == Some("plan");
         self.settings.operator = message.mode.as_deref() == Some("operator");
         self.settings.orchestrator = message.mode.as_deref() == Some("orchestrator");
-        self.planning_orchestration = self.settings.orchestrator;
         self.orchestration_plan = None;
         self.orchestration_error = None;
         let composer_attachments = std::mem::take(&mut self.attachments);

@@ -1,5 +1,6 @@
 use monocode_core::agent::{Approval, Control, Settings};
 use monocode_core::{
+    orchestration,
     provider::{self, Event, Kind, Request},
     store::{Session, Store},
     transcript::{Row, Transcript},
@@ -15,6 +16,8 @@ mod follow_up_tests;
 mod handoff;
 #[cfg(all(test, unix))]
 mod handoff_tests;
+#[cfg(all(test, unix))]
+mod orchestration_tests;
 mod persistence;
 pub(crate) mod remote;
 mod visual_discovery;
@@ -53,6 +56,7 @@ pub(crate) struct Update {
     pub(crate) questions: Vec<monocode_core::agent::Question>,
     pub(crate) questions_resolved: Vec<String>,
     pub(crate) handoff: Option<Option<monocode_core::agent::Handoff>>,
+    pub(crate) orchestration: Option<Result<orchestration::Plan, String>>,
     pub(crate) status: String,
     pub(crate) finished: bool,
 }
@@ -150,6 +154,9 @@ fn run_turn_using(
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
         .unwrap_or_default();
     let mut usage_limit = None;
+    let mut planning_orchestration = false;
+    let mut native_proposal = String::new();
+    let mut native_proposal_id = None;
     let result = (|| {
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
             return Err(reason);
@@ -254,6 +261,7 @@ fn run_turn_using(
                 questions: Vec::new(),
                 questions_resolved: Vec::new(),
                 handoff: None,
+                orchestration: None,
                 status: if creating_worktree {
                     "Creating worktree…"
                 } else if settings.pending_provider_switch.is_some() {
@@ -309,6 +317,7 @@ fn run_turn_using(
                     questions: Vec::new(),
                     questions_resolved: Vec::new(),
                     handoff: None,
+                    orchestration: None,
                     status: "Connecting…".into(),
                     finished: false,
                 },
@@ -357,6 +366,7 @@ fn run_turn_using(
                     questions: Vec::new(),
                     questions_resolved: Vec::new(),
                     handoff: None,
+                    orchestration: None,
                     status: "Preparing handoff…".into(),
                     finished: false,
                 },
@@ -417,6 +427,7 @@ fn run_turn_using(
                     questions: Vec::new(),
                     questions_resolved: Vec::new(),
                     handoff: Some(Some(prepared)),
+                    orchestration: None,
                     status: "Connecting…".into(),
                     finished: false,
                 },
@@ -544,10 +555,8 @@ fn run_turn_using(
             }
         }
         if !raw_native_command && settings.orchestrator {
-            prompt = format!(
-                "{}\n\nUser request:\n{prompt}",
-                monocode_core::orchestration::INSTRUCTIONS
-            );
+            planning_orchestration = true;
+            prompt = format!("{}\n\nUser request:\n{prompt}", orchestration::INSTRUCTIONS);
         }
         if !raw_native_command && settings.operator_enabled {
             let cli = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -710,6 +719,14 @@ fn run_turn_using(
                             let at = transcript.append(&text);
                             start = start.min(at);
                             pending.changed(at);
+                        }
+                        Event::OrchestrationPlan { id, text, append } => {
+                            if append && native_proposal_id.as_ref() == Some(&id) {
+                                native_proposal.push_str(&text);
+                            } else {
+                                native_proposal = text;
+                                native_proposal_id = Some(id);
+                            }
                         }
                         Event::Reasoning(text) => {
                             if text.is_empty() {
@@ -894,6 +911,7 @@ fn run_turn_using(
                             questions,
                             questions_resolved,
                             handoff,
+                            orchestration: None,
                             status,
                             finished: false,
                         },
@@ -1059,6 +1077,10 @@ fn run_turn_using(
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");
     }
+    let orchestration = (planning_orchestration && !cancelled && status == "Ready").then(|| {
+        let assistant = monocode_core::response::prose(&transcript.rows[turn_start..]);
+        orchestration::parse_response(&native_proposal, &assistant)
+    });
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
@@ -1087,6 +1109,7 @@ fn run_turn_using(
         questions: Vec::new(),
         questions_resolved: Vec::new(),
         handoff,
+        orchestration,
         status,
         finished: true,
     });

@@ -996,7 +996,6 @@ impl Conversation {
             }
             return;
         }
-        self.planning_orchestration = self.settings.orchestrator;
         self.orchestration_plan = None;
         self.orchestration_error = None;
         self.launch_prompt(prompt, cx);
@@ -1181,6 +1180,7 @@ impl Conversation {
             self.transcript
                 .update(cx, |view, cx| view.submit_prompt(&prompt, &settings, cx));
         }
+        self.planning_orchestration = settings.orchestrator;
         if settings.orchestrator {
             settings.plan = true;
             settings.operator = false;
@@ -1514,11 +1514,14 @@ impl Conversation {
                                     info.stopped = stopped;
                                 }
                             });
+                            this.planning_orchestration = false;
                             if stopping {
-                                this.planning_orchestration = false;
                                 this.orchestration_progress = None;
-                            } else {
-                                this.finish_orchestration_plan(cx);
+                            } else if let Some(proposal) = update.orchestration {
+                                match proposal {
+                                    Ok(plan) => this.orchestration_plan = Some(plan),
+                                    Err(error) => this.orchestration_error = Some(error),
+                                }
                             }
                             this.settings.turns = this.transcript.read(cx).window_turns();
                             this.save_settings(cx);

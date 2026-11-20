@@ -36,6 +36,7 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
         questions: vec![],
         questions_resolved: vec![],
         handoff: None,
+        orchestration: None,
         status: status.into(),
         finished,
     }

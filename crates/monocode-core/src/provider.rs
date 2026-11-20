@@ -94,6 +94,12 @@ pub enum Event {
     QuestionResolved(String),
     BeginAssistant,
     Text(String),
+    /// Codex can deliver an orchestration proposal as a dedicated plan item.
+    OrchestrationPlan {
+        id: String,
+        text: String,
+        append: bool,
+    },
     Reasoning(String),
     Tool(ToolCall),
     Status(String),
@@ -349,6 +355,28 @@ impl Protocol {
             self.text_key = Some(key.to_owned());
         }
         events.push(Event::Text(text));
+    }
+    fn codex_orchestration_plan(
+        &self,
+        id: &Value,
+        text: &Value,
+        append: bool,
+        events: &mut Vec<Event>,
+    ) {
+        if !self.request.settings.orchestrator {
+            return;
+        }
+        let (Some(id), Some(text)) = (
+            id.as_str().filter(|id| !id.is_empty()),
+            text.as_str().filter(|text| !text.is_empty()),
+        ) else {
+            return;
+        };
+        events.push(Event::OrchestrationPlan {
+            id: id.into(),
+            text: text.into(),
+            append,
+        });
     }
     fn frame(&mut self, v: Value, stdin: &mut impl Write) -> Result<Vec<Event>, String> {
         if self.request.kind == Kind::Codex {
@@ -670,6 +698,17 @@ impl Protocol {
                             &mut events,
                         );
                     }
+                    "item/plan/delta" => {
+                        self.codex_orchestration_plan(&p["itemId"], &p["delta"], true, &mut events)
+                    }
+                    "item/completed" if p["item"]["type"] == "plan" => {
+                        self.codex_orchestration_plan(
+                            &p["item"]["id"],
+                            &p["item"]["text"],
+                            false,
+                            &mut events,
+                        );
+                    }
                     "item/started" if p["item"]["type"] == "agentMessage" => {}
                     "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
                         events.push(Event::Reasoning(p["delta"].as_str().unwrap_or("").into()));
@@ -698,7 +737,18 @@ impl Protocol {
                         let interrupted =
                             matches!(status, "interrupted" | "cancelled" | "canceled")
                                 || v["method"] == "turn/aborted";
+                        if interrupted && self.request.settings.orchestrator {
+                            return Err("Codex interrupted the orchestration proposal.".into());
+                        }
                         for item in p["turn"]["items"].as_array().into_iter().flatten() {
+                            if item["type"] == "plan" {
+                                self.codex_orchestration_plan(
+                                    &item["id"],
+                                    &item["text"],
+                                    false,
+                                    &mut events,
+                                );
+                            }
                             if interrupted && item["type"] == "contextCompaction" {
                                 // An aborted turn can include its unfinished
                                 // compaction item in the final snapshot.
@@ -1780,9 +1830,10 @@ fn run_operation(
                             continue;
                         }
                         pending_bytes += match &event {
-                            Event::Text(text) | Event::Reasoning(text) | Event::Status(text) => {
-                                text.len()
-                            }
+                            Event::Text(text)
+                            | Event::Reasoning(text)
+                            | Event::Status(text)
+                            | Event::OrchestrationPlan { text, .. } => text.len(),
                             Event::Tool(tool) => tool.input.len() + tool.output.len(),
                             Event::Approval(approval) => approval.detail.len(),
                             Event::Question(question) => {
@@ -2036,6 +2087,79 @@ mod tests {
             )
             .unwrap(),
             vec![Event::Done]
+        );
+    }
+    #[test]
+    fn codex_orchestration_routes_native_plan_items_separately_from_chat() {
+        let partial = "<monocode_orchestration>{\"title\":\"Review";
+        let complete = r#"<monocode_orchestration>{"title":"Review","summary":"Inspect","tasks":[{"id":"tests","title":"Check tests","prompt":"Run tests","files":["tests"]}]}</monocode_orchestration>"#;
+        for orchestrator in [true, false] {
+            let mut p = protocol(Kind::Codex);
+            p.request.settings.plan = true;
+            p.request.settings.orchestrator = orchestrator;
+            let mut out = Vec::new();
+            p.frame(
+                json!({"id":2,"result":{"thread":{"id":"review"},"model":"test-model"}}),
+                &mut out,
+            )
+            .unwrap();
+            let start: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(start["method"], "turn/start");
+            assert_eq!(start["params"]["collaborationMode"]["mode"], "plan");
+            assert_eq!(start["params"]["sandboxPolicy"]["type"], "readOnly");
+
+            let chat = p
+                .frame(
+                    json!({"method":"item/agentMessage/delta","params":{"itemId":"chat","delta":partial}}),
+                    &mut out,
+                )
+                .unwrap();
+            assert_eq!(chat, [Event::BeginAssistant, Event::Text(partial.into())]);
+            let plan = |text: &str, append| Event::OrchestrationPlan {
+                id: "proposal".into(),
+                text: text.into(),
+                append,
+            };
+            let delta = p
+                .frame(
+                    json!({"method":"item/plan/delta","params":{"itemId":"proposal","delta":partial}}),
+                    &mut out,
+                )
+                .unwrap();
+            let item = json!({"type":"plan","id":"proposal","text":complete});
+            let snapshot = p
+                .frame(
+                    json!({"method":"item/completed","params":{"item":item}}),
+                    &mut out,
+                )
+                .unwrap();
+            let terminal = p
+                .frame(
+                    json!({"method":"turn/completed","params":{"turn":{"status":"completed","items":[item]}}}),
+                    &mut out,
+                )
+                .unwrap();
+            if orchestrator {
+                assert_eq!(delta, [plan(partial, true)]);
+                assert_eq!(snapshot, [plan(complete, false)]);
+                assert_eq!(terminal, [plan(complete, false), Event::Done]);
+            } else {
+                assert!(delta.is_empty() && snapshot.is_empty());
+                assert_eq!(terminal, [Event::Done]);
+            }
+        }
+    }
+    #[test]
+    fn codex_interrupted_orchestration_does_not_report_success() {
+        let mut p = protocol(Kind::Codex);
+        p.request.settings.orchestrator = true;
+        let reply = p.frame(
+            json!({"method":"turn/aborted","params":{"turn":{"status":"interrupted"}}}),
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            reply.unwrap_err(),
+            "Codex interrupted the orchestration proposal."
         );
     }
     #[test]

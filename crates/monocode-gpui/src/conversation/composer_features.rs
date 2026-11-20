@@ -420,23 +420,6 @@ impl Conversation {
                 .into_any_element(),
         )
     }
-    pub(super) fn finish_orchestration_plan(&mut self, cx: &mut Context<Self>) {
-        if !self.planning_orchestration {
-            return;
-        }
-        self.planning_orchestration = false;
-        let rows = self.transcript.read(cx).source_rows();
-        let start = rows.iter().rposition(|row| row.role == "user").unwrap_or(0);
-        let text: String = rows[start..]
-            .iter()
-            .filter(|row| row.role == "assistant")
-            .map(|row| row.text.as_str())
-            .collect();
-        match monocode_core::orchestration::parse(&text) {
-            Ok(plan) => self.orchestration_plan = Some(plan),
-            Err(error) => self.orchestration_error = Some(error),
-        }
-    }
     pub(crate) fn set_orchestration_progress(
         &mut self,
         progress: Option<String>,
@@ -506,8 +489,26 @@ impl Conversation {
         self.launch_prompt(prompt, cx);
         self.settings.internal_message = internal;
     }
+    fn retry_orchestration_plan(&mut self, cx: &mut Context<Self>) {
+        if self.available_for_managed_run(cx)
+            && let Some(error) = &self.orchestration_error
+        {
+            self.launch_message(
+                monocode_core::follow_up::Message {
+                    mode: Some("orchestrator".into()),
+                    text: format!(
+                        "Regenerate the complete orchestration plan for my original request. Reuse the investigation already done. Correct the previous proposal using this feedback:\n{error}"
+                    ),
+                    ..Default::default()
+                },
+                cx,
+            );
+        }
+    }
     pub(super) fn orchestration_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.orchestration_plan.is_none()
+        let preparing = self.planning_orchestration && self.busy && !self.stopping;
+        if !preparing
+            && self.orchestration_plan.is_none()
             && self.orchestration_error.is_none()
             && self.orchestration_progress.is_none()
         {
@@ -538,6 +539,13 @@ impl Conversation {
                             .unwrap_or_else(|| "Orchestrator".into()),
                     ),
             );
+        if preparing {
+            card = card.child(
+                div()
+                    .text_color(content(0.6))
+                    .child("Preparing assignments…"),
+            );
+        }
         if let Some(plan) = &self.orchestration_plan {
             card = card
                 .child(
@@ -597,12 +605,26 @@ impl Conversation {
             card = card
                 .child(div().text_color(tint(AMBER_400, 0.9)).child(error.clone()))
                 .child(
-                    tool_pill("dismiss-plan-error", "Dismiss")
-                        .child("Dismiss")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.orchestration_error = None;
-                            cx.notify();
-                        })),
+                    div()
+                        .flex()
+                        .gap_2()
+                        .when(self.available_for_managed_run(cx), |d| {
+                            d.child(
+                                tool_pill("retry-orchestration", "Retry plan")
+                                    .child("Retry plan")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.retry_orchestration_plan(cx);
+                                    })),
+                            )
+                        })
+                        .child(
+                            tool_pill("dismiss-plan-error", "Dismiss")
+                                .child("Dismiss")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.orchestration_error = None;
+                                    cx.notify();
+                                })),
+                        ),
                 );
         }
         if let Some(progress) = &self.orchestration_progress {
