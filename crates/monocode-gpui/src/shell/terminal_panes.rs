@@ -714,7 +714,9 @@ mod tests {
         visual.simulate_keystrokes("cmd-shift-j");
         visual.run_until_parked();
         let tab = window
-            .update(&mut visual, |shell, _, _| shell.workspace.tab_of(b).unwrap())
+            .update(&mut visual, |shell, _, _| {
+                shell.workspace.tab_of(b).unwrap()
+            })
             .unwrap();
         let boundary = |visual: &mut VisualTestContext| {
             window
@@ -727,16 +729,32 @@ mod tests {
         let sash = visual.debug_bounds("pane-sash-0").unwrap().center();
         // Well clear of the middle the sash follows the pointer.
         visual.simulate_mouse_down(sash, MouseButton::Left, Default::default());
-        visual.simulate_mouse_move(sash + point(px(80.), px(0.)), MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            sash + point(px(80.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
         let (at, snapped) = boundary(&mut visual);
         assert!(at > 0.55 && !snapped);
         // Within a few pixels of it, it settles exactly on the middle.
-        visual.simulate_mouse_move(sash + point(px(7.), px(0.)), MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            sash + point(px(7.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
         let (at, snapped) = boundary(&mut visual);
         assert_eq!(at, 0.5);
         assert!(snapped);
-        visual.simulate_mouse_move(sash - point(px(90.), px(0.)), MouseButton::Left, Default::default());
-        visual.simulate_mouse_up(sash - point(px(90.), px(0.)), MouseButton::Left, Default::default());
+        visual.simulate_mouse_move(
+            sash - point(px(90.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        visual.simulate_mouse_up(
+            sash - point(px(90.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
         visual.run_until_parked();
         assert!(boundary(&mut visual).0 < 0.45);
         // A double-click on the sash evens the panes back out.

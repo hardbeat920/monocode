@@ -68,7 +68,7 @@ Select and input labels are not shown: make options and placeholders self-explan
 visual.canvas(shapes,{width?,height?})
 Canvas shapes: visual.rect(x,y,w,h,{color?}), circle(x,y,r,{color?}),
 line(x1,y1,x2,y2,{color?,width?}), polyline([[x,y],...],{color?,width?}),
-label(x,y,text,{color?}).
+label(x,y,text,{color?}): x is the left edge of the text and y is its baseline.
 visual.scene(objects,{width?,height?,camera?})
 Scene objects: visual.object({kind:'box'|'sphere'|'cylinder'|'cone'|'plane'},
 {position:[x,y,z],rotation:[x,y,z],scale:[x,y,z],color:'accent'}).

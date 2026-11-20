@@ -20,7 +20,7 @@ Pass --input FILE or --input - to read a JSON object instead.
 Actions:
 models.list {}
 sessions.list {project?}
-sessions.read {sessionId,project?,before?,limit?,maxChars?}
+sessions.read {sessionId,project?,before?,limit?,maxChars?,charOffset?}
 sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMode?,title?,draft?,reveal?,workspaceMode?,worktreeBase?,worktreeCwd?,placement?,besideSessionId?,notifyOnComplete?}
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
@@ -36,7 +36,7 @@ memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,unti
 habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
 chat.card {type:"pr",repo?,number,note?} / {type:"session",sessionId,note?} / {type:"choices",options:[text]} / {type:"habit",name,instructions,schedule}
 Ordinary Operator sessions are visible in project history. Mono launches follow its Show started sessions preference. reveal defaults to false and controls navigation, not history visibility. placement right/down explicitly opens a split beside besideSessionId (or the caller).
-sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before.
+sessions.read returns up to three prose exchanges and nextBefore for older turns; pass that turn ID as before. maxChars (200-6000) caps each message; a longer one has nextCharOffset, so read on by repeating the call with that value as charOffset (without limit, charOffset reads only the latest exchange).
 notes.write requires body for a new note; existing notes accept title, body or tags independently.
 Artifacts, memory, soul, habits, cards and notifyOnComplete:true require a Mono.
 The CLI returns {ok,result,requestId}. Retry uncertain mutations with the same request ID and identical input.

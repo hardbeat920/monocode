@@ -297,21 +297,288 @@ fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
             })
             .unwrap();
         visual.run_until_parked();
-        assert!(
-            visual.debug_bounds(page).is_none(),
-            "returning to a Mono must not replay an old page's exit"
-        );
+        let tab = if kind == "session" {
+            OverviewTab::Sessions
+        } else {
+            OverviewTab::Documents
+        };
         assert_eq!(
-            visual.debug_bounds("mono-detail-base").unwrap().left(),
-            stack.left()
+            visual.debug_bounds(page).unwrap().left(),
+            stack.left(),
+            "returning to a Mono shows its remembered page in place, without sliding"
         );
+        assert_eq!(s.manager.read_with(visual, |m, _| m.overview_tab), tab);
     }
 }
+#[gpui::test]
+fn each_mono_remembers_its_details_tab_and_open_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let session = s
+        .window
+        .update(cx, |shell, _, _| shell.workspace.active.unwrap())
+        .unwrap();
+    let action = json!({"type":"session", "sessionId":session});
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &action, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+    let view = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            (m.active.clone().unwrap(), m.overview_tab, m.route.clone())
+        })
+    };
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Overview, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.select_overview(OverviewTab::Habits, cx);
+                m.open(&s.id, w, cx);
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view(cx),
+        (
+            s.id.clone(),
+            OverviewTab::Sessions,
+            Some(Route::Session(session))
+        )
+    );
+    // An archived session falls back to the list; the other Mono keeps its tab.
+    s.window
+        .update(cx, |shell, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&other, w, cx));
+            shell.mono_remove(session, false, w, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+    // A card from another Mono's chat switches to that Mono's own view and
+    // leaves the one it came from intact.
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert_eq!(view(cx), (other.clone(), OverviewTab::Habits, None));
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    assert_eq!(view(cx), (s.id.clone(), OverviewTab::Sessions, None));
+}
+
+#[gpui::test]
+fn a_card_switching_monos_shows_the_target_monos_habits(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let mut h = Habit::new(
+        "Daily review".into(),
+        "Review changes.".into(),
+        habits::Schedule::default(),
+        monocode_core::time::now_ms(),
+    )
+    .unwrap();
+    h.id = "target-habit".into();
+    habits::update(&s.root, &s.id, |all| {
+        all.push(h.clone());
+        Ok(())
+    })
+    .unwrap();
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.open(&s.id, w, cx);
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(s.manager.read_with(cx, |m, _| m.habits.is_empty()));
+    let ids = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.habits.iter().map(|h| h.id.clone()).collect::<Vec<_>>()
+        })
+    };
+    // Back on the first Mono, then a card from the second's chat switches over.
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(ids(cx), vec!["target-habit".to_string()]);
+    let pr = json!({"type":"pr", "repo":"o/r", "number":1});
+    s.manager.update(cx, |m, cx| m.card_action(&other, &pr, cx));
+    assert!(
+        ids(cx).is_empty(),
+        "the previous Mono's habits must not linger"
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        s.manager.read_with(cx, |m, _| m.active.clone()),
+        Some(other)
+    );
+    assert!(ids(cx).is_empty());
+}
+
+#[gpui::test]
+fn a_document_deleted_by_the_desktop_while_its_mono_is_inactive_returns_to_documents(
+    cx: &mut TestAppContext,
+) {
+    let s = setup_shared(cx);
+    let doc = "saved-document";
+    // The desktop app writes the same SQLite file through its own connection.
+    let desktop =
+        rusqlite::Connection::open(std::path::Path::new(&s.project).join("native.sqlite")).unwrap();
+    let original = locked(&s.store)
+        .unwrap()
+        .persisted_session_id(s.session)
+        .unwrap();
+    desktop
+        .execute(
+            "INSERT INTO notes(id,slug,title,body,tags_json,created_at,updated_at,content_kind,artifact_kind)
+             VALUES(?1,?1,'Saved document','# Saved\n\nBody.','[]',10,20,'artifact','document')",
+            [doc],
+        )
+        .unwrap();
+    let blocks = json!([{"id":"reply","role":"assistant","text":"Saved it.",
+        "artifactCards":[{"id":doc,"kind":"document","title":"Saved document","summary":""}]}]);
+    desktop
+        .execute(
+            "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+            rusqlite::params![original, blocks.to_string()],
+        )
+        .unwrap();
+    s.manager.update(cx, |m, cx| m.refresh_work(&s.id, cx));
+    cx.run_until_parked();
+    let listed = |cx: &mut TestAppContext| {
+        s.manager.read_with(cx, |m, _| {
+            m.roster
+                .get(&s.id)
+                .unwrap()
+                .documents
+                .iter()
+                .any(|d| d.id == doc)
+        })
+    };
+    assert!(listed(cx), "the chat's card lists the saved document");
+
+    // Open it on this Mono, then switch to another.
+    let action = json!({"type":"document", "documentId":doc});
+    s.manager
+        .update(cx, |m, cx| m.card_action(&s.id, &action, cx));
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.route, Some(Route::Document(doc.into())));
+        assert!(m.work.documents.contains_key(doc));
+    });
+    let other = s
+        .window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.create(vec![s.project.clone()], w, cx);
+                m.active.clone().unwrap()
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_ne!(other, s.id);
+
+    // The desktop deletes the artifact (src-tauri/src/artifacts.rs). Its card
+    // stays in the transcript, so the Mono keeps a placeholder entry.
+    desktop
+        .execute(
+            "DELETE FROM notes WHERE id = ?1 AND content_kind = 'artifact'",
+            [doc],
+        )
+        .unwrap();
+    s.window
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.open(&s.id, w, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(listed(cx), "the placeholder entry survives the deletion");
+    s.manager.read_with(cx, |m, _| {
+        assert_eq!(m.active.as_deref(), Some(s.id.as_str()));
+        assert_eq!(m.overview_tab, OverviewTab::Documents);
+        assert_eq!(m.route, None, "the deleted document's page is not restored");
+        assert!(!m.work.documents.contains_key(doc));
+        assert!(!m.documents.contains_key(doc));
+        assert!(
+            m.panel_views
+                .values()
+                .all(|v| v.route != Some(Route::Document(doc.into())))
+        );
+    });
+}
+
+#[gpui::test]
+fn an_unavailable_document_page_keeps_its_back_control(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        m.overview_tab = OverviewTab::Documents;
+        m.route = Some(Route::Document("never-loaded".into()));
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let back = visual
+        .debug_bounds("mono-page-back")
+        .expect("an unavailable document still offers Back");
+    visual.simulate_click(back.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(s.manager.read_with(visual, |m, _| m.route.clone()), None);
+}
+
+#[test]
+fn restored_panel_views_keep_only_pages_whose_subject_exists() {
+    let view = |route| PanelView {
+        tab: OverviewTab::Habits,
+        previous: OverviewTab::Overview,
+        route: Some(route),
+    };
+    let missing = view(Route::Session(7)).restored(|_| false);
+    assert_eq!((missing.tab, missing.route), (OverviewTab::Habits, None));
+    let kept = view(Route::Document("d".into())).restored(|_| true);
+    assert_eq!(kept.route, Some(Route::Document("d".into())));
+    assert_eq!(
+        view(Route::Habit("h".into())).restored(|_| true).route,
+        None
+    );
+}
+
 fn setup(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open(path).unwrap())
+}
+/// `setup` over the desktop's shared database, at `<project>/native.sqlite`.
+fn setup_shared(cx: &mut TestAppContext) -> Setup {
+    setup_with(cx, |path| Store::open_monocode(path).unwrap())
+}
+fn setup_with(cx: &mut TestAppContext, open: impl FnOnce(&std::path::Path) -> Store) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-monos-{}", mono::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
-    let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
+    let store = Arc::new(Mutex::new(open(&dir.join("native.sqlite"))));
     let db = store.clone();
     let cwd = project.clone();
     let window = cx.update(|cx| {
@@ -583,6 +850,81 @@ fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &m
     });
     cx.run_until_parked();
     cx.update(|cx| assert!(!s.manager.read(cx).floating_shows(&s.id, cx)));
+}
+
+#[gpui::test]
+fn failed_completion_focus_scrolls_after_moving_between_windows(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let workspace: gpui::AnyWindowHandle = s.window.into();
+    workspace
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                for id in ["first", "second"] {
+                    m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                        id: id.into(),
+                        text: "completion".into(),
+                        internal: true,
+                        sent_at: None,
+                        error: Some("Long failure. ".repeat(500)),
+                        attachments: Vec::new(),
+                    });
+                }
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let mut main = gpui::VisualTestContext::from_window(workspace, cx);
+    main.run_until_parked();
+    main.refresh().unwrap();
+    s.manager
+        .update(&mut main, |m, cx| m.open_floating(s.id.clone(), cx));
+    main.run_until_parked();
+    let panel = s.manager.read_with(&main, |m, _| m.floating[0]);
+    let mut floating = gpui::VisualTestContext::from_window(panel, cx);
+    panel
+        .update(&mut floating, |_, w, _| w.activate_window())
+        .unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let chat = s
+        .manager
+        .read_with(&floating, |m, _| m.chats[&s.id].clone());
+    let second = chat.read_with(&floating, |c, _| c.queue_test_focus("second", 0));
+    panel
+        .update(&mut floating, |_, w, cx| w.focus(&second, cx))
+        .unwrap();
+    floating.refresh().unwrap();
+    floating.run_until_parked();
+    floating.refresh().unwrap();
+    let list = floating.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = floating.debug_bounds("mono-queue-retry-second").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "floating action {retry:?} outside {list:?}"
+    );
+
+    s.manager
+        .update(&mut floating, |m, cx| m.hide_floating(&s.id, cx));
+    floating.run_until_parked();
+    workspace
+        .update(&mut main, |_, w, _| w.activate_window())
+        .unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let first = chat.read_with(&main, |c, _| c.queue_test_focus("first", 0));
+    workspace
+        .update(&mut main, |_, w, cx| w.focus(&first, cx))
+        .unwrap();
+    main.refresh().unwrap();
+    main.run_until_parked();
+    main.refresh().unwrap();
+    let list = main.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = main.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "workspace action {retry:?} outside {list:?}"
+    );
 }
 
 #[gpui::test]
@@ -895,6 +1237,10 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
         visual.debug_bounds("mono-internal-queue").is_none(),
         "a routine completion must not flash a Pending card in the composer"
     );
+    assert!(
+        visual.debug_bounds("mono-internal-queue-list").is_none(),
+        "no invisible queue tab stop"
+    );
     s.manager.update(visual, |m, cx| {
         m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Delivery failed".into());
         m.configure_chat(&s.id, cx);
@@ -904,6 +1250,267 @@ fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppC
     assert!(
         visual.debug_bounds("mono-internal-queue").is_some(),
         "a failed notification keeps its retry and discard controls"
+    );
+}
+
+#[gpui::test]
+fn long_completion_error_keeps_composer_in_view(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    id: "completion".into(),
+                    text: "completion".into(),
+                    internal: true,
+                    sent_at: None,
+                    error: Some("Long failure message. ".repeat(500)),
+                    attachments: Vec::new(),
+                });
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let composer = visual.debug_bounds("mono-composer").unwrap();
+    let viewport = s
+        .window
+        .update(visual, |_, w, _| w.viewport_size())
+        .unwrap();
+    assert!(
+        composer.bottom() <= viewport.height,
+        "composer {composer:?}, viewport {viewport:?}"
+    );
+}
+
+#[gpui::test]
+fn failed_completion_keyboard_recovery_reveals_controls(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                for id in ["first", "second"] {
+                    m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                        id: id.into(),
+                        text: "completion".into(),
+                        internal: true,
+                        sent_at: None,
+                        error: Some("Long failure. ".repeat(500)),
+                        attachments: Vec::new(),
+                    });
+                }
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, _| w.activate_window())
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let chat = s.manager.read_with(visual, |m, _| m.chats[&s.id].clone());
+    let first_retry = chat.read_with(visual, |c, _| c.queue_test_focus("first", 0));
+    let first_discard = chat.read_with(visual, |c, _| c.queue_test_focus("first", 1));
+    let second_retry = chat.read_with(visual, |c, _| c.queue_test_focus("second", 0));
+    let second_discard = chat.read_with(visual, |c, _| c.queue_test_focus("second", 1));
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    let before = visual.debug_bounds("mono-queue-retry-first").unwrap().top();
+    visual.simulate_keystrokes("down");
+    visual.refresh().unwrap();
+    let after = visual.debug_bounds("mono-queue-retry-first").unwrap().top();
+    assert!(after < before, "down must scroll the focused failure list");
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(first_retry.is_focused(w)))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(first_discard.is_focused(w)))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(second_retry.is_focused(w)))
+        .unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-second").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "{retry:?} outside {list:?}"
+    );
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "third".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("new failure".into()),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list_focus = chat.read_with(visual, |c, _| c.queue_test_list_focus());
+    s.window
+        .update(visual, |_, w, _| {
+            assert!(list_focus.is_focused(w), "focus follows the reset list")
+        })
+        .unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let first = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "third", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus(&second_discard, cx))
+        .unwrap();
+    s.window
+        .update(visual, |_, w, _| assert!(second_discard.is_focused(w)))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("enter");
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(visual, |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("enter").unwrap(),
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(!s.manager.read_with(visual, |m, _| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .any(|m| m.id == "second")
+    }));
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "remaining action {retry:?} outside {list:?}"
+    );
+    chat.update(visual, |c, _| c.busy = true);
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    handle
+        .update(visual, |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("space").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+                cx,
+            );
+            w.dispatch_event(
+                gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("space").unwrap(),
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(s.manager.read_with(visual, |m, _| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .any(|m| m.id == "first" && m.error.is_none())
+    }));
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Long failure. ".repeat(500));
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let first_retry = chat.read_with(visual, |c, _| c.queue_test_focus("first", 0));
+    s.window
+        .update(visual, |_, w, cx| w.focus(&first_retry, cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    s.window
+        .update(visual, |_, w, cx| w.focus_prev(cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    visual.simulate_keystrokes("pagedown");
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-first").unwrap();
+    assert!(
+        retry.top() < list.top(),
+        "test must scroll before clearing the queue"
+    );
+    s.manager
+        .update(visual, |m, cx| m.queue_changed(&s.id, "first", true, cx));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("mono-internal-queue-list").is_none());
+    let input_focus = chat.read_with(visual, |c, cx| c.input.focus_handle(cx));
+    s.window
+        .update(visual, |_, w, _| assert!(input_focus.is_focused(w)))
+        .unwrap();
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+            id: "new".into(),
+            text: "completion".into(),
+            internal: true,
+            sent_at: None,
+            error: Some("Long failure. ".repeat(500)),
+            attachments: Vec::new(),
+        });
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let list = visual.debug_bounds("mono-internal-queue-list").unwrap();
+    let retry = visual.debug_bounds("mono-queue-retry-new").unwrap();
+    assert!(
+        retry.top() >= list.top() && retry.bottom() <= list.bottom(),
+        "new action {retry:?} outside {list:?}"
     );
 }
 
@@ -1945,4 +2552,268 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     search(visual, "mono-document-search", "release");
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
+}
+
+/// A delegated session interrupted by an app restart reports its turn as
+/// unfinished, and the read call it offers names the project a multi-project
+/// Mono needs.
+#[gpui::test]
+fn completion_report_flags_an_interrupted_child_and_names_its_project(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let tool = serde_json::to_string(&monocode_core::tool::ToolCall::new("t", "Read")).unwrap();
+    let progress = format!("Now reading main.rs...{}", " more".repeat(3000));
+    let child = {
+        let mut store = s.store.lock().unwrap();
+        let child = store.create("codex", &s.project).unwrap().id;
+        let mut transcript = monocode_core::transcript::Transcript::default();
+        for (role, text) in [
+            ("user", "Investigate"),
+            ("assistant", progress.as_str()),
+            ("tool", tool.as_str()),
+        ] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        store.write_rows(child, 0, &transcript.rows).unwrap();
+        // The receipt opened when the turn started; the app quit before closing it.
+        let mut settings = store.agent_settings(child).unwrap().unwrap_or_default();
+        let turn = transcript.rows.iter().rposition(|r| r.is_prompt()).unwrap() + 1;
+        settings.turns.insert(
+            turn,
+            monocode_core::agent::TurnInfo {
+                started_at: Some(1),
+                ..Default::default()
+            },
+        );
+        store.save_agent_settings(child, &settings).unwrap();
+        child
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.settings.usage_limit = Some(Default::default())
+        });
+        let mono = m.roster.get_mut(&s.id).unwrap();
+        mono.projects.push("/elsewhere/other".into());
+        mono.launches.push(monocode_core::mono::Launch {
+            session_id: child,
+            cwd: s.project.clone(),
+            title: "Child".into(),
+            harness: "codex".into(),
+            model: None,
+            origin_turn: ((s.session as u64) << 32) | 1,
+            notify_on_complete: true,
+            completed: false,
+            dismissed: false,
+        });
+        m.check_completions(cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        let mono = m.roster.get(&s.id).unwrap();
+        assert!(mono.launches.iter().all(|l| l.completed));
+        let report = mono
+            .outbox
+            .iter()
+            .find(|message| message.text.starts_with("[Delegated work completed]"))
+            .map(|message| message.text.clone())
+            .expect("the completion report is queued for the Mono");
+        assert!(
+            report.contains(&format!(
+                "Session {child}: Child\n(its latest turn did not finish: the app quit or restarted while it was running. This is the last message it wrote, not a final answer:)"
+            )),
+            "{report}"
+        );
+        let json = &report[report.find("sessions.read {").unwrap() + "sessions.read ".len()..];
+        let json = &json[..=json.find('}').unwrap()];
+        let input: Value = serde_json::from_str(json).unwrap();
+        monocode_core::mono::api::validate("sessions.read", &input).unwrap();
+        assert_eq!(mono.project(input["project"].as_str()).unwrap(), s.project);
+        assert_eq!(input["sessionId"], child);
+    });
+}
+
+/// A report is read in the background after the readiness check. If the child
+/// changes in between, `disturb` (applied right after the check) must hold the
+/// report back, and `settle` lets the next check deliver a fresh one.
+fn completion_is_held_until_the_child_settles(
+    cx: &mut TestAppContext,
+    disturb: impl Fn(&mut crate::conversation::Conversation),
+    settle: impl Fn(&mut crate::conversation::Conversation),
+) {
+    let s = setup(cx);
+    let child = {
+        let mut store = s.store.lock().unwrap();
+        let child = store.create("codex", &s.project).unwrap().id;
+        let mut transcript = monocode_core::transcript::Transcript::default();
+        for (role, text) in [("user", "Investigate"), ("assistant", "THE ANSWER")] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        store.write_rows(child, 0, &transcript.rows).unwrap();
+        child
+    };
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.mono_track_sessions(vec![child], cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let view = s
+        .window
+        .update(cx, |shell, _, cx| shell.mono_ensure_session(child, cx))
+        .unwrap()
+        .unwrap();
+    cx.run_until_parked();
+    let delivered = |m: &Monos| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .any(|message| message.text.starts_with("[Delegated work completed]"))
+    };
+    let completed = |m: &Monos| {
+        m.roster
+            .get(&s.id)
+            .unwrap()
+            .launches
+            .iter()
+            .all(|l| l.completed)
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.settings.usage_limit = Some(Default::default())
+        });
+        m.roster
+            .get_mut(&s.id)
+            .unwrap()
+            .launches
+            .push(monocode_core::mono::Launch {
+                session_id: child,
+                cwd: s.project.clone(),
+                title: "Child".into(),
+                harness: "codex".into(),
+                model: None,
+                origin_turn: ((s.session as u64) << 32) | 1,
+                notify_on_complete: true,
+                completed: false,
+                dismissed: false,
+            });
+        m.check_completions(cx);
+        view.update(cx, |chat, _| disturb(chat));
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert!(
+            !delivered(m),
+            "the report must describe the child's latest turn"
+        );
+        assert!(!completed(m));
+    });
+    view.update(cx, |chat, _| settle(chat));
+    s.manager.update(cx, |m, cx| m.check_completions(cx));
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        assert!(delivered(m), "once the turn settles, the group reports");
+        assert!(completed(m));
+    });
+}
+
+/// A turn that starts after the readiness check, while the report is being
+/// read, holds the report back until that turn settles.
+#[gpui::test]
+fn completion_waits_for_a_turn_started_while_its_report_was_read(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(
+        cx,
+        |chat| chat.busy = true,
+        |chat| chat.busy = false,
+    );
+}
+
+/// A whole turn can start and finish between the readiness check and delivery,
+/// so busy is never seen. Its updated_at moved, so the held report is dropped
+/// and the next check reports the newer turn.
+#[gpui::test]
+fn completion_drops_a_report_when_a_newer_turn_ran_while_it_was_read(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(cx, |chat| chat.summary.updated_at += 1, |_| {});
+}
+
+/// A stop clears busy at once, but the runtime settles the rows and the
+/// receipt later; until then the child isn't ready to report.
+#[gpui::test]
+fn completion_waits_for_a_stop_to_settle(cx: &mut TestAppContext) {
+    completion_is_held_until_the_child_settles(
+        cx,
+        |chat| chat.mono_set_stopping(true),
+        |chat| chat.mono_set_stopping(false),
+    );
+}
+
+/// A native stop leaves no row. Its closed receipt records the stop, so a
+/// child stopped before an app restart still reports its turn as unfinished.
+#[gpui::test]
+fn completion_report_flags_a_child_stopped_before_a_restart(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let progress = "I will investigate this now";
+    let child = {
+        let mut store = s.store.lock().unwrap();
+        let child = store.create("codex", &s.project).unwrap().id;
+        let mut transcript = monocode_core::transcript::Transcript::default();
+        for (role, text) in [("user", "Investigate"), ("assistant", progress)] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        store.write_rows(child, 0, &transcript.rows).unwrap();
+        let mut settings = store.agent_settings(child).unwrap().unwrap_or_default();
+        settings.turns.insert(
+            1,
+            monocode_core::agent::TurnInfo {
+                started_at: Some(1),
+                duration_known: true,
+                stopped: true,
+                ..Default::default()
+            },
+        );
+        store.save_agent_settings(child, &settings).unwrap();
+        child
+    };
+    s.manager.update(cx, |m, cx| {
+        m.chats[&s.id].update(cx, |chat, _| {
+            chat.settings.usage_limit = Some(Default::default())
+        });
+        m.roster
+            .get_mut(&s.id)
+            .unwrap()
+            .launches
+            .push(monocode_core::mono::Launch {
+                session_id: child,
+                cwd: s.project.clone(),
+                title: "Child".into(),
+                harness: "codex".into(),
+                model: None,
+                origin_turn: ((s.session as u64) << 32) | 1,
+                notify_on_complete: true,
+                completed: false,
+                dismissed: false,
+            });
+        m.check_completions(cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |m, _| {
+        let report = m
+            .roster
+            .get(&s.id)
+            .unwrap()
+            .outbox
+            .iter()
+            .find(|message| message.text.starts_with("[Delegated work completed]"))
+            .map(|message| message.text.clone())
+            .expect("the completion report is queued for the Mono");
+        assert!(
+            report.ends_with(&format!(
+                "Session {child}: Child\n(its latest turn did not finish: it was stopped. This is the last message it wrote, not a final answer:)\n\n{progress}"
+            )),
+            "{report}"
+        );
+    });
 }
