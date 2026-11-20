@@ -527,6 +527,7 @@ fn rich_inline(
             children.push(
                 div()
                     .id(SharedString::from(format!("{id}-code-{run_ix}")))
+                    .debug_selector(move || format!("rich-code-{run_ix}"))
                     .flex()
                     .items_center()
                     .gap_1()
@@ -558,7 +559,9 @@ fn rich_inline(
                             })
                             .child(crate::activity::file_icon(&text, 14.))
                     })
-                    .child(child)
+                    // As a flex item, text would keep its unwrapped width and
+                    // spill past the chip in narrow table cells; let it wrap.
+                    .child(div().min_w_0().child(child))
                     .into_any_element(),
             );
             offset += run.text.len();
@@ -836,6 +839,7 @@ pub(crate) fn body_selected(
                             .children(columns.iter().enumerate().map(|(col, width)| {
                                 let cell = cells.get(col).map(Vec::as_slice).unwrap_or_default();
                                 div()
+                                    .debug_selector(move || format!("table-cell-{ix}-{col}"))
                                     .w(px(*width))
                                     .min_w(px(160.))
                                     .flex_grow(*width)
@@ -1164,6 +1168,66 @@ mod rich_wrap_tests {
         assert!(
             prose.size.height > px(24.),
             "long prose did not wrap: {prose:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod table_wrap_tests {
+    use super::*;
+    use crate::markdown_model::InlineStyle;
+    use gpui::{Context, TestAppContext};
+
+    const PATH: &str = "/Users/me/workspace/project/.worktrees/branch-name/mash1/loyalty_stored_value/docs/prd/card-programs.md";
+
+    fn cell(text: &str, code: bool) -> Vec<InlineRun> {
+        vec![InlineRun {
+            text: text.into(),
+            style: InlineStyle {
+                code,
+                ..Default::default()
+            },
+        }]
+    }
+
+    struct Fixture;
+    impl gpui::Render for Fixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let row = rows(&Block::Table {
+                header: vec![cell("Path", false), cell("BRs", false)],
+                rows: vec![vec![cell(PATH, true), cell("New: BR-19, BR-20", false)]],
+                align: vec![TableAlign::Left, TableAlign::Left],
+            })
+            .remove(0);
+            div().w(px(420.)).child(body(
+                &row,
+                "table".into(),
+                Tone::Normal,
+                None,
+                Instant::now(),
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn long_inline_code_wraps_inside_its_table_cell(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Fixture))
+                .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let cell = visual.debug_bounds("table-cell-1-0").unwrap();
+        let next = visual.debug_bounds("table-cell-1-1").unwrap();
+        let code = visual.debug_bounds("rich-code-0").unwrap();
+        assert!(
+            code.right() <= cell.right() && code.right() <= next.left(),
+            "code {code:?} overflows cell {cell:?} into {next:?}"
+        );
+        assert!(
+            code.size.height > px(24.),
+            "long inline code did not wrap: {code:?}"
         );
     }
 }
