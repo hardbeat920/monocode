@@ -720,11 +720,18 @@ fn set_enabled_in(
     enabled: bool,
     now: i64,
 ) -> Result<Automation, String> {
-    let mut automation = get(conn, id)?.ok_or("Automation not found.")?;
-    automation.enabled = enabled;
-    automation.updated_at = now;
-    write_automation(conn, &automation)?;
-    Ok(automation)
+    let changed = conn
+        .execute(
+            "UPDATE automations SET enabled = ?1, updated_at = ?2,
+         definition_json = json_set(definition_json, '$.enabled', json(?3), '$.updatedAt', ?2)
+         WHERE id = ?4",
+            params![enabled, now, if enabled { "true" } else { "false" }, id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Automation not found.".into());
+    }
+    get(conn, id)?.ok_or_else(|| "Automation not found.".into())
 }
 
 #[tauri::command(async)]
@@ -1091,6 +1098,31 @@ mod tests {
             "triggers":[{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 9 * * *"}]}"#;
         let automation: Automation = serde_json::from_str(json).unwrap();
         write_automation(&conn, &automation).unwrap();
+        // A resume before the occurrence also preserves the stored schedule.
+        assert_eq!(
+            set_enabled_in(&conn, "a1", false, 100).unwrap().next_run_at,
+            1000
+        );
+        assert_eq!(
+            set_enabled_in(&conn, "a1", true, 200).unwrap().next_run_at,
+            1000
+        );
+        // Preserve fields written by another connection, including unknown JSON fields.
+        conn.execute("UPDATE automations SET next_run_at = 2000, definition_json = json_set(definition_json, '$.nextRunAt', 2000, '$.otherWriter', 'kept') WHERE id = 'a1'", []).unwrap();
+        set_enabled_in(&conn, "a1", false, 300).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT definition_json FROM automations WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&raw).unwrap()["otherWriter"],
+            "kept"
+        );
+        assert_eq!(get(&conn, "a1").unwrap().unwrap().next_run_at, 2000);
+        conn.execute("UPDATE automations SET next_run_at = 1000, definition_json = json_set(definition_json, '$.nextRunAt', 1000) WHERE id = 'a1'", []).unwrap();
         // The stored occurrence (1000) is long past, like a custom automation paused for days.
         let paused = set_enabled_in(&conn, "a1", false, 5_000_000).unwrap();
         assert!(!paused.enabled);
@@ -1100,6 +1132,51 @@ mod tests {
         assert_eq!(stored.next_run_at, 1000);
         assert_eq!(stored.triggers.unwrap()[0].cron, "0 9 * * *");
         assert!(set_enabled_in(&conn, "missing", true, 1).is_err());
+    }
+
+    #[test]
+    fn concurrent_schedule_update_survives_resume() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let path =
+            std::env::temp_dir().join(format!("automation-concurrency-{}.sqlite", Uuid::new_v4()));
+        let conn = Connection::open(&path).unwrap();
+        ensure_tables(&conn).unwrap();
+        let json = r#"{"id":"a1","name":"n","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":false,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1}"#;
+        let automation: Automation = serde_json::from_str(json).unwrap();
+        write_automation(&conn, &automation).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE; UPDATE automations SET next_run_at = 2000, definition_json = json_set(definition_json, '$.nextRunAt', 2000, '$.name', 'updated') WHERE id = 'a1';").unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let other_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let other = Connection::open(other_path).unwrap();
+            other.busy_timeout(Duration::from_secs(5)).unwrap();
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(set_enabled_in(&other, "a1", true, 3000))
+                .unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        conn.execute_batch("COMMIT").unwrap();
+        let resumed = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(resumed.enabled);
+        assert_eq!(resumed.next_run_at, 2000);
+        assert_eq!(resumed.name, "updated");
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

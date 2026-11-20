@@ -1048,21 +1048,31 @@ fn is_fixed_time_cron(expression: &str) -> bool {
 /// (`*/30 * * * *`, `0 6-20/2 * * *`) keep running on every pass.
 fn next_cron_at<Tz: TimeZone>(expression: &str, start: &DateTime<Tz>) -> Option<DateTime<Tz>> {
     let cron = parse_cron(expression).ok()?;
-    let fixed = is_fixed_time_cron(expression);
-    let mut from = start.clone();
-    // A repeated hour is at most a few occurrences long; the bound only guards against loops.
-    for _ in 0..8 {
-        let next = cron.find_next_occurrence(&from, false).ok()?;
-        let first_pass = start
-            .timezone()
-            .from_local_datetime(&next.naive_local())
-            .earliest();
-        if !fixed || first_pass.as_ref() == Some(&next) {
-            return Some(next);
-        }
-        from = next;
+    if !is_fixed_time_cron(expression) {
+        return cron.find_next_occurrence(start, false).ok();
     }
-    None
+
+    // Croner treats lists as interval jobs. Search each fixed time independently so
+    // repeated and missing wall times follow the same policy as daily schedules.
+    let fields: Vec<_> = expression.split_whitespace().collect();
+    let mut earliest = None;
+    for minute in fields[0].split(',') {
+        for hour in fields[1].split(',') {
+            let single = format!(
+                "{} {} {} {} {}",
+                minute, hour, fields[2], fields[3], fields[4]
+            );
+            if let Some(next) = parse_cron(&single)
+                .ok()
+                .and_then(|cron| cron.find_next_occurrence(start, false).ok())
+            {
+                if earliest.as_ref().is_none_or(|current| next < *current) {
+                    earliest = Some(next);
+                }
+            }
+        }
+    }
+    earliest
 }
 
 const MAX_CRON_LEN: usize = 200;
@@ -1150,7 +1160,11 @@ impl AutomationTrigger {
     }
     /// Calendar arithmetic in the user's time zone, including daylight-saving changes.
     pub fn next_at(&self, after: i64) -> i64 {
-        let Some(start) = Local.timestamp_millis_opt(after).single() else {
+        self.next_at_in_timezone(after, &Local)
+    }
+
+    fn next_at_in_timezone<Tz: TimeZone>(&self, after: i64, timezone: &Tz) -> i64 {
+        let Some(start) = timezone.timestamp_millis_opt(after).single() else {
             return after.saturating_add(86_400_000);
         };
         if self.schedule_kind == "custom" {
@@ -1163,7 +1177,7 @@ impl AutomationTrigger {
             // Enumerating actual clock minutes also handles repeated/nonexistent DST hours.
             let mut candidate = (after / 60_000 + 1) * 60_000;
             for _ in 0..180 {
-                if Local
+                if timezone
                     .timestamp_millis_opt(candidate)
                     .single()
                     .is_some_and(|date| date.minute() == self.minute.clamp(0, 59) as u32)
@@ -1193,7 +1207,7 @@ impl AutomationTrigger {
                 // valid clock minute after the requested wall time, as Date.setHours does.
                 for gap in 0..=180 {
                     let target = naive + chrono::Duration::minutes(gap);
-                    if let Some(candidate) = Local.from_local_datetime(&target).earliest() {
+                    if let Some(candidate) = timezone.from_local_datetime(&target).earliest() {
                         let at = candidate.timestamp_millis();
                         if at > after {
                             return at;
@@ -1727,12 +1741,22 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let list = sequence("30 1,3 * * *");
-        // The same times written as two separate daily schedules, merged.
-        let mut separate = sequence("30 1 * * *");
-        separate.extend(sequence("30 3 * * *"));
-        separate.sort();
-        separate.dedup();
-        assert_eq!(list[..2], separate[..2]);
+        // Compare with the actual built-in daily scheduling path in the same timezone.
+        let mut one = AutomationTrigger::new("time", "custom");
+        one.schedule_kind = "daily".into();
+        one.time = "01:30".into();
+        let mut three = one.clone();
+        three.time = "03:30".into();
+        let mut cursor = start.timestamp_millis();
+        let daily: Vec<_> = (0..5)
+            .map(|_| {
+                cursor = one
+                    .next_at_in_timezone(cursor, &New_York)
+                    .min(three.next_at_in_timezone(cursor, &New_York));
+                cursor / 1000
+            })
+            .collect();
+        assert_eq!(list, daily);
         let first = New_York
             .with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
             .earliest()
@@ -1754,6 +1778,26 @@ mod tests {
             .latest()
             .unwrap();
         assert!(windowed.contains(&repeated_hour.timestamp()));
+    }
+
+    #[test]
+    fn fixed_time_cron_handles_dense_lists_and_spring_gap() {
+        use chrono_tz::America::New_York;
+        let start = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 40, 0)
+            .earliest()
+            .unwrap();
+        let next = next_cron_at("0,5,10,15,20,25,30,35,40 1 * * *", &start).unwrap();
+        assert_eq!(
+            next,
+            New_York.with_ymd_and_hms(2026, 11, 2, 1, 0, 0).unwrap()
+        );
+        let start = New_York.with_ymd_and_hms(2026, 3, 8, 1, 30, 0).unwrap();
+        let next = next_cron_at("30 1,2 * * *", &start).unwrap();
+        assert_eq!(
+            next,
+            New_York.with_ymd_and_hms(2026, 3, 8, 3, 0, 0).unwrap()
+        );
     }
 
     #[test]
