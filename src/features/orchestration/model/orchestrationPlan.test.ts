@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  collectOrchestrationPlanText,
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
   orchestrationRepairPrompt,
@@ -41,13 +42,39 @@ const payload = {
   summary: "Build the view, then validate",
   tasks: [task],
 };
+const providerPlan =
+  "# Settings plan\n1. Build the view.\n2. Validate the result.";
+const taggedProposal = (value: unknown) =>
+  `<monocode_proposal>${JSON.stringify(value)}</monocode_proposal>`;
 
 describe("orchestration proposals", () => {
+  it("keeps plan streams separate and replaces deltas with the final snapshot", () => {
+    const items = new Map<string | undefined, string>();
+    const record = (text: string, key?: string, append = false) =>
+      collectOrchestrationPlanText(items, { type: "plan", key, text, append });
+
+    expect(record("First draft", "first", true)).toBe("First draft");
+    expect(record("Latest", "second", true)).toBe("Latest");
+    expect(record("Old snapshot", "first")).toBe("Latest");
+    expect(record(" draft", "second", true)).toBe("Latest draft");
+    expect(record("Final snapshot", "second")).toBe("Final snapshot");
+
+    items.clear();
+    expect(record("Keyless plan")).toBe("Keyless plan");
+    expect(record("Updated keyless plan")).toBe("Updated keyless plan");
+  });
+
   it("recovers an omitted harness from an exact, unambiguous catalog model without another turn", async () => {
     const repair = vi.fn();
     const result = await completeOrRepairOrchestrationProposal(
       draft,
-      JSON.stringify({ ...payload, tasks: [{ ...task, harness: undefined }] }),
+      {
+        plan: JSON.stringify({
+          ...payload,
+          tasks: [{ ...task, harness: undefined }],
+        }),
+        message: "",
+      },
       repair,
       () => true,
     );
@@ -55,6 +82,27 @@ describe("orchestration proposals", () => {
     expect(result.tasks[0].harness).toBe("codex");
     expect(repair).not.toHaveBeenCalled();
     expect(result.response).toBeUndefined();
+  });
+
+  it.each([
+    { label: "provider prose", plan: providerPlan, title: payload.title },
+    {
+      label: "valid provider proposal",
+      plan: JSON.stringify({ ...payload, title: "Provider assignments" }),
+      title: "Provider assignments",
+    },
+  ])("uses the first valid proposal with $label", async ({ plan, title }) => {
+    const repair = vi.fn();
+    const result = await completeOrRepairOrchestrationProposal(
+      draft,
+      { plan, message: taggedProposal(payload) },
+      repair,
+      () => true,
+    );
+    expect(result.status).toBe("ready");
+    expect(result.title).toBe(title);
+    expect(result.tasks).toEqual(payload.tasks);
+    expect(repair).not.toHaveBeenCalled();
   });
 
   it("never guesses ambiguous harnesses or replaces an explicit unavailable choice", () => {
@@ -83,14 +131,17 @@ describe("orchestration proposals", () => {
   });
 
   it("repairs malformed output once with the failed response, exact error and catalog", async () => {
-    const invalid = JSON.stringify({
+    const invalid = taggedProposal({
       ...payload,
       tasks: [{ ...task, model: "unknown" }],
     });
-    const repair = vi.fn(async () => JSON.stringify(payload));
+    const repair = vi.fn(async () => ({
+      plan: providerPlan,
+      message: taggedProposal(payload),
+    }));
     const result = await completeOrRepairOrchestrationProposal(
       draft,
-      invalid,
+      { plan: providerPlan, message: invalid },
       repair,
       () => true,
     );
@@ -104,10 +155,10 @@ describe("orchestration proposals", () => {
   });
 
   it("stops after one unsuccessful repair and retains its response for manual retry", async () => {
-    const repair = vi.fn(async () => "Still invalid");
+    const repair = vi.fn(async () => ({ plan: "", message: "Still invalid" }));
     const result = await completeOrRepairOrchestrationProposal(
       draft,
-      "Invalid",
+      { plan: "", message: "Invalid" },
       repair,
       () => true,
     );
@@ -124,7 +175,7 @@ describe("orchestration proposals", () => {
     });
     const result = await completeOrRepairOrchestrationProposal(
       draft,
-      "Invalid",
+      { plan: "", message: "Invalid" },
       repair,
       () => false,
     );
@@ -133,7 +184,7 @@ describe("orchestration proposals", () => {
     await expect(
       completeOrRepairOrchestrationProposal(
         draft,
-        "Invalid",
+        { plan: "", message: "Invalid" },
         repair,
         () => true,
       ),

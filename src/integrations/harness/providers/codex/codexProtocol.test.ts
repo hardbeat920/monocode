@@ -720,12 +720,22 @@ describe("mapCodexNotification", () => {
     );
   });
 
-  it("maps aborted turns as interrupted completion", () => {
-    const mapped = mapCodexNotification("turn/aborted", {
-      turn: { id: "turn_1" },
+  it.each([
+    ["turn/aborted", undefined, "interrupted"],
+    ["turn/completed", "interrupted", "interrupted"],
+    ["turn/completed", "cancelled", "cancelled"],
+    ["turn/completed", "canceled", "cancelled"],
+  ])("reports a %s turn with %s status as interrupted", (method, status, outcome) => {
+    const mapped = mapCodexNotification(method, {
+      turn: { id: "turn_1", status },
     });
-    expect(mapped.turnCompleted?.status).toBe("interrupted");
+    expect(mapped.turnCompleted?.status).toBe(outcome);
     expect(mapped.activeTurnId).toBeNull();
+    expect(mapped.events).toEqual([
+      { type: "message.completed" },
+      { type: "reasoning.completed" },
+      { type: "turn.interrupted" },
+    ]);
   });
 
   it.each([

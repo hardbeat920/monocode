@@ -616,11 +616,11 @@ function mapTurnTerminal(
   const status =
     statusRaw === "failed"
       ? "failed"
-      : statusRaw === "interrupted" || statusRaw === "cancelled"
-        ? statusRaw === "cancelled"
-          ? "cancelled"
-          : "interrupted"
-        : "completed";
+      : statusRaw === "cancelled" || statusRaw === "canceled"
+        ? "cancelled"
+        : statusRaw === "interrupted" || method === "turn/aborted"
+          ? "interrupted"
+          : "completed";
   const events: HarnessEvent[] = [
     { type: "message.completed" },
     { type: "reasoning.completed" },
@@ -629,6 +629,11 @@ function mapTurnTerminal(
     events.push({ type: "session.error", message: error });
   } else if (status === "failed") {
     events.push({ type: "session.error", message: "Codex turn failed." });
+  } else if (status === "interrupted" || status === "cancelled") {
+    events.push({
+      type: "turn.interrupted",
+      ...(error ? { message: error } : {}),
+    });
   }
   return {
     events,

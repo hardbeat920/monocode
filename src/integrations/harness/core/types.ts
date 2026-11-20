@@ -16,6 +16,7 @@ export type HarnessEvent =
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "turn.started"; providerTurnId: string }
+  | { type: "turn.interrupted"; message?: string }
   | { type: "turn.ready" }
   | {
       type: "session.configChanged";

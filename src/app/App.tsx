@@ -65,6 +65,7 @@ import {
 import { modelsFor } from "../features/sessions/model/models";
 import { isHarnessAvailable } from "../integrations/harness/core/availability";
 import {
+  collectOrchestrationPlanText,
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
   orchestrationPlanningPrompt,
@@ -7992,6 +7993,7 @@ function Workspace({
       let controlText = "";
       let proposalText = "";
       let nativeProposalText = "";
+      const nativeProposalItems = new Map<string | undefined, string>();
       let completedProposal: OrchestrationProposal | undefined;
       void (async () => {
         let workCwd = initialWorkCwd;
@@ -8122,9 +8124,10 @@ function Workspace({
               return null;
             }
             if (event.type === "plan") {
-              nativeProposalText = event.append
-                ? nativeProposalText + event.text
-                : event.text;
+              nativeProposalText = collectOrchestrationPlanText(
+                nativeProposalItems,
+                event,
+              );
               return null;
             }
           }
@@ -8141,6 +8144,15 @@ function Workspace({
 
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
+          if (event.type === "turn.interrupted") {
+            if (!proposalDraft) return;
+            event = {
+              type: "session.error",
+              message:
+                event.message ??
+                "The provider interrupted the orchestration proposal.",
+            };
+          }
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
             controlText = (controlText + event.text).slice(-20_000);
@@ -8421,21 +8433,23 @@ function Workspace({
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(
               proposalDraft,
-              nativeProposalText || proposalText,
+              { plan: nativeProposalText, message: proposalText },
               async (repairPrompt) => {
                 proposalText = "";
                 nativeProposalText = "";
+                nativeProposalItems.clear();
                 await sendTurn(repairPrompt, []);
                 if (providerFailureSeen)
                   throw new Error(
                     controlOutcome.error ??
                       "The lead could not repair the proposal.",
                   );
-                return nativeProposalText || proposalText;
+                return { plan: nativeProposalText, message: proposalText };
               },
               () =>
                 turnGen.current.get(sessionId) === gen &&
-                !isProviderFailureText(nativeProposalText || proposalText),
+                !isProviderFailureText(nativeProposalText) &&
+                !isProviderFailureText(proposalText),
             );
           }
           if (turnGen.current.get(sessionId) !== gen) return;

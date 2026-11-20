@@ -1,4 +1,5 @@
 import { HARNESSES, type Block, type HarnessId, type Session } from "../../sessions/model/session";
+import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 
 export type OrchestrationChoice = {
@@ -307,17 +308,51 @@ export function orchestrationRepairPrompt(
   ].join("\n\n");
 }
 
+type OrchestrationResponse = {
+  plan: string;
+  message: string;
+};
+
+/** Return the latest plan item, replacing deltas with the provider's final snapshot. */
+export function collectOrchestrationPlanText(
+  items: Map<string | undefined, string>,
+  { key, text, append }: Extract<HarnessEvent, { type: "plan" }>,
+): string {
+  items.set(key, append ? (items.get(key) ?? "") + text : text);
+  return [...items.values()].pop() ?? "";
+}
+
+function completeOrchestrationResponse(
+  draft: OrchestrationProposal,
+  { plan, message }: OrchestrationResponse,
+): OrchestrationProposal {
+  const hasPlan = !!plan.trim();
+  const primary = completeOrchestrationProposal(draft, hasPlan ? plan : message);
+  if (primary.status === "ready" || !hasPlan || !message.trim()) return primary;
+
+  // A provider can publish its own prose plan alongside the assignment JSON.
+  const assistant = completeOrchestrationProposal(draft, message);
+  if (
+    assistant.status === "ready" ||
+    (message.includes("<monocode_proposal>") &&
+      !plan.includes("<monocode_proposal>"))
+  ) {
+    return assistant;
+  }
+  return primary;
+}
+
 /** At most one corrective turn; provider failures and cancellation never loop. */
 export async function completeOrRepairOrchestrationProposal(
   draft: OrchestrationProposal,
-  response: string,
-  repair: (prompt: string) => Promise<string>,
+  response: OrchestrationResponse,
+  repair: (prompt: string) => Promise<OrchestrationResponse>,
   canRepair: () => boolean,
 ): Promise<OrchestrationProposal> {
-  const first = completeOrchestrationProposal(draft, response);
+  const first = completeOrchestrationResponse(draft, response);
   if (first.status !== "invalid" || !canRepair()) return first;
   const corrected = await repair(orchestrationRepairPrompt(first));
-  return completeOrchestrationProposal(draft, corrected);
+  return completeOrchestrationResponse(draft, corrected);
 }
 
 export function proposalMarkdown(proposal: OrchestrationProposal): string {
