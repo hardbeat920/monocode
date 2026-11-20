@@ -767,14 +767,19 @@ impl QuickComposer {
             multiple: true,
             prompt: Some("Attach".into()),
         });
+        let before = window.focused(cx);
         cx.spawn_in(window, async move |this, cx| {
             let picked = prompt.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Ok(Ok(Some(paths))) = picked {
                     this.add_attachments(paths, cx);
                 }
-                // Cancelling hands focus back too, so typing continues.
-                this.focus(window, cx);
+                // Hand focus back so typing continues, unless the user moved
+                // it (say, to the project filter) while the panel was open.
+                let now = window.focused(cx);
+                if now.is_none() || now == before {
+                    this.focus(window, cx);
+                }
             });
         })
         .detach();
@@ -2300,5 +2305,24 @@ mod tests {
             })
             .unwrap();
         std::fs::remove_file(file).ok();
+        // Opening the project picker while the panel is up keeps its filter
+        // focused when the panel is cancelled.
+        window
+            .update(cx, |view, w, cx| view.choose_files(w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, w, cx| view.open(Picker::Project, w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        assert!(!focused(cx));
+        window
+            .update(cx, |view, w, cx| {
+                assert!(view.picker == Some(Picker::Project));
+                assert!(view.query.focus_handle(cx).is_focused(w));
+            })
+            .unwrap();
     }
 }
