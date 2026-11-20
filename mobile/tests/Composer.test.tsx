@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { Alert } from "react-native";
 import { Composer } from "@/features/sessions/Composer";
 
 const runtime = vi.hoisted(() => ({
@@ -16,7 +17,6 @@ const runtime = vi.hoisted(() => ({
   photos: vi.fn(async () => []),
   files: vi.fn(async () => []),
   paste: vi.fn(async () => [] as object[]),
-  merge: vi.fn((existing: object[], added: object[]) => [...existing, ...added]),
   clipboard: null as ((hasImage: boolean) => void) | null,
 }));
 vi.mock("react-native", () => {
@@ -194,20 +194,26 @@ vi.mock("@/features/sessions/dictation", () => ({
   canDictate: () => false,
   insertDictation: vi.fn(),
 }));
-vi.mock("@/features/sessions/attachments", () => ({
-  MAX_ATTACHMENTS: 10,
-  pickPhotos: runtime.photos,
-  pickFiles: runtime.files,
-  pasteImage: runtime.paste,
-  watchClipboardImage: (onChange: (hasImage: boolean) => void) => {
-    runtime.clipboard = onChange;
-    return () => {
-      runtime.clipboard = null;
-    };
-  },
-  merge: runtime.merge,
-  isImage: () => false,
-}));
+// The real merge, restore and limits; only what reaches native code is stood in for.
+vi.mock("expo-clipboard", () => ({}));
+vi.mock("expo-file-system", () => ({}));
+vi.mock("expo-image-manipulator", () => ({}));
+vi.mock("expo-image-picker", () => ({}));
+vi.mock("@/features/sessions/attachments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/sessions/attachments")>();
+  return {
+    ...actual,
+    pickPhotos: runtime.photos,
+    pickFiles: runtime.files,
+    pasteImage: runtime.paste,
+    watchClipboardImage: (onChange: (hasImage: boolean) => void) => {
+      runtime.clipboard = onChange;
+      return () => {
+        runtime.clipboard = null;
+      };
+    },
+  };
+});
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/LiquidView", () => ({ LiquidView: () => null }));
 vi.mock("@/ui/theme", () => ({
@@ -429,8 +435,7 @@ it("offers to paste a copied image and holds it as a picked photo", async () => 
     [...container.querySelectorAll("button")].find((item) => item.textContent === "Paste Image")!.click(),
   );
   expect(runtime.paste).toHaveBeenCalledWith(10);
-  expect(runtime.merge).toHaveBeenCalledWith([], [pasted]);
-  // The same strip as a picked photo, removable the same way, and sent with the message.
+  // The same strip as a picked photo, and sent with the message.
   expect(button("Remove Pasted image.png")).toBeTruthy();
   await act(async () => button("Send").click());
   expect(send).toHaveBeenCalledWith("", [pasted]);
@@ -438,4 +443,116 @@ it("offers to paste a copied image and holds it as a picked photo", async () => 
   act(() => runtime.clipboard!(false));
   await act(async () => button("Add photos or files").click());
   expect(menuItems()).not.toContain("Paste Image");
+});
+
+it("keeps every image when a second pick lands while the first paste is pending", async () => {
+  let releaseFirst!: (picked: object[]) => void;
+  runtime.paste
+    .mockReturnValueOnce(new Promise<object[]>((resolve) => (releaseFirst = resolve)))
+    .mockResolvedValueOnce([chip("B.png")]);
+  runtime.photos.mockResolvedValueOnce([chip("C.jpg")] as never);
+  render();
+  act(() => runtime.clipboard!(true));
+  // The first waits, as on iOS's "Allow Paste" prompt; a second paste and a photo land meanwhile.
+  await choose("Paste Image");
+  await choose("Paste Image");
+  await choose("Photo Library");
+  await act(async () => releaseFirst([chip("A.png")]));
+  expect(button("Remove A.png")).toBeTruthy();
+  expect(button("Remove B.png")).toBeTruthy();
+  expect(button("Remove C.jpg")).toBeTruthy();
+});
+
+const chip = (name: string, data = "AAA") => ({
+  id: name,
+  name,
+  mimeType: "image/png",
+  size: 3,
+  uri: `file:///${name}`,
+  data,
+});
+const choose = async (label: string) => {
+  await act(async () => button("Add photos or files").click());
+  await act(async () =>
+    [...container.querySelectorAll("button")].find((item) => item.textContent === label)!.click(),
+  );
+};
+const held = () =>
+  [...container.querySelectorAll("button")]
+    .map((item) => item.getAttribute("aria-label") ?? "")
+    .filter((label) => label.startsWith("Remove "))
+    .map((label) => label.slice("Remove ".length));
+/** A send the desktop hasn't answered yet; `fail` is its answer. */
+const pendingSend = () => {
+  let fail!: (reason: Error) => void;
+  send.mockReturnValueOnce(new Promise<void>((_, reject) => (fail = reject)));
+  return (reason: Error) => fail(reason);
+};
+
+it("removes a pasted image from the strip", async () => {
+  runtime.paste.mockResolvedValueOnce([chip("A.png")]);
+  render();
+  act(() => runtime.clipboard!(true));
+  await choose("Paste Image");
+  expect(held()).toEqual(["A.png"]);
+  act(() => button("Remove A.png").click());
+  expect(held()).toEqual([]);
+});
+
+it("keeps a failed send's images alongside one pasted while it was sending", async () => {
+  runtime.paste.mockResolvedValueOnce([chip("A.png")]).mockResolvedValueOnce([chip("B.png")]);
+  render(true, { busy: false });
+  act(() => runtime.clipboard!(true));
+  await choose("Paste Image");
+  type("Look at this");
+  const fail = pendingSend();
+  await act(async () => button("Send").click());
+  expect(send).toHaveBeenCalledWith("Look at this", [chip("A.png")]);
+  expect(held()).toEqual([]);
+  await choose("Paste Image");
+  expect(held()).toEqual(["B.png"]);
+  await act(async () => fail(new Error("Desktop went away")));
+  // The text's image first, then the new one, each once.
+  expect(held()).toEqual(["A.png", "B.png"]);
+  expect(container.querySelector("textarea")!.value).toBe("Look at this");
+  expect(Alert.alert).toHaveBeenCalledWith("Message not sent", "Desktop went away");
+  // Both go with the retry.
+  send.mockResolvedValueOnce(undefined);
+  await act(async () => button("Send").click());
+  expect(send).toHaveBeenLastCalledWith("Look at this", [chip("A.png"), chip("B.png")]);
+});
+
+it("keeps a failed send's full set and says which image pasted meanwhile didn't fit", async () => {
+  const ten = Array.from({ length: 10 }, (_, i) => chip(`${i}.png`));
+  runtime.photos.mockResolvedValueOnce(ten as never);
+  runtime.paste.mockResolvedValueOnce([chip("Late.png")]);
+  render(true, { busy: false });
+  await choose("Photo Library");
+  expect(held()).toHaveLength(10);
+  const fail = pendingSend();
+  await act(async () => button("Send").click());
+  act(() => runtime.clipboard!(true));
+  await choose("Paste Image");
+  await act(async () => fail(new Error("Desktop went away")));
+  expect(held()).toEqual(ten.map((item) => item.name));
+  expect(Alert.alert).toHaveBeenCalledWith(
+    "Message not sent",
+    expect.stringMatching(/^Desktop went away\n\nA message can carry up to 10 files.*Late\.png.*was removed\.$/s),
+  );
+});
+
+it("drops an image pasted meanwhile that would take the restored message past the size limit", async () => {
+  const big = (name: string) => chip(name, "A".repeat(10 * 1024 * 1024));
+  runtime.photos.mockResolvedValueOnce([big("One.png"), big("Two.png")] as never);
+  runtime.paste.mockResolvedValueOnce([big("Three.png")]);
+  render(true, { busy: false });
+  await choose("Photo Library");
+  const fail = pendingSend();
+  await act(async () => button("Send").click());
+  act(() => runtime.clipboard!(true));
+  await choose("Paste Image");
+  expect(held()).toEqual(["Three.png"]);
+  await act(async () => fail(new Error("Desktop went away")));
+  expect(held()).toEqual(["One.png", "Two.png"]);
+  expect(Alert.alert).toHaveBeenCalledWith("Message not sent", expect.stringContaining("Three.png"));
 });

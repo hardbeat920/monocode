@@ -109,3 +109,122 @@ impl Store {
         Ok(page)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::response::{completion_report, read_call, turn_end, TurnEnd};
+    use std::path::Path;
+
+    /// The report reads projected rows, where a plan or an unstructured task
+    /// list shows as assistant prose; `sessions.read` reads the canonical
+    /// blocks. Both must pick the same message, so the read call returns it.
+    #[test]
+    fn report_and_read_call_agree_on_projected_plan_and_task_messages() {
+        let long = format!("{}PLAN END", "step\n".repeat(4000));
+        for (trailing, text) in [
+            (
+                json!({"id":"p","role":"plan","text":"# Plan\n\n- Fix it"}),
+                "# Plan\n\n- Fix it",
+            ),
+            (
+                json!({"id":"t","role":"tasks","text":"1. Fix it"}),
+                "1. Fix it",
+            ),
+            (json!({"id":"p","role":"plan","text":long}), long.as_str()),
+        ] {
+            let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+            let session = store.create("codex", "/work/repo").unwrap();
+            store.provider_id(session.id, "thread").unwrap();
+            let blocks = vec![
+                json!({"id":"u","role":"user","text":"Plan the fix"}),
+                json!({"id":"a","role":"assistant","text":"THE ANSWER"}),
+                trailing,
+            ];
+            store.shared_store_blocks(session.id, &blocks).unwrap();
+            let rows = store.load(session.id).unwrap().rows;
+            let call = read_call(session.id, Some("/work/repo")).unwrap();
+            let report = completion_report(&rows, TurnEnd::Unknown, Some(&call), 12000);
+            let expected = crate::response::normalized(text);
+            let mut input = call.clone();
+            let mut read = String::new();
+            loop {
+                let page = store
+                    .app_conversation(session.id, &input, false, false)
+                    .unwrap();
+                let message = &page["turns"][0]["assistant"];
+                read.push_str(message["text"].as_str().unwrap());
+                match message.get("nextCharOffset") {
+                    Some(next) => input["charOffset"] = next.clone(),
+                    None => break,
+                }
+            }
+            assert_eq!(read, expected, "sessions.read returns the reported message");
+            assert!(expected.ends_with(report.rsplit("\n\n").next().unwrap()));
+            if expected.chars().count() <= 12000 {
+                assert_eq!(report, expected);
+            }
+        }
+    }
+
+    /// A native stop leaves no row. The receipt the runtime closes records it,
+    /// so the report still says the turn was stopped after a restart.
+    #[test]
+    fn a_stopped_turn_still_reports_unfinished_after_reopening_the_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-stopped-{}-{}",
+            std::process::id(),
+            crate::time::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let progress = "I will investigate this now";
+        for shared in [false, true] {
+            let path = dir.join(format!("store-{shared}.sqlite"));
+            let open = |path: &Path| {
+                if shared {
+                    Store::open_monocode(path).unwrap()
+                } else {
+                    Store::open(path).unwrap()
+                }
+            };
+            let id = {
+                let mut store = open(&path);
+                let session = store.create("codex", "/work/repo").unwrap();
+                let mut transcript = crate::transcript::Transcript::default();
+                for (role, text) in [("user", "Investigate"), ("assistant", progress)] {
+                    transcript.begin(role);
+                    transcript.append(text);
+                }
+                store.write_rows(session.id, 0, &transcript.rows).unwrap();
+                let mut settings = store
+                    .agent_settings(session.id)
+                    .unwrap()
+                    .unwrap_or_default();
+                settings.turns.insert(
+                    1,
+                    crate::agent::TurnInfo {
+                        started_at: Some(1),
+                        duration_known: true,
+                        stopped: true,
+                        ..Default::default()
+                    },
+                );
+                store.save_agent_settings(session.id, &settings).unwrap();
+                session.id
+            };
+            let store = open(&path);
+            let rows = store.load(id).unwrap().rows;
+            let turns = store.agent_settings(id).unwrap().unwrap_or_default().turns;
+            assert_eq!(
+                turn_end(&rows, &turns),
+                TurnEnd::Stopped,
+                "shared: {shared}"
+            );
+            assert_eq!(
+                completion_report(&rows, turn_end(&rows, &turns), None, 12000),
+                format!("(its latest turn did not finish: it was stopped. This is the last message it wrote, not a final answer:)\n\n{progress}")
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
