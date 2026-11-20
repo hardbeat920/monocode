@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -657,11 +657,38 @@ pub fn automations_upsert(
     store: State<'_, SessionStore>,
     automation: AutomationUpsert,
 ) -> Result<Automation, String> {
-    let now = now_millis();
+    let mut conn = store.lock_conn()?;
+    let saved = upsert_in(&mut conn, automation, now_millis())?;
+    drop(conn);
+    let _ = app.emit(CHANGED, ());
+    Ok(saved)
+}
+
+fn upsert_in(
+    conn: &mut Connection,
+    automation: AutomationUpsert,
+    now: i64,
+) -> Result<Automation, String> {
     validate_upsert(&automation, now)?;
     let triggers = Some(normalize_triggers(&automation));
-    let conn = store.lock_conn()?;
-    let previous = get(&conn, &automation.id)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let previous = get(&tx, &automation.id)?;
+    if previous
+        .as_ref()
+        .is_some_and(|value| match &value.triggers {
+            Some(triggers) => triggers
+                .iter()
+                .any(|trigger| trigger.kind == "time" && trigger.schedule_kind == "custom"),
+            None => value.trigger_kind == "time" && value.schedule_kind == "custom",
+        })
+    {
+        return Err(
+            "This automation has a custom schedule. Refresh it and edit it in MonoCode Native."
+                .into(),
+        );
+    }
     let created_at = previous
         .as_ref()
         .map(|value| value.created_at)
@@ -705,9 +732,8 @@ pub fn automations_upsert(
         created_at,
         updated_at: now,
     };
-    write_automation(&conn, &saved)?;
-    drop(conn);
-    let _ = app.emit(CHANGED, ());
+    write_automation(&tx, &saved)?;
+    tx.commit().map_err(|error| error.to_string())?;
     Ok(saved)
 }
 
@@ -1132,6 +1158,43 @@ mod tests {
         assert_eq!(stored.next_run_at, 1000);
         assert_eq!(stored.triggers.unwrap()[0].cron, "0 9 * * *");
         assert!(set_enabled_in(&conn, "missing", true, 1).is_err());
+    }
+
+    #[test]
+    fn stale_preset_upsert_cannot_overwrite_stored_custom_schedule() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        let stored_json = r#"{"id":"a1","name":"native","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":true,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1,
+            "triggers":[{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 9 * * *"}]}"#;
+        let stored: Automation = serde_json::from_str(stored_json).unwrap();
+        write_automation(&conn, &stored).unwrap();
+        let stale_json = r#"{"id":"a1","name":"desktop","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","runtimeMode":"auto","scheduleKind":"daily",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":false,
+            "nextRunAt":5000}"#;
+        let stale: AutomationUpsert = serde_json::from_str(stale_json).unwrap();
+        assert!(upsert_in(&mut conn, stale.clone(), 100)
+            .unwrap_err()
+            .contains("custom schedule"));
+        let untouched = get(&conn, "a1").unwrap().unwrap();
+        assert_eq!(untouched.name, "native");
+        assert_eq!(untouched.next_run_at, 1000);
+        assert_eq!(untouched.triggers.unwrap()[0].cron, "0 9 * * *");
+        let paused = set_enabled_in(&conn, "a1", false, 200).unwrap();
+        let resumed = set_enabled_in(&conn, "a1", true, 2000).unwrap();
+        assert!(!paused.enabled && resumed.enabled);
+        assert_eq!(resumed.next_run_at, 1000);
+        assert_eq!(resumed.triggers.unwrap()[0].cron, "0 9 * * *");
+        // Preset edits remain supported after the custom row is removed.
+        conn.execute("DELETE FROM automations WHERE id = 'a1'", [])
+            .unwrap();
+        assert_eq!(
+            upsert_in(&mut conn, stale, 100).unwrap().schedule_kind,
+            "daily"
+        );
     }
 
     #[test]
