@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
 import {
   applyTriggers,
   automationScheduleLabel,
@@ -15,6 +19,7 @@ import {
   nextRunPreview,
   nextTriggersRunAt,
   overdueTriggerOccurrences,
+  setAutomationEnabled,
   type Automation,
 } from "./automations";
 
@@ -41,6 +46,41 @@ describe("custom cron schedules written by Native", () => {
         dayOfWeek: 1,
       }),
     ).toBe("Cron: 0 6-20/2 * * *");
+  });
+
+  describe("pause and resume", () => {
+    const stored = {
+      id: "a1",
+      enabled: false,
+      scheduleKind: "custom",
+      nextRunAt: 1000,
+      triggers: [custom],
+    } as unknown as Automation;
+
+    beforeEach(() => {
+      invoke.mockReset();
+      // The model announces changes on `window`; the test environment is not a browser.
+      vi.stubGlobal("window", new EventTarget());
+    });
+
+    it("only flips the flag, so resuming after the stored run passed still works", async () => {
+      invoke.mockResolvedValue({ ...stored, enabled: true });
+      await setAutomationEnabled(stored, true);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("automations_set_enabled", {
+        id: "a1",
+        enabled: true,
+      });
+    });
+
+    it("never rewrites a cron schedule through the regular save", async () => {
+      await expect(
+        import("./automations").then(({ saveAutomation, draftFromAutomation }) =>
+          saveAutomation(draftFromAutomation(stored)),
+        ),
+      ).rejects.toThrow(/MonoCode Native/);
+      expect(invoke).not.toHaveBeenCalled();
+    });
   });
 
   it("does not invent a next run that Native would not use", () => {

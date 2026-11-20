@@ -479,11 +479,10 @@ export async function listAutomations(): Promise<Automation[]> {
 
 export async function saveAutomation(
   draft: AutomationDraft,
-  keepNextRunAt?: number,
 ): Promise<Automation> {
   const synced = applyTriggers(draft, draft.triggers);
   // Desktop cannot compute a cron schedule, so it must not rewrite when it runs next.
-  if (hasCustomSchedule(synced.triggers) && keepNextRunAt === undefined) {
+  if (hasCustomSchedule(synced.triggers)) {
     throw new Error(
       "This automation uses a custom cron schedule. Edit it in MonoCode Native.",
     );
@@ -491,7 +490,7 @@ export async function saveAutomation(
   const automation: AutomationUpsert = {
     ...synced,
     id: synced.id ?? crypto.randomUUID(),
-    nextRunAt: keepNextRunAt ?? nextTriggersRunAt(synced.triggers),
+    nextRunAt: nextTriggersRunAt(synced.triggers),
   };
   const saved = await invoke<Automation>("automations_upsert", { automation });
   emitLocalChange();
@@ -502,12 +501,17 @@ export async function setAutomationEnabled(
   automation: Automation,
   enabled: boolean,
 ): Promise<Automation> {
-  return saveAutomation(
-    { ...draftFromAutomation(automation), enabled },
-    hasCustomSchedule(automationTriggers(automation))
-      ? automation.nextRunAt
-      : undefined,
-  );
+  if (hasCustomSchedule(automationTriggers(automation))) {
+    // Only flips the flag in the backend, so a resume after the stored occurrence
+    // passed still works and Native keeps owning when the next run happens.
+    const saved = await invoke<Automation>("automations_set_enabled", {
+      id: automation.id,
+      enabled,
+    });
+    emitLocalChange();
+    return saved;
+  }
+  return saveAutomation({ ...draftFromAutomation(automation), enabled });
 }
 
 export async function deleteAutomation(id: string): Promise<void> {

@@ -711,6 +711,37 @@ pub fn automations_upsert(
     Ok(saved)
 }
 
+/// Pauses or resumes an automation without touching its schedule. Desktop cannot compute
+/// every schedule (cron is evaluated by MonoCode Native), so this keeps `next_run_at`
+/// as stored, even when it is already in the past.
+fn set_enabled_in(
+    conn: &Connection,
+    id: &str,
+    enabled: bool,
+    now: i64,
+) -> Result<Automation, String> {
+    let mut automation = get(conn, id)?.ok_or("Automation not found.")?;
+    automation.enabled = enabled;
+    automation.updated_at = now;
+    write_automation(conn, &automation)?;
+    Ok(automation)
+}
+
+#[tauri::command(async)]
+pub fn automations_set_enabled(
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    id: String,
+    enabled: bool,
+) -> Result<Automation, String> {
+    validate_id(&id, "automation")?;
+    let conn = store.lock_conn()?;
+    let automation = set_enabled_in(&conn, &id, enabled, now_millis())?;
+    drop(conn);
+    let _ = app.emit(CHANGED, ());
+    Ok(automation)
+}
+
 #[tauri::command(async)]
 pub fn automations_delete(
     app: AppHandle,
@@ -1047,6 +1078,28 @@ mod tests {
             ..trigger
         };
         assert!(validate_trigger(&empty).is_err());
+    }
+
+    #[test]
+    fn pausing_and_resuming_keeps_the_stored_next_run_even_when_overdue() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        let json = r#"{"id":"a1","name":"n","prompt":"p","harness":"codex","model":"m","cwd":"/r",
+            "workspaceMode":"current","reuseSession":false,"runtimeMode":"auto","scheduleKind":"custom",
+            "minute":0,"time":"09:00","dayOfWeek":1,"missedRunGraceMinutes":720,"enabled":true,
+            "nextRunAt":1000,"createdAt":1,"updatedAt":1,
+            "triggers":[{"id":"t","kind":"time","event":"custom","scheduleKind":"custom","cron":"0 9 * * *"}]}"#;
+        let automation: Automation = serde_json::from_str(json).unwrap();
+        write_automation(&conn, &automation).unwrap();
+        // The stored occurrence (1000) is long past, like a custom automation paused for days.
+        let paused = set_enabled_in(&conn, "a1", false, 5_000_000).unwrap();
+        assert!(!paused.enabled);
+        let resumed = set_enabled_in(&conn, "a1", true, 9_000_000).unwrap();
+        assert!(resumed.enabled);
+        let stored = get(&conn, "a1").unwrap().unwrap();
+        assert_eq!(stored.next_run_at, 1000);
+        assert_eq!(stored.triggers.unwrap()[0].cron, "0 9 * * *");
+        assert!(set_enabled_in(&conn, "missing", true, 1).is_err());
     }
 
     #[test]

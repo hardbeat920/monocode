@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use chrono::{Datelike, Local, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 use std::path::Path;
 
 fn now_millis() -> i64 {
@@ -1030,6 +1030,41 @@ impl Service {
     }
 }
 
+/// True when the minute and hour fields are plain numbers or lists, like `30 1,3 * * *`.
+/// The built-in daily, weekday and weekly schedules are fixed times of this kind.
+fn is_fixed_time_cron(expression: &str) -> bool {
+    let mut fields = expression.split_whitespace();
+    let plain = |field: Option<&str>| {
+        field.is_some_and(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit() || c == ','))
+    };
+    plain(fields.next()) && plain(fields.next())
+}
+
+/// Next occurrence of a cron expression strictly after `start`, in `start`'s time zone.
+///
+/// A fixed-time expression runs once when its wall-clock time repeats at the end of
+/// daylight-saving time, like the built-in daily schedules. `croner` would run an hour
+/// list such as `30 1,3 * * *` on both passes. Wildcard and step expressions
+/// (`*/30 * * * *`, `0 6-20/2 * * *`) keep running on every pass.
+fn next_cron_at<Tz: TimeZone>(expression: &str, start: &DateTime<Tz>) -> Option<DateTime<Tz>> {
+    let cron = parse_cron(expression).ok()?;
+    let fixed = is_fixed_time_cron(expression);
+    let mut from = start.clone();
+    // A repeated hour is at most a few occurrences long; the bound only guards against loops.
+    for _ in 0..8 {
+        let next = cron.find_next_occurrence(&from, false).ok()?;
+        let first_pass = start
+            .timezone()
+            .from_local_datetime(&next.naive_local())
+            .earliest();
+        if !fixed || first_pass.as_ref() == Some(&next) {
+            return Some(next);
+        }
+        from = next;
+    }
+    None
+}
+
 const MAX_CRON_LEN: usize = 200;
 
 fn cron_parser() -> croner::parser::CronParser {
@@ -1119,9 +1154,7 @@ impl AutomationTrigger {
             return after.saturating_add(86_400_000);
         };
         if self.schedule_kind == "custom" {
-            return parse_cron(&self.cron)
-                .ok()
-                .and_then(|cron| cron.find_next_occurrence(&start, false).ok())
+            return next_cron_at(&self.cron, &start)
                 .map(|next| next.timestamp_millis())
                 // An unparsable or exhausted expression must not fire repeatedly.
                 .unwrap_or_else(|| after.saturating_add(365 * 86_400_000));
@@ -1677,6 +1710,50 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         let next = service.list().unwrap()[0].next_run_at;
         assert_eq!(next, first + 120_000);
+    }
+
+    #[test]
+    fn fixed_time_cron_runs_once_in_a_repeated_dst_hour_like_the_built_in_schedules() {
+        use chrono_tz::America::New_York;
+        // 2026-11-01: clocks fall back from 02:00 EDT to 01:00 EST, so 01:30 happens twice.
+        let start = New_York.with_ymd_and_hms(2026, 11, 1, 0, 30, 0).unwrap();
+        let sequence = |expression: &str| {
+            let mut at = start;
+            (0..5)
+                .map(|_| {
+                    at = next_cron_at(expression, &at).unwrap();
+                    at.timestamp()
+                })
+                .collect::<Vec<_>>()
+        };
+        let list = sequence("30 1,3 * * *");
+        // The same times written as two separate daily schedules, merged.
+        let mut separate = sequence("30 1 * * *");
+        separate.extend(sequence("30 3 * * *"));
+        separate.sort();
+        separate.dedup();
+        assert_eq!(list[..2], separate[..2]);
+        let first = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
+            .earliest()
+            .unwrap();
+        let repeated = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
+            .latest()
+            .unwrap();
+        let after = New_York.with_ymd_and_hms(2026, 11, 1, 3, 30, 0).unwrap();
+        assert_eq!(list[..2], [first.timestamp(), after.timestamp()]);
+        assert_ne!(first.timestamp(), repeated.timestamp());
+
+        // Wildcard and step expressions still run on both passes.
+        let every_half_hour = sequence("*/30 * * * *");
+        assert!(every_half_hour.contains(&repeated.timestamp()));
+        let windowed = sequence("0 1-3/1 * * *");
+        let repeated_hour = New_York
+            .with_ymd_and_hms(2026, 11, 1, 1, 0, 0)
+            .latest()
+            .unwrap();
+        assert!(windowed.contains(&repeated_hour.timestamp()));
     }
 
     #[test]
