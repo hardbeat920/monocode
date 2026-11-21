@@ -296,6 +296,40 @@ impl Drop for HostFixture {
 }
 
 #[gpui::test]
+fn remote_composer_drafts_send_only_the_attached_note_reference(cx: &mut TestAppContext) {
+    for (input, suffix) in [("/draft", ""), ("/draft Review later", " Review later")] {
+        let host = HostFixture::new(false, false);
+        let view = host.conversation(cx);
+        host.wait(&view, cx, true);
+        let note = {
+            let store = locked(&host.store).unwrap();
+            let mut note = store.create_note(None).unwrap();
+            note.title = "Remote draft fixture".into();
+            note.body = "Local note contents".into();
+            store.upsert_note(&note.upsert(true)).unwrap()
+        };
+        let expected = format!("@note/{}{suffix}", note.slug);
+        view.update(cx, |view, cx| {
+            view.attach_composer_note(note, cx);
+            view.input
+                .update(cx, |input_view, cx| input_view.set_text(input.into(), cx));
+            view.send(cx);
+            assert!(view.busy);
+            assert!(view.composer_note.is_none());
+            assert!(view.input.read(cx).content.is_empty());
+        });
+        host.wait(&view, cx, true);
+        let requests = host.requests.lock().unwrap();
+        let draft = requests
+            .iter()
+            .find(|row| row["method"] == "commands.dispatch" && row["params"]["type"] == "draft")
+            .expect("the host should receive a draft command");
+        assert_eq!(draft["params"]["text"].as_str(), Some(expected.as_str()));
+        assert!(!draft.to_string().contains("Local note contents"));
+    }
+}
+
+#[gpui::test]
 fn snapshot_load_restores_host_draft_without_replacing_unsent_composer(cx: &mut TestAppContext) {
     let host = HostFixture::new(false, true);
     let view = host.conversation(cx);

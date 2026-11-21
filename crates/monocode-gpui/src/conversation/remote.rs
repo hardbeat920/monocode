@@ -322,11 +322,12 @@ impl Conversation {
         let prompt = monocode_core::composer::consume_command(&raw, "draft")
             .unwrap_or(&raw)
             .to_owned();
-        if prompt.trim().is_empty() && self.attachments.is_empty() {
+        if prompt.trim().is_empty() && self.composer_note.is_none() && self.attachments.is_empty() {
             return;
         }
         self.input
             .update(cx, |input, cx| input.set_text(String::new(), cx));
+        let prompt = self.take_composer_note(prompt);
         self.follow_ups.draft_selected = false;
         self.settings.remote_action = Some(json!({"type":"draft"}));
         self.launch_prompt(prompt, cx);
@@ -371,7 +372,10 @@ impl Conversation {
             cx.notify();
             return;
         }
-        if !self.input.read(cx).content.trim().is_empty() || !self.attachments.is_empty() {
+        if self.composer_note.is_some()
+            || !self.input.read(cx).content.trim().is_empty()
+            || !self.attachments.is_empty()
+        {
             self.status = "Clear the composer before restoring the rejected message.".into();
             cx.notify();
             return;
