@@ -56,8 +56,9 @@ vi.mock("@/features/sessions/attachments", () => ({
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe("starting mobile sessions", () => {
@@ -83,6 +84,7 @@ describe("starting mobile sessions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    link.pairing = { desktop: { fingerprint: "desktop" } };
     link.nativeTranscript = false;
     link.storage.clear();
     vi.stubGlobal("__DEV__", false);
@@ -163,6 +165,113 @@ describe("starting mobile sessions", () => {
     expect(conversation.busy).toBe(true);
     act(() => workspace.nativeTranscriptStatus("session", { ...status, userCount: 4 }));
     expect(conversation.turns).toEqual([]); // Confirmed turns remain native.
+  });
+
+  it("flushes a pending model pick before sending a message", async () => {
+    vi.useFakeTimers();
+    link.nativeTranscript = true;
+    const configured = deferred<void>();
+    link.command.mockImplementation((method: string) =>
+      method === "session.configure" ? configured.promise : Promise.resolve(),
+    );
+    render("session");
+    let picked!: Promise<unknown>;
+    let sent!: Promise<void>;
+    await act(async () => {
+      picked = workspace.configureSession("session", { harness: "codex", model: "codex:new" });
+      expect(link.command).not.toHaveBeenCalled();
+      sent = workspace.sendMessage("session", "Use the selected model");
+    });
+
+    expect(link.command).toHaveBeenCalledTimes(1);
+    expect(link.command).toHaveBeenCalledWith("session.configure", {
+      conversationId: "session", harness: "codex", model: "codex:new",
+    }, "request-id");
+    expect(conversation.turns).toEqual([]);
+
+    await act(async () => {
+      configured.resolve(undefined);
+      await Promise.all([picked, sent]);
+    });
+    expect(link.command).toHaveBeenNthCalledWith(2, "conversation.send", {
+      conversationId: "session", text: "Use the selected model",
+    }, "request-id");
+  });
+
+  it("waits for the latest pick after an earlier in-flight pick fails", async () => {
+    vi.useFakeTimers();
+    link.nativeTranscript = true;
+    const first = deferred<void>();
+    const last = deferred<void>();
+    link.command.mockImplementation((method: string, params: { model?: string }) => {
+      if (method !== "session.configure") return Promise.resolve();
+      return params.model === "codex:first" ? first.promise : last.promise;
+    });
+    render("session");
+    let firstResult!: Promise<unknown>;
+    let middleResult!: Promise<unknown>;
+    let lastResult!: Promise<unknown>;
+    let sent!: Promise<void>;
+    await act(async () => {
+      firstResult = workspace.configureSession("session", { model: "codex:first" }).catch((reason) => reason);
+      await vi.advanceTimersByTimeAsync(400);
+      sent = workspace.sendMessage("session", "Wait for the latest pick");
+      middleResult = workspace.configureSession("session", { model: "codex:middle" });
+      lastResult = workspace.configureSession("session", { model: "codex:last" });
+    });
+    expect(link.command).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      first.reject(new Error("First model unavailable"));
+      expect(await firstResult).toBeInstanceOf(Error);
+      expect(await middleResult).toBe("superseded");
+    });
+    expect(link.command.mock.calls.map(([method, params]) => [method, params.model])).toEqual([
+      ["session.configure", "codex:first"],
+      ["session.configure", "codex:last"],
+    ]);
+
+    await act(async () => {
+      last.resolve(undefined);
+      await Promise.all([lastResult, sent]);
+    });
+    expect(link.command.mock.calls.at(-1)?.[0]).toBe("conversation.send");
+  });
+
+  it("keeps a failed model change from submitting a draft with the old model", async () => {
+    vi.useFakeTimers();
+    link.nativeTranscript = true;
+    link.command.mockImplementation(async (method: string) => {
+      if (method === "session.configure") throw new Error("Model unavailable");
+    });
+    render("session");
+    await act(async () => {
+      // This older local echo is still waiting for its native transcript.
+      await workspace.sendMessage("session", "Already sent");
+      const picked = workspace.configureSession("session", { model: "codex:missing" });
+      const sent = workspace.sendMessage("session", "Keep this draft");
+      await Promise.all([
+        expect(picked).rejects.toThrow("Model unavailable"),
+        expect(sent).rejects.toThrow("Model unavailable"),
+      ]);
+    });
+    expect(link.command.mock.calls.map(([method]) => method)).toEqual([
+      "conversation.send", "session.configure",
+    ]);
+    expect(conversation.turns[0].items[0]).toMatchObject({ text: "Already sent" });
+  });
+
+  it("does not apply a pending pick on a different desktop", async () => {
+    vi.useFakeTimers();
+    link.nativeTranscript = true;
+    render("session");
+    const picked = workspace.configureSession("session", { model: "codex:new" });
+    const rejected = expect(picked).rejects.toThrow("desktop connection changed");
+    link.pairing = { desktop: { fingerprint: "another" } };
+    render("session");
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await rejected;
+    expect(link.command).not.toHaveBeenCalled();
   });
 
   it("keeps a new native session busy during its temporary routing error", async () => {
