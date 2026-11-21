@@ -112,9 +112,14 @@ pub(crate) fn session_markdown(title: &str, rows: &[Row]) -> Result<String, Stri
         wrote_message = true;
         markdown.push_str(&format!("\n## {heading}\n"));
         if !text.trim().is_empty() {
+            let text = text.trim_end_matches(['\r', '\n']);
             markdown.push('\n');
-            markdown.push_str(text.trim_end_matches(['\r', '\n']));
+            markdown.push_str(text);
             markdown.push('\n');
+            if let Some(fence) = unfinished_export_fence(text) {
+                markdown.push_str(fence);
+                markdown.push('\n');
+            }
         }
         if !attachments.is_empty() {
             markdown.push_str("\nAttachments\n");
@@ -131,34 +136,70 @@ pub(crate) fn session_markdown(title: &str, rows: &[Row]) -> Result<String, Stri
 }
 
 fn export_attachments<'a>(text: &'a str, manifest: Option<&Row>) -> (&'a str, Vec<String>) {
+    use crate::transcript::attachments::{export_basename, legacy_export_names};
+
     if let Some(manifest) = manifest {
         let files =
             serde_json::from_str::<Vec<serde_json::Value>>(&manifest.text).unwrap_or_default();
         let names = files
             .iter()
             .filter_map(|file| {
-                [file["name"].as_str(), file["path"].as_str()]
+                let name = file["name"].as_str();
+                let path = file["path"].as_str();
+                // A manifest's basename can itself resemble a Windows path on
+                // POSIX. Preserve it when its path confirms it as literal.
+                if let Some((name, _)) = name.zip(path).filter(|(name, path)| {
+                    path.starts_with('/') && export_basename(path) == Some(*name)
+                }) {
+                    return Some(name.to_owned());
+                }
+                [name, path]
                     .into_iter()
                     .flatten()
-                    .find_map(attachment_name)
+                    .find_map(export_basename)
                     .map(str::to_owned)
             })
             .collect();
         return (text, names);
     }
-    let (text, paths) = crate::transcript::attachments::legacy_tail(text);
-    let names = paths
-        .iter()
-        .filter_map(|path| attachment_name(path.to_str()?))
-        .map(str::to_owned)
-        .collect();
-    (text, names)
+    let (text, names) = legacy_export_names(text);
+    (text, names.into_iter().map(str::to_owned).collect())
 }
 
-fn attachment_name(path: &str) -> Option<&str> {
-    path.rsplit(['/', '\\'])
-        .next()
-        .filter(|name| !name.trim().is_empty())
+/// Only a top-level fence can contain the heading appended after a message.
+fn unfinished_export_fence(text: &str) -> Option<&str> {
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+
+    if !text.contains("```") && !text.contains("~~~") {
+        return None;
+    }
+    let mut depth = 0;
+    for (event, range) in Parser::new(text).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
+                if depth == 0 && text[range.end..].trim().is_empty() =>
+            {
+                let block = &text[range];
+                let marker = block.as_bytes()[0];
+                let length = block.bytes().take_while(|&byte| byte == marker).count();
+                let terminator = block
+                    .trim_end_matches(['\r', '\n'])
+                    .rsplit_once(['\r', '\n'])
+                    .is_some_and(|(_, line)| {
+                        let indented = line.trim_start_matches(' ');
+                        let run = indented.trim_end_matches([' ', '\t']);
+                        line.len() - indented.len() <= 3
+                            && run.len() >= length
+                            && run.bytes().all(|byte| byte == marker)
+                    });
+                return (!terminator).then_some(&block[..length]);
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn markdown_label(label: &str) -> String {
@@ -988,6 +1029,62 @@ mod tests {
             format!("# Check \\[report\\] next\n\n## User\n\nReview **the file**.\n\nAttachments\n\n- legacy.txt\n\n## Assistant\n\n**Ready.**\n\n```text\n  first line\n{long}\n```\n\n## User\n\nAttachments\n\n- report.txt\n")
         );
         assert!(session_markdown("Empty session", &[]).is_err());
+    }
+
+    #[test]
+    fn session_markdown_closes_only_unfinished_top_level_fences() {
+        for (message, added) in [
+            ("```text\nsample", "```\n"),
+            ("````rust\nlet number = 1;\n```", "````\n"),
+            ("  ~~~text\r\nnotes", "~~~\n"),
+            ("```", "```\n"),
+            ("~~~text\r\nnotes\r\n  ~~~~ \t", ""),
+            ("- ```text\n  sample\n  ```", ""),
+            ("> ```text\n> sample", ""),
+            ("Inline `~~~` is unchanged.", ""),
+        ] {
+            let mut transcript = crate::transcript::Transcript::default();
+            transcript.begin("user");
+            transcript.append(message);
+            transcript.begin("assistant");
+            transcript.append("Done");
+
+            assert_eq!(
+                session_markdown("Example", &transcript.rows).unwrap(),
+                format!("# Example\n\n## User\n\n{message}\n{added}\n## Assistant\n\nDone\n")
+            );
+        }
+    }
+
+    #[test]
+    fn session_markdown_keeps_attachment_basenames_without_paths() {
+        use crate::transcript::{attachments::ROLE, Transcript};
+
+        let mut transcript = Transcript::default();
+        transcript.begin("user");
+        transcript.append(
+            r"A report
+
+[draft\report.txt](</workspace/draft\report.txt>)
+
+[old.txt](<C:\workspace\old.txt>)",
+        );
+        transcript.begin("user");
+        transcript.append("More files");
+        transcript.begin(ROLE);
+        transcript.append(r#"[{"name":"part\\report.txt","path":"/workspace/part\\report.txt"},{"name":"C:\\literal.txt","path":"/workspace/C:\\literal.txt"},{"path":"C:\\workspace\\final.txt"}]"#);
+
+        let markdown = session_markdown("Attachment names", &transcript.rows).unwrap();
+        for name in [
+            r"draft\\report.txt",
+            "old.txt",
+            r"part\\report.txt",
+            r"C:\\literal.txt",
+            "final.txt",
+        ] {
+            assert!(markdown.contains(&format!("\n- {name}\n")), "{markdown}");
+        }
+        assert!(!markdown.contains("workspace"));
     }
 
     #[test]

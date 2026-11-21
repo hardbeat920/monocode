@@ -43,8 +43,43 @@ pub fn paths(row: &Row) -> Result<Vec<PathBuf>, String> {
 /// Older native prompts kept their attachments as trailing local file links.
 /// Keep those histories readable without rewriting them.
 pub fn legacy_tail(text: &str) -> (&str, Vec<PathBuf>) {
+    legacy_tail_with(text, |name, path| {
+        let path = Path::new(path);
+        (path.is_absolute() && path.file_name().and_then(|part| part.to_str()) == Some(name))
+            .then(|| path.to_path_buf())
+    })
+}
+
+/// Recognize foreign path syntax for a names-only export without offering
+/// foreign paths to the native attachment renderer.
+pub(crate) fn legacy_export_names(text: &str) -> (&str, Vec<&str>) {
+    legacy_tail_with(text, |name, path| {
+        ((path.starts_with('/') || is_absolute_windows_path(path))
+            && export_basename(path) == Some(name))
+        .then_some(name)
+    })
+}
+
+fn is_absolute_windows_path(path: &str) -> bool {
+    path.starts_with("\\\\")
+        || matches!(path.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic())
+}
+
+pub(crate) fn export_basename(path: &str) -> Option<&str> {
+    let name = if is_absolute_windows_path(path) {
+        path.rsplit(['/', '\\']).next()
+    } else {
+        path.rsplit('/').next()
+    };
+    name.filter(|part| !part.trim().is_empty())
+}
+
+fn legacy_tail_with<'a, T>(
+    text: &'a str,
+    attachment: impl Fn(&'a str, &'a str) -> Option<T>,
+) -> (&'a str, Vec<T>) {
     let mut body = text;
-    let mut paths = Vec::new();
+    let mut attachments = Vec::new();
     while let Some((before, tail)) = body.rsplit_once("\n\n") {
         let Some((name, path)) = tail
             .strip_prefix('[')
@@ -53,20 +88,14 @@ pub fn legacy_tail(text: &str) -> (&str, Vec<PathBuf>) {
         else {
             break;
         };
-        let native_path = Path::new(path);
-        let native_match = native_path.is_absolute()
-            && native_path.file_name().and_then(|part| part.to_str()) == Some(name);
-        let windows_path = path.starts_with("\\\\")
-            || matches!(path.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
-        let windows_match = windows_path && path.rsplit(['/', '\\']).next() == Some(name);
-        if !native_match && !windows_match {
+        let Some(attachment) = attachment(name, path) else {
             break;
-        }
-        paths.push(native_path.to_path_buf());
+        };
+        attachments.push(attachment);
         body = before;
     }
-    paths.reverse();
-    (body, paths)
+    attachments.reverse();
+    (body, attachments)
 }
 
 impl Transcript {
@@ -87,4 +116,12 @@ impl Transcript {
             });
         }
     }
+}
+
+#[cfg(all(test, not(windows)))]
+#[test]
+fn foreign_windows_legacy_names_do_not_become_native_attachment_paths() {
+    let text = "A report\n\n[report.png](<C:\\workspace\\report.png>)";
+    assert_eq!(legacy_export_names(text), ("A report", vec!["report.png"]));
+    assert_eq!(legacy_tail(text), (text, Vec::new()));
 }

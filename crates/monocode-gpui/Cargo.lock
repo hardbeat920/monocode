@@ -3751,6 +3751,7 @@ dependencies = [
  "minisign-verify",
  "monocode-mobile-link",
  "natpmp",
+ "pulldown-cmark",
  "quinn",
  "rand 0.9.5",
  "regex",
