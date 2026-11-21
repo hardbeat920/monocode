@@ -346,6 +346,11 @@ impl Conversation {
         self.loaded
             .then(|| (self.model_label(), self.branch.clone()))
     }
+    /// Distinguish a provider default from settings that have yet to load.
+    pub(crate) fn model_for_app_list(&self) -> Option<Option<&str>> {
+        let model = self.settings.model.as_deref();
+        (self.loaded || self.settings.revision != 0 || model.is_some()).then_some(model)
+    }
     pub(crate) fn preview(&self, done: bool) -> AnyElement {
         let kind = Kind::from_id(&self.summary.provider);
         let model = self.resolved_model.as_deref().or(self.model.as_deref());
@@ -1986,8 +1991,9 @@ impl Conversation {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        let mut settings = self.settings.clone();
-        settings.model = self.model.clone();
+        // App tools can clone the live settings before the save reaches disk.
+        self.settings.model.clone_from(&self.model);
+        let settings = self.settings.clone();
         let store = self.store.clone();
         let id = self.summary.id;
         let provider = self.summary.provider.clone();

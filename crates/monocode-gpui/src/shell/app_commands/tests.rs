@@ -253,6 +253,69 @@ fn operator_scopes_sessions_and_preserves_an_unsent_draft(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn operator_tools_use_the_current_model_selection(cx: &mut TestAppContext) {
+    let (window, _, caller) = setup(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.session_details.insert(
+                caller,
+                monocode_core::store::MobileSessionMetadata {
+                    model: Some("previous-model".into()),
+                    ..Default::default()
+                },
+            );
+            shell.sessions[&caller].update(cx, |view, cx| {
+                view.install_transfer(
+                    Settings {
+                        model: Some("previous-model".into()),
+                        operator_enabled: true,
+                        ..Default::default()
+                    },
+                    None,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+
+    for (request, model) in [("explicit", Some("selected-model")), ("default", None)] {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&caller].update(cx, |view, cx| {
+                    view.mobile_configure(
+                        Some((Kind::Claude, model.map(str::to_owned))),
+                        &Default::default(),
+                        None,
+                        cx,
+                    );
+                });
+            })
+            .unwrap();
+        let list = call(window, caller, request, "sessions.list", json!({}), cx).unwrap();
+        let listed = list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["sessionId"] == caller)
+            .unwrap();
+        assert_eq!(listed["model"].as_str(), model);
+
+        let child = launch(window, caller, &format!("draft-{request}"), json!({}), cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let child = shell.sessions[&child].read(cx);
+                assert_ne!(child.settings.model.as_deref(), Some("previous-model"));
+                if let Some(model) = model {
+                    assert_eq!(child.settings.model.as_deref(), Some(model));
+                }
+                assert!(child.has_saved_draft());
+                assert!(!child.busy);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
 fn operator_children_are_visible_durable_and_do_not_navigate_by_default(cx: &mut TestAppContext) {
     let (window, _, caller) = setup(cx);
     let child = launch(
