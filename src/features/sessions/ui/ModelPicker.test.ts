@@ -64,6 +64,7 @@ vi.mock("../../../shared/ui/Popover", () => ({
 }));
 
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
+import { LOCAL_MODEL_SOURCE, ModelSourceContext } from "./modelSource";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
@@ -126,6 +127,100 @@ function inputText(input: HTMLInputElement, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+
+describe("local OpenCode catalog refresh", () => {
+  const existing = {
+    id: "opencode:opencode-go/first",
+    harness: "opencode" as const,
+    name: "First model",
+    nativeId: "opencode-go/first",
+    provider: { id: "opencode-go", name: "OpenCode Go" },
+  };
+  const added = {
+    id: "opencode:venice/second",
+    harness: "opencode" as const,
+    name: "Second model",
+    nativeId: "venice/second",
+    provider: { id: "venice", name: "Venice" },
+  };
+
+  function openPicker(reloadOpenCode?: () => Promise<void>) {
+    const onChange = vi.fn();
+    setHarnessModels("opencode", [existing]);
+    act(() =>
+      root.render(
+        createElement(
+          ModelSourceContext.Provider,
+          { value: { ...LOCAL_MODEL_SOURCE, reloadOpenCode } },
+          createElement(ModelPicker, {
+            harness: "opencode",
+            model: existing.id,
+            values: {},
+            hideSettings: true,
+            onChange,
+            onSettingsChange: vi.fn(),
+          }),
+        ),
+      ),
+    );
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-haspopup]')!.click());
+    return onChange;
+  }
+
+  const refreshButton = () => container.querySelector<HTMLButtonElement>(
+    '[aria-label="Refresh OpenCode models"]',
+  );
+
+  it("keeps the search while loading newly discovered models", async () => {
+    let finish!: () => void;
+    const reload = vi.fn(() => new Promise<void>((resolve) => {
+      finish = () => {
+        setHarnessModels("opencode", [existing, added]);
+        resolve();
+      };
+    }));
+    const onChange = openPicker(reload);
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Search models"]')!;
+    inputText(search, "Venice");
+    const refresh = refreshButton()!;
+    act(() => refresh.click());
+
+    expect(refresh.getAttribute("aria-disabled")).toBe("true");
+    expect(container.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Refreshing OpenCode models…");
+    act(() => refresh.click());
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    expect(search.value).toBe("Venice");
+    expect(container.querySelector('[role="option"][aria-label="Second model, Venice"]')).not.toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("OpenCode models refreshed.");
+    expect(refresh.getAttribute("aria-disabled")).toBe("false");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the selected model available when refresh fails and allows retry", async () => {
+    const reload = vi.fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const onChange = openPicker(reload);
+    const refresh = refreshButton()!;
+    await act(async () => refresh.click());
+
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Refresh failed. Try again.");
+    expect(container.querySelector('[role="option"][aria-selected="true"]')?.textContent).toBe("First model");
+    await act(async () => refresh.click());
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("OpenCode models refreshed.");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a local refresh when the source does not support it", () => {
+    openPicker();
+    expect(refreshButton()).toBeNull();
+    expect(container.querySelector('[role="option"][aria-selected="true"]')).not.toBeNull();
+  });
+});
 
 describe("model picker", () => {
   it("shows the model name and effort in the combined picker", () => {

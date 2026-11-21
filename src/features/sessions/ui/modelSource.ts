@@ -12,6 +12,7 @@ import {
   probeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import { reloadOpenCodeCatalog } from "../../../integrations/harness/providers/opencode/opencodeCatalog";
 
 /** Where the model picker gets its models and provider availability. The
  * default is this computer's catalog; a remote session supplies its host's. */
@@ -25,6 +26,8 @@ export type ModelSource = {
   probed(): boolean;
   /** Refresh availability and catalogs, when the source supports it. */
   refresh(harnesses: HarnessId[]): void;
+  /** Explicit refresh with feedback for sources backed by local OpenCode. */
+  reloadOpenCode?: () => Promise<void>;
 };
 
 export const LOCAL_MODEL_SOURCE: ModelSource = {
@@ -33,6 +36,7 @@ export const LOCAL_MODEL_SOURCE: ModelSource = {
   find: findModel,
   available: isHarnessAvailable,
   probed: hasProbedHarnessAvailability,
+  reloadOpenCode: reloadOpenCodeCatalog,
   refresh: (harnesses) => {
     void probeHarnessAvailability();
     void refreshHarnessCatalogs(harnesses);
