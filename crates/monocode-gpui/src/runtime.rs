@@ -123,6 +123,7 @@ fn run_turn_using(
         prompt,
         mut settings,
     } = input;
+    let requested_orchestration = settings.orchestrator;
     if settings.account.root.is_none() && settings.account.id != monocode_core::accounts::DEFAULT {
         settings.account.root = locked(&store)
             .ok()
@@ -1077,10 +1078,19 @@ fn run_turn_using(
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");
     }
-    let orchestration = (planning_orchestration && !cancelled && status == "Ready").then(|| {
+    let orchestration = if cancelled || !requested_orchestration {
+        None
+    } else if status != "Ready" {
+        Some(Err(
+            "The planning turn did not finish. Check the session error, then select Retry plan."
+                .into(),
+        ))
+    } else if planning_orchestration {
         let assistant = monocode_core::response::prose(&transcript.rows[turn_start..]);
-        orchestration::parse_response(&native_proposal, &assistant)
-    });
+        Some(orchestration::parse_response(&native_proposal, &assistant))
+    } else {
+        None
+    };
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {

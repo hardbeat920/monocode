@@ -490,19 +490,26 @@ impl Conversation {
         self.settings.internal_message = internal;
     }
     fn retry_orchestration_plan(&mut self, cx: &mut Context<Self>) {
-        if self.available_for_managed_run(cx)
-            && let Some(error) = &self.orchestration_error
-        {
-            self.launch_message(
-                monocode_core::follow_up::Message {
-                    mode: Some("orchestrator".into()),
-                    text: format!(
-                        "Regenerate the complete orchestration plan for my original request. Reuse the investigation already done. Correct the previous proposal using this feedback:\n{error}"
-                    ),
-                    ..Default::default()
-                },
-                cx,
-            );
+        if !self.available_for_managed_run(cx) || self.orchestration_error.is_none() {
+            return;
+        }
+        if !self.history_ready() {
+            // Defer the whole retry so its planning mode survives history loading.
+            self.defer_history_action(|this, cx| this.retry_orchestration_plan(cx), cx);
+            return;
+        }
+        let previous_error = self.orchestration_error.take();
+        self.launch_message(
+            monocode_core::follow_up::Message {
+                mode: Some("orchestrator".into()),
+                text: "Regenerate the complete orchestration plan for my original request. Reuse the investigation already done and follow the required proposal format.".into(),
+                ..Default::default()
+            },
+            cx,
+        );
+        if !self.busy {
+            self.orchestration_error = previous_error;
+            cx.notify();
         }
     }
     pub(super) fn orchestration_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -637,5 +644,52 @@ impl Conversation {
                 );
         }
         Some(card.into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[gpui::test]
+    fn retry_waits_for_history_and_restores_read_only_planning(cx: &mut gpui::TestAppContext) {
+        let store = monocode_core::store::Store::open(Path::new(":memory:")).unwrap();
+        let mut summary = store.create("codex", "/test-project").unwrap();
+        summary.has_messages = true;
+        // Reject the background runtime's preflight before any provider runs.
+        store.mark_edit_recovery_required(summary.id).unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        view.update(cx, |view, cx| {
+            view.loaded = true;
+            view.history_unloaded = true;
+            view.loading = true;
+            view.settings.access = AccessMode::FullAccess;
+            view.orchestration_error = Some("fixture diagnostic".into());
+
+            view.retry_orchestration_plan(cx);
+            assert!(!view.busy);
+            assert_eq!(
+                view.orchestration_error.as_deref(),
+                Some("fixture diagnostic")
+            );
+            assert_eq!(view.history_actions.len(), 1);
+
+            view.history_unloaded = false;
+            view.loading = false;
+            view.run_history_actions(cx);
+            assert!(view.busy);
+            assert!(view.planning_orchestration && view.app_read_only);
+            assert!(view.orchestration_error.is_none());
+            assert!(view.settings.access == AccessMode::FullAccess);
+            assert!(
+                view.transcript
+                    .read(cx)
+                    .source_rows()
+                    .iter()
+                    .all(|row| { !row.text.contains("fixture diagnostic") })
+            );
+        });
+        cx.run_until_parked();
     }
 }

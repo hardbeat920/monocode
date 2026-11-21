@@ -100,6 +100,11 @@ impl Conversation {
     ) {
         self.enqueue_follow_up_inverted(prompt, mode, false, cx);
     }
+    fn can_steer_follow_ups(&self) -> bool {
+        // A proposal is a response to one request. Do not change that request
+        // while the provider can still finish an earlier draft of the plan.
+        !self.planning_orchestration && Kind::from_id(&self.summary.provider).can_steer()
+    }
     /// Whether a plain follow-up sent now steers the turn rather than queuing;
     /// `invert` flips the preference, as Cmd+Enter does.
     pub(super) fn steers_follow_up(&self, invert: bool, cx: &gpui::App) -> bool {
@@ -110,7 +115,7 @@ impl Conversation {
         // may never end (a dev server), queuing would park the message behind
         // it, so hand it to the agent now.
         (prefers_steer != invert || !self.background.tasks.is_empty())
-            && Kind::from_id(&self.summary.provider).can_steer()
+            && self.can_steer_follow_ups()
     }
     /// `invert` flips the follow-up preference for this message (Cmd+Enter).
     pub(super) fn enqueue_follow_up_inverted(
@@ -218,7 +223,7 @@ impl Conversation {
             message.steer = cx
                 .try_global::<crate::settings::Preferences>()
                 .is_none_or(|prefs| prefs.follow_up == "steer")
-                && Kind::from_id(&self.summary.provider).can_steer();
+                && self.can_steer_follow_ups();
             if !self.busy {
                 self.follow_ups.requested = Some(message.id.clone());
             }
@@ -339,7 +344,7 @@ impl Conversation {
                 return;
             }
             if !message.steer
-                || !Kind::from_id(&self.summary.provider).can_steer()
+                || !self.can_steer_follow_ups()
                 || !message.can_steer()
                 || !self.follow_ups.ready
                 || (!requested
@@ -534,8 +539,8 @@ impl Conversation {
                     } else {
                         let (steer, edit, remove) = (id.clone(), id.clone(), id);
                         row.child(div().flex_1().min_w_0().py_1().child(div().id("queued-message-text").role(Role::Label).aria_label(message.label()).truncate().text_color(content(0.75)).child(message.label())).when_some(message.error.clone(), |d, error| d.child(div().id("queue-error").role(Role::Alert).text_color(gpui::rgb(0xf87171)).child(error))))
-                            .when(Kind::from_id(&self.summary.provider).can_steer(), |d| d.child(queue_button("queue-steer", "Steer queued message", "queue-steer").w_auto().px_2().gap(px(6.)).opacity(if sending { 0.4 } else { 1. }).child("Steer").on_click(cx.listener(move |this, _, _, cx| {
-                                if !sending && let Some(message) = this.follow_ups.state.messages.iter_mut().find(|m| m.id == steer) {
+                            .when(self.can_steer_follow_ups(), |d| d.child(queue_button("queue-steer", "Steer queued message", "queue-steer").w_auto().px_2().gap(px(6.)).opacity(if sending { 0.4 } else { 1. }).child("Steer").on_click(cx.listener(move |this, _, _, cx| {
+                                if !sending && this.can_steer_follow_ups() && let Some(message) = this.follow_ups.state.messages.iter_mut().find(|m| m.id == steer) {
                                     if !message.can_steer() && this.busy { return; }
                                     message.steer = true;
                                     message.error = None;
@@ -707,6 +712,40 @@ mod tests {
             queue_top - settled >= 30.,
             "Reduce Motion must reveal the full row immediately"
         );
+    }
+
+    #[gpui::test]
+    fn orchestration_planning_queues_follow_ups_until_the_turn_ends(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let (send, receive) = std::sync::mpsc::channel();
+        window
+            .update(cx, |view, _, cx| {
+                view.summary.has_messages = true;
+                view.busy = true;
+                view.planning_orchestration = true;
+                view.follow_ups.ready = true;
+                view.controls = Some(send);
+                view.input.update(cx, |input, cx| {
+                    input.set_text("Use the updated requirements".into(), cx)
+                });
+                // The fixture normally queues, so alternate Send would steer.
+                assert_eq!(
+                    view.follow_up_action(true, cx),
+                    Some(("Queue", "queue-list"))
+                );
+                view.send_follow_up(true, cx);
+                assert_eq!(view.follow_ups.state.messages.len(), 1);
+                assert!(!view.follow_ups.state.messages[0].steer);
+
+                // A persisted or explicitly requested steer is blocked as well.
+                view.follow_ups.state.messages[0].steer = true;
+                view.follow_ups.requested = Some(view.follow_ups.state.messages[0].id.clone());
+                view.follow_ups.persisted = view.follow_ups.state.revision;
+                view.pump_follow_ups(cx);
+                assert!(view.follow_ups.sending.is_none());
+                assert!(receive.try_recv().is_err());
+            })
+            .unwrap();
     }
 
     #[gpui::test]
