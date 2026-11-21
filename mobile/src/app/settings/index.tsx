@@ -1,11 +1,14 @@
 import { router, useLocalSearchParams, useNavigationContainerRef } from "expo-router";
 import { Fragment, useState } from "react";
-import { Alert, Linking, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, Linking, Platform, StyleSheet, Switch, Text, View } from "react-native";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
 import { MONOS_ENABLED } from "@/features/connection/selection";
 import { useNotificationsBlocked } from "@/features/notifications/SessionNotifications";
 import { useAppearancePreference } from "@/features/settings/appearance";
+import { engineFor } from "@/features/sessions/dictationEngines";
+import { languageName } from "@/features/sessions/dictationLanguages";
+import { useDictationPreference } from "@/features/settings/dictation";
 import { accessMode } from "@/features/models/access";
 import {
   useDefaultModel,
@@ -44,6 +47,7 @@ export default function SettingsScreen() {
   const [openAfterStarting, setOpenAfterStarting] = useOpenSessionAfterStarting();
   const blocked = useNotificationsBlocked();
   const [monoOnly] = useMonoOnlyLayout();
+  const [dictation] = useDictationPreference();
   const navigation = useNavigationContainerRef();
   const switchLayout = useChangeLayout();
   // The layouts go about the app differently, so settings closes, and the
@@ -166,6 +170,20 @@ export default function SettingsScreen() {
             router.push({ pathname: "/settings/permissions", params })
           }
         />
+        {/* Dictation runs on iOS only. */}
+        {Platform.OS === "ios" ? (
+          <>
+            <View style={styles.divider} />
+            <SettingsRow
+              icon="mic"
+              label="Dictation"
+              value={`${engineFor(dictation.engine)?.label ?? "Apple Speech"}, ${
+                dictation.language ? languageName(dictation.language) : "Automatic"
+              }`}
+              onPress={() => router.push("/settings/dictation")}
+            />
+          </>
+        ) : null}
       </View>
 
       <Text style={styles.heading}>New sessions</Text>

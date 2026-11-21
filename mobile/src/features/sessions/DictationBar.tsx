@@ -9,6 +9,7 @@ import {
 } from "expo-audio";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -31,7 +32,14 @@ import Animated, {
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors } from "@/ui/theme";
 
-import { formatElapsed, meterLevel, prepareDictation, transcribe } from "./dictation";
+import {
+  DictationError,
+  formatElapsed,
+  meterLevel,
+  prepareDictation,
+  transcribe,
+  type DictationSession,
+} from "./dictation";
 
 const BUTTON = 36;
 /** Readings kept for the waveform, newest last. */
@@ -66,6 +74,8 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
   const [phase, setPhase] = useState<Phase>("preparing");
   const stage = useRef<Phase>("preparing");
   const recorder = useRef<AudioRecorder | null>(null);
+  // The engine and language readied for this recording.
+  const session = useRef<DictationSession | null>(null);
   const [seconds, setSeconds] = useState(0);
   const levels = useSharedValue<number[]>(Array(HISTORY).fill(0));
   // Read through a function: TypeScript keeps a ref's narrowing across awaits.
@@ -78,13 +88,22 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
   const fail = (title: string, reason: unknown) => {
     if (stage.current === "done") return;
     stage.current = "done";
-    Alert.alert(title, reason instanceof Error ? reason.message : String(reason));
+    if (reason instanceof DictationError) {
+      // An engine or language that can't be used: settings is where it's fixed.
+      Alert.alert(reason.problem.title, reason.problem.message, [
+        { text: "OK", style: "cancel" },
+        { text: "Dictation Settings", onPress: () => router.push("/settings/dictation") },
+      ]);
+    } else {
+      Alert.alert(title, reason instanceof Error ? reason.message : String(reason));
+    }
     close.current(null);
   };
 
   const finish = async () => {
     const current = recorder.current;
-    if (stage.current !== "recording" || !current) return;
+    const readied = session.current;
+    if (stage.current !== "recording" || !current || !readied) return;
     stage.current = "transcribing";
     setPhase("transcribing");
     try {
@@ -93,7 +112,7 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
       await endAudioSession();
       const uri = current.uri;
       if (!uri) throw new Error("Nothing was recorded.");
-      const words = await transcribe(await new File(uri).arrayBuffer());
+      const words = await transcribe(readied, uri);
       if (stage.current !== "transcribing") return;
       stage.current = "done";
       if (!words) Alert.alert("No speech heard", "Try again a little closer to the microphone.");
@@ -124,7 +143,7 @@ export function DictationBar({ onClose }: { onClose: (words: string | null) => v
         close.current(null);
         return;
       }
-      await prepareDictation();
+      session.current = await prepareDictation();
       if (stopped()) return;
       await setAudioModeAsync({
         allowsRecording: true,
