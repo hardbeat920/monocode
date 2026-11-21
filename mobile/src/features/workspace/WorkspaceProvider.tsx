@@ -568,7 +568,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const apply = async () => {
         if (current.current.pairing?.desktop.fingerprint !== desktop)
           throw new Error("The desktop connection changed. Try again.");
-        await mutate("session.configure", { conversationId, ...choice });
+        // Reapply the current choice even if an earlier request with the same
+        // settings succeeded and its reply was lost.
+        await command("session.configure", { conversationId, ...choice }, makeCommandId());
       };
       if (choice.model === undefined) {
         await apply();
@@ -584,7 +586,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (changes.get(scope) === change) changes.delete(scope);
       }
     },
-    [desktop, mutate],
+    [command, desktop],
   );
   const stop = useCallback(
     async (conversationId: string) => {

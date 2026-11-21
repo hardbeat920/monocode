@@ -13,6 +13,7 @@ import type { Turn } from "@/features/workspace/types";
 const link = vi.hoisted(() => ({
   pairing: { desktop: { fingerprint: "desktop" } },
   command: vi.fn(),
+  makeCommandId: vi.fn(),
   refresh: vi.fn(),
   openWatch: vi.fn(),
   nextUpdates: vi.fn(),
@@ -41,7 +42,7 @@ vi.mock("@/features/connection/ConnectionProvider", () => ({
 }));
 vi.mock("@/features/connection/nativeLink", () => ({
   get hasNativeTranscript() { return link.nativeTranscript; },
-  makeCommandId: () => "request-id",
+  makeCommandId: link.makeCommandId,
   openWatch: link.openWatch,
   nextUpdates: link.nextUpdates,
   closeWatch: link.closeWatch,
@@ -84,6 +85,7 @@ describe("starting mobile sessions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    link.makeCommandId.mockReset().mockReturnValue("request-id");
     link.pairing = { desktop: { fingerprint: "desktop" } };
     link.nativeTranscript = false;
     link.storage.clear();
@@ -236,6 +238,48 @@ describe("starting mobile sessions", () => {
       await Promise.all([lastResult, sent]);
     });
     expect(link.command.mock.calls.at(-1)?.[0]).toBe("conversation.send");
+  });
+
+  it("reapplies an earlier model before sending when its first reply was lost", async () => {
+    vi.useFakeTimers();
+    link.nativeTranscript = true;
+    let nextRequest = 0;
+    link.makeCommandId.mockImplementation(() => `request-${++nextRequest}`);
+    const completed = new Set<string>();
+    let desktopModel: string | undefined;
+    let sentWithModel: string | undefined;
+    link.command.mockImplementation(async (method: string, params: { model?: string }, id: string) => {
+      if (method === "conversation.send") {
+        sentWithModel = desktopModel;
+      } else if (method === "session.configure" && !completed.has(id)) {
+        desktopModel = params.model;
+        completed.add(id);
+        if (completed.size === 1) throw new Error("The reply was lost");
+      }
+    });
+    render("session");
+
+    await act(async () => {
+      const picked = workspace.configureSession("session", { harness: "codex", model: "codex:a" });
+      const rejected = expect(picked).rejects.toThrow("The reply was lost");
+      await vi.advanceTimersByTimeAsync(400);
+      await rejected;
+    });
+    expect(desktopModel).toBe("codex:a");
+
+    await act(async () => {
+      const picked = workspace.configureSession("session", { harness: "codex", model: "codex:b" });
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await picked).toBe("applied");
+    });
+    expect(desktopModel).toBe("codex:b");
+
+    await act(async () => {
+      const picked = workspace.configureSession("session", { harness: "codex", model: "codex:a" });
+      await workspace.sendMessage("session", "Use model A");
+      expect(await picked).toBe("applied");
+    });
+    expect(sentWithModel).toBe("codex:a");
   });
 
   it("keeps a failed model change from submitting a draft with the old model", async () => {
