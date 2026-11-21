@@ -20,7 +20,10 @@ import {
 import { notifyGitChanged } from "../../../platform/tauri/fs";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
-import { registerRemoteSessionActions } from "../model/remoteSessionActions";
+import {
+  registerRemoteSessionActions,
+  type RemoteSessionChoice,
+} from "../model/remoteSessionActions";
 import {
   clearPendingRemoteCommand,
   loadRemoteSession,
@@ -710,6 +713,60 @@ function ConnectedRemoteSession({
       });
   });
 
+  const configure = async (choice: RemoteSessionChoice) => {
+    const current = snapshotRef.current?.session;
+    if (
+      !online || !current || current.id !== sessionId || current.id !== boundSession.current ||
+      current.busy || busy || pending || changes || sendingRef.current
+    )
+      throw new Error("Wait for the host conversation to be ready before changing its model.");
+    if (choice.harness && choice.harness !== current.harness)
+      throw new Error("A started host conversation keeps its current provider.");
+    const picked = choice.model
+      ? findRemoteModel(catalog?.models[current.harness as RemoteProvider] ?? [], choice.model)
+      : undefined;
+    if (choice.model && choice.model !== current.model && !picked)
+      throw new Error("The selected model is unavailable on this host.");
+    const model = picked?.id ?? current.model;
+    const currentSettings = current.modelSettings ?? {};
+    const modelSettings = picked && model !== current.model
+      ? carryModelSettings(picked.settings ?? [], choice.modelSettings ?? currentSettings)
+      : { ...currentSettings, ...choice.modelSettings };
+    const runtimeMode = choice.runtimeMode ?? current.runtimeMode;
+    if (
+      model === current.model &&
+      runtimeMode === current.runtimeMode &&
+      sameModelSettings(modelSettings, currentSettings)
+    ) return;
+
+    const version = bindingVersion.current;
+    const receipt = await run({
+      type: "configure",
+      commandId: crypto.randomUUID(),
+      sessionId: current.id,
+      model,
+      modelSettings,
+      runtimeMode,
+    });
+    if (!receipt)
+      throw new Error("The host did not confirm the model change.");
+    const confirmed = await loadRemoteSession(machine.id, current.id);
+    if (
+      !alive.current ||
+      bindingVersion.current !== version ||
+      confirmed.projectId !== project.projectId ||
+      confirmed.revision < receipt.revision ||
+      confirmed.session.model !== model ||
+      confirmed.session.runtimeMode !== runtimeMode ||
+      !sameModelSettings(confirmed.session.modelSettings, modelSettings)
+    )
+      throw new Error("The host conversation changed before the model could be confirmed.");
+    snapshotRef.current = confirmed;
+    setSnapshot((current) =>
+      current && current.revision > confirmed.revision ? current : confirmed,
+    );
+  };
+
   const dispatchTurn = async (
     id: string,
     turn: OptimisticTurn,
@@ -1160,10 +1217,11 @@ function ConnectedRemoteSession({
       saveDraft,
       stop: stopTurn,
       compact,
+      configure,
       approve,
       answer,
     }),
-    [shell.id, buildPlan, saveDraft, stopTurn, compact, approve, answer],
+    [shell.id, buildPlan, saveDraft, stopTurn, compact, configure, approve, answer],
   );
 
   const hostFilePath = (path: string) => {

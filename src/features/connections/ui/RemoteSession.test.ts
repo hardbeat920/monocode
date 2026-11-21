@@ -10,6 +10,7 @@ import {
 import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
+import { remoteSessionActions } from "../model/remoteSessionActions";
 import { preloadRemoteSession } from "./RemoteSession";
 import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
 import "../model/remoteCommands";
@@ -961,6 +962,103 @@ it("applies effort changes directly and uses them on the next turn", async () =>
   expect(byLabel("Reasoning:")?.getAttribute("aria-label")).toBe(
     "Reasoning: Low",
   );
+});
+
+it("confirms a phone model change with the host before the next send", async () => {
+  const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
+  catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
+  await render();
+  await send("First");
+  await settle();
+
+  await act(async () => {
+    const actions = remoteSessionActions("shell")!;
+    await actions.configure({
+      harness: "codex",
+      model: nextModel.id,
+      modelSettings: { reasoningEffort: "high" },
+    });
+    expect(host?.session.model).toBe(nextModel.id);
+    expect(host?.session.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(actions.submit("Use the new model", [])).toBe(true);
+  });
+  await settle();
+  expect(commands.slice(-2)).toMatchObject([
+    { type: "configure", model: nextModel.id, modelSettings: { reasoningEffort: "high" } },
+    { type: "send", text: "Use the new model" },
+  ]);
+});
+
+it("uses the confirmed host configuration for another phone choice before a render", async () => {
+  const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
+  catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
+  await render();
+  await send("First");
+  await settle();
+
+  await act(async () => {
+    const actions = remoteSessionActions("shell")!;
+    await actions.configure({
+      model: nextModel.id,
+      modelSettings: { reasoningEffort: "low" },
+      runtimeMode: "auto-accept-edits",
+    });
+    expect(host?.session.model).toBe(nextModel.id);
+    expect(remoteSessionActions("shell")).toBe(actions);
+    await actions.configure({ model: gpt.id });
+  });
+
+  expect(commands.filter((command) => command.type === "configure")).toMatchObject([
+    { model: nextModel.id },
+    { model: gpt.id, modelSettings: { reasoningEffort: "low" }, runtimeMode: "auto-accept-edits" },
+  ]);
+  expect(host?.session.model).toBe(gpt.id);
+});
+
+it("keeps settings absent from the catalog when the phone reselects the saved model", async () => {
+  host = {
+    projectId: "project",
+    revision: 1,
+    status: "idle",
+    updatedAt: 0,
+    session: {
+      id: "host-session",
+      cwd: "/home/me/repo",
+      harness: "codex",
+      model: gpt.id,
+      modelSettings: { reasoningEffort: "high", serviceTier: "fast" },
+      runtimeMode: "supervised",
+      title: "Existing conversation",
+      blocks: [],
+    },
+  };
+  rememberRemoteSession("shell", "host-session");
+  await render();
+
+  await act(async () => {
+    const actions = remoteSessionActions("shell")!;
+    await actions.configure({ model: gpt.id, runtimeMode: "auto-accept-edits" });
+    expect(host?.session.modelSettings).toEqual({ reasoningEffort: "high", serviceTier: "fast" });
+    expect(host?.session.runtimeMode).toBe("auto-accept-edits");
+    await actions.configure({ model: gpt.id, modelSettings: { reasoningEffort: "low" } });
+  });
+
+  expect(host?.session.modelSettings).toEqual({ reasoningEffort: "low", serviceTier: "fast" });
+  expect(host?.session.runtimeMode).toBe("auto-accept-edits");
+});
+
+it("rejects a phone choice for another provider in a started host conversation", async () => {
+  await render();
+  await send("First");
+  await settle();
+  await expect(
+    remoteSessionActions("shell")!.configure({
+      harness: "cursor",
+      model: cursor.id,
+    }),
+  ).rejects.toThrow("keeps its current provider");
+  expect(commands.some((command) => command.type === "configure")).toBe(false);
+  expect(host?.session.model).toBe(gpt.id);
 });
 
 it("keeps a saved model's effort editable when the host catalog fails", async () => {
