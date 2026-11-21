@@ -1,61 +1,53 @@
-import { Platform } from "react-native";
+import { getDictationPreference } from "@/features/settings/dictation";
 
-// Dictation is transcribed on the phone, by Apple's SpeechTranscriber (iOS 26
-// and up)
+import { dictationEngineInfo, ENGINES, engineFor, type Prepared } from "./dictationEngines";
+import { planDictation, type DictationProblem, type EngineId } from "./dictationLanguages";
 
-type AppleTranscription =
-  typeof import("@react-native-ai/apple").AppleTranscription;
+// Dictation is recorded and transcribed on the phone, by the engine and in
+// the language picked in Settings → Dictation; only the words reach the
+// desktop, so it works however the desktop is reached, or while it is away.
 
-let transcription: AppleTranscription | null | undefined;
-
-/** The native transcriber, loaded on first use: the package's turbo modules
- *  are looked up as it loads, and throw where they aren't built in. */
-function transcriber() {
-  if (transcription === undefined) {
-    try {
-      transcription =
-        Platform.OS === "ios"
-          ? // eslint-disable-next-line @typescript-eslint/no-require-imports
-            (
-              require("@react-native-ai/apple") as typeof import("@react-native-ai/apple")
-            ).AppleTranscription
-          : null;
-    } catch {
-      transcription = null;
-    }
-  }
-  return transcription;
-}
-
-/** The phone's language, as the transcriber takes it ("en-US"). */
+/** The phone's language ("en-US"): "Automatic" for an engine that can't
+ *  detect the spoken language itself. */
 export const dictationLocale = () =>
   Intl.DateTimeFormat().resolvedOptions().locale;
 
-/** Whether this phone can transcribe: iOS 26 or later, with the module built in. */
-export function canDictate() {
-  try {
-    return transcriber()?.isAvailable(dictationLocale()) ?? false;
-  } catch {
-    return false;
+/** A dictation that can't go ahead, with what to tell the user. */
+export class DictationError extends Error {
+  constructor(readonly problem: DictationProblem) {
+    super(problem.message);
+    this.name = "DictationError";
   }
 }
 
-/** Fetches the language's speech assets if they aren't on the phone yet. */
-export async function prepareDictation() {
-  const native = transcriber();
-  if (!native) throw new Error("Dictation isn't available on this device.");
-  await native.prepare(dictationLocale());
+/** Whether any engine can run on this phone: iOS 26 or later for Apple's. */
+export function canDictate() {
+  return ENGINES.some((engine) => engine.canRun());
 }
 
-/** The words in a recording, or "" when there were none. */
-export async function transcribe(audio: ArrayBuffer) {
-  const native = transcriber();
-  if (!native) throw new Error("Dictation isn't available on this device.");
-  const result = await native.transcribe(audio, dictationLocale());
-  return result.segments
-    .map((segment) => segment.text.trim())
-    .filter(Boolean)
-    .join(" ");
+export type DictationSession = {
+  engine: EngineId;
+  prepared: Prepared;
+  fellBackFrom?: EngineId;
+};
+
+/** Picks the engine and language and readies them: speech assets fetched if
+ *  they aren't on the phone yet. Throws a DictationError when the engine or
+ *  language can't be used. */
+export async function prepareDictation(): Promise<DictationSession> {
+  const plan = planDictation(
+    getDictationPreference(),
+    await dictationEngineInfo(),
+    dictationLocale(),
+  );
+  if (!plan.ok) throw new DictationError(plan.problem);
+  const prepared = await engineFor(plan.engine)!.prepare(plan.language);
+  return { engine: plan.engine, prepared, fellBackFrom: plan.fellBackFrom };
+}
+
+/** The words in the recording at `uri`, or "" when there were none. */
+export async function transcribe(session: DictationSession, uri: string) {
+  return engineFor(session.engine)!.transcribe(uri, session.prepared);
 }
 
 /** Below this the microphone hears only the room. */
