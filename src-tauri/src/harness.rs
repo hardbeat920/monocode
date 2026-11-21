@@ -3005,11 +3005,13 @@ pub(crate) fn apply_gui_env(cmd: &mut Command) {
 
 fn prepare_child(cmd: &mut Command, command: &str) {
     apply_gui_env(cmd);
-    if command_basename(command) == "fx" {
-        apply_fx_env(cmd);
-    }
-    if command_basename(command) == "grok" {
-        apply_grok_env(cmd);
+    match command_basename(command) {
+        "fx" => apply_fx_env(cmd),
+        "grok" => apply_grok_env(cmd),
+        "opencode" => {
+            apply_opencode_config(cmd, |key| std::env::var_os(key).is_some(), login_shell_env);
+        }
+        _ => {}
     }
     isolate_child(cmd);
 }
@@ -3040,6 +3042,25 @@ fn apply_grok_env(cmd: &mut Command) {
             continue;
         }
         if let Some(value) = login_shell_env(key) {
+            cmd.env(key, value);
+        }
+    }
+}
+
+// The GUI may be started without the login shell's custom config locations.
+// Apply the same fallback to catalog probes and the OpenCode server process.
+const OPENCODE_CONFIG_KEYS: [&str; 2] = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"];
+
+fn apply_opencode_config(
+    cmd: &mut Command,
+    inherited: impl Fn(&str) -> bool,
+    login: impl Fn(&str) -> Option<String>,
+) {
+    for key in OPENCODE_CONFIG_KEYS {
+        if inherited(key) || cmd.get_envs().any(|(name, _)| name == key) {
+            continue;
+        }
+        if let Some(value) = login(key) {
             cmd.env(key, value);
         }
     }
@@ -3089,6 +3110,7 @@ fn load_login_shell_env() -> HashMap<String, String> {
     {
         LOGIN_SHELL_KEYS
             .into_iter()
+            .chain(OPENCODE_CONFIG_KEYS)
             .filter_map(|key| {
                 let value = std::env::var(key).ok()?;
                 (!value.is_empty()).then(|| (key.to_string(), value))
@@ -3135,16 +3157,20 @@ fn load_unix_login_shell_env() -> HashMap<String, String> {
             return HashMap::new();
         }
     };
-    let mut map = HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if LOGIN_SHELL_KEYS.contains(&key) && !value.is_empty() {
-            map.insert(key.to_string(), value.to_string());
-        }
-    }
-    map
+    parse_login_shell_env(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn parse_login_shell_env(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (!value.is_empty()
+                && (LOGIN_SHELL_KEYS.contains(&key) || OPENCODE_CONFIG_KEYS.contains(&key)))
+            .then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 fn command_basename(command: &str) -> &str {
@@ -3762,6 +3788,46 @@ mod tests {
         assert_eq!(parts[0], "/opt/mise/shims");
         assert!(at("/opt/mise/shims") < at("/tmp/home/.local/bin"));
         assert!(at("/tmp/home/.local/bin") < at("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn opencode_config_locations_reach_the_child_from_the_login_shell() {
+        let login = parse_login_shell_env(
+            "shell greeting\nOPENCODE_CONFIG=/fixture/user config=work.json\n\
+             OPENCODE_CONFIG_DIR=/fixture/config dir\nUNRELATED_KEY=ignored\n",
+        );
+        assert_eq!(login.len(), 2);
+
+        let mut cmd = Command::new("opencode");
+        apply_opencode_config(&mut cmd, |_| false, |key| login.get(key).cloned());
+        let configured: HashMap<_, _> = cmd.get_envs().collect();
+        assert_eq!(
+            configured[std::ffi::OsStr::new("OPENCODE_CONFIG")],
+            Some(std::ffi::OsStr::new("/fixture/user config=work.json"))
+        );
+        assert_eq!(
+            configured[std::ffi::OsStr::new("OPENCODE_CONFIG_DIR")],
+            Some(std::ffi::OsStr::new("/fixture/config dir"))
+        );
+    }
+
+    #[test]
+    fn opencode_login_config_preserves_explicit_and_inherited_overrides() {
+        let mut cmd = Command::new("opencode");
+        cmd.env("OPENCODE_CONFIG", "/fixture/explicit.json");
+        apply_opencode_config(
+            &mut cmd,
+            |key| key == "OPENCODE_CONFIG_DIR",
+            |_| panic!("must not look up a fallback for an existing override"),
+        );
+        let configured: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(
+            configured,
+            vec![(
+                std::ffi::OsStr::new("OPENCODE_CONFIG"),
+                Some(std::ffi::OsStr::new("/fixture/explicit.json"))
+            )]
+        );
     }
 
     #[test]
