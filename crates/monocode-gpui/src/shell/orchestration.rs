@@ -137,7 +137,7 @@ impl Shell {
                         && let Some(view) = self.sessions.get(&id)
                     {
                         let view = view.read(cx);
-                        if !view.busy {
+                        if !view.external_submission_pending() {
                             let (success, report) = view.external_outcome(cx);
                             task.report = report;
                             task.state = if success { State::Done } else { State::Failed };
@@ -305,16 +305,13 @@ impl Shell {
             let ready = self
                 .sessions
                 .get(&lead)
-                .is_some_and(|v| v.read(cx).ready_for_external(cx));
+                .is_some_and(|v| v.read(cx).ready_for_orchestration_report());
             if stopped || ready {
                 self.orchestrations.remove(&lead);
                 if let Some(view) = self.sessions.get(&lead) {
                     view.update(cx, |v, cx| {
-                        v.orchestration_plan = None;
-                        v.set_orchestration_progress(None, cx);
-                        if !stopped {
-                            v.send_coordinator_report(format!("The orchestration workers have finished. Summarize and verify the combined results, identify incomplete work and report the outcome to the user. Preserve their changes.\n\n{reports}"), cx);
-                        }
+                        let report = (!stopped).then(|| format!("The orchestration workers have finished. Summarize and verify the combined results, identify incomplete work and report the outcome to the user. Preserve their changes.\n\n{reports}"));
+                        v.finish_orchestration(report, cx);
                     });
                 }
             }

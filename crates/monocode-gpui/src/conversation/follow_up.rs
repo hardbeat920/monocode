@@ -103,7 +103,7 @@ impl Conversation {
     fn can_steer_follow_ups(&self) -> bool {
         // A proposal is a response to one request. Do not change that request
         // while the provider can still finish an earlier draft of the plan.
-        !self.planning_orchestration && Kind::from_id(&self.summary.provider).can_steer()
+        !self.orchestration_blocks_follow_ups() && Kind::from_id(&self.summary.provider).can_steer()
     }
     /// Whether a plain follow-up sent now steers the turn rather than queuing;
     /// `invert` flips the preference, as Cmd+Enter does.
@@ -290,7 +290,10 @@ impl Conversation {
         }
     }
     pub(super) fn pump_follow_ups(&mut self, cx: &mut Context<Self>) {
-        if self.editing_last_turn.pending() || self.stopping {
+        if self.editing_last_turn.pending()
+            || self.stopping
+            || self.orchestration_blocks_follow_ups()
+        {
             return;
         }
         if !self.history_ready() {
@@ -400,8 +403,6 @@ impl Conversation {
         self.settings.plan = message.mode.as_deref() == Some("plan");
         self.settings.operator = message.mode.as_deref() == Some("operator");
         self.settings.orchestrator = message.mode.as_deref() == Some("orchestrator");
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
         let composer_attachments = std::mem::take(&mut self.attachments);
         self.settings.attachments = message.attachments;
         let previous_prepared = self.settings.prepared_prompt.take();
@@ -421,7 +422,11 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.resume_queue(cx), cx);
             return;
         }
-        if self.busy || !self.follow_ups.state.paused || self.follow_ups.state.messages.is_empty() {
+        if self.busy
+            || self.orchestration_blocks_follow_ups()
+            || !self.follow_ups.state.paused
+            || self.follow_ups.state.messages.is_empty()
+        {
             return;
         }
         // Resume the interrupted provider turn before releasing its outbox,
@@ -520,7 +525,7 @@ impl Conversation {
             .iter()
             .any(|m| m.error.is_some());
         let card = composer_shelf::card("message-queue-card", self.classic_layout)
-            .when(self.follow_ups.state.paused && !self.follow_ups.resuming, |d| d.child(
+            .when(self.follow_ups.state.paused && !self.follow_ups.resuming && !self.orchestration_blocks_follow_ups(), |d| d.child(
                 div().h(px(28.)).flex().items_center().gap_2().border_b_1().border_color(content(0.1))
                     .child(icon("queue-pause", 14.))
                     .child(div().flex_1().min_w_0().truncate().child(if failed { "A message couldn't be sent" } else { "Queue paused because you interrupted" }))
@@ -746,6 +751,50 @@ mod tests {
                 assert!(receive.try_recv().is_err());
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn completed_proposals_hold_follow_ups_until_dismissed(cx: &mut TestAppContext) {
+        for failed in [false, true] {
+            let window = conversation(cx);
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, cx| {
+                    // Neither branch of this test needs a real provider.
+                    locked(&view.store)
+                        .unwrap()
+                        .mark_edit_recovery_required(view.summary.id)
+                        .unwrap();
+                    if failed {
+                        view.orchestration_error = Some("Plan unavailable".into());
+                    } else {
+                        view.orchestration_plan = Some(monocode_core::orchestration::Plan {
+                            title: "Review workspace".into(),
+                            summary: "Check the changed files".into(),
+                            tasks: Vec::new(),
+                        });
+                    }
+                    assert!(view.sends_as_follow_up());
+                    view.follow_ups.state.messages.push(Message {
+                        id: "queued".into(),
+                        text: "Later request".into(),
+                        ..Default::default()
+                    });
+                    view.pump_follow_ups(cx);
+                    assert!(!view.busy);
+                    assert!(view.follow_ups.sending.is_none());
+                    assert_eq!(view.orchestration_error.is_some(), failed);
+                    assert_eq!(view.orchestration_plan.is_some(), !failed);
+
+                    view.dismiss_orchestration_proposal(cx);
+                    assert!(view.orchestration_plan.is_none());
+                    assert!(view.orchestration_error.is_none());
+                    assert!(view.busy);
+                    assert_eq!(view.follow_ups.sending.as_deref(), Some("queued"));
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
     }
 
     #[gpui::test]

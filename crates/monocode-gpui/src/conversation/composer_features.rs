@@ -441,14 +441,17 @@ impl Conversation {
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
+        self.ready_for_orchestration_report()
+            && self.input.read(cx).content.is_empty()
+            && self.attachments.is_empty()
+    }
+    pub(crate) fn ready_for_orchestration_report(&self) -> bool {
         self.history_ready()
             && !self.editing_last_turn.pending()
             && !self.busy
             && !self.stopping
             && !self.preparing_worktree
             && !self.attaching
-            && self.input.read(cx).content.is_empty()
-            && self.attachments.is_empty()
     }
     /// Managed runs must wait for history restoration and worktree setup as
     /// well as the provider, including submissions deferred by the editor.
@@ -466,6 +469,9 @@ impl Conversation {
     /// An evicted history can be restored for a managed run; a user's draft
     /// or an already accepted message must keep ownership of this composer.
     pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
+        self.managed_composer_ready(cx) && self.follow_ups.state.messages.is_empty()
+    }
+    fn managed_composer_ready(&self, cx: &gpui::App) -> bool {
         !self.busy
             && !self.stopping
             && !self.preparing_worktree
@@ -475,22 +481,39 @@ impl Conversation {
             && !self.mono_external_pending()
             && self.input.read(cx).content.is_empty()
             && self.attachments.is_empty()
-            && self.follow_ups.state.messages.is_empty()
             && self.follow_ups.state.draft.is_none()
             && !self.settings.worktree_removed
     }
-    pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.history_ready() || self.stopping {
-            self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);
-            return;
+    pub(crate) fn finish_orchestration(&mut self, report: Option<String>, cx: &mut Context<Self>) {
+        self.orchestration_plan = None;
+        self.set_orchestration_progress(None, cx);
+        if let Some(text) = report {
+            let previous_internal = self.settings.internal_message;
+            let provider_switch = self.settings.pending_provider_switch.take();
+            self.settings.internal_message = true;
+            self.launch_message(
+                monocode_core::follow_up::Message {
+                    text,
+                    ..Default::default()
+                },
+                cx,
+            );
+            self.settings.internal_message = previous_internal;
+            self.settings.pending_provider_switch = provider_switch;
+            self.reporting_orchestration = self.busy;
         }
-        let internal = self.settings.internal_message;
-        self.settings.internal_message = true;
-        self.launch_prompt(prompt, cx);
-        self.settings.internal_message = internal;
+        if !self.reporting_orchestration {
+            self.pump_follow_ups(cx);
+        }
+    }
+    pub(super) fn dismiss_orchestration_proposal(&mut self, cx: &mut Context<Self>) {
+        self.orchestration_plan = None;
+        self.orchestration_error = None;
+        self.pump_follow_ups(cx);
+        cx.notify();
     }
     fn retry_orchestration_plan(&mut self, cx: &mut Context<Self>) {
-        if !self.available_for_managed_run(cx) || self.orchestration_error.is_none() {
+        if !self.managed_composer_ready(cx) || self.orchestration_error.is_none() {
             return;
         }
         if !self.history_ready() {
@@ -601,8 +624,7 @@ impl Conversation {
                             tool_pill("dismiss-orchestration", "Dismiss plan")
                                 .child("Dismiss")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.orchestration_plan = None;
-                                    cx.notify();
+                                    this.dismiss_orchestration_proposal(cx);
                                 })),
                         ),
                 );
@@ -615,7 +637,7 @@ impl Conversation {
                     div()
                         .flex()
                         .gap_2()
-                        .when(self.available_for_managed_run(cx), |d| {
+                        .when(self.managed_composer_ready(cx), |d| {
                             d.child(
                                 tool_pill("retry-orchestration", "Retry plan")
                                     .child("Retry plan")
@@ -628,8 +650,7 @@ impl Conversation {
                             tool_pill("dismiss-plan-error", "Dismiss")
                                 .child("Dismiss")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.orchestration_error = None;
-                                    cx.notify();
+                                    this.dismiss_orchestration_proposal(cx);
                                 })),
                         ),
                 );
@@ -653,6 +674,49 @@ mod tests {
     use std::sync::Mutex;
 
     #[gpui::test]
+    fn orchestration_report_keeps_draft_and_queued_follow_up(cx: &mut gpui::TestAppContext) {
+        let store = monocode_core::store::Store::open(Path::new(":memory:")).unwrap();
+        let mut summary = store.create("codex", "/test-project").unwrap();
+        summary.has_messages = true;
+        store.mark_edit_recovery_required(summary.id).unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        view.update(cx, |view, cx| {
+            view.loaded = true;
+            view.input.update(cx, |input, cx| {
+                input.set_text("Draft for a later turn".into(), cx);
+            });
+            let attachment = Path::new("/test-project/draft.txt").to_path_buf();
+            view.attachments.push(attachment.clone());
+            view.settings.plan = true;
+            view.orchestration_progress = Some("Workers finished".into());
+            view.follow_ups
+                .state
+                .messages
+                .push(monocode_core::follow_up::Message {
+                    id: "queued-follow-up".into(),
+                    text: "A later request".into(),
+                    steer: true,
+                    ..Default::default()
+                });
+
+            assert!(view.ready_for_orchestration_report());
+            view.finish_orchestration(Some("Summarize worker reports".into()), cx);
+            assert!(view.reporting_orchestration);
+            assert!(!view.app_read_only, "report must use its own mode");
+            assert!(view.settings.plan);
+            assert_eq!(view.attachments, [attachment]);
+            assert_eq!(
+                view.input.read(cx).content.as_ref(),
+                "Draft for a later turn"
+            );
+            view.pump_follow_ups(cx);
+            assert_eq!(view.follow_ups.state.messages.len(), 1);
+            assert!(view.follow_ups.sending.is_none());
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
     fn retry_waits_for_history_and_restores_read_only_planning(cx: &mut gpui::TestAppContext) {
         let store = monocode_core::store::Store::open(Path::new(":memory:")).unwrap();
         let mut summary = store.create("codex", "/test-project").unwrap();
@@ -666,6 +730,14 @@ mod tests {
             view.loading = true;
             view.settings.access = AccessMode::FullAccess;
             view.orchestration_error = Some("fixture diagnostic".into());
+            view.follow_ups
+                .state
+                .messages
+                .push(monocode_core::follow_up::Message {
+                    id: "queued-follow-up".into(),
+                    text: "A later request".into(),
+                    ..Default::default()
+                });
 
             view.retry_orchestration_plan(cx);
             assert!(!view.busy);

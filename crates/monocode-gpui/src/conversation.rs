@@ -166,6 +166,7 @@ pub(crate) struct Conversation {
     /// The running turn's policy, independent of the next composer's mode.
     pub(crate) app_read_only: bool,
     planning_orchestration: bool,
+    reporting_orchestration: bool,
     pub(crate) orchestration_plan: Option<monocode_core::orchestration::Plan>,
     orchestration_error: Option<String>,
     pub(crate) orchestration_progress: Option<String>,
@@ -623,6 +624,7 @@ impl Conversation {
             app_environment: Default::default(),
             app_read_only: false,
             planning_orchestration: false,
+            reporting_orchestration: false,
             orchestration_plan: None,
             orchestration_error: None,
             orchestration_progress: None,
@@ -968,7 +970,10 @@ impl Conversation {
         } else {
             None
         };
-        if self.settings.pending_provider_switch.is_some() && self.busy {
+        if self.settings.pending_provider_switch.is_some()
+            && self.busy
+            && !self.orchestration_blocks_follow_ups()
+        {
             // Picking a provider only arms the change. Sending is what stops
             // the outgoing provider and commits the handoff.
             self.stop(cx);
@@ -996,17 +1001,23 @@ impl Conversation {
             }
             return;
         }
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
         self.launch_prompt(prompt, cx);
         if self.busy && mode.is_some() {
             self.clear_submitted_mode(cx);
         }
     }
+    fn orchestration_blocks_follow_ups(&self) -> bool {
+        self.planning_orchestration
+            || self.reporting_orchestration
+            || self.orchestration_plan.is_some()
+            || self.orchestration_error.is_some()
+            || self.orchestration_progress.is_some()
+    }
     /// A message sent now joins the follow-ups instead of starting a turn.
     fn sends_as_follow_up(&self) -> bool {
         self.stopping
             || self.busy
+            || self.orchestration_blocks_follow_ups()
             || self.settings.pending_provider_switch.is_some()
             || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused)
     }
@@ -1493,7 +1504,9 @@ impl Conversation {
                                     cx,
                                 );
                             }
-                            if this.status != "Ready" && !this.follow_ups.state.messages.is_empty()
+                            if this.status != "Ready"
+                                && (stopping || update.orchestration.is_none())
+                                && !this.follow_ups.state.messages.is_empty()
                             {
                                 this.follow_ups.state.paused = true;
                                 this.save_follow_ups(cx);
@@ -1515,6 +1528,7 @@ impl Conversation {
                                 }
                             });
                             this.planning_orchestration = false;
+                            this.reporting_orchestration = false;
                             if stopping {
                                 this.orchestration_progress = None;
                             } else if let Some(proposal) = update.orchestration {
