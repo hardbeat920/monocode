@@ -168,7 +168,20 @@ it("says when a pick couldn't be saved", async () => {
   await render();
   await act(async () => button("Russian (Russia)").click());
   expect(state.preference.language).toBe("ru-RU");
-  expect(state.alert).toHaveBeenCalledWith("Couldn't save", expect.stringContaining("until Monocode closes"));
+  expect(state.alert).toHaveBeenCalledWith(
+    "Couldn't save",
+    expect.stringContaining("until Monocode closes"),
+    expect.any(Array),
+  );
+  // Try Again writes the shown pick, now that storage works.
+  state.saveFails = false;
+  const buttons = state.alert.mock.calls[0]![2] as { text: string; onPress?: () => void }[];
+  const saves = vi.fn();
+  state.listeners.add(saves);
+  await act(async () => buttons.find((entry) => entry.text === "Try Again")!.onPress!());
+  expect(saves).toHaveBeenCalled();
+  expect(state.preference.language).toBe("ru-RU");
+  expect(state.alert).toHaveBeenCalledTimes(1);
 });
 
 it("clears the language filter when the engine changes", async () => {

@@ -48,12 +48,14 @@ export default function DictationScreen() {
     },
     [],
   );
-  const save = (next: Partial<DictationPreference>) =>
+  // An empty change writes the preference as it is, so Try Again saves the
+  // pick already shown rather than waiting for a different one.
+  const save = (next: Partial<DictationPreference>): void =>
     void setPreference(next).catch(() =>
-      Alert.alert(
-        "Couldn't save",
-        "This choice applies until Monocode closes. Try picking it again.",
-      ),
+      Alert.alert("Couldn't save", "This choice applies until Monocode closes.", [
+        { text: "OK", style: "cancel" },
+        { text: "Try Again", onPress: () => save({}) },
+      ]),
     );
 
   useEffect(() => {
