@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   prepare: vi.fn(async (_language: string | null) => ({ language: "ru-RU" })),
   alert: vi.fn(),
+  saveFails: false,
   engines: [] as EngineInfo[],
 }));
 
@@ -18,7 +19,9 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-  TextInput: () => <input />,
+  TextInput: ({ value, onChangeText }: { value: string; onChangeText: (text: string) => void }) => (
+    <input value={value} onChange={(event) => onChangeText(event.target.value)} />
+  ),
   Pressable: ({ children, onPress, accessibilityLabel, accessibilityState, disabled }: {
     children: ReactNode; onPress: () => void; accessibilityLabel: string;
     accessibilityState?: { selected?: boolean }; disabled?: boolean;
@@ -43,8 +46,10 @@ vi.mock("@/features/settings/dictation", async () => {
   const set = (next: object) => {
     state.preference = { ...state.preference, ...next };
     state.listeners.forEach((listener) => listener());
+    return state.saveFails ? Promise.reject(new Error("disk full")) : Promise.resolve();
   };
   return {
+    getDictationPreference: () => state.preference,
     useDictationPreference: () => [
       useSyncExternalStore(
         (listener) => {
@@ -84,6 +89,7 @@ beforeEach(() => {
   state.engines = [apple];
   state.prepare.mockClear();
   state.alert.mockClear();
+  state.saveFails = false;
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -139,4 +145,47 @@ it("shows an engine that can't run, and says which stands in", async () => {
   expect(button("NVIDIA Parakeet").disabled).toBe(true);
   expect(container.textContent).toContain("Needs iOS 17 or later.");
   expect(container.textContent).toContain("NVIDIA Parakeet isn't available here, so Apple Speech is used.");
+});
+
+it("doesn't let a late refusal undo a newer pick", async () => {
+  let refuse: (reason: Error) => void = () => {};
+  state.prepare.mockImplementationOnce(
+    () => new Promise((_, reject) => { refuse = reject; }),
+  );
+  await render();
+  await act(async () => button("Ukrainian (Ukraine)").click());
+  // Settings closes while Ukrainian is checked, and Russian is picked after.
+  act(() => root.unmount());
+  state.preference = { ...state.preference, language: "ru-RU" };
+  await render();
+  await act(async () => refuse(new Error("Ukrainian isn't available.")));
+  expect(state.preference.language).toBe("ru-RU");
+  expect(state.alert).not.toHaveBeenCalled();
+});
+
+it("says when a pick couldn't be saved", async () => {
+  state.saveFails = true;
+  await render();
+  await act(async () => button("Russian (Russia)").click());
+  expect(state.preference.language).toBe("ru-RU");
+  expect(state.alert).toHaveBeenCalledWith("Couldn't save", expect.stringContaining("until Monocode closes"));
+});
+
+it("clears the language filter when the engine changes", async () => {
+  const many = Array.from({ length: 14 }, (_, index) => ({ id: `x${index}`, name: `Language ${index}` }));
+  state.engines = [
+    { ...apple, languages: [...apple.languages, ...many] },
+    { ...apple, id: "parakeet", label: "NVIDIA Parakeet", automatic: true, languages: [{ id: "ru", name: "Russian" }] },
+  ];
+  await render();
+  const input = container.querySelector("input")!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  act(() => {
+    setValue.call(input, "zzz");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(button("Automatic")).toBeNull();
+  await act(async () => button("NVIDIA Parakeet").click());
+  expect(button("Automatic")).toBeTruthy();
+  expect(button("Russian")).toBeTruthy();
 });

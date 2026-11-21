@@ -1,10 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 const stored = new Map<string, string>();
+let failWrites = false;
 vi.mock("expo-sqlite/kv-store", () => ({
   default: {
     getItemSync: (key: string) => stored.get(key) ?? null,
     setItem: async (key: string, value: string) => {
+      if (failWrites) throw new Error("disk full");
       stored.set(key, value);
     },
   },
@@ -12,6 +14,7 @@ vi.mock("expo-sqlite/kv-store", () => ({
 
 beforeEach(() => {
   stored.clear();
+  failWrites = false;
   vi.resetModules();
 });
 
@@ -49,4 +52,11 @@ it("reads unknown or damaged values as the default", async () => {
     engine: "parakeet",
     language: "uk-UA",
   });
+});
+
+it("keeps a pick for this launch and reports a failed save", async () => {
+  const { getDictationPreference, setDictationPreference } = await load();
+  failWrites = true;
+  await expect(setDictationPreference({ language: "ru-RU" })).rejects.toThrow("disk full");
+  expect(getDictationPreference().language).toBe("ru-RU");
 });

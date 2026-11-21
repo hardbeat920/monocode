@@ -115,8 +115,26 @@ enum AppleLocales {
     case .unsupported:
       throw UnsupportedLanguageException(resolved.locale.identifier(.bcp47))
     default:
-      if let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
-        try await request.downloadAndInstall()
+      // An installation request reserves the locale, and the system allows
+      // only so many. Dictation uses one language at a time, so the oldest
+      // other reservations make room; a failed install gives back its own.
+      let target = resolved.locale.identifier(.bcp47)
+      let reserved = await AssetInventory.reservedLocales
+      let alreadyReserved = reserved.contains { $0.identifier(.bcp47) == target }
+      if !alreadyReserved {
+        let others = reserved.filter { $0.identifier(.bcp47) != target }
+        let excess = others.count - (AssetInventory.maximumReservedLocales - 1)
+        for locale in others.prefix(max(0, excess)) {
+          await AssetInventory.release(reservedLocale: locale)
+        }
+      }
+      do {
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
+          try await request.downloadAndInstall()
+        }
+      } catch {
+        if !alreadyReserved { await AssetInventory.release(reservedLocale: resolved.locale) }
+        throw error
       }
     }
   }

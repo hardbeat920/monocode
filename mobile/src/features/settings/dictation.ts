@@ -52,10 +52,12 @@ export function getDictationPreference() {
   return (preference ??= load());
 }
 
-export function setDictationPreference(next: Partial<DictationPreference>) {
+/** Applies at once; the returned promise is the write to storage, which
+ *  rejects if the pick won't outlast this launch. */
+export function setDictationPreference(next: Partial<DictationPreference>): Promise<void> {
   preference = { ...getDictationPreference(), ...next };
-  void Storage.setItem(STORAGE_KEY, JSON.stringify(preference));
   listeners.forEach((listener) => listener());
+  return Storage.setItem(STORAGE_KEY, JSON.stringify(preference));
 }
 
 export function useDictationPreference() {

@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,10 +16,11 @@ import {
   languageName,
   matchLanguage,
   type DictationLanguage,
+  type DictationPreference,
   type EngineId,
   type EngineInfo,
 } from "@/features/sessions/dictationLanguages";
-import { useDictationPreference } from "@/features/settings/dictation";
+import { getDictationPreference, useDictationPreference } from "@/features/settings/dictation";
 import { SettingsPage } from "@/features/settings/SettingsUI";
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors } from "@/ui/theme";
@@ -38,6 +39,22 @@ export default function DictationScreen() {
   // The language being checked with the engine, while it is.
   const [checking, setChecking] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  // Counts language checks: one finishing after a newer pick, an engine
+  // change or this screen closing no longer owns the selection.
+  const check = useRef(0);
+  useEffect(
+    () => () => {
+      check.current += 1;
+    },
+    [],
+  );
+  const save = (next: Partial<DictationPreference>) =>
+    void setPreference(next).catch(() =>
+      Alert.alert(
+        "Couldn't save",
+        "This choice applies until Monocode closes. Try picking it again.",
+      ),
+    );
 
   useEffect(() => {
     let live = true;
@@ -84,14 +101,19 @@ export default function DictationScreen() {
   const pickEngine = (id: EngineId) => {
     if (id === preference.engine) return;
     void Haptics.selectionAsync();
-    setPreference({ engine: id });
+    check.current += 1;
+    setChecking(null);
+    // Another engine's languages: a filter for this one could hide them all.
+    setFilter("");
+    save({ engine: id });
   };
 
   const pickLanguage = async (id: string | null) => {
     if (checking || (id === selected && !unsupported)) return;
     void Haptics.selectionAsync();
     const previous = preference.language;
-    setPreference({ language: id });
+    const token = (check.current += 1);
+    save({ language: id });
     if (!engine) return;
     const checked = id ?? (engine.automatic ? null : dictationLocale());
     if (checked === null) return;
@@ -99,13 +121,15 @@ export default function DictationScreen() {
     try {
       await engineFor(engine.id)?.prepare(checked);
     } catch (reason) {
-      setPreference({ language: previous });
+      // Only while this check still owns the selection.
+      if (token !== check.current || getDictationPreference().language !== id) return;
+      save({ language: previous });
       Alert.alert(
         "Language unavailable",
         reason instanceof Error ? reason.message : String(reason),
       );
     } finally {
-      setChecking(null);
+      if (token === check.current) setChecking(null);
     }
   };
 
@@ -170,7 +194,7 @@ export default function DictationScreen() {
       {engine ? (
         <>
           <Text style={styles.heading}>Language</Text>
-          {languages.length > FILTER_FROM ? (
+          {languages.length > FILTER_FROM || filter ? (
             <TextInput
               accessibilityLabel="Find a language"
               placeholder="Find a language"
