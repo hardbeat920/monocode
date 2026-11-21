@@ -20,9 +20,9 @@ beforeEach(() => {
 
 const load = () => import("@/features/settings/dictation");
 
-it("starts on Apple Speech in the phone's language", async () => {
+it("starts on Apple Speech in the phone's language, with Parakeet TDT v3 for Parakeet", async () => {
   const { getDictationPreference } = await load();
-  expect(getDictationPreference()).toEqual({ engine: "apple", language: null });
+  expect(getDictationPreference()).toEqual({ engine: "apple", language: null, parakeetModel: "v3" });
 });
 
 it("keeps the picked engine and language across launches", async () => {
@@ -31,7 +31,7 @@ it("keeps the picked engine and language across launches", async () => {
   first.setDictationPreference({ engine: "parakeet" });
   vi.resetModules();
   const relaunched = await load();
-  expect(relaunched.getDictationPreference()).toEqual({ engine: "parakeet", language: "ru-RU" });
+  expect(relaunched.getDictationPreference()).toEqual({ engine: "parakeet", language: "ru-RU", parakeetModel: "v3" });
 });
 
 it("goes back to Automatic when the language is cleared", async () => {
@@ -43,14 +43,16 @@ it("goes back to Automatic when the language is cleared", async () => {
 
 it("reads unknown or damaged values as the default", async () => {
   const { parseDictationPreference } = await load();
-  expect(parseDictationPreference("{")).toEqual({ engine: "apple", language: null });
-  expect(parseDictationPreference('{"engine":"whisper","language":""}')).toEqual({
+  expect(parseDictationPreference("{")).toEqual({ engine: "apple", language: null, parakeetModel: "v3" });
+  expect(parseDictationPreference('{"engine":"whisper","language":"","parakeetModel":"tiny"}')).toEqual({
     engine: "apple",
     language: null,
+    parakeetModel: "v3",
   });
-  expect(parseDictationPreference('{"engine":"parakeet","language":"uk-UA"}')).toEqual({
+  expect(parseDictationPreference('{"engine":"parakeet","language":"uk-UA","parakeetModel":"v2"}')).toEqual({
     engine: "parakeet",
     language: "uk-UA",
+    parakeetModel: "v2",
   });
 });
 

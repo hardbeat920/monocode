@@ -30,18 +30,36 @@ export type EngineInfo = {
   /** The languages it takes. Empty when they can't be listed here, in which
    *  case the engine is left to accept or refuse one when it prepares. */
   languages: DictationLanguage[];
+  /** What this info describes, as Parakeet's model id: passed back to the
+   *  engine when it prepares, so it readies what was planned. */
+  variant?: string;
 };
+
+/** The Parakeet models offered, the default first (their native ids). */
+export const PARAKEET_MODEL_IDS = ["v3", "ultra", "redux", "v2"] as const;
+export type ParakeetModelId = (typeof PARAKEET_MODEL_IDS)[number];
 
 /** Settings' pick. A null language is "Automatic": the engine's own
  *  detection, or the phone's language for an engine without it. */
 export type DictationPreference = {
   engine: EngineId;
   language: string | null;
+  /** The Parakeet model used when Parakeet is the engine. */
+  parakeetModel: ParakeetModelId;
 };
+
+/** Whether a model download ended because it was cancelled, not because it
+ *  failed (modules/monocode-parakeet's cancel code). */
+export const isCancelledDownload = (reason: unknown) =>
+  (reason as { code?: string } | null)?.code === "ERR_PARAKEET_CANCELLED";
 
 export const DEFAULT_PREFERENCE: DictationPreference = {
   engine: "apple",
   language: null,
+  // NVIDIA's multilingual original: quick to prepare on every supported
+  // phone. Ultra is more accurate but takes much longer to prepare the first
+  // time, so it's left to choose.
+  parakeetModel: "v3",
 };
 
 export type DictationProblem = {
@@ -59,6 +77,8 @@ export type DictationPlan =
       /** The engine picked in settings, when it couldn't run and this one
        *  stands in. */
       fellBackFrom?: EngineId;
+      /** The engine's variant the plan was made for (see EngineInfo). */
+      variant?: string;
     }
   | { ok: false; problem: DictationProblem };
 
@@ -134,7 +154,7 @@ export function languageName(
  *   in another, which would only give wrong words.
  */
 export function planDictation(
-  preference: DictationPreference,
+  preference: Pick<DictationPreference, "engine" | "language">,
   engines: readonly EngineInfo[],
   deviceLocale: string,
 ): DictationPlan {
@@ -157,6 +177,13 @@ export function planDictation(
     };
   }
   const fellBackFrom = engine.id === preference.engine ? undefined : preference.engine;
+  const ok = (language: string | null): DictationPlan => ({
+    ok: true,
+    engine: engine.id,
+    language,
+    fellBackFrom,
+    variant: engine.variant,
+  });
   if (!engine.ready) {
     return {
       ok: false,
@@ -171,21 +198,21 @@ export function planDictation(
 
   const ids = engine.languages.map((language) => language.id);
   if (preference.language === null) {
-    if (engine.automatic) return { ok: true, engine: engine.id, language: null, fellBackFrom };
+    if (engine.automatic) return ok(null);
     // The phone's language, as dictation has always used.
     if (ids.length === 0) {
-      return { ok: true, engine: engine.id, language: deviceLocale, fellBackFrom };
+      return ok(deviceLocale);
     }
     const language = matchLanguage(deviceLocale, ids);
-    if (language) return { ok: true, engine: engine.id, language, fellBackFrom };
+    if (language) return ok(language);
     return unsupported(engine, deviceLocale);
   }
 
   if (ids.length === 0) {
-    return { ok: true, engine: engine.id, language: preference.language, fellBackFrom };
+    return ok(preference.language);
   }
   const language = matchLanguage(preference.language, ids);
-  if (language) return { ok: true, engine: engine.id, language, fellBackFrom };
+  if (language) return ok(language);
   return unsupported(engine, preference.language);
 }
 

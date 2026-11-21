@@ -4,7 +4,9 @@ import { useSyncExternalStore } from "react";
 import {
   DEFAULT_PREFERENCE,
   type DictationPreference,
+  PARAKEET_MODEL_IDS,
   type EngineId,
+  type ParakeetModelId,
 } from "@/features/sessions/dictationLanguages";
 
 const STORAGE_KEY = "dictation.preference";
@@ -23,6 +25,9 @@ export function parseDictationPreference(stored: string | null): DictationPrefer
         typeof value.language === "string" && value.language.length > 0
           ? value.language
           : null,
+      parakeetModel: PARAKEET_MODEL_IDS.includes(value.parakeetModel as ParakeetModelId)
+        ? (value.parakeetModel as ParakeetModelId)
+        : DEFAULT_PREFERENCE.parakeetModel,
     };
   } catch {
     return DEFAULT_PREFERENCE;

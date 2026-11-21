@@ -41,7 +41,7 @@ export async function prepareDictation(): Promise<DictationSession> {
     dictationLocale(),
   );
   if (!plan.ok) throw new DictationError(plan.problem);
-  const prepared = await engineFor(plan.engine)!.prepare(plan.language);
+  const prepared = await engineFor(plan.engine)!.prepare(plan.language, plan.variant);
   return { engine: plan.engine, prepared, fellBackFrom: plan.fellBackFrom };
 }
 
