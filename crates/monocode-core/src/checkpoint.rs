@@ -38,6 +38,25 @@ pub struct CheckpointStatus {
     pub files: Vec<CheckpointFile>,
 }
 
+/// The pending files and the completed checkpoint that produced that list.
+#[derive(Clone, Debug, Default)]
+pub struct ReviewSnapshot {
+    pub checkpoint_id: Option<String>,
+    pub status: CheckpointStatus,
+}
+
+#[derive(Clone)]
+pub struct ReviewedFile {
+    pub checkpoint_id: String,
+    pub relative: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ReviewAction {
+    Keep,
+    Undo,
+}
+
 enum FileState {
     Contents(Vec<u8>),
     Missing,
@@ -97,15 +116,53 @@ impl Store {
 
     pub fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
         validate_id(session_id, "session")?;
-        Ok(self.turn_status(session_id, cwd)?.unwrap_or_default())
+        Ok(self
+            .review_snapshot(session_id, cwd)?
+            .unwrap_or_default()
+            .status)
     }
 
     /// A presentation-only read, without persisting newly resolved paths.
     pub fn status_readonly(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
         validate_id(session_id, "session")?;
         Ok(self
-            .turn_status_inner(session_id, cwd, false)?
-            .unwrap_or_default())
+            .review_snapshot_inner(session_id, cwd, false)?
+            .unwrap_or_default()
+            .status)
+    }
+
+    pub fn current_review(&self, session_id: &str, cwd: &str) -> Result<ReviewSnapshot, String> {
+        validate_id(session_id, "session")?;
+        self.exclusive(|store| Ok(store.review_snapshot(session_id, cwd)?.unwrap_or_default()))
+    }
+
+    /// A file action applies only to the completed checkpoint the caller reviewed.
+    pub fn apply_review(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        file: Option<&ReviewedFile>,
+        action: ReviewAction,
+    ) -> Result<ReviewSnapshot, String> {
+        validate_id(session_id, "session")?;
+        self.exclusive(|store| {
+            if let Some(file) = file {
+                let review = store.matching_turn_review(session_id, cwd)?;
+                if !review.as_ref().is_some_and(|review| {
+                    completed_turn(review).is_ok_and(|turn| turn.id == file.checkpoint_id)
+                }) {
+                    return Err(
+                        "The checkpoint changed. Review the current changes and try again.".into(),
+                    );
+                }
+            }
+            let relative = file.map(|file| file.relative.as_str());
+            let snapshot = match action {
+                ReviewAction::Keep => store.keep_turn(session_id, cwd, relative),
+                ReviewAction::Undo => store.undo_turn(session_id, cwd, relative),
+            }?;
+            Ok(snapshot.unwrap_or_default())
+        })
     }
 
     /// Native UI handles and desktop UUIDs can name the same conversation.
@@ -155,7 +212,8 @@ impl Store {
         validate_id(session_id, "session")?;
         Ok(self
             .undo_turn(session_id, cwd, relative)?
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .status)
     }
 
     pub fn keep(
@@ -167,7 +225,8 @@ impl Store {
         validate_id(session_id, "session")?;
         Ok(self
             .keep_turn(session_id, cwd, relative)?
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .status)
     }
 
     pub fn forget(&self, session_id: &str) -> Result<(), String> {
@@ -322,10 +381,15 @@ impl Store {
         let Some(previous) = review.latest.as_ref().filter(|_| review.active.is_none()) else {
             return Carried::default();
         };
-        let Ok(Some(status)) = self.turn_status_inner(session_id, cwd, false) else {
+        let Ok(Some(snapshot)) = self.review_snapshot_inner(session_id, cwd, false) else {
             return Carried::default();
         };
-        let pending: HashSet<_> = status.files.iter().map(|f| f.relative.as_str()).collect();
+        let pending: HashSet<_> = snapshot
+            .status
+            .files
+            .iter()
+            .map(|f| f.relative.as_str())
+            .collect();
         let Ok(recorded) = changes(Path::new(&review.cwd), previous) else {
             return Carried::default();
         };
@@ -509,16 +573,20 @@ impl Store {
         Ok(active)
     }
 
-    fn turn_status(&self, session_id: &str, cwd: &str) -> Result<Option<CheckpointStatus>, String> {
-        self.turn_status_inner(session_id, cwd, true)
+    fn review_snapshot(
+        &self,
+        session_id: &str,
+        cwd: &str,
+    ) -> Result<Option<ReviewSnapshot>, String> {
+        self.review_snapshot_inner(session_id, cwd, true)
     }
 
-    fn turn_status_inner(
+    fn review_snapshot_inner(
         &self,
         session_id: &str,
         cwd: &str,
         persist_resolved: bool,
-    ) -> Result<Option<CheckpointStatus>, String> {
+    ) -> Result<Option<ReviewSnapshot>, String> {
         let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
             return Ok(None);
         };
@@ -570,7 +638,10 @@ impl Store {
                 }
             })
             .collect();
-        Ok(Some(CheckpointStatus { files }))
+        Ok(Some(ReviewSnapshot {
+            checkpoint_id: Some(turn.id.clone()),
+            status: CheckpointStatus { files },
+        }))
     }
 
     fn turn_file_diff(
@@ -615,7 +686,7 @@ impl Store {
         session_id: &str,
         cwd: &str,
         relative: Option<&str>,
-    ) -> Result<Option<CheckpointStatus>, String> {
+    ) -> Result<Option<ReviewSnapshot>, String> {
         let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
             return Ok(None);
         };
@@ -630,7 +701,7 @@ impl Store {
         };
         review.latest.as_mut().unwrap().dismissed.extend(dismissed);
         write_review(&self.session_dir(session_id), &review)?;
-        self.turn_status(session_id, cwd)
+        self.review_snapshot(session_id, cwd)
     }
 
     fn undo_turn(
@@ -638,11 +709,11 @@ impl Store {
         session_id: &str,
         cwd: &str,
         relative: Option<&str>,
-    ) -> Result<Option<CheckpointStatus>, String> {
+    ) -> Result<Option<ReviewSnapshot>, String> {
         let Some(review) = self.matching_turn_review(session_id, cwd)? else {
             return Ok(None);
         };
-        let status = self.turn_status(session_id, cwd)?.unwrap();
+        let status = self.review_snapshot(session_id, cwd)?.unwrap().status;
         let root = Path::new(&review.cwd);
         let relative = relative.map(resolve_turn_path).transpose()?;
         let selected: Vec<_> = status

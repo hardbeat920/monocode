@@ -8,7 +8,9 @@ use crate::{
 use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
-use monocode_core::checkpoint::{CheckpointFile, CheckpointStatus, Store as CheckpointStore};
+use monocode_core::checkpoint::{
+    CheckpointFile, ReviewAction as Action, ReviewSnapshot, ReviewedFile, Store as CheckpointStore,
+};
 
 /// The card shows this many files until expanded.
 const COLLAPSED: usize = 3;
@@ -20,16 +22,11 @@ pub(crate) enum SessionReviewEvent {
     Changed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
-    Keep,
-    Undo,
-}
-
 pub(crate) struct SessionReview {
     session: i64,
     cwd: String,
     files: Vec<CheckpointFile>,
+    checkpoint_id: Option<String>,
     error: Option<String>,
     expanded: bool,
     acting: Option<Action>,
@@ -50,6 +47,7 @@ impl SessionReview {
             session,
             cwd,
             files: Vec::new(),
+            checkpoint_id: None,
             error: None,
             expanded: false,
             acting: None,
@@ -72,7 +70,7 @@ impl SessionReview {
         if self.cwd != cwd {
             self.cwd = cwd;
             self.generation += 1;
-            self.publish(Ok(CheckpointStatus::default()), cx);
+            self.publish(Ok(ReviewSnapshot::default()), cx);
             self.refresh(cx);
         }
     }
@@ -86,7 +84,7 @@ impl SessionReview {
         if busy {
             self.generation += 1;
             self._load = None;
-            self.publish(Ok(CheckpointStatus::default()), cx);
+            self.publish(Ok(ReviewSnapshot::default()), cx);
         }
         cx.notify();
     }
@@ -98,7 +96,9 @@ impl SessionReview {
     }
     #[cfg(test)]
     pub(crate) fn set_files(&mut self, files: Vec<CheckpointFile>, cx: &mut Context<Self>) {
-        self.publish(Ok(CheckpointStatus { files }), cx);
+        let mut snapshot = ReviewSnapshot::default();
+        snapshot.status.files = files;
+        self.publish(Ok(snapshot), cx);
     }
     /// Reread the recorded turn, as after a turn, Git change or reload.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -113,7 +113,7 @@ impl SessionReview {
         let (session, cwd) = (self.session.to_string(), self.cwd.clone());
         let work = cx
             .background_executor()
-            .spawn(async move { store.exclusive(|s| s.status(&session, &cwd)) });
+            .spawn(async move { store.current_review(&session, &cwd) });
         self._load = Some(cx.spawn(async move |this, cx| {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -123,21 +123,22 @@ impl SessionReview {
             });
         }));
     }
-    fn publish(&mut self, status: Result<CheckpointStatus, String>, cx: &mut Context<Self>) {
-        let (files, error) = match status {
-            Ok(status) => (status.files, None),
-            Err(error) => (Vec::new(), Some(error)),
+    fn publish(&mut self, snapshot: Result<ReviewSnapshot, String>, cx: &mut Context<Self>) {
+        let (checkpoint_id, files, error) = match snapshot {
+            Ok(snapshot) => (snapshot.checkpoint_id, snapshot.status.files, None),
+            Err(error) => (None, Vec::new(), Some(error)),
         };
         if files.len() <= COLLAPSED {
             self.expanded = false;
         }
-        if self.files != files || self.error != error {
+        if self.checkpoint_id != checkpoint_id || self.files != files || self.error != error {
+            self.checkpoint_id = checkpoint_id;
             self.files = files;
             self.error = error;
             cx.notify();
         }
     }
-    fn run(&mut self, action: Action, relative: Option<String>, cx: &mut Context<Self>) {
+    fn run(&mut self, action: Action, file: Option<ReviewedFile>, cx: &mut Context<Self>) {
         if self.busy
             || self.acting.is_some()
             || self.files.is_empty()
@@ -147,11 +148,14 @@ impl SessionReview {
             return;
         }
         let applicable = |file: &CheckpointFile| action == Action::Keep || file.undoable;
-        let allowed = match relative.as_deref() {
-            Some(relative) => self
-                .files
-                .iter()
-                .any(|file| file.relative == relative && applicable(file)),
+        let allowed = match &file {
+            Some(selected) => {
+                self.checkpoint_id.as_ref() == Some(&selected.checkpoint_id)
+                    && self
+                        .files
+                        .iter()
+                        .any(|file| file.relative == selected.relative && applicable(file))
+            }
             None => self.files.iter().all(applicable),
         };
         if !allowed {
@@ -165,12 +169,9 @@ impl SessionReview {
         self.generation += 1;
         let generation = self.generation;
         let (session, cwd) = (self.session.to_string(), self.cwd.clone());
-        let work = cx.background_executor().spawn(async move {
-            store.exclusive(|s| match action {
-                Action::Keep => s.keep(&session, &cwd, relative.as_deref()),
-                Action::Undo => s.undo(&session, &cwd, relative.as_deref()),
-            })
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { store.apply_review(&session, &cwd, file.as_ref(), action) });
         // Refreshes and new turns can cancel a read, but a write must settle.
         self._action = Some(cx.spawn(async move |this, cx| {
             let status = work.await;
@@ -409,9 +410,17 @@ impl SessionReview {
                     |n| n.to_string_lossy().into_owned(),
                 );
             let path = file.path.clone();
-            let undo_path = file.relative.clone();
-            let keep_path = file.relative.clone();
-            let undo_enabled = !disabled && !self.undo_locked && file.undoable;
+            let selection = self
+                .checkpoint_id
+                .as_ref()
+                .map(|checkpoint_id| ReviewedFile {
+                    checkpoint_id: checkpoint_id.clone(),
+                    relative: file.relative.clone(),
+                });
+            let keep_enabled = !disabled && selection.is_some();
+            let undo_enabled = keep_enabled && !self.undo_locked && file.undoable;
+            let undo_file = selection.clone().filter(|_| undo_enabled);
+            let keep_file = selection.filter(|_| keep_enabled);
             div()
                 .id(format!("session-review-file-{}", file.relative))
                 .h(px(32.))
@@ -470,19 +479,19 @@ impl SessionReview {
                     text_button("session-review-file-undo", "Undo", undo_enabled)
                         .debug_selector(move || format!("session-review-file-undo-{ix}"))
                         .aria_label(format!("Undo changes in {}", file.relative))
-                        .when(undo_enabled, |d| {
+                        .when_some(undo_file, |d, file| {
                             d.on_click(cx.listener(move |this, _, _, cx| {
-                                this.run(Action::Undo, Some(undo_path.clone()), cx)
+                                this.run(Action::Undo, Some(file.clone()), cx)
                             }))
                         }),
                 )
                 .child(
-                    text_button("session-review-file-keep", "Keep", !disabled)
+                    text_button("session-review-file-keep", "Keep", keep_enabled)
                         .debug_selector(move || format!("session-review-file-keep-{ix}"))
                         .aria_label(format!("Keep changes in {}", file.relative))
-                        .when(!disabled, |d| {
+                        .when_some(keep_file, |d, file| {
                             d.on_click(cx.listener(move |this, _, _, cx| {
-                                this.run(Action::Keep, Some(keep_path.clone()), cx)
+                                this.run(Action::Keep, Some(file.clone()), cx)
                             }))
                         }),
                 )
@@ -606,13 +615,19 @@ mod tests {
         store.finish_turn("1", &cwd, &turn).unwrap();
         // The review can keep a file with later edits, but cannot undo it.
         std::fs::write(project.join("b.txt"), "later\n").unwrap();
-        let status = store.status("1", &cwd).unwrap();
+        let snapshot = store.current_review("1", &cwd).unwrap();
+        let selection = |relative: &str| {
+            Some(ReviewedFile {
+                checkpoint_id: snapshot.checkpoint_id.clone().unwrap(),
+                relative: relative.into(),
+            })
+        };
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| {
                     let mut review = SessionReview::new(1, cwd.clone());
                     review.store = Some(store.clone());
-                    review.set_files(status.files.clone(), cx);
+                    review.publish(Ok(snapshot.clone()), cx);
                     review
                 })
             })
@@ -622,16 +637,20 @@ mod tests {
             .update(cx, |review, _, cx| {
                 review.set_busy(true, cx);
                 // A callback from the previous rendered card must not start.
-                review.set_files(status.files.clone(), cx);
-                review.run(Action::Undo, Some("a.txt".into()), cx);
-                review.run(Action::Keep, Some("b.txt".into()), cx);
+                review.publish(Ok(snapshot.clone()), cx);
+                review.run(Action::Undo, selection("a.txt"), cx);
+                review.run(Action::Keep, selection("b.txt"), cx);
                 assert!(review.acting.is_none());
                 review.set_busy(false, cx);
+                let mut previous = selection("a.txt").unwrap();
+                previous.checkpoint_id = "previous".into();
+                review.run(Action::Undo, Some(previous), cx);
+                assert!(review.acting.is_none());
                 review.set_undo_locked(true, cx);
-                review.run(Action::Undo, Some("a.txt".into()), cx);
+                review.run(Action::Undo, selection("a.txt"), cx);
                 assert!(review.acting.is_none());
                 review.set_undo_locked(false, cx);
-                review.run(Action::Undo, Some("b.txt".into()), cx);
+                review.run(Action::Undo, selection("b.txt"), cx);
                 assert!(review.acting.is_none());
             })
             .unwrap();

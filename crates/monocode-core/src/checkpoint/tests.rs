@@ -42,6 +42,48 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn reviewed_file_actions_reject_a_superseded_checkpoint() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "first report\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let displayed = f.store.current_review("session", f.cwd()).unwrap();
+    let mut file = ReviewedFile {
+        checkpoint_id: displayed.checkpoint_id.unwrap(),
+        relative: displayed.status.files[0].relative.clone(),
+    };
+
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("a.txt", "second report\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    let state = f.dir.join("checkpoints/session/turn-review.json");
+    let before = std::fs::read(&state).unwrap();
+    for action in [ReviewAction::Undo, ReviewAction::Keep] {
+        let error = f
+            .store
+            .apply_review("session", f.cwd(), Some(&file), action)
+            .unwrap_err();
+        assert!(error.starts_with("The checkpoint changed"));
+        assert_eq!(std::fs::read(&state).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
+            "second report\n"
+        );
+    }
+
+    let current = f.store.current_review("session", f.cwd()).unwrap();
+    assert_eq!(current.status.files[0].relative, file.relative);
+    file.checkpoint_id = current.checkpoint_id.unwrap();
+    assert!(f
+        .store
+        .apply_review("session", f.cwd(), Some(&file), ReviewAction::Keep)
+        .unwrap()
+        .status
+        .files
+        .is_empty());
+}
+
+#[test]
 fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
     let f = Fixture::new();
     f.write("a.txt", "user change\n");
