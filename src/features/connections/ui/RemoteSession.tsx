@@ -714,38 +714,43 @@ function ConnectedRemoteSession({
   });
 
   const configure = async (choice: RemoteSessionChoice) => {
-    if (!online || !hostSession || !saved || busy || pending || changes || sendingRef.current)
+    const current = snapshotRef.current?.session;
+    if (
+      !online || !current || current.id !== sessionId || current.id !== boundSession.current ||
+      current.busy || busy || pending || changes || sendingRef.current
+    )
       throw new Error("Wait for the host conversation to be ready before changing its model.");
-    if (choice.harness && choice.harness !== saved.harness)
+    if (choice.harness && choice.harness !== current.harness)
       throw new Error("A started host conversation keeps its current provider.");
     const picked = choice.model
-      ? findRemoteModel(catalog?.models[saved.harness] ?? [], choice.model)
+      ? findRemoteModel(catalog?.models[current.harness as RemoteProvider] ?? [], choice.model)
       : undefined;
-    if (choice.model && choice.model !== saved.model && !picked)
+    if (choice.model && choice.model !== current.model && !picked)
       throw new Error("The selected model is unavailable on this host.");
-    const model = picked?.id ?? saved.model;
-    const modelSettings = picked
-      ? carryModelSettings(picked.settings ?? [], choice.modelSettings ?? saved.settings)
-      : (choice.modelSettings ?? saved.settings);
-    const runtimeMode = choice.runtimeMode ?? saved.mode;
+    const model = picked?.id ?? current.model;
+    const currentSettings = current.modelSettings ?? {};
+    const modelSettings = picked && model !== current.model
+      ? carryModelSettings(picked.settings ?? [], choice.modelSettings ?? currentSettings)
+      : { ...currentSettings, ...choice.modelSettings };
+    const runtimeMode = choice.runtimeMode ?? current.runtimeMode;
     if (
-      model === saved.model &&
-      runtimeMode === saved.mode &&
-      sameModelSettings(modelSettings, saved.settings)
+      model === current.model &&
+      runtimeMode === current.runtimeMode &&
+      sameModelSettings(modelSettings, currentSettings)
     ) return;
 
     const version = bindingVersion.current;
     const receipt = await run({
       type: "configure",
       commandId: crypto.randomUUID(),
-      sessionId: hostSession.id,
+      sessionId: current.id,
       model,
       modelSettings,
       runtimeMode,
     });
     if (!receipt)
       throw new Error("The host did not confirm the model change.");
-    const confirmed = await loadRemoteSession(machine.id, hostSession.id);
+    const confirmed = await loadRemoteSession(machine.id, current.id);
     if (
       !alive.current ||
       bindingVersion.current !== version ||
