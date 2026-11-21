@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import {
   findModel,
+  hasLiveCatalog,
   modelsFor,
   resolveModel,
   type AgentModel,
@@ -32,7 +33,29 @@ export type ModelSource = {
 
 export const LOCAL_MODEL_SOURCE: ModelSource = {
   modelsFor,
-  resolve: resolveModel,
+  resolve: (harness, id) => {
+    const resolved = resolveModel(harness, id);
+    if (
+      harness !== "opencode" ||
+      !id?.startsWith("opencode:") ||
+      resolved.id === id
+    ) {
+      return resolved;
+    }
+
+    // A provider-qualified selection can disappear after a catalog refresh.
+    // Keep showing its identity until the user picks a replacement.
+    const nativeId = id.slice("opencode:".length);
+    if (!nativeId.includes("/") || resolved.nativeId === nativeId) {
+      return resolved;
+    }
+    return {
+      id,
+      harness,
+      nativeId,
+      name: hasLiveCatalog(harness) ? `${nativeId} (unavailable)` : nativeId,
+    };
+  },
   find: findModel,
   available: isHarnessAvailable,
   probed: hasProbedHarnessAvailability,

@@ -215,6 +215,38 @@ describe("local OpenCode catalog refresh", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("shows an unavailable selection when a successful refresh removes it", async () => {
+    const reload = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(async () => setHarnessModels("opencode", [added]))
+      .mockImplementationOnce(async () =>
+        setHarnessModels("opencode", [existing, added]),
+      );
+    const onChange = openPicker(reload);
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup]',
+    )!;
+    const refresh = refreshButton()!;
+    const selected = () =>
+      container.querySelector('[role="option"][aria-selected="true"]');
+
+    await act(async () => refresh.click());
+
+    expect(trigger.textContent).toBe("opencode-go/first (unavailable)");
+    expect(selected()).toBeNull();
+    expect(
+      container.querySelector(
+        '[role="option"][aria-label="Second model, Venice"]',
+      ),
+    ).not.toBeNull();
+
+    await act(async () => refresh.click());
+
+    expect(trigger.textContent).toBe("First model");
+    expect(selected()?.textContent).toBe("First model");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("does not offer a local refresh when the source does not support it", () => {
     openPicker();
     expect(refreshButton()).toBeNull();
