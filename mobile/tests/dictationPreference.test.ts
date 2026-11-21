@@ -60,3 +60,12 @@ it("keeps a pick for this launch and reports a failed save", async () => {
   await expect(setDictationPreference({ language: "ru-RU" })).rejects.toThrow("disk full");
   expect(getDictationPreference().language).toBe("ru-RU");
 });
+
+it("writes picks in the order they were made", async () => {
+  const { setDictationPreference } = await load();
+  await Promise.all([
+    setDictationPreference({ language: "uk-UA" }),
+    setDictationPreference({ language: "ru-RU" }),
+  ]);
+  expect(JSON.parse(stored.get("dictation.preference")!)).toMatchObject({ language: "ru-RU" });
+});

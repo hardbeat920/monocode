@@ -64,6 +64,12 @@ export type DictationPlan =
 
 const base = (id: string) => id.split(/[-_]/)[0]!.toLowerCase();
 const normalized = (id: string) => id.replace(/_/g, "-").toLowerCase();
+/** The BCP-47 region subtag ("tw" in "zh-Hant-TW"), if any. */
+const region = (id: string) =>
+  normalized(id)
+    .split("-")
+    .slice(1)
+    .find((part) => /^([a-z]{2}|\d{3})$/.test(part));
 /** The BCP-47 script subtag ("latn" in "sr-Latn-RS"), if any. */
 const script = (id: string) =>
   normalized(id)
@@ -95,9 +101,14 @@ export function matchLanguage(
   // A bare code is the whole language; an engine taking one takes them all.
   const bare = sameLanguage.find((id) => !/[-_]/.test(id));
   if (bare) return bare;
-  const home = sameLanguage.find(
-    (id) => normalized(id) === `${language}-${language}`,
-  );
+  // The requested region ("zh-Hant-TW" → "zh-TW"), then the language's own
+  // country ("ru" → "ru-RU"), then any.
+  const wantedRegion = region(requested);
+  const sameRegion = wantedRegion
+    ? sameLanguage.find((id) => region(id) === wantedRegion)
+    : undefined;
+  if (sameRegion) return sameRegion;
+  const home = sameLanguage.find((id) => region(id) === language);
   return home ?? sameLanguage[0]!;
 }
 

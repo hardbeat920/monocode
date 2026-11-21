@@ -57,8 +57,15 @@ export function getDictationPreference() {
 export function setDictationPreference(next: Partial<DictationPreference>): Promise<void> {
   preference = { ...getDictationPreference(), ...next };
   listeners.forEach((listener) => listener());
-  return Storage.setItem(STORAGE_KEY, JSON.stringify(preference));
+  // Written one after another, in the order picked, so a slower earlier
+  // write can't land last; each pick gets its own write's result.
+  const value = JSON.stringify(preference);
+  const write = writes.catch(() => {}).then(() => Storage.setItem(STORAGE_KEY, value));
+  writes = write;
+  return write;
 }
+
+let writes: Promise<void> = Promise.resolve();
 
 export function useDictationPreference() {
   const value = useSyncExternalStore(subscribe, getDictationPreference);

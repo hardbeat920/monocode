@@ -91,14 +91,14 @@ export default function DictationScreen() {
     );
   }, [languages, filter]);
 
+  // Matched in the engine's own order, as planDictation matches for
+  // recording; the name-sorted list above is only for display.
+  const matchIds = (engine?.languages ?? []).map((language) => language.id);
   // The picked language as the engine knows it, so "ru" checks "ru-RU".
   const selected =
     preference.language === null
       ? null
-      : (matchLanguage(
-          preference.language,
-          languages.map((language) => language.id),
-        ) ?? preference.language);
+      : (matchLanguage(preference.language, matchIds) ?? preference.language);
   const unsupported =
     !!engine &&
     preference.language !== null &&
@@ -124,10 +124,7 @@ export default function DictationScreen() {
       id ??
       (engine?.automatic
         ? null
-        : (matchLanguage(
-            dictationLocale(),
-            languages.map((language) => language.id),
-          ) ?? dictationLocale()));
+        : (matchLanguage(dictationLocale(), matchIds) ?? dictationLocale()));
     // Nothing for the engine to fetch or refuse: saved as it is.
     if (!engine || checked === null) {
       nextCheck();

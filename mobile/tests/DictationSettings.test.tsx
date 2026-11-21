@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   prepare: vi.fn(async (_language: string | null) => ({ language: "ru-RU" })),
   alert: vi.fn(),
   saveFails: false,
+  written: [] as object[],
   engines: [] as EngineInfo[],
 }));
 
@@ -47,7 +48,9 @@ vi.mock("@/features/settings/dictation", async () => {
   const set = (next: object) => {
     state.preference = { ...state.preference, ...next };
     state.listeners.forEach((listener) => listener());
-    return state.saveFails ? Promise.reject(new Error("disk full")) : Promise.resolve();
+    if (state.saveFails) return Promise.reject(new Error("disk full"));
+    state.written.push({ ...state.preference });
+    return Promise.resolve();
   };
   return {
     getDictationPreference: () => state.preference,
@@ -91,6 +94,7 @@ beforeEach(() => {
   state.prepare.mockClear();
   state.alert.mockClear();
   state.saveFails = false;
+  state.written = [];
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -189,6 +193,8 @@ it("says when a pick couldn't be saved", async () => {
   state.listeners.add(saves);
   await act(async () => buttons.find((entry) => entry.text === "Try Again")!.onPress!());
   expect(saves).toHaveBeenCalled();
+  // The retry is what reaches storage, with the pick shown.
+  expect(state.written).toEqual([expect.objectContaining({ language: "ru-RU" })]);
   expect(state.preference.language).toBe("ru-RU");
   expect(state.alert).toHaveBeenCalledTimes(1);
 });

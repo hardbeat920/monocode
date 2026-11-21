@@ -51,6 +51,11 @@ describe("matchLanguage", () => {
     expect(matchLanguage("zh-Hant-HK", ["zh-Hans-CN", "zh-Hant-TW"])).toBe("zh-Hant-TW");
   });
 
+  it("prefers the requested region among the same language", () => {
+    expect(matchLanguage("zh-Hant-TW", ["zh-CN", "zh-HK", "zh-TW"])).toBe("zh-TW");
+    expect(matchLanguage("pt-PT", ["pt-BR", "pt-PT"])).toBe("pt-PT");
+  });
+
   it("doesn't stand one language in for another", () => {
     expect(matchLanguage("ru-RU", ["en-US", "uk-UA"])).toBeNull();
   });
