@@ -225,3 +225,13 @@ it("saves a language only once the engine has taken it", async () => {
   await act(async () => accept());
   expect(state.preference.language).toBe("ru-RU");
 });
+
+it("checks Automatic with the locale recording will use", async () => {
+  state.engines = [{ ...apple, languages: [{ id: "en-GB", name: "English (UK)" }, { id: "ru-RU", name: "Russian (Russia)" }] }];
+  state.preference.language = "ru-RU";
+  await render();
+  await act(async () => button("Automatic").click());
+  // The phone's en-US isn't listed: recording takes en-GB, so the check does too.
+  expect(state.prepare).toHaveBeenCalledWith("en-GB");
+  expect(state.preference.language).toBeNull();
+});

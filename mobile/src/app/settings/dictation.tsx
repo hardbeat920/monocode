@@ -118,7 +118,16 @@ export default function DictationScreen() {
   const pickLanguage = async (id: string | null) => {
     if (checking || (id === selected && !unsupported)) return;
     void Haptics.selectionAsync();
-    const checked = id ?? (engine?.automatic ? null : dictationLocale());
+    // Automatic is checked with the locale recording will use: the phone's
+    // language matched to one the engine lists, as planDictation does.
+    const checked =
+      id ??
+      (engine?.automatic
+        ? null
+        : (matchLanguage(
+            dictationLocale(),
+            languages.map((language) => language.id),
+          ) ?? dictationLocale()));
     // Nothing for the engine to fetch or refuse: saved as it is.
     if (!engine || checked === null) {
       nextCheck();
