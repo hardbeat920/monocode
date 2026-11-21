@@ -45,6 +45,21 @@ Tap the model in the composer, then **Account**, to choose a Claude Code or Code
 
 The account card also shows the desktop footer's usage windows, percentages and reset times. Tap **Refresh** or pull down in the model picker to reload usage for the provider's accounts.
 
+## Dictation
+
+The composer's mic records and transcribes on the phone; only the words are sent to the desktop, so dictation works over LAN, a VPN, or while the desktop is away. **Settings → Dictation** picks the engine and the language it listens for, independently of the phone's language (an iPhone in English can dictate Russian). **Automatic** uses the phone's language with Apple Speech. The pick is kept across launches, and a language is checked with the engine, fetching its speech assets, when it is chosen.
+
+Apple Speech needs iOS 26. Languages Apple's `SpeechTranscriber` covers go through `@react-native-ai/apple`; others its `DictationTranscriber` covers (Russian and Ukrainian among them) go through the local module in `modules/monocode-speech`, which also lists the languages each takes on the phone. **NVIDIA Parakeet** runs on the phone's Neural Engine through [FluidAudio](https://github.com/FluidInference/FluidAudio)'s Core ML port, in `modules/monocode-parakeet`. **Settings → Dictation → Model** picks one of:
+
+- **Parakeet TDT v3** (default): NVIDIA's original `nvidia/parakeet-tdt-0.6b-v3`, 25 European languages, about 470 MB.
+- **Parakeet Ultra**: moondream's post-training of v3, the most accurate, the same 25 languages, about 630 MB. Its int8 encoder takes several minutes to prepare on first use, and the phone heats up meanwhile.
+- **Parakeet Redux**: a 2-bit re-training of v3, about 220 MB, needs iOS 18; its first use takes a few minutes to prepare.
+- **Parakeet TDT v2**: English only, about 470 MB.
+
+The multilingual models include Russian and Ukrainian and detect the spoken language themselves. A picked language is passed as a script hint. Models aren't bundled: each is downloaded from Hugging Face on request, kept out of backups and can be deleted. After that dictation works offline; transcription runs with FluidAudio's offline mode on, so it never reaches the network. Only the picked model is loaded, on first use, and it is released after 90 seconds idle or on a memory warning. Parakeet needs a phone with at least 4 GB of memory, and FluidAudio raises the app's minimum to iOS 17. CocoaPods' trunk stops at FluidAudio 0.7, so `plugins/with-fluidaudio.js` adds the pod from its git tag.
+
+Engines share the interface in `src/features/sessions/dictationEngines.ts`, and `dictationLanguages.ts` decides which engine and language a dictation runs with.
+
 ## EAS development builds
 
 Run EAS commands from `mobile/`. The iOS development and production profiles pin the Xcode 27.1 build image in `eas.json`; the simulator profile inherits it. Changes to the native transcript or hinge observer require a new native build, rather than only an EAS Update. The build input must include the root Cargo workspace and its path dependencies. The `eas-build-pre-install` hook installs the pinned Rust toolchain and builds the native transport before CocoaPods/Gradle runs.

@@ -40,6 +40,10 @@ export default function SettingsLayout() {
         options={{ title: "Providers", ...androidBackHeader("Providers") }}
       />
       <Stack.Screen
+        name="dictation"
+        options={{ title: "Dictation", ...androidBackHeader("Dictation") }}
+      />
+      <Stack.Screen
         name="permissions"
         options={{ title: "Permissions", ...androidBackHeader("Permissions") }}
       />
