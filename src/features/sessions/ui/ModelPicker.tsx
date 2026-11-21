@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Gauge,
+  RefreshCw,
   Search,
   Star,
   Zap,
@@ -112,6 +113,13 @@ const MODEL_MENU_HEIGHT =
   HARNESSES.length * PROVIDER_TAB_GAP +
   PROVIDER_RAIL_PADDING;
 const MODEL_MENU_FRAME_HEIGHT = MODEL_MENU_HEIGHT + 2;
+
+const OPEN_CODE_REFRESH_MESSAGES = {
+  idle: "",
+  refreshing: "Refreshing OpenCode models…",
+  complete: "OpenCode models refreshed.",
+  failed: "Refresh failed. Try again.",
+};
 
 const SETTING_ORDER = [
   "fast",
@@ -1510,6 +1518,22 @@ function ModelFlyout({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
   const groups = modelGroups(tab, models);
+  const reloadOpenCode = tab === "opencode" ? source.reloadOpenCode : undefined;
+  const [refreshState, setRefreshState] =
+    useState<keyof typeof OPEN_CODE_REFRESH_MESSAGES>("idle");
+  const refreshing = refreshState === "refreshing";
+  const refreshMessage = OPEN_CODE_REFRESH_MESSAGES[refreshState];
+
+  async function refreshModels() {
+    if (!reloadOpenCode || refreshing) return;
+    setRefreshState("refreshing");
+    try {
+      await reloadOpenCode();
+      setRefreshState("complete");
+    } catch {
+      setRefreshState("failed");
+    }
+  }
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -1630,24 +1654,56 @@ function ModelFlyout({
       </nav>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <label className="flex shrink-0 items-center gap-2 border-b border-stroke px-3 py-2.5 text-content/50">
-          <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
-          <input
-            ref={searchRef}
-            type="text"
-            value={query}
-            placeholder="Search models"
-            aria-label="Search models"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
-            onChange={(event) => onQuery(event.target.value)}
-            onKeyDown={onSearchKey}
-          />
-        </label>
+        <div className="flex shrink-0 items-center gap-2 border-b border-stroke pl-3 pr-2">
+          <label className="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-content/50">
+            <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              placeholder="Search models"
+              aria-label="Search models"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
+              onChange={(event) => onQuery(event.target.value)}
+              onKeyDown={onSearchKey}
+            />
+          </label>
+          {reloadOpenCode ? (
+            <button
+              type="button"
+              aria-label="Refresh OpenCode models"
+              aria-disabled={refreshing}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => void refreshModels()}
+              className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-content/75 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent aria-disabled:opacity-60"
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={`size-3.5 ${refreshing ? "motion-safe:animate-spin" : ""}`}
+                strokeWidth={1.75}
+              />
+              Refresh
+            </button>
+          ) : null}
+        </div>
+        {reloadOpenCode ? (
+          <div
+            role="status"
+            className={
+              refreshMessage
+                ? "shrink-0 border-b border-stroke px-3 py-1.5 text-[11px] text-content/75"
+                : "sr-only"
+            }
+          >
+            {refreshMessage}
+          </div>
+        ) : null}
 
         <div
           ref={lockOverscroll}
           role="listbox"
           aria-label="Models"
+          aria-busy={reloadOpenCode ? refreshing : undefined}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1"
         >
           {models.length === 0 ? (

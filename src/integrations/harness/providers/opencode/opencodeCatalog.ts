@@ -47,13 +47,18 @@ export type OpenCodeAgent = {
 let inflight: Promise<void> | null = null;
 
 export function refreshOpenCodeCatalog(): Promise<void> {
+  return reloadOpenCodeCatalog().catch((error: unknown) => {
+    console.debug("[monocode] opencode catalog", error);
+  });
+}
+
+/** Refresh requested by the user, with failures reported to the caller. */
+export function reloadOpenCodeCatalog(): Promise<void> {
   if (inflight) return inflight;
   inflight = discoverOpenCodeModels()
     .then((models) => {
-      if (models.length > 0) setHarnessModels("opencode", models);
-    })
-    .catch((error: unknown) => {
-      console.debug("[monocode] opencode catalog", error);
+      if (models.length === 0) throw new Error("OpenCode returned no models.");
+      setHarnessModels("opencode", models);
     })
     .finally(() => {
       inflight = null;

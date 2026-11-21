@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import {
   findModel,
+  hasLiveCatalog,
   modelsFor,
   resolveModel,
   type AgentModel,
@@ -12,6 +13,7 @@ import {
   probeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import { reloadOpenCodeCatalog } from "../../../integrations/harness/providers/opencode/opencodeCatalog";
 
 /** Where the model picker gets its models and provider availability. The
  * default is this computer's catalog; a remote session supplies its host's. */
@@ -25,14 +27,39 @@ export type ModelSource = {
   probed(): boolean;
   /** Refresh availability and catalogs, when the source supports it. */
   refresh(harnesses: HarnessId[]): void;
+  /** Explicit refresh with feedback for sources backed by local OpenCode. */
+  reloadOpenCode?: () => Promise<void>;
 };
 
 export const LOCAL_MODEL_SOURCE: ModelSource = {
   modelsFor,
-  resolve: resolveModel,
+  resolve: (harness, id) => {
+    const resolved = resolveModel(harness, id);
+    if (
+      harness !== "opencode" ||
+      !id?.startsWith("opencode:") ||
+      resolved.id === id
+    ) {
+      return resolved;
+    }
+
+    // A provider-qualified selection can disappear after a catalog refresh.
+    // Keep showing its identity until the user picks a replacement.
+    const nativeId = id.slice("opencode:".length);
+    if (!nativeId.includes("/") || resolved.nativeId === nativeId) {
+      return resolved;
+    }
+    return {
+      id,
+      harness,
+      nativeId,
+      name: hasLiveCatalog(harness) ? `${nativeId} (unavailable)` : nativeId,
+    };
+  },
   find: findModel,
   available: isHarnessAvailable,
   probed: hasProbedHarnessAvailability,
+  reloadOpenCode: reloadOpenCodeCatalog,
   refresh: (harnesses) => {
     void probeHarnessAvailability();
     void refreshHarnessCatalogs(harnesses);
