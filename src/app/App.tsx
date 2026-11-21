@@ -7019,7 +7019,7 @@ function Workspace({
       if (plan.kind === "empty") {
         void forgetHarnessSession(plan.forget, sessionId);
       }
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
           let next = withHarnessChoice(s, harness, resolved.id, modelSettings);
@@ -7053,7 +7053,7 @@ function Workspace({
   const onModelSettingsChange = useCallback(
     (sessionId: string, modelSettings: Record<string, string>) => {
       saveLastModelSettings(modelSettings);
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
       );
     },
@@ -7062,7 +7062,7 @@ function Workspace({
 
   const onRuntimeModeChange = useCallback(
     (sessionId: string, runtimeMode: RuntimeMode) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, runtimeMode } : s)),
       );
     },
@@ -9143,6 +9143,14 @@ function Workspace({
         // The phone's model sheet, through the same paths as the composer's
         // pickers, so a provider switch hands off on the next send as here.
         const choice = mobileChoice(params);
+        if (remoteProjectFor(session.cwd)) {
+          const actions = remoteSessionActions(session.id);
+          if (!actions) throw new Error("The host conversation is unavailable.");
+          await actions.configure(choice);
+          return { sessionId: session.id };
+        }
+        if (isPreparingHandoff(session))
+          throw new Error("Wait for the provider transfer to finish before changing its model.");
         if (choice.harness && choice.model && (choice.harness !== session.harness || choice.model !== session.model))
           onModelChange(session.id, choice.harness, choice.model);
         if (choice.modelSettings) {

@@ -1,5 +1,18 @@
-import type { Attachment, ComposerTurnOptions, PlanBuildTarget } from "../../sessions/model/session";
+import type {
+  Attachment,
+  ComposerTurnOptions,
+  HarnessId,
+  PlanBuildTarget,
+  RuntimeMode,
+} from "../../sessions/model/session";
 import type { ApprovalDecision, UserQuestionReply } from "../../../integrations/harness";
+
+export type RemoteSessionChoice = {
+  harness?: HarnessId;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  runtimeMode?: RuntimeMode;
+};
 
 type RemoteActions = {
   buildPlan: (blockId: string, target?: PlanBuildTarget) => void;
@@ -7,6 +20,7 @@ type RemoteActions = {
   saveDraft: (text: string, attachments: Attachment[]) => boolean | void;
   stop: () => void;
   compact: () => boolean;
+  configure: (choice: RemoteSessionChoice) => Promise<void>;
   approve: (requestId: number, decision: ApprovalDecision) => void;
   answer: (requestId: number, reply: UserQuestionReply) => void;
 };
