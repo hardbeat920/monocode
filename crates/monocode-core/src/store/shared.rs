@@ -1566,7 +1566,7 @@ impl Store {
         Ok(out)
     }
     pub(super) fn shared_search(
-        &self,
+        &mut self,
         query: &str,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(Vec<crate::search::Hit>, bool), String> {

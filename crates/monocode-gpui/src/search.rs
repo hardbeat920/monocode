@@ -314,10 +314,9 @@ impl SearchView {
                 let saved = locked(&store)
                     .and_then(|db| db.search_reader())
                     .and_then(|reader| match reader {
-                        Some(reader) => reader.search_sessions(&query, flag.clone()),
-                        None => {
-                            locked(&store).and_then(|db| db.search_sessions(&query, flag.clone()))
-                        }
+                        Some(mut reader) => reader.search_sessions(&query, flag.clone()),
+                        None => locked(&store)
+                            .and_then(|mut db| db.search_sessions(&query, flag.clone())),
                     });
                 (local, saved)
             });

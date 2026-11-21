@@ -591,7 +591,7 @@ impl Store {
     /// Stream saved message bodies without loading conversations into the UI.
     /// Rejoin native row fragments so phrase matches span storage boundaries.
     pub fn search_sessions(
-        &self,
+        &mut self,
         query: &str,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(Vec<crate::search::Hit>, bool), String> {

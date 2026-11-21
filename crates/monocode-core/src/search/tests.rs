@@ -51,7 +51,7 @@ fn saved_search_rejoins_messages_is_literal_and_survives_reopening() {
         )
         .unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let mut store = Store::open(&path).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let (hits, truncated) = store
         .search_sessions("CAFÉ and 100%_literal", cancel.clone())
@@ -189,7 +189,7 @@ fn unopened_titles_are_searchable_and_the_reader_sees_new_writes() {
     store
         .write_rows(session.id, 0, &[row("user", "unrelated body", true)])
         .unwrap();
-    let reader = store.search_reader().unwrap().unwrap();
+    let mut reader = store.search_reader().unwrap().unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let hits = reader.search_sessions("needle", flag.clone()).unwrap().0;
     assert_eq!(hits.len(), 1);

@@ -30,12 +30,12 @@ serde.workspace = true
 serde_json.workspace = true
 toml = "0.9.12"
 sha2 = "0.10"
-zstd = "0.13"
+zstd = "0.13.4"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri-plugin-dialog = "2"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
+rusqlite = { version = "0.41.0", features = ["bundled", "hooks"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
 url = "2.5"
 time = { version = "0.3", features = ["parsing"] }

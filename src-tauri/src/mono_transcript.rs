@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn cold_page_reads_are_bounded_and_never_read_the_legacy_blob() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.lock_conn().unwrap();
+        let mut conn = store.lock_conn().unwrap();
         upsert(&conn, &sample("mono", 10_000), None, None, true).unwrap();
         conn.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
             AuthAction::Read {

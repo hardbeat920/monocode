@@ -797,7 +797,7 @@ fn notes_reminders_search_and_read_only_connections_use_the_same_data() {
     assert_eq!(source_reminder, source);
     assert_eq!(store.take_due_reminders(2000).unwrap().len(), 1);
     assert!(store.take_due_reminders(2000).unwrap().is_empty());
-    let reader = store.search_reader().unwrap().unwrap();
+    let mut reader = store.search_reader().unwrap().unwrap();
     let (hits, _) = reader
         .search_sessions(
             "searchable",

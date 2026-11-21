@@ -489,15 +489,15 @@ fn search_store(
     let token = begin_session_search(&options.search_owner);
     let release = SessionSearchRelease(token.clone());
     let result = {
-        let read_conn = store
+        let mut read_conn = store
             .read_conn
             .lock()
             .map_err(|_| "Session read store is locked")?;
-        if let Some(conn) = read_conn.as_ref() {
+        if let Some(conn) = read_conn.as_mut() {
             search_sessions_with_connection(conn, options, token.as_ref())?
         } else {
-            let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-            search_sessions_with_connection(&conn, options, token.as_ref())?
+            let mut conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+            search_sessions_with_connection(&mut conn, options, token.as_ref())?
         }
     };
     drop(release);
@@ -1322,7 +1322,7 @@ pub(crate) fn upsert_session(
     })
 }
 
-struct SearchProgressGuard<'a>(&'a Connection);
+struct SearchProgressGuard<'a>(&'a mut Connection);
 
 impl Drop for SearchProgressGuard<'_> {
     fn drop(&mut self) {
@@ -1332,7 +1332,7 @@ impl Drop for SearchProgressGuard<'_> {
 
 #[cfg(test)]
 fn search_sessions(
-    conn: &Connection,
+    conn: &mut Connection,
     options: &SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
@@ -1383,7 +1383,7 @@ fn search_sessions_sql(include_archived: bool, cwd_scoped: bool) -> String {
 }
 
 fn search_sessions_with_connection(
-    conn: &Connection,
+    conn: &mut Connection,
     options: &SessionSearchOptions,
     token: Option<&SessionSearchToken>,
 ) -> Result<SessionSearchResult, String> {
@@ -1405,6 +1405,15 @@ fn search_sessions_with_connection(
     let budget = MAX_SEARCH_BUFFER_BYTES as i64;
     let sql = search_sessions_sql(options.include_archived, cwd.is_some());
 
+    let progress_token = token.cloned();
+    conn.progress_handler(
+        SEARCH_PROGRESS_INTERVAL as i32,
+        Some(move || !session_search_is_current(progress_token.as_ref())),
+    )
+    .map_err(|e| e.to_string())?;
+    let progress_guard = SearchProgressGuard(conn);
+    let conn = &*progress_guard.0;
+
     let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let limit = (MAX_SEARCH_SCAN as i64) + 1;
     let mut rows = if let Some(cwd) = cwd {
@@ -1417,13 +1426,6 @@ fn search_sessions_with_connection(
             .map_err(|e| e.to_string())?
     };
 
-    let progress_token = token.cloned();
-    conn.progress_handler(
-        SEARCH_PROGRESS_INTERVAL as i32,
-        Some(move || !session_search_is_current(progress_token.as_ref())),
-    )
-    .map_err(|e| e.to_string())?;
-    let _progress_guard = SearchProgressGuard(conn);
     let mut conversations = Vec::new();
     let mut messages = Vec::new();
     let mut scanned = 0usize;
@@ -2109,13 +2111,13 @@ mod tests {
     #[test]
     fn search_keeps_older_mono_messages_available_after_conversion() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.lock_conn().unwrap();
+        let mut conn = store.lock_conn().unwrap();
         let mut mono = sample("mono", "/tmp/a", "Mono");
         mono.blocks = json!([{ "id":"old", "role":"user", "text":"Archived needle" }, { "id":"answer", "role":"assistant", "text":"Done" }]);
         upsert_session(&conn, &mono).unwrap();
         crate::mono_transcript::migrate_transcript(&conn, "mono").unwrap();
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Archived needle".into(),
                 cwd: None,
@@ -2215,7 +2217,7 @@ mod tests {
     #[test]
     fn legacy_inbox_chats_are_not_normal_sessions() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.lock_conn().unwrap();
+        let mut conn = store.lock_conn().unwrap();
         upsert_session(&conn, &sample("project", "/tmp/project", "Login")).unwrap();
         upsert_session(&conn, &sample("ask", "/tmp/project", "Login")).unwrap();
         conn.execute("UPDATE sessions SET inbox_ask = '{}' WHERE id = 'ask'", [])
@@ -2226,7 +2228,7 @@ mod tests {
         assert_eq!(rows[0].id, "project");
         assert!(get_session(&conn, "ask").unwrap().is_none());
         let search = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Login".into(),
                 cwd: None,
@@ -3341,7 +3343,7 @@ mod tests {
             .unwrap();
         }
         let store = SessionStore::open(path.clone()).unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         let index: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
@@ -3353,7 +3355,7 @@ mod tests {
         assert_eq!(index, 1);
         upsert_session(&conn, &sample("s1", "/tmp/a", "Restored index")).unwrap();
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Restored".into(),
                 cwd: None,
@@ -3388,8 +3390,8 @@ mod tests {
         )
         .unwrap();
 
-        let read_conn = store.read_conn.lock().unwrap();
-        let conn = read_conn.as_ref().unwrap();
+        let mut read_conn = store.read_conn.lock().unwrap();
+        let conn = read_conn.as_mut().unwrap();
         let result = search_sessions_with_connection(
             conn,
             &SessionSearchOptions {
@@ -3416,7 +3418,7 @@ mod tests {
     #[test]
     fn oversized_transcript_keeps_title_hit_without_hiding_older_messages() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         let mut small = sample("small", "/tmp/a", "Needle title");
         small.blocks = json!([{ "id": "small", "role": "user", "text": "needle" }]);
         upsert_session(&conn, &small).unwrap();
@@ -3433,7 +3435,7 @@ mod tests {
             .unwrap();
 
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "needle".into(),
                 cwd: None,
@@ -3548,7 +3550,7 @@ mod tests {
     #[test]
     fn a_superseded_session_search_returns_no_hits() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Searchable title")).unwrap();
         let owner = "superseded-session-search-test";
         let stale = begin_session_search(owner).unwrap();
@@ -3560,7 +3562,7 @@ mod tests {
             search_owner: owner.into(),
         };
 
-        let result = search_sessions_with_connection(&conn, &options, Some(&stale)).unwrap();
+        let result = search_sessions_with_connection(&mut conn, &options, Some(&stale)).unwrap();
 
         assert!(result.hits.is_empty());
         assert!(!result.truncated);
@@ -3598,12 +3600,12 @@ mod tests {
     #[test]
     fn a_test_helper_session_search_releases_its_token() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Needle title")).unwrap();
         let owner = "helper-session-search-owner";
 
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Needle".into(),
                 cwd: None,
@@ -3623,7 +3625,7 @@ mod tests {
     #[test]
     fn search_uses_top_level_user_blocks_for_the_materialized_filter() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         let mut session = sample("s1", "/tmp/a", "Unrelated title");
         session.blocks = json!([
             { "id": "t1", "role": "tool", "text": "wrapper", "tool": {
@@ -3633,7 +3635,7 @@ mod tests {
         upsert_session(&conn, &session).unwrap();
 
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "needle".into(),
                 cwd: None,
@@ -3649,7 +3651,7 @@ mod tests {
     #[test]
     fn search_finds_title_and_message_hits() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         let mut session = sample("s1", "/tmp/a", "Fix sidebar search");
         session.blocks = json!([
             { "id": "u1", "role": "user", "text": "Please search the sidebar filter chips" },
@@ -3659,7 +3661,7 @@ mod tests {
         upsert_session(&conn, &sample("s2", "/tmp/b", "Unrelated title")).unwrap();
 
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "sidebar".into(),
                 cwd: None,
@@ -3687,7 +3689,7 @@ mod tests {
     #[test]
     fn search_skips_inbox_ask_sessions_when_scoped_and_unscoped() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("ask", "/tmp/a", "Needle ask")).unwrap();
         upsert_session(&conn, &sample("chat", "/tmp/a", "Needle chat")).unwrap();
         conn.execute("UPDATE sessions SET inbox_ask = '{}' WHERE id = 'ask'", [])
@@ -3695,7 +3697,7 @@ mod tests {
 
         for cwd in [None, Some("/tmp/a".to_string())] {
             let result = search_sessions(
-                &conn,
+                &mut conn,
                 &SessionSearchOptions {
                     query: "Needle".into(),
                     cwd,
@@ -3711,13 +3713,13 @@ mod tests {
     #[test]
     fn search_respects_cwd_and_skips_archived() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Search project a")).unwrap();
         upsert_session(&conn, &sample("s2", "/tmp/b", "Search project b")).unwrap();
         set_archived(&conn, "s1", true).unwrap();
 
         let scoped = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Search project".into(),
                 cwd: Some("/tmp/a".into()),
@@ -3729,7 +3731,7 @@ mod tests {
         assert!(scoped.hits.is_empty());
 
         let with_archived = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Search project".into(),
                 cwd: Some("/tmp/a".into()),
@@ -3744,7 +3746,7 @@ mod tests {
             .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
 
         let other = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "Search project".into(),
                 cwd: Some("/tmp/b".into()),
@@ -3759,10 +3761,10 @@ mod tests {
     #[test]
     fn search_empty_query_is_empty() {
         let store = SessionStore::open_in_memory().unwrap();
-        let conn = store.conn.lock().unwrap();
+        let mut conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "Anything")).unwrap();
         let result = search_sessions(
-            &conn,
+            &mut conn,
             &SessionSearchOptions {
                 query: "   ".into(),
                 cwd: None,
