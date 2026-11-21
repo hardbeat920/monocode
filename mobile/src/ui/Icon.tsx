@@ -1,4 +1,5 @@
 import Add01Icon from "@hugeicons/core-free-icons/Add01Icon";
+import AiChipIcon from "@hugeicons/core-free-icons/AiChipIcon";
 import Archive01Icon from "@hugeicons/core-free-icons/Archive01Icon";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
@@ -109,6 +110,7 @@ const icons = {
   people: UserGroupIcon,
   layers: Layers01Icon,
   circle: CircleIcon,
+  aiChip: AiChipIcon,
 };
 
 export type IconName = keyof typeof icons;

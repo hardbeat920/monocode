@@ -94,16 +94,25 @@ enum AppleLocales {
     }
   }
 
+  /// The language as a transcriber takes it. The one that takes it exactly
+  /// wins (SpeechTranscriber first), so a region only DictationTranscriber
+  /// has, such as de-AT, isn't swapped for SpeechTranscriber's de-DE; an
+  /// equivalent in another region is the fallback.
   static func resolve(_ language: String) async throws -> ResolvedLocale {
     let requested = Locale(identifier: language)
-    if SpeechTranscriber.isAvailable,
-      let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requested)
-    {
-      return ResolvedLocale(locale: locale, transcriber: .speech)
+    let wanted = requested.identifier(.bcp47)
+    let speech =
+      SpeechTranscriber.isAvailable
+      ? await SpeechTranscriber.supportedLocale(equivalentTo: requested) : nil
+    if let speech, speech.identifier(.bcp47) == wanted {
+      return ResolvedLocale(locale: speech, transcriber: .speech)
     }
-    if let locale = await DictationTranscriber.supportedLocale(equivalentTo: requested) {
-      return ResolvedLocale(locale: locale, transcriber: .dictation)
+    let dictation = await DictationTranscriber.supportedLocale(equivalentTo: requested)
+    if let dictation, dictation.identifier(.bcp47) == wanted {
+      return ResolvedLocale(locale: dictation, transcriber: .dictation)
     }
+    if let speech { return ResolvedLocale(locale: speech, transcriber: .speech) }
+    if let dictation { return ResolvedLocale(locale: dictation, transcriber: .dictation) }
     throw UnsupportedLanguageException(language)
   }
 

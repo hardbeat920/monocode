@@ -40,6 +40,7 @@ vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/theme", () => ({
   themedStyles: (create: (colors: object) => object) => () => create({}),
   useColors: () => ({}),
+  radii: { card: 20, row: 12 },
 }));
 vi.mock("@/features/settings/dictation", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -98,13 +99,20 @@ async function render() {
   root = createRoot(container);
   await act(async () => root.render(<DictationScreen />));
 }
+// Rows read their hint after the label: "Russian (Russia), русский (Россия)".
 const button = (label: string) =>
-  container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+  container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${label}"], button[aria-label^="${label}, "]`,
+  )!;
 
 it("lists the engine's languages with Automatic as the phone's language", async () => {
   await render();
   expect(button("Automatic").getAttribute("aria-pressed")).toBe("true");
-  expect(container.textContent).toContain("The phone's language, English (United States).");
+  expect(container.textContent).toContain("Phone language, English (United States)");
+  // VoiceOver hears which language Automatic uses.
+  expect(button("Automatic").getAttribute("aria-label")).toBe(
+    "Automatic, Phone language, English (United States)",
+  );
   expect(container.textContent).toContain("русский (Россия)");
   expect(button("Ukrainian (Ukraine)")).toBeTruthy();
 });
@@ -117,7 +125,7 @@ it("picks Russian and checks it with the engine", async () => {
   expect(button("Russian (Russia)").getAttribute("aria-pressed")).toBe("true");
 });
 
-it("goes back to the previous language when the engine refuses one", async () => {
+it("keeps the previous language when the engine refuses one", async () => {
   state.prepare.mockRejectedValueOnce(new Error("Ukrainian isn't available for Apple Speech on this device."));
   state.preference.language = "ru-RU";
   await render();
@@ -156,8 +164,9 @@ it("doesn't let a late refusal undo a newer pick", async () => {
   await act(async () => button("Ukrainian (Ukraine)").click());
   // Settings closes while Ukrainian is checked, and Russian is picked after.
   act(() => root.unmount());
-  state.preference = { ...state.preference, language: "ru-RU" };
   await render();
+  await act(async () => button("Russian (Russia)").click());
+  expect(state.preference.language).toBe("ru-RU");
   await act(async () => refuse(new Error("Ukrainian isn't available.")));
   expect(state.preference.language).toBe("ru-RU");
   expect(state.alert).not.toHaveBeenCalled();
@@ -201,4 +210,18 @@ it("clears the language filter when the engine changes", async () => {
   await act(async () => button("NVIDIA Parakeet").click());
   expect(button("Automatic")).toBeTruthy();
   expect(button("Russian")).toBeTruthy();
+});
+
+it("saves a language only once the engine has taken it", async () => {
+  let accept: () => void = () => {};
+  state.prepare.mockImplementationOnce(
+    () => new Promise((resolve) => { accept = () => resolve({ language: "ru-RU" }); }),
+  );
+  await render();
+  await act(async () => button("Russian (Russia)").click());
+  // Shown as picked while its speech assets download, but not saved yet.
+  expect(button("Russian (Russia)").getAttribute("aria-pressed")).toBe("true");
+  expect(state.preference.language).toBeNull();
+  await act(async () => accept());
+  expect(state.preference.language).toBe("ru-RU");
 });

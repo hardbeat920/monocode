@@ -46,6 +46,11 @@ describe("matchLanguage", () => {
     expect(matchLanguage("en-RU", ["en-GB", "en-US"])).toBe("en-GB");
   });
 
+  it("keeps the requested script before another region", () => {
+    expect(matchLanguage("sr-Latn-BA", ["sr-Cyrl-RS", "sr-Latn-RS"])).toBe("sr-Latn-RS");
+    expect(matchLanguage("zh-Hant-HK", ["zh-Hans-CN", "zh-Hant-TW"])).toBe("zh-Hant-TW");
+  });
+
   it("doesn't stand one language in for another", () => {
     expect(matchLanguage("ru-RU", ["en-US", "uk-UA"])).toBeNull();
   });

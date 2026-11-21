@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,34 +20,39 @@ import {
   type EngineId,
   type EngineInfo,
 } from "@/features/sessions/dictationLanguages";
-import { getDictationPreference, useDictationPreference } from "@/features/settings/dictation";
+import { useDictationPreference } from "@/features/settings/dictation";
 import { SettingsPage } from "@/features/settings/SettingsUI";
-import { Icon } from "@/ui/Icon";
-import { themedStyles, useColors } from "@/ui/theme";
+import { Icon, type IconName } from "@/ui/Icon";
+import { radii, themedStyles, useColors } from "@/ui/theme";
 
 /** Past this many languages the list gets a filter field. */
 const FILTER_FROM = 12;
 
+const ENGINE_ICONS: Record<EngineId, IconName> = {
+  apple: "mic",
+  parakeet: "aiChip",
+};
+
+// Counts language checks, across screens: a check finishing after a newer
+// pick or an engine change no longer owns the selection, even once this
+// screen has closed and opened again.
+let latestCheck = 0;
+const nextCheck = () => (latestCheck += 1);
+const isLatest = (token: number) => token === latestCheck;
+
 // Dictation: the engine that turns speech into words, and the language it
-// listens for, apart from the phone's own language. A language picked here is
-// checked with the engine at once, fetching its speech assets if need be.
+// listens for, apart from the phone's own language. A language is saved once
+// the engine has taken it, fetching its speech assets if need be.
 export default function DictationScreen() {
   const colors = useColors();
   const styles = useStyles();
   const [preference, setPreference] = useDictationPreference();
   const [engines, setEngines] = useState<EngineInfo[] | null>(null);
-  // The language being checked with the engine, while it is.
+  // The language being checked with the engine, while it is ("automatic"
+  // for Automatic), shown as picked until the engine answers.
   const [checking, setChecking] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  // Counts language checks: one finishing after a newer pick, an engine
-  // change or this screen closing no longer owns the selection.
-  const check = useRef(0);
-  useEffect(
-    () => () => {
-      check.current += 1;
-    },
-    [],
-  );
+
   // An empty change writes the preference as it is, so Try Again saves the
   // pick already shown rather than waiting for a different one.
   const save = (next: Partial<DictationPreference>): void =>
@@ -103,7 +108,7 @@ export default function DictationScreen() {
   const pickEngine = (id: EngineId) => {
     if (id === preference.engine) return;
     void Haptics.selectionAsync();
-    check.current += 1;
+    nextCheck();
     setChecking(null);
     // Another engine's languages: a filter for this one could hide them all.
     setFilter("");
@@ -113,25 +118,27 @@ export default function DictationScreen() {
   const pickLanguage = async (id: string | null) => {
     if (checking || (id === selected && !unsupported)) return;
     void Haptics.selectionAsync();
-    const previous = preference.language;
-    const token = (check.current += 1);
-    save({ language: id });
-    if (!engine) return;
-    const checked = id ?? (engine.automatic ? null : dictationLocale());
-    if (checked === null) return;
+    const checked = id ?? (engine?.automatic ? null : dictationLocale());
+    // Nothing for the engine to fetch or refuse: saved as it is.
+    if (!engine || checked === null) {
+      nextCheck();
+      save({ language: id });
+      return;
+    }
+    const token = nextCheck();
     setChecking(id ?? "automatic");
     try {
       await engineFor(engine.id)?.prepare(checked);
+      if (isLatest(token)) save({ language: id });
     } catch (reason) {
-      // Only while this check still owns the selection.
-      if (token !== check.current || getDictationPreference().language !== id) return;
-      save({ language: previous });
-      Alert.alert(
-        "Language unavailable",
-        reason instanceof Error ? reason.message : String(reason),
-      );
+      if (isLatest(token)) {
+        Alert.alert(
+          "Language unavailable",
+          reason instanceof Error ? reason.message : String(reason),
+        );
+      }
     } finally {
-      if (token === check.current) setChecking(null);
+      if (isLatest(token)) setChecking(null);
     }
   };
 
@@ -144,48 +151,35 @@ export default function DictationScreen() {
   }
 
   const automaticHint = engine?.automatic
-    ? "Recognizes the language you speak."
-    : `The phone's language, ${languageName(dictationLocale(), languages)}.`;
+    ? "Recognizes the language you speak"
+    : `Phone language, ${languageName(dictationLocale(), languages)}`;
+  // While a language is checked it shows as picked, with a spinner.
+  const isPicked = (id: string | null) =>
+    checking !== null ? checking === (id ?? "automatic") : id === selected;
 
   return (
     <SettingsPage>
-      <Text style={styles.heading}>Engine</Text>
-      <View style={styles.list}>
-        {engines.map((info, index) => {
-          const chosen = info.id === engine?.id;
-          return (
-            <Fragment key={info.id}>
-              {index > 0 ? <View style={styles.divider} /> : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: chosen, disabled: !info.available }}
-                accessibilityLabel={info.label}
-                disabled={!info.available}
-                onPress={() => pickEngine(info.id)}
-                style={({ pressed }) => [
-                  styles.row,
-                  pressed && styles.pressed,
-                  !info.available && styles.disabled,
-                ]}
-              >
-                <View style={styles.icon}>
-                  <Icon name="mic" size={18} color={colors.content} />
-                </View>
-                <View style={styles.text}>
-                  <Text style={styles.label}>{info.label}</Text>
-                  <Text style={styles.hint}>
-                    {!info.available
-                      ? info.unavailableReason
-                      : !info.ready
-                        ? info.notReadyReason
-                        : "On this phone, offline once its speech assets are downloaded."}
-                  </Text>
-                </View>
-                {chosen ? <Icon name="check" size={18} color={colors.accent} /> : null}
-              </Pressable>
-            </Fragment>
-          );
-        })}
+      <Text style={[styles.heading, styles.firstHeading]}>Engine</Text>
+      <View style={styles.card}>
+        {engines.map((info, index) => (
+          <Fragment key={info.id}>
+            {index > 0 ? <View style={styles.divider} /> : null}
+            <ChoiceRow
+              icon={ENGINE_ICONS[info.id]}
+              label={info.label}
+              hint={
+                !info.available
+                  ? info.unavailableReason
+                  : !info.ready
+                    ? info.notReadyReason
+                    : engineHint(info.id)
+              }
+              selected={info.id === engine?.id}
+              disabled={!info.available}
+              onPress={() => pickEngine(info.id)}
+            />
+          </Fragment>
+        ))}
       </View>
       {engine && engine.id !== preference.engine ? (
         <Text style={styles.note}>
@@ -209,29 +203,36 @@ export default function DictationScreen() {
               style={styles.filter}
             />
           ) : null}
-          <View style={styles.list}>
-            {filter.trim() ? null : (
-              <LanguageRow
+          {filter.trim() ? null : (
+            <View style={[styles.card, styles.automaticCard]}>
+              <ChoiceRow
+                icon="sparkle"
                 label="Automatic"
                 hint={automaticHint}
-                selected={preference.language === null}
+                selected={isPicked(null)}
                 checking={checking === "automatic"}
                 onPress={() => void pickLanguage(null)}
               />
-            )}
-            {shown.map((language, index) => (
-              <Fragment key={language.id}>
-                {index > 0 || !filter.trim() ? <View style={styles.divider} /> : null}
-                <LanguageRow
-                  label={language.name}
-                  hint={nativeHint(language)}
-                  selected={language.id === selected}
-                  checking={checking === language.id}
-                  onPress={() => void pickLanguage(language.id)}
-                />
-              </Fragment>
-            ))}
-          </View>
+            </View>
+          )}
+          {shown.length > 0 ? (
+            <View style={styles.card}>
+              {shown.map((language, index) => (
+                <Fragment key={language.id}>
+                  {index > 0 ? <View style={[styles.divider, styles.textDivider]} /> : null}
+                  <ChoiceRow
+                    label={language.name}
+                    hint={nativeHint(language)}
+                    selected={isPicked(language.id)}
+                    checking={checking === language.id}
+                    onPress={() => void pickLanguage(language.id)}
+                  />
+                </Fragment>
+              ))}
+            </View>
+          ) : filter.trim() ? (
+            <Text style={styles.note}>{`No language matches “${filter.trim()}”.`}</Text>
+          ) : null}
           {unsupported ? (
             <Text style={[styles.note, { color: colors.deletions }]}>
               {`${languageName(preference.language!)} isn't available for ${engine.label}. Choose another language or engine.`}
@@ -252,48 +253,77 @@ export default function DictationScreen() {
   );
 }
 
+function engineHint(id: EngineId) {
+  switch (id) {
+    case "apple":
+      return "Built into iOS, on this phone";
+    case "parakeet":
+      return "Open model on this phone's Neural Engine, offline";
+  }
+}
+
 function nativeHint(language: DictationLanguage) {
   return language.nativeName && language.nativeName !== language.name
     ? language.nativeName
     : undefined;
 }
 
-function LanguageRow({
+/** A row in a settings card: an optional icon, a label over a hint, and a
+ *  check when picked (a spinner while being checked). */
+function ChoiceRow({
+  icon,
   label,
   hint,
   selected,
-  checking,
+  checking = false,
+  disabled = false,
   onPress,
 }: {
+  icon?: IconName;
   label: string;
   hint?: string;
   selected: boolean;
-  checking: boolean;
+  checking?: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const colors = useColors();
   const styles = useStyles();
+  let trailing: ReactNode = null;
+  if (checking) trailing = <ActivityIndicator size="small" color={colors.muted} />;
+  else if (selected) trailing = <Icon name="check" size={18} color={colors.accent} />;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected, busy: checking }}
-      accessibilityLabel={label}
+      accessibilityState={{ selected, disabled, busy: checking }}
+      // The hint is in the label: it says which language Automatic uses.
+      accessibilityLabel={hint ? `${label}, ${hint}` : label}
+      disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed, disabled && styles.disabled]}
     >
-      <View style={styles.text}>
-        <Text style={styles.label}>{label}</Text>
-        {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      </View>
-      {checking ? (
-        <ActivityIndicator size="small" color={colors.muted} />
-      ) : selected ? (
-        <Icon name="check" size={18} color={colors.accent} />
+      {icon ? (
+        <View style={styles.icon}>
+          <Icon name={icon} size={18} color={colors.content} />
+        </View>
       ) : null}
+      <View style={styles.text}>
+        <Text style={styles.label} numberOfLines={1}>
+          {label}
+        </Text>
+        {hint ? (
+          <Text style={styles.hint} numberOfLines={2}>
+            {hint}
+          </Text>
+        ) : null}
+      </View>
+      {trailing}
     </Pressable>
   );
 }
 
+// Grouped as the rest of Settings: a muted heading over a filled, rounded
+// card, rows split by hairlines inset past their icons.
 const useStyles = themedStyles((colors) => ({
   loading: {
     marginTop: 40,
@@ -301,24 +331,39 @@ const useStyles = themedStyles((colors) => ({
   heading: {
     color: colors.muted,
     fontSize: 15,
-    marginTop: 20,
+    marginTop: 24,
     marginBottom: 8,
-    marginLeft: 4,
+    marginLeft: 16,
   },
-  list: {
-    marginLeft: -4,
-    paddingRight: 4,
+  firstHeading: {
+    marginTop: 8,
+  },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    borderCurve: "continuous",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  automaticCard: {
+    marginBottom: 12,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
+    marginLeft: 40,
     backgroundColor: colors.stroke,
+  },
+  textDivider: {
+    marginLeft: 6,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
     minHeight: 52,
-    paddingVertical: 10,
-    paddingLeft: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: radii.row,
+    gap: 8,
   },
   pressed: {
     opacity: 0.6,
@@ -327,14 +372,12 @@ const useStyles = themedStyles((colors) => ({
     opacity: 0.45,
   },
   icon: {
-    width: 32,
-    marginRight: 4,
+    width: 26,
     alignItems: "center",
   },
   text: {
     flex: 1,
     gap: 2,
-    marginRight: 8,
   },
   label: {
     color: colors.content,
@@ -347,9 +390,9 @@ const useStyles = themedStyles((colors) => ({
   },
   filter: {
     height: 40,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    borderRadius: radii.card,
     borderCurve: "continuous",
     backgroundColor: colors.surface,
     color: colors.content,
@@ -360,6 +403,6 @@ const useStyles = themedStyles((colors) => ({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 8,
-    marginHorizontal: 4,
+    marginHorizontal: 16,
   },
 }));

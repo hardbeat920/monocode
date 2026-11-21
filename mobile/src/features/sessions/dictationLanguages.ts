@@ -64,6 +64,12 @@ export type DictationPlan =
 
 const base = (id: string) => id.split(/[-_]/)[0]!.toLowerCase();
 const normalized = (id: string) => id.replace(/_/g, "-").toLowerCase();
+/** The BCP-47 script subtag ("latn" in "sr-Latn-RS"), if any. */
+const script = (id: string) =>
+  normalized(id)
+    .split("-")
+    .slice(1)
+    .find((part) => /^[a-z]{4}$/.test(part));
 
 /**
  * The language among `supported` that best stands for `requested`: the same
@@ -78,8 +84,14 @@ export function matchLanguage(
   const exact = supported.find((id) => normalized(id) === wanted);
   if (exact) return exact;
   const language = base(requested);
-  const sameLanguage = supported.filter((id) => base(id) === language);
+  let sameLanguage = supported.filter((id) => base(id) === language);
   if (sameLanguage.length === 0) return null;
+  // A script ("sr-Latn") outranks a region: Latin Serbian isn't Cyrillic.
+  const wantedScript = script(requested);
+  if (wantedScript) {
+    const sameScript = sameLanguage.filter((id) => script(id) === wantedScript);
+    if (sameScript.length > 0) sameLanguage = sameScript;
+  }
   // A bare code is the whole language; an engine taking one takes them all.
   const bare = sameLanguage.find((id) => !/[-_]/.test(id));
   if (bare) return bare;
