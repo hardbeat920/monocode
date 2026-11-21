@@ -10,16 +10,20 @@ import type { Harness, Project } from "@/features/workspace/types";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 
 import { DEFAULT_ACCESS } from "./access";
+import { ModelChangeError } from "./modelChange";
 import type { ModelPick, RuntimeMode } from "./types";
+
+type ChosenModel = { pick: ModelPick; name: string };
 
 /** What the model picker set for a session, or for a new one in a project. */
 type Picked = {
-  model: { pick: ModelPick; name: string } | null;
+  model: ChosenModel | null;
+  appliedModel: ChosenModel | null;
   access: RuntimeMode | null;
   accounts: Partial<Record<Harness, string>>;
 };
 
-const NOTHING: Picked = { model: null, access: null, accounts: {} };
+const NOTHING: Picked = { model: null, appliedModel: null, access: null, accounts: {} };
 
 const choiceScope = (
   desktop: string | undefined,
@@ -41,9 +45,6 @@ const set = (scope: string, next: Partial<Picked>) => {
   picks.set(scope, { ...(picks.get(scope) ?? NOTHING), ...next });
   listeners.forEach((listener) => listener());
 };
-
-// A slider drag picks step after step; the desktop hears only where it stops.
-const applying = new Map<string, ReturnType<typeof setTimeout>>();
 
 const failed = (reason: unknown) =>
   Alert.alert(
@@ -83,15 +84,20 @@ export function useSessionChoice(
     DEFAULT_ACCESS;
 
   const pickModel = (pick: ModelPick, name: string) => {
-    set(scope, { model: { pick, name } });
+    const model = { pick, name };
+    set(scope, { model });
     if (!sessionId) return;
-    clearTimeout(applying.get(scope));
-    applying.set(
-      scope,
-      setTimeout(() => {
-        applying.delete(scope);
-        configureSession(sessionId, pick).catch(failed);
-      }, 400),
+    void configureSession(sessionId, pick).then(
+      (result) => {
+        if (result === "applied" && picks.has(scope)) set(scope, { appliedModel: model });
+      },
+      (reason: unknown) => {
+        const latest = picks.get(scope);
+        if (latest?.model !== model) return;
+        set(scope, { model: latest.appliedModel });
+        // The composer restores the draft and reports a failure that blocked Send.
+        if (!(reason instanceof ModelChangeError && reason.sending)) failed(reason);
+      },
     );
   };
   const pickAccess = (mode: RuntimeMode) => {

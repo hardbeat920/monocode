@@ -6,14 +6,16 @@ import {
   useSessionChoice,
   useForgetChoiceOnLeave,
 } from "@/features/models/sessionChoice";
+import { ModelChangeError } from "@/features/models/modelChange";
 import type { ModelPick } from "@/features/models/types";
 import type { Project } from "@/features/workspace/types";
 
 const desktop = vi.hoisted(() => ({
   fingerprint: "desktop",
   configure: vi.fn(),
+  alert: vi.fn(),
 }));
-vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("react-native", () => ({ Alert: { alert: desktop.alert } }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
   useConnection: () => ({
     pairing: { desktop: { fingerprint: desktop.fingerprint } },
@@ -92,5 +94,35 @@ describe("mobile account choices", () => {
     act(() => root.render(<Probe />));
     expect(draft.accounts).toEqual({});
     expect(draft.chosen).toBeNull();
+  });
+
+  it("rolls back a rejected pick to the last model the desktop applied", async () => {
+    desktop.configure.mockResolvedValueOnce("applied");
+    await act(async () => existing.pickModel(pick, "GPT"));
+    desktop.configure.mockRejectedValueOnce(new ModelChangeError("Model unavailable", false));
+    await act(async () => existing.pickModel({ ...pick, model: "codex:missing" }, "Missing"));
+    expect(existing.chosen).toEqual({ pick, name: "GPT" });
+    expect(desktop.alert).toHaveBeenCalledWith("Could not change the session", "Model unavailable");
+  });
+
+  it("keeps the newest selection when an older request fails", async () => {
+    let reject!: (reason: unknown) => void;
+    desktop.configure.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    act(() => existing.pickModel(pick, "GPT"));
+    const newer = { ...pick, model: "codex:new" };
+    desktop.configure.mockResolvedValueOnce("applied");
+    await act(async () => {
+      existing.pickModel(newer, "New model");
+      reject(new Error("Older model unavailable"));
+    });
+    expect(existing.chosen).toEqual({ pick: newer, name: "New model" });
+    expect(desktop.alert).not.toHaveBeenCalled();
+  });
+
+  it("leaves the alert to the composer when the failure blocked Send", async () => {
+    desktop.configure.mockRejectedValueOnce(new ModelChangeError("Model unavailable", true));
+    await act(async () => existing.pickModel(pick, "GPT"));
+    expect(existing.chosen).toBeNull();
+    expect(desktop.alert).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ import {
   type Conversation,
 } from "@/features/connection/ConnectionProvider";
 import { selectedWorkspace } from "@/features/connection/selection";
+import { scheduleModelChange, type ModelChangeResult } from "@/features/models/modelChange";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
 import type { DisplayedQuestionPrompt, Message, UsageLimitState, Mono, MonoSubsessions, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
@@ -86,7 +87,7 @@ type Workspace = {
   /** The model sheet's catalog, for a conversation or else a new session in the project. */
   listModels: (projectId: string, conversationId?: string) => Promise<ModelCatalog>;
   /** Sets a conversation's model and settings, or its permissions, as the desktop's pickers do. */
-  configureSession: (conversationId: string, choice: Partial<ModelChoice>) => Promise<void>;
+  configureSession: (conversationId: string, choice: Partial<ModelChoice>) => Promise<ModelChangeResult>;
   /** Renames a session as the desktop sidebar does; the new title shows at once. */
   renameSession: (session: SessionSummary, title: string) => Promise<void>;
   /** Every project on the desktop, chosen for this phone or not, as a Mono can work in any. */
@@ -137,6 +138,7 @@ const TAIL = 3;
 const OLDER_PAGE = 20;
 /** An accepted new session may precede its desktop routing catalog by one poll. */
 const STARTUP_GRACE_MS = 5_000;
+const modelChangeScope = (desktop: string | undefined, id: string) => `${desktop ?? ""}\n${id}`;
 
 /** A message sent from here that the desktop has not echoed back yet. */
 type PendingSend = { turn: Turn; userCount: number; afterUserId?: string };
@@ -414,6 +416,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [watching, desktop, read, showQuestion, showUsageLimit]);
   const mutationIds = useRef(new Map<string, string>());
+  const modelChanges = useRef(new Map<string, ReturnType<typeof scheduleModelChange>>());
   const { command, refresh } = connection;
   const mutate = useCallback(async <T,>(method: string, params: object): Promise<T> => {
     const signature = JSON.stringify([method, params]);
@@ -468,6 +471,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // The message shows at once, as its own turn, until the desktop's transcript
   // has one more user message than when it was sent.
   const sendMessage = useCallback(async (conversationId: string, text: string, attachments: Attachment[] = []) => {
+    const changes = modelChanges.current;
+    const scope = modelChangeScope(desktop, conversationId);
+    for (let change = changes.get(scope); change; change = changes.get(scope)) {
+      change.flushForSend();
+      try {
+        await change.result;
+      } catch (reason) {
+        // A newer pick can still take effect before this message is sent.
+        const latest = changes.get(scope);
+        if (!latest || latest === change) throw reason;
+      }
+    }
+    if (current.current.pairing?.desktop.fingerprint !== desktop)
+      throw new Error("The desktop connection changed. Try again.");
     const at = Date.now();
     const id = `pending:${at}`;
     const userCount = hasNativeTranscript
@@ -508,7 +525,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setPending((previous) =>
       previous[conversationId]?.turn.id === id ? withoutKey(previous, conversationId) : previous,
     );
-  }, [mutate, read]);
+  }, [desktop, mutate, read]);
   // Pages in the turns before the earliest one here.
   const loadingOlder = useRef(new Set<string>());
   const loadOlder = useCallback(
@@ -548,9 +565,28 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
   const configureSession = useCallback(
     async (conversationId: string, choice: Partial<ModelChoice>) => {
-      await mutate("session.configure", { conversationId, ...choice });
+      const apply = async () => {
+        if (current.current.pairing?.desktop.fingerprint !== desktop)
+          throw new Error("The desktop connection changed. Try again.");
+        // Reapply the current choice even if an earlier request with the same
+        // settings succeeded and its reply was lost.
+        await command("session.configure", { conversationId, ...choice }, makeCommandId());
+      };
+      if (choice.model === undefined) {
+        await apply();
+        return "applied" as const;
+      }
+      const changes = modelChanges.current;
+      const scope = modelChangeScope(desktop, conversationId);
+      const change = scheduleModelChange(changes.get(scope), apply);
+      changes.set(scope, change);
+      try {
+        return await change.result;
+      } finally {
+        if (changes.get(scope) === change) changes.delete(scope);
+      }
     },
-    [mutate],
+    [command, desktop],
   );
   const stop = useCallback(
     async (conversationId: string) => {
