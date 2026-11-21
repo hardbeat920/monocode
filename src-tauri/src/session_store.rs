@@ -1414,7 +1414,16 @@ fn search_sessions_with_connection(
     let progress_guard = SearchProgressGuard(conn);
     let conn = &*progress_guard.0;
 
-    let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut statement = match conn.prepare(&sql) {
+        Ok(statement) => statement,
+        Err(_) if !session_search_is_current(token) => {
+            return Ok(SessionSearchResult {
+                hits: Vec::new(),
+                truncated: false,
+            });
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let limit = (MAX_SEARCH_SCAN as i64) + 1;
     let mut rows = if let Some(cwd) = cwd {
         statement
@@ -3572,6 +3581,46 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         cancel_owned_session_search(owner);
+    }
+
+    #[test]
+    fn search_prepare_errors_only_reach_the_current_search() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.lock_conn().unwrap();
+        let owner = "search-prepare-error-test";
+        let options = SessionSearchOptions {
+            query: "Needle".into(),
+            cwd: None,
+            include_archived: false,
+            search_owner: owner.into(),
+        };
+
+        for superseded in [false, true] {
+            let token = begin_session_search(owner).unwrap();
+            conn.authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(context.action, AuthAction::Select) {
+                    if superseded {
+                        begin_session_search(owner);
+                    }
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+
+            let result = search_sessions_with_connection(&mut conn, &options, Some(&token));
+            if superseded {
+                let result = result.unwrap();
+                assert!(result.hits.is_empty());
+                assert!(!result.truncated);
+            } else {
+                assert!(result.is_err());
+            }
+            cancel_owned_session_search(owner);
+        }
     }
 
     #[test]
