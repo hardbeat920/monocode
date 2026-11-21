@@ -324,14 +324,42 @@ impl Shell {
         let input = call.input.clone();
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
-            "sessions.list" => Ok(
-                json!({"cwd":project,"sessions":self.order.iter().filter_map(|id|{
-                let metadata=self.session_metadata(*id,cx);
-                if metadata.summary.cwd!=project || self.monos.as_ref().is_some_and(|m|m.read(cx).hidden_session(*id)) || self.orchestration_worker(*id){return None;}
-                let live=self.sessions.get(id).map(|v|v.read(cx));
-                Some(json!({"id":id,"sessionId":id,"title":metadata.summary.title,"harness":metadata.summary.provider,"model":live.and_then(|v|v.settings.model.clone()).or_else(||self.session_details.get(id).and_then(|m|m.model.clone())),"busy":metadata.busy,"hasDraft":live.is_some_and(|v|v.has_saved_draft() || !v.input.read(cx).content.is_empty()) || self.draft_sessions.contains(id),"archived":metadata.summary.archived}))
-            }).collect::<Vec<_>>()}),
-            ),
+            "sessions.list" => {
+                let sessions: Vec<_> = self
+                    .order
+                    .iter()
+                    .filter_map(|id| {
+                        let metadata = self.session_metadata(*id, cx);
+                        if metadata.summary.cwd != project
+                            || self
+                                .monos
+                                .as_ref()
+                                .is_some_and(|m| m.read(cx).hidden_session(*id))
+                            || self.orchestration_worker(*id)
+                        {
+                            return None;
+                        }
+                        let live = self.sessions.get(id).map(|v| v.read(cx));
+                        let model = live
+                            .and_then(Conversation::model_for_app_list)
+                            .unwrap_or_else(|| {
+                                self.session_details.get(id).and_then(|m| m.model.as_deref())
+                            });
+                        Some(json!({
+                            "id": id,
+                            "sessionId": id,
+                            "title": metadata.summary.title,
+                            "harness": metadata.summary.provider,
+                            "model": model,
+                            "busy": metadata.busy,
+                            "hasDraft": live.is_some_and(|v| v.has_saved_draft() || !v.input.read(cx).content.is_empty())
+                                || self.draft_sessions.contains(id),
+                            "archived": metadata.summary.archived,
+                        }))
+                    })
+                    .collect();
+                Ok(json!({"cwd": project, "sessions": sessions}))
+            }
             "models.list" => {
                 let profiles: Vec<_> = Kind::ALL
                     .into_iter()
