@@ -108,7 +108,8 @@ it("shows missing documents without falling back to Notes", async () => {
 });
 
 it("can cancel deletion, keeps the reader on failure, and closes after a successful retry", async () => {
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal("confirm", confirm);
   const onClose = vi.fn();
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "artifacts_delete") throw new Error("Storage failed");

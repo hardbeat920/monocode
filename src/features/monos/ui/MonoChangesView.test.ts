@@ -90,7 +90,7 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  vi.spyOn(window, "alert").mockImplementation(() => {});
+  vi.stubGlobal("alert", vi.fn());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

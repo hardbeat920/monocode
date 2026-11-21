@@ -40,7 +40,7 @@ const prefs = [
 ];
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   prefs.forEach((pref) => pref.save(pref.defaultValue));
   localStorage.clear();
 });
@@ -61,8 +61,11 @@ describe.each(prefs)("$name preference", (pref) => {
   });
 
   it("keeps the saved value in memory when storage rejects the write", () => {
-    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-      throw new Error("quota");
+    vi.stubGlobal("localStorage", {
+      getItem: localStorage.getItem.bind(localStorage),
+      setItem() {
+        throw new Error("quota");
+      },
     });
     const listener = vi.fn();
     const unsubscribe = pref.subscribe(listener);
