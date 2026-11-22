@@ -1015,6 +1015,99 @@ it("uses the confirmed host configuration for another phone choice before a rend
   expect(host?.session.model).toBe(gpt.id);
 });
 
+it("keeps the confirmed phone model when an older poll finishes afterwards", async () => {
+  const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
+  catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
+  const sessionId = "delayed-model-poll";
+  host = {
+    projectId: "project",
+    revision: 1,
+    status: "idle",
+    updatedAt: 0,
+    session: { ...shell(), id: sessionId, harness: "codex", model: gpt.id },
+  };
+  rememberRemoteSession("shell", sessionId);
+  await render();
+
+  let releasePoll!: () => void;
+  const delayedPoll = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let resumePolling!: () => void;
+  const laterPolls = new Promise<void>((resolve) => {
+    resumePolling = resolve;
+  });
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let pollStarted = false;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: { revision?: number } } | undefined;
+    const revision = request?.params?.revision;
+    if (request?.method === "sessions.sync" && revision !== undefined) {
+      if (!pollStarted) {
+        pollStarted = true;
+        await delayedPoll;
+        return { kind: "unchanged", revision };
+      }
+      await laterPolls;
+    }
+    return original(command, input);
+  });
+  const onRemoteSnapshot = vi.fn();
+  await render(shell(), { onRemoteSnapshot });
+  expect(pollStarted).toBe(true);
+
+  await act(async () => {
+    await remoteSessionActions("shell")!.configure({ model: nextModel.id });
+    releasePoll();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(byLabel("Codex GPT Alt")).not.toBeNull();
+  expect(onRemoteSnapshot).toHaveBeenCalledTimes(1);
+  expect(onRemoteSnapshot).toHaveBeenLastCalledWith("shell", host);
+  await act(async () => {
+    await remoteSessionActions("shell")!.configure({ model: nextModel.id });
+  });
+  expect(commands.filter((command) => command.type === "configure")).toHaveLength(1);
+
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render();
+  expect(byLabel("Codex GPT Alt")).not.toBeNull();
+
+  await act(async () => resumePolling());
+  await settle();
+  await act(async () => {
+    await remoteSessionActions("shell")!.configure({ model: gpt.id });
+  });
+  expect(commands.filter((command) => command.type === "configure")).toMatchObject([
+    { model: nextModel.id },
+    { model: gpt.id },
+  ]);
+});
+
+it("accepts a confirmed phone model change after the host restores an older revision", async () => {
+  const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
+  catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
+  const sessionId = "restored-model-session";
+  host = {
+    projectId: "project",
+    revision: 5,
+    status: "idle",
+    updatedAt: 0,
+    session: { ...shell(), id: sessionId, harness: "codex", model: gpt.id },
+  };
+  rememberRemoteSession("shell", sessionId);
+  await render();
+
+  host = { ...host, revision: 1 };
+  await act(async () => {
+    await remoteSessionActions("shell")!.configure({ model: nextModel.id });
+  });
+  expect(host).toMatchObject({ revision: 2, session: { model: nextModel.id } });
+  expect(byLabel("Codex GPT Alt")).not.toBeNull();
+});
+
 it("keeps settings absent from the catalog when the phone reselects the saved model", async () => {
   host = {
     projectId: "project",
