@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 /// How long a yielded Antigravity turn waits for its background work to wake
 /// the agent before treating the run as over.
-const DRAIN_WAKE_TIMEOUT: Duration = Duration::from_secs(60);
+const DRAIN_WAKE_TIMEOUT: Duration = Duration::from_secs(45);
 /// A completed model response may be followed by a tool call it requested.
 const DRAIN_RESPONSE_GRACE: Duration = Duration::from_secs(5);
 /// Quiet time after the agent's resumed output before the turn is settled.
@@ -60,6 +60,7 @@ pub(super) struct State {
     drain_awaiting_wake: bool,
     drain_resumed: bool,
     drain_finish: Option<Instant>,
+    last_text: bool,
     spent_effort: bool,
     probe_models: VecDeque<String>,
     probe_budget: Option<Instant>,
@@ -137,6 +138,7 @@ impl Protocol {
         self.acp.drain_awaiting_wake = false;
         self.acp.drain_resumed = false;
         self.acp.drain_finish = None;
+        self.acp.last_text = false;
         self.acp.background.clear();
         if matches!(self.request.kind, Kind::Antigravity | Kind::Devin) {
             for (_, (wire, _, _)) in self.approvals.drain() {
@@ -207,6 +209,7 @@ impl Protocol {
                 self.acp.drain_awaiting_wake = false;
                 self.acp.drain_resumed = false;
                 self.acp.drain_finish = None;
+                self.acp.last_text = false;
                 self.done = true;
                 events.push(Event::Done);
                 return Ok(events);
@@ -293,6 +296,7 @@ impl Protocol {
         self.acp.drain_awaiting_wake = false;
         self.acp.drain_resumed = false;
         self.acp.drain_finish = None;
+        self.acp.last_text = false;
         let setup = self.acp.setup.clone();
         self.acp_options(&setup)?;
         self.acp_next(stdin)
@@ -374,6 +378,7 @@ impl Protocol {
                 stdin,
             )
         } else {
+            self.acp.last_text = false;
             self.acp_send(
                 Stage::Prompt,
                 "session/prompt",
@@ -965,22 +970,25 @@ impl Protocol {
                         result["stopReason"].as_str().unwrap_or("")
                     ));
                 }
-                // Antigravity reports `end_turn` as soon as the agent yields
-                // while a background task runs, then streams the task result
-                // and the agent's continuation. Keep the turn alive until the
-                // pending tools settle and the resumed output goes quiet.
+                // Antigravity reports `end_turn` when the agent yields to
+                // background work. That can happen with a tool still running,
+                // or after a response whose tool call has not reached us yet
+                // (the server's safety checks can delay the tool update). A
+                // response that ended in visible text and left no tool behind
+                // is a normal finished turn.
+                let running = self
+                    .tools
+                    .values()
+                    .any(|tool| tool.state == ToolState::Running);
                 if self.request.kind == Kind::Antigravity
                     && !self.acp.cancelling
-                    && self
-                        .tools
-                        .values()
-                        .any(|tool| tool.state == ToolState::Running)
+                    && (running || !self.acp.last_text)
                 {
                     let now = Instant::now();
                     self.acp.stage = Stage::Drain;
                     self.acp.drain_deadline = Some(now + DRAIN_LIMIT);
                     self.acp.drain_last = Some(now);
-                    self.acp.drain_awaiting_wake = false;
+                    self.acp.drain_awaiting_wake = !running;
                     self.acp.drain_resumed = false;
                     self.acp.drain_finish = None;
                     events.append(&mut self.acp.notices);
@@ -1028,16 +1036,21 @@ impl Protocol {
             .or_else(|| update["type"].as_str())
             .unwrap_or("");
         match kind {
-            "agent_message_chunk" | "agent_message" => self.text(
-                &format!("acp-{}", self.acp.message),
-                &content_text(&update["content"]),
-                kind == "agent_message",
-                events,
-            ),
+            "agent_message_chunk" | "agent_message" => {
+                self.acp.last_text = true;
+                self.text(
+                    &format!("acp-{}", self.acp.message),
+                    &content_text(&update["content"]),
+                    kind == "agent_message",
+                    events,
+                )
+            }
             "agent_thought_chunk" | "agent_thought" => {
+                self.acp.last_text = false;
                 events.push(Event::Reasoning(content_text(&update["content"])))
             }
             "tool_call" | "tool_call_update" | "tool_call_content_chunk" => {
+                self.acp.last_text = false;
                 let tool = update
                     .get("toolCall")
                     .or_else(|| update.get("tool_call"))
@@ -1645,6 +1658,81 @@ mod tests {
         p.acp.drain_finish = Some(Instant::now());
         let events = p.acp_tick(&mut Vec::new()).unwrap();
         assert_eq!(events, vec![Event::Done]);
+        assert!(p.done);
+    }
+
+    #[test]
+    fn antigravity_waits_for_a_tool_call_the_yield_delayed() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        // The response ended in reasoning; its edit tool has not reached us.
+        p.frame(
+            update(
+                json!({"sessionUpdate":"agent_thought_chunk","content":{"text":"Editing files."}}),
+            ),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!p.done);
+        assert_eq!(p.acp.stage, Stage::Drain);
+        assert!(p.acp.drain_awaiting_wake);
+        assert!(!events.contains(&Event::Done));
+
+        // The server's safety check releases the tool call later.
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call","toolCallId":"edit","name":"edit_file","kind":"edit","title":"Edit","status":"in_progress","rawInput":{"Path":"x"}})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        assert!(!p.acp.drain_awaiting_wake);
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call_update","toolCallId":"edit","status":"completed"})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        p.frame(
+            update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}})),
+            &mut out,
+        )
+        .unwrap();
+        p.frame(
+            update(json!({"sessionUpdate":"usage_update","used":1,"size":10})),
+            &mut out,
+        )
+        .unwrap();
+        p.acp.drain_finish = Some(Instant::now());
+        assert_eq!(p.acp_tick(&mut Vec::new()).unwrap(), vec![Event::Done]);
+    }
+
+    #[test]
+    fn antigravity_finishes_a_turn_that_ends_with_visible_text() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        p.frame(
+            json!({"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"text":"All done."}}}}),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(events.contains(&Event::Done));
         assert!(p.done);
     }
 
