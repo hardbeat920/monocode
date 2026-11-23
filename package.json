@@ -22,6 +22,8 @@
     "set-version": "node scripts/bump-version.mjs",
     "tauri": "tauri",
     "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",
+    "mock:discord": "node scripts/mock-discord-ipc.mjs",
+    "mock:discord:win": "powershell -NoProfile -File scripts/mock-discord-ipc.ps1",
     "setup:linux:deb": "bash scripts/install-linux-deps-debian.sh",
     "setup:linux:fedora": "bash scripts/install-linux-deps-fedora.sh",
     "build:linux": "tauri build --bundles deb,appimage && bash scripts/repack-appimage.sh",

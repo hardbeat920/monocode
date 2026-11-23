@@ -822,6 +822,7 @@ import {
   inFlightSnapshotKey,
   shouldWriteInFlightSnapshot,
 } from "../features/sessions/model/inFlight";
+import { useDiscordPresence } from "../features/settings/model/discord";
 import {
   isBlankSession,
   reconcileProjectReturn,
@@ -2345,6 +2346,20 @@ function Workspace({
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
 
+  // Presence is shared by every MonoCode window, so only the focused one owns
+  // it. The token makes focus gains republish even when no session data changed.
+  const [windowHasFocus, setWindowHasFocus] = useState(() =>
+    typeof document === "undefined" ? true : document.hasFocus(),
+  );
+  const [focusRepublishToken, setFocusRepublishToken] = useState(0);
+  useDiscordPresence(
+    sessions.find((session) => session.id === activeSessionId) ?? active,
+    sessions,
+    projectCwd,
+    windowHasFocus,
+    focusRepublishToken,
+  );
+
   // Sessions that belong in the UI: a habit's hidden run is not one of them,
   // and asks through its Mono's chat rather than on its own.
   const promptableSessions = useMemo(
@@ -2431,7 +2446,9 @@ function Workspace({
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
         setWindowFocused(focused);
+        setWindowHasFocus(focused);
         if (focused) {
+          setFocusRepublishToken((token) => token + 1);
           flushForegroundHarnessEvents();
           syncDockBadge(sessionsRef.current);
           if (

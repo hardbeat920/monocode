@@ -399,6 +399,14 @@ import {
   type SettingsSectionId,
 } from "../model/settings";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
+import {
+  discordPresenceStatus,
+  DISCORD_STATUS_LABEL,
+  saveDiscordPresenceEnabled,
+  useDiscordPresenceEnabled,
+  setDiscordPresence,
+  type DiscordPresenceStatus,
+} from "../model/discord";
 import { setQuickComposerShortcut } from "../../quick-composer/model/quickComposer";
 import {
   isGlobalShortcut,
@@ -862,6 +870,27 @@ function GeneralPage({
   const [quickComposerError, setQuickComposerError] = useState<string | null>(
     null,
   );
+  // Shared store: a toggle in another window is reflected here immediately.
+  const discordPresenceEnabled = useDiscordPresenceEnabled();
+  const [discordStatus, setDiscordStatus] = useState<DiscordPresenceStatus>(
+    "disabled",
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      void discordPresenceStatus().then((next) => {
+        if (!cancelled) setDiscordStatus(next);
+      });
+    };
+    refresh();
+    // The worker can finish connecting or lose Discord while this page is open.
+    const timer = window.setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -890,6 +919,12 @@ function GeneralPage({
   const onNotesEnabled = (next: boolean) => {
     saveNotesEnabled(next);
     setNotesEnabled(next);
+  };
+
+  const onDiscordPresenceEnabled = (next: boolean) => {
+    saveDiscordPresenceEnabled(next);
+    setDiscordStatus(next ? "connecting" : "disabled");
+    void setDiscordPresence(next).then(setDiscordStatus);
   };
 
   const onQuickComposerEnabled = (next: boolean) => {
@@ -1025,6 +1060,20 @@ function GeneralPage({
             label="Working agents"
             on={liveAgentsEnabled}
             onChange={onLiveAgentsEnabled}
+          />
+        </Row>
+        <Row
+          id="discord-presence"
+          label="Discord presence"
+          description="Show the project, harness, and active chat on your Discord profile while MonoCode runs. Presence connects to the Discord desktop app on this machine and clears when MonoCode quits."
+        >
+          <span className="text-[12px] text-content/45">
+            {DISCORD_STATUS_LABEL[discordStatus]}
+          </span>
+          <Toggle
+            label="Discord presence"
+            on={discordPresenceEnabled}
+            onChange={onDiscordPresenceEnabled}
           />
         </Row>
         {IS_WIN && (
