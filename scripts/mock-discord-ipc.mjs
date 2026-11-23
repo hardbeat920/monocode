@@ -28,8 +28,12 @@ function frame(opcode, payload) {
 
 const ready = frame(1, { cmd: "DISPATCH", evt: "READY", data: {} });
 
+const clients = new Set();
+
 const server = net.createServer((socket) => {
   console.log("client connected");
+  clients.add(socket);
+  socket.on("close", () => clients.delete(socket));
   let buffer = Buffer.alloc(0);
   socket.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -56,7 +60,14 @@ server.listen(socketPath, () => {
   console.log(`Mock Discord IPC listening on ${socketPath}`);
 });
 
+let shuttingDown = false;
 function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // server.close() waits for open connections, so end them first. With no
+  // clients this destroys nothing and the close callback still runs.
+  for (const socket of clients) socket.destroy();
+  clients.clear();
   server.close(() => {
     try {
       fs.unlinkSync(socketPath);

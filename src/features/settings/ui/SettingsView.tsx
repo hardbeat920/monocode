@@ -402,8 +402,8 @@ import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
 import {
   discordPresenceStatus,
   DISCORD_STATUS_LABEL,
-  loadDiscordPresenceEnabled,
   saveDiscordPresenceEnabled,
+  useDiscordPresenceEnabled,
   setDiscordPresence,
   type DiscordPresenceStatus,
 } from "../model/discord";
@@ -870,9 +870,8 @@ function GeneralPage({
   const [quickComposerError, setQuickComposerError] = useState<string | null>(
     null,
   );
-  const [discordPresenceEnabled, setDiscordPresenceEnabled] = useState(
-    loadDiscordPresenceEnabled,
-  );
+  // Shared store: a toggle in another window is reflected here immediately.
+  const discordPresenceEnabled = useDiscordPresenceEnabled();
   const [discordStatus, setDiscordStatus] = useState<DiscordPresenceStatus>(
     "disabled",
   );
@@ -924,7 +923,6 @@ function GeneralPage({
 
   const onDiscordPresenceEnabled = (next: boolean) => {
     saveDiscordPresenceEnabled(next);
-    setDiscordPresenceEnabled(next);
     setDiscordStatus(next ? "connecting" : "disabled");
     void setDiscordPresence(next).then(setDiscordStatus);
   };

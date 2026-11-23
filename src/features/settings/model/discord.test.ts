@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Session } from "../../sessions/model/session";
 import {
+  buildActivity,
   DISCORD_STATUS_LABEL,
   discordPresenceStatus,
   loadDiscordPresenceEnabled,
@@ -9,6 +11,7 @@ import {
   saveDiscordPresenceEnabled,
   setDiscordPresence,
   subscribeDiscordPresence,
+  truncateUtf8,
 } from "./discord";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -93,5 +96,39 @@ describe("discord presence commands", () => {
       "error",
     ]);
     expect(DISCORD_STATUS_LABEL.unavailable).toBe("Discord not running");
+  });
+});
+
+describe("discord activity details", () => {
+  const session = (title: string, busy: boolean) =>
+    ({
+      title,
+      harness: "claude",
+      busy,
+      cwd: "/repo",
+    }) as unknown as Session;
+
+  it("trims at a character boundary without splitting multi-byte characters", () => {
+    const trimmed = truncateUtf8("😀".repeat(40), 10);
+    expect(trimmed).toBe("😀😀");
+    expect(new TextEncoder().encode(trimmed).length).toBe(8);
+  });
+
+  it("reserves room for the idle suffix", () => {
+    const details = buildActivity(session("A".repeat(200), false), "/repo", 0, 1)
+      .details;
+    expect(details.endsWith(" · idle")).toBe(true);
+    expect(new TextEncoder().encode(details).length).toBeLessThanOrEqual(128);
+  });
+
+  it("bounds busy details and browsing details", () => {
+    const busy = buildActivity(session("😀".repeat(100), true), "/repo", 0, 1);
+    expect(new TextEncoder().encode(busy.details).length).toBeLessThanOrEqual(
+      128,
+    );
+    const browsing = buildActivity(undefined, "/repo", 3, 1);
+    expect(
+      new TextEncoder().encode(browsing.details).length,
+    ).toBeLessThanOrEqual(128);
   });
 });

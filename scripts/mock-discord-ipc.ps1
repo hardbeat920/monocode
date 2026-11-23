@@ -32,8 +32,13 @@ try {
     try {
       while ($pipe.IsConnected) {
         $header = [byte[]]::new(8)
-        $read = $pipe.Read($header, 0, 8)
-        if ($read -lt 8) { break }
+        $headerOffset = 0
+        while ($headerOffset -lt 8) {
+          $read = $pipe.Read($header, $headerOffset, 8 - $headerOffset)
+          if ($read -le 0) { break }
+          $headerOffset += $read
+        }
+        if ($headerOffset -lt 8) { break }
         $opcode = [BitConverter]::ToUInt32($header, 0)
         $length = [BitConverter]::ToUInt32($header, 4)
         if ($length -gt 1048576) { Write-Host "frame too large: $length"; break }

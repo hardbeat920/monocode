@@ -101,6 +101,9 @@ struct Inner {
     enabled: bool,
     activity: Option<Activity>,
     status: PresenceStatus,
+    /// Bumped on every `set` so a connection attempt can tell whether it was
+    /// superseded while it was blocked in connect/handshake.
+    generation: u64,
 }
 
 struct Shared {
@@ -120,6 +123,7 @@ impl DiscordPresence {
                     enabled: false,
                     activity: None,
                     status: PresenceStatus::Disabled,
+                    generation: 0,
                 }),
                 wake: Condvar::new(),
             }),
@@ -137,6 +141,7 @@ impl DiscordPresence {
         let mut inner = lock(&self.shared.inner);
         let turning_on = enabled && !inner.enabled;
         trace!("set enabled={enabled} (was {})", inner.enabled);
+        inner.generation = inner.generation.wrapping_add(1);
         inner.enabled = enabled;
         if let Some(activity) = activity {
             inner.activity = Some(activity);
@@ -168,6 +173,14 @@ fn set_status(shared: &Shared, status: PresenceStatus) {
     lock(&shared.inner).status = status;
 }
 
+/// A connect/handshake may block while the user disables presence or changes
+/// the activity. Only commit its result if that request is still the current
+/// one and presence is still enabled.
+fn still_current(shared: &Shared, generation: u64) -> bool {
+    let inner = lock(&shared.inner);
+    inner.enabled && inner.generation == generation
+}
+
 fn wait(shared: &Shared, timeout: Option<Duration>) {
     let inner = lock(&shared.inner);
     match timeout {
@@ -175,7 +188,7 @@ fn wait(shared: &Shared, timeout: Option<Duration>) {
             let _ = shared.wake.wait_timeout(inner, duration);
         }
         None => {
-            drop(shared.wake.wait(inner));
+            drop(shared.wake.wait_while(inner, |state| !state.enabled));
         }
     }
 }
@@ -187,9 +200,9 @@ fn worker(shared: Arc<Shared>) {
     let mut next_retry = Instant::now();
 
     loop {
-        let (enabled, activity) = {
+        let (enabled, activity, generation) = {
             let inner = lock(&shared.inner);
-            (inner.enabled, inner.activity.clone())
+            (inner.enabled, inner.activity.clone(), inner.generation)
         };
 
         if was_enabled && !enabled {
@@ -210,38 +223,56 @@ fn worker(shared: Arc<Shared>) {
 
         if connection.is_none() && Instant::now() >= next_retry {
             match IpcConnection::connect() {
-                Ok(mut connected) => match connected.handshake() {
-                    Ok(()) => {
-                        connection = Some(connected);
-                        last_sent = None;
-                        set_status(&shared, PresenceStatus::Connected);
+                Ok(mut connected) => {
+                    let handshake = connected.handshake();
+                    // Both calls can block. Do not let a stale attempt overwrite
+                    // Disabled or publish an activity from an older request.
+                    if !still_current(&shared, generation) {
+                        trace!("discarding superseded connection");
+                        next_retry = Instant::now();
+                    } else {
+                        match handshake {
+                            Ok(()) => {
+                                connection = Some(connected);
+                                last_sent = None;
+                                set_status(&shared, PresenceStatus::Connected);
+                            }
+                            Err(error) => {
+                                trace!("handshake failed: {error}");
+                                next_retry = Instant::now() + CONNECT_RETRY;
+                                set_status(&shared, PresenceStatus::Unavailable);
+                            }
+                        }
                     }
-                    Err(error) => {
-                        trace!("handshake failed: {error}");
+                }
+                Err(error) => {
+                    trace!("connect failed: {error}");
+                    if still_current(&shared, generation) {
                         next_retry = Instant::now() + CONNECT_RETRY;
                         set_status(&shared, PresenceStatus::Unavailable);
                     }
-                },
-                Err(error) => {
-                    trace!("connect failed: {error}");
-                    next_retry = Instant::now() + CONNECT_RETRY;
-                    set_status(&shared, PresenceStatus::Unavailable);
                 }
             }
         }
 
         let mut dropped = false;
         if let Some(connection) = connection.as_mut() {
-            if let Some(activity) = activity.as_ref() {
-                let payload = activity_json(activity);
-                if last_sent.as_deref() != Some(payload.as_str()) {
+            if !still_current(&shared, generation) {
+                // A newer set() arrived after the handshake. Let the next loop
+                // publish its activity instead of this captured one.
+                trace!("skipping activity for superseded request");
+                last_sent = None;
+            } else if let Some(activity) = activity.as_ref() {
+                // Compare the activity itself: every frame gets a fresh nonce.
+                let content = activity_payload(activity).to_string();
+                if last_sent.as_deref() != Some(content.as_str()) {
                     trace!(
                         "SET_ACTIVITY state={:?} details={:?}",
                         activity.state,
                         activity.details
                     );
-                    match connection.send(OP_FRAME, &payload) {
-                        Ok(()) => last_sent = Some(payload),
+                    match connection.send(OP_FRAME, &activity_json(activity)) {
+                        Ok(()) => last_sent = Some(content),
                         Err(error) => {
                             trace!("send failed, will reconnect: {error}");
                             dropped = true;
@@ -277,21 +308,27 @@ fn handshake_json() -> String {
     serde_json::json!({ "v": 1, "client_id": CLIENT_ID }).to_string()
 }
 
+/// The activity body, without the per-frame nonce. Used to decide whether the
+/// presence actually changed and should be sent again.
+fn activity_payload(activity: &Activity) -> serde_json::Value {
+    serde_json::json!({
+        "state": activity.state,
+        "details": activity.details,
+        "timestamps": { "start": activity.started_at },
+        "assets": {
+            "large_image": logo_image(),
+            "large_text": LOGO_TEXT,
+        },
+        "instance": false,
+    })
+}
+
 fn activity_json(activity: &Activity) -> String {
     serde_json::json!({
         "cmd": "SET_ACTIVITY",
         "args": {
             "pid": std::process::id(),
-            "activity": {
-                "state": activity.state,
-                "details": activity.details,
-                "timestamps": { "start": activity.started_at },
-                "assets": {
-                    "large_image": logo_image(),
-                    "large_text": LOGO_TEXT,
-                },
-                "instance": false,
-            },
+            "activity": activity_payload(activity),
         },
         "nonce": uuid::Uuid::new_v4().to_string(),
     })
@@ -310,6 +347,33 @@ fn clear_activity_json() -> String {
     .to_string()
 }
 
+/// XDG_RUNTIME_DIR wins when set; otherwise try the conventional temp folders
+/// before falling back to /tmp. Discord uses one of these for its IPC socket.
+#[cfg(unix)]
+fn ipc_directories(
+    xdg: Option<&str>,
+    tmpdir: Option<&str>,
+    tmp: Option<&str>,
+    temp: Option<&str>,
+) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    let mut add = |value: Option<&str>| {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            directories.push(PathBuf::from(value));
+        }
+    };
+
+    if let Some(runtime) = xdg.filter(|value| !value.is_empty()) {
+        directories.push(PathBuf::from(runtime));
+    } else {
+        add(tmpdir);
+        add(tmp);
+        add(temp);
+    }
+    directories.push(PathBuf::from("/tmp"));
+    directories
+}
+
 #[cfg(unix)]
 struct IpcConnection {
     stream: UnixStream,
@@ -318,13 +382,16 @@ struct IpcConnection {
 #[cfg(unix)]
 impl IpcConnection {
     fn connect() -> io::Result<Self> {
-        let mut directories = Vec::new();
-        if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
-            if !runtime.is_empty() {
-                directories.push(PathBuf::from(runtime));
-            }
-        }
-        directories.push(PathBuf::from("/tmp"));
+        let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+        let tmpdir = std::env::var("TMPDIR").ok();
+        let tmp = std::env::var("TMP").ok();
+        let temp = std::env::var("TEMP").ok();
+        let directories = ipc_directories(
+            xdg.as_deref(),
+            tmpdir.as_deref(),
+            tmp.as_deref(),
+            temp.as_deref(),
+        );
 
         let mut error = io::Error::new(io::ErrorKind::NotFound, "Discord IPC not available");
         for directory in directories {
@@ -488,6 +555,75 @@ mod tests {
         assert_eq!(logo_from_override(None), LOGO_URL);
         assert_eq!(logo_from_override(Some("  ")), LOGO_URL);
         assert_eq!(logo_from_override(Some(" asset-key ")), "asset-key");
+    }
+
+    #[test]
+    fn activity_dedup_ignores_the_fresh_nonce() {
+        let activity = Activity {
+            state: "state".into(),
+            details: "details".into(),
+            started_at: 1_700_000_000_000,
+        };
+        let first = activity_json(&activity);
+        let second = activity_json(&activity);
+        assert_ne!(first, second, "each frame gets its own nonce");
+        assert_eq!(
+            activity_payload(&activity).to_string(),
+            activity_payload(&activity).to_string()
+        );
+        let value: serde_json::Value = serde_json::from_str(&first).expect("valid activity");
+        assert_eq!(value["args"]["activity"], activity_payload(&activity));
+    }
+
+    #[test]
+    fn superseded_requests_are_not_current() {
+        let presence = DiscordPresence::new();
+        let initial = lock(&presence.shared.inner).generation;
+        assert!(!still_current(&presence.shared, initial));
+
+        presence.set(true, None);
+        let current = lock(&presence.shared.inner).generation;
+        assert!(still_current(&presence.shared, current));
+
+        presence.set(
+            true,
+            Some(Activity {
+                state: "state".into(),
+                details: "details".into(),
+                started_at: 1,
+            }),
+        );
+        assert!(!still_current(&presence.shared, current));
+
+        presence.set(false, None);
+        let after_disable = lock(&presence.shared.inner).generation;
+        assert!(!still_current(&presence.shared, after_disable));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_ipc_directories_prefer_xdg_then_temp_then_tmp() {
+        assert_eq!(
+            ipc_directories(Some("/run/user/1000"), None, None, None),
+            vec![PathBuf::from("/run/user/1000"), PathBuf::from("/tmp")]
+        );
+        assert_eq!(
+            ipc_directories(None, Some("/t1"), Some("/t2"), Some("/t3")),
+            vec![
+                PathBuf::from("/t1"),
+                PathBuf::from("/t2"),
+                PathBuf::from("/t3"),
+                PathBuf::from("/tmp"),
+            ]
+        );
+        assert_eq!(
+            ipc_directories(Some(""), Some("/t1"), None, None),
+            vec![PathBuf::from("/t1"), PathBuf::from("/tmp")]
+        );
+        assert_eq!(
+            ipc_directories(None, Some(""), Some("/t2"), None),
+            vec![PathBuf::from("/t2"), PathBuf::from("/tmp")]
+        );
     }
 
     #[test]

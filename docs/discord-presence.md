@@ -18,7 +18,7 @@ default. Its status label polls the native client every three seconds.
 To confirm Discord exposes its IPC endpoint on Windows:
 
 ```powershell
-[System.IO.Directory]::GetFiles("\\.\\pipe\\") | Where-Object { $_ -like 'discord-ipc*' }
+[System.IO.Directory]::GetFiles("\\.\\pipe\\") | Where-Object { [System.IO.Path]::GetFileName($_) -like 'discord-ipc*' }
 ```
 
 On Linux/macOS look for `discord-ipc-0` in `$XDG_RUNTIME_DIR` or `/tmp`.

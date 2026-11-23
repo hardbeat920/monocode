@@ -82,6 +82,28 @@ export type DiscordActivity = {
   startedAt: number;
 };
 
+/** Discord allows at most 128 bytes for activity details. */
+const DETAILS_MAX_BYTES = 128;
+const IDLE_SUFFIX = " · idle";
+const encoder = new TextEncoder();
+
+function utf8Length(value: string): number {
+  return encoder.encode(value).length;
+}
+
+/** Trim at a character boundary so the result never exceeds `maxBytes`. */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = utf8Length(character);
+    if (bytes + size > maxBytes) break;
+    result += character;
+    bytes += size;
+  }
+  return result;
+}
+
 let lastActivity: DiscordActivity | null = null;
 
 /** Keep the last computed activity so the Settings toggle can resend it. */
@@ -129,7 +151,7 @@ export async function discordPresenceStatus(): Promise<DiscordPresenceStatus> {
   }
 }
 
-function buildActivity(
+export function buildActivity(
   active: Session | undefined,
   cwd: string,
   busyCount: number,
@@ -138,19 +160,28 @@ function buildActivity(
   const project = projectName(active?.cwd ?? cwd);
   const place = project || "MonoCode";
   if (!active) {
+    const details =
+      busyCount > 0
+        ? `${busyCount} agent${busyCount === 1 ? "" : "s"} running`
+        : "Browsing MonoCode";
     return {
       state: `In ${place}`,
-      details:
-        busyCount > 0
-          ? `${busyCount} agent${busyCount === 1 ? "" : "s"} running`
-          : "Browsing MonoCode",
+      details: truncateUtf8(details, DETAILS_MAX_BYTES),
       startedAt,
     };
   }
   const title = sessionDisplayTitle(active.title, active.harness);
+  // Reserve room for the idle suffix before truncating, so the final value
+  // (suffix included) still fits in the 128-byte limit.
+  const details = active.busy
+    ? truncateUtf8(title, DETAILS_MAX_BYTES)
+    : `${truncateUtf8(
+        title,
+        DETAILS_MAX_BYTES - utf8Length(IDLE_SUFFIX),
+      )}${IDLE_SUFFIX}`;
   return {
     state: `${HARNESS_TITLE[active.harness]} · ${place}`,
-    details: active.busy ? title : `${title} · idle`,
+    details,
     startedAt,
   };
 }
@@ -164,6 +195,8 @@ export function useDiscordPresence(
   active: Session | undefined,
   sessions: readonly Session[],
   cwd: string,
+  focused = true,
+  focusToken = 0,
 ): DiscordPresenceStatus {
   const enabled = useDiscordPresenceEnabled();
   const [status, setStatus] = useState<DiscordPresenceStatus>(() =>
@@ -186,6 +219,9 @@ export function useDiscordPresence(
   ]);
 
   useEffect(() => {
+    // Several MonoCode windows share one presence client. Only the focused one
+    // publishes, and a focus change republishes even if nothing else changed.
+    if (!focused) return;
     if (timer.current.key !== key) {
       timer.current = { key, at: Date.now() };
     }
@@ -194,7 +230,7 @@ export function useDiscordPresence(
     void setDiscordPresence(enabled, activity).then(setStatus);
     // `key` already captures every field of `active` and `sessions` used above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, key]);
+  }, [enabled, focused, focusToken, key]);
 
   return status;
 }
