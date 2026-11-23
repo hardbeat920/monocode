@@ -822,6 +822,7 @@ import {
   inFlightSnapshotKey,
   shouldWriteInFlightSnapshot,
 } from "../features/sessions/model/inFlight";
+import { useDiscordPresence } from "../features/settings/model/discord";
 import {
   isBlankSession,
   reconcileProjectReturn,
@@ -2033,6 +2034,7 @@ function Workspace({
     sessions.find(
       (session) => activeTab && leafIds(activeTab.layout).includes(session.id),
     );
+  useDiscordPresence(active, sessions, projectCwd);
   const monoViewSession = monoViewId
     ? sessions.find((session) => session.id === monoViewId)
     : undefined;

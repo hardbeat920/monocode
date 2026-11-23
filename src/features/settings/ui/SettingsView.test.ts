@@ -1159,3 +1159,43 @@ describe("providers scope inheritance", () => {
     );
   });
 });
+
+describe("discord presence setting", () => {
+  it("lives in General settings and persists its toggle", async () => {
+    await render("general");
+
+    const row = container.querySelector('[data-setting-id="discord-presence"]');
+    expect(row).toBeTruthy();
+    const toggle = row!.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => toggle.click());
+
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem("monocode.discordPresence")).toBe("1");
+    expect(invoke).toHaveBeenCalledWith(
+      "discord_presence_set",
+      expect.objectContaining({ enabled: true }),
+    );
+  });
+
+  it("is reachable from settings search", async () => {
+    await render("general");
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Search settings"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "discord");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const results = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    );
+    expect(
+      results.some((option) => option.textContent?.includes("Discord presence")),
+    ).toBe(true);
+  });
+});

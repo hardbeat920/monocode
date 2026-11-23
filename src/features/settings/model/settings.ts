@@ -56,7 +56,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "General",
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
-    keywords: "version update sounds notifications notes rail",
+    keywords: "version update sounds notifications notes rail discord presence",
   },
   {
     id: "connections",
@@ -235,6 +235,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "general",
     label: "Notifications",
     keywords: "notify alert toast permission reminder background",
+  },
+  {
+    id: "discord-presence",
+    section: "general",
+    label: "Discord presence",
+    keywords: "rich presence status activity discord show what i am working on",
   },
   {
     id: "notes",

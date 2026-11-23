@@ -17,6 +17,9 @@ npm install
 npm run tauri dev
 ```
 
+To verify the optional Discord Rich Presence integration from a dev build, see
+[Verify Discord presence](discord-presence.md).
+
 ## Ubuntu / Debian packages
 
 On an Ubuntu/Debian workstation, the repository can install the native Tauri prerequisites and build distributable Linux packages directly:

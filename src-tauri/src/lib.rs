@@ -13,6 +13,7 @@ pub mod control_cli;
 mod cursor_store;
 mod devin_config;
 mod devin_usage;
+mod discord;
 mod external_editor;
 mod fs;
 mod gitlab;
@@ -279,8 +280,12 @@ pub fn run() {
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
+        .manage(discord::DiscordPresence::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
+            if let Some(presence) = app.try_state::<discord::DiscordPresence>() {
+                presence.start();
+            }
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             mobile_access::init(app.handle())?;
@@ -345,6 +350,8 @@ pub fn run() {
             notifications::request_notification_permission,
             notifications::show_notification,
             notifications::open_notification_settings,
+            discord::discord_presence_set,
+            discord::discord_presence_status,
             reminders::reminder_list,
             reminders::reminder_set,
             reminders::reminder_clear,
@@ -707,6 +714,9 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
+            if let Some(presence) = handle.try_state::<discord::DiscordPresence>() {
+                presence.set(false, None);
+            }
             handle.state::<remote::RemoteConnections>().shutdown();
             reap_harness_children(handle);
         }
