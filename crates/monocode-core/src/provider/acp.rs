@@ -4,7 +4,18 @@
 use super::*;
 use std::collections::VecDeque;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+/// How long a yielded Antigravity turn waits for its background work to wake
+/// the agent before treating the run as over.
+const DRAIN_WAKE_TIMEOUT: Duration = Duration::from_secs(60);
+/// A completed model response may be followed by a tool call it requested.
+const DRAIN_RESPONSE_GRACE: Duration = Duration::from_secs(5);
+/// Quiet time after the agent's resumed output before the turn is settled.
+const DRAIN_QUIET: Duration = Duration::from_secs(8);
+/// A background task that never settles (a dev server, for example) must not
+/// keep the conversation in a working state forever.
+const DRAIN_LIMIT: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Stage {
     #[default]
     Initialize,
@@ -15,6 +26,10 @@ enum Stage {
     New,
     Configure,
     Prompt,
+    /// Antigravity yields `end_turn` as soon as a background task starts and
+    /// keeps streaming once that task wakes the agent. Stay in the turn while
+    /// a tool is still running, then finish once the agent falls quiet.
+    Drain,
     Background,
     ThoughtProbe,
     DeleteProbe,
@@ -40,6 +55,11 @@ pub(super) struct State {
     cancelling: bool,
     background: HashMap<String, BackgroundDispatch>,
     background_poll: Option<Instant>,
+    drain_deadline: Option<Instant>,
+    drain_last: Option<Instant>,
+    drain_awaiting_wake: bool,
+    drain_resumed: bool,
+    drain_finish: Option<Instant>,
     spent_effort: bool,
     probe_models: VecDeque<String>,
     probe_budget: Option<Instant>,
@@ -112,6 +132,11 @@ impl Protocol {
     pub(super) fn acp_cancel(&mut self, stdin: &mut impl Write) -> Result<(), String> {
         self.acp.cancelling = true;
         self.acp.deadline = None;
+        self.acp.drain_deadline = None;
+        self.acp.drain_last = None;
+        self.acp.drain_awaiting_wake = false;
+        self.acp.drain_resumed = false;
+        self.acp.drain_finish = None;
         self.acp.background.clear();
         if matches!(self.request.kind, Kind::Antigravity | Kind::Devin) {
             for (_, (wire, _, _)) in self.approvals.drain() {
@@ -163,6 +188,30 @@ impl Protocol {
                 stdin,
             )?;
         }
+        if self.acp.stage == Stage::Drain {
+            let now = Instant::now();
+            let expired = self
+                .acp
+                .drain_deadline
+                .is_some_and(|deadline| now >= deadline);
+            let no_wake = self.acp.drain_awaiting_wake
+                && self
+                    .acp
+                    .drain_last
+                    .is_some_and(|last| now.duration_since(last) >= DRAIN_WAKE_TIMEOUT);
+            let quiet = self.acp.drain_finish.is_some_and(|finish| now >= finish);
+            if expired || no_wake || quiet {
+                let mut events = std::mem::take(&mut self.acp.notices);
+                self.acp.drain_deadline = None;
+                self.acp.drain_last = None;
+                self.acp.drain_awaiting_wake = false;
+                self.acp.drain_resumed = false;
+                self.acp.drain_finish = None;
+                self.done = true;
+                events.push(Event::Done);
+                return Ok(events);
+            }
+        }
         if self.acp.stage == Stage::Background
             && self
                 .acp
@@ -178,8 +227,10 @@ impl Protocol {
     }
 
     pub(super) fn acp_active_session(&self) -> Option<&str> {
-        (matches!(self.acp.stage, Stage::Prompt | Stage::Background)
-            && !self.acp.session.is_empty())
+        (matches!(
+            self.acp.stage,
+            Stage::Prompt | Stage::Drain | Stage::Background
+        ) && !self.acp.session.is_empty())
         .then_some(self.acp.session.as_str())
     }
 
@@ -237,6 +288,11 @@ impl Protocol {
         self.acp.options.clear();
         self.acp.settings_applied = false;
         self.acp.spent_effort = false;
+        self.acp.drain_deadline = None;
+        self.acp.drain_last = None;
+        self.acp.drain_awaiting_wake = false;
+        self.acp.drain_resumed = false;
+        self.acp.drain_finish = None;
         let setup = self.acp.setup.clone();
         self.acp_options(&setup)?;
         self.acp_next(stdin)
@@ -705,7 +761,9 @@ impl Protocol {
                                 self.request.kind != Kind::Devin
                                     && !matches!(kind, Some("execute" | "other" | "fetch"))
                             });
-                    if self.acp.stage != Stage::Prompt || self.acp.cancelling {
+                    if !matches!(self.acp.stage, Stage::Prompt | Stage::Drain)
+                        || self.acp.cancelling
+                    {
                         self.approvals.remove(&id);
                         write_json(
                             stdin,
@@ -747,8 +805,10 @@ impl Protocol {
             } else if matches!(
                 method,
                 "session/update" | "_x.ai/session_notification" | "x.ai/session_notification"
-            ) && matches!(self.acp.stage, Stage::Prompt | Stage::Background)
-            {
+            ) && matches!(
+                self.acp.stage,
+                Stage::Prompt | Stage::Drain | Stage::Background
+            ) {
                 // session/load may replay the entire history. Only live prompt updates render.
                 if v["params"]["sessionId"]
                     .as_str()
@@ -905,6 +965,27 @@ impl Protocol {
                         result["stopReason"].as_str().unwrap_or("")
                     ));
                 }
+                // Antigravity reports `end_turn` as soon as the agent yields
+                // while a background task runs, then streams the task result
+                // and the agent's continuation. Keep the turn alive until the
+                // pending tools settle and the resumed output goes quiet.
+                if self.request.kind == Kind::Antigravity
+                    && !self.acp.cancelling
+                    && self
+                        .tools
+                        .values()
+                        .any(|tool| tool.state == ToolState::Running)
+                {
+                    let now = Instant::now();
+                    self.acp.stage = Stage::Drain;
+                    self.acp.drain_deadline = Some(now + DRAIN_LIMIT);
+                    self.acp.drain_last = Some(now);
+                    self.acp.drain_awaiting_wake = false;
+                    self.acp.drain_resumed = false;
+                    self.acp.drain_finish = None;
+                    events.append(&mut self.acp.notices);
+                    return Ok(events);
+                }
                 if self.request.kind == Kind::Hermes
                     && !self.acp.background.is_empty()
                     && !self.acp.cancelling
@@ -916,7 +997,7 @@ impl Protocol {
                     events.push(Event::Done);
                 }
             }
-            Stage::Background => {}
+            Stage::Drain | Stage::Background => {}
             Stage::ThoughtProbe => {
                 if let Some(catalog) = self.catalog_result.as_mut() {
                     let model = self.acp.pending_params["value"].as_str().unwrap_or("");
@@ -930,6 +1011,10 @@ impl Protocol {
         Ok(events)
     }
     fn acp_update(&mut self, update: &Value, events: &mut Vec<Event>) {
+        let was_running = self
+            .tools
+            .values()
+            .any(|tool| tool.state == ToolState::Running);
         if self.request.kind == Kind::Hermes {
             if let Some(dispatch) = background_dispatch(update) {
                 self.acp
@@ -1064,6 +1149,44 @@ impl Protocol {
                 events.push(Event::Status(text));
             }
             _ => {}
+        }
+        self.acp_drain_update(kind, was_running);
+    }
+    /// After Antigravity's early `end_turn`, the run is only over once every
+    /// tool it left behind has settled, the resumed output has arrived, and
+    /// the stream has been quiet long enough for the agent to be idle.
+    fn acp_drain_update(&mut self, kind: &str, was_running: bool) {
+        if self.acp.stage != Stage::Drain || self.acp.cancelling {
+            return;
+        }
+        let now = Instant::now();
+        self.acp.drain_last = Some(now);
+        let running = self
+            .tools
+            .values()
+            .any(|tool| tool.state == ToolState::Running);
+        if self.acp.drain_awaiting_wake {
+            self.acp.drain_awaiting_wake = false;
+            self.acp.drain_resumed = true;
+        }
+        if was_running && !running {
+            // The background task just finished; the agent's next response is
+            // still being computed, so wait for that wake instead of guessing.
+            self.acp.drain_awaiting_wake = true;
+            self.acp.drain_resumed = false;
+            self.acp.drain_finish = None;
+            return;
+        }
+        if running {
+            self.acp.drain_finish = None;
+            return;
+        }
+        if kind == "usage_update" {
+            // A model response just completed. Give a tool call from the same
+            // response a moment to arrive before ending the turn.
+            self.acp.drain_finish = Some(now + DRAIN_RESPONSE_GRACE);
+        } else if self.acp.drain_resumed {
+            self.acp.drain_finish = Some(now + DRAIN_QUIET);
         }
     }
     fn acp_background(&mut self, stdin: &mut impl Write) -> Result<Vec<Event>, String> {
@@ -1463,6 +1586,68 @@ mod tests {
             assert!(p.done);
         }
     }
+    #[test]
+    fn antigravity_keeps_the_turn_open_while_a_background_task_wakes_the_agent() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call","toolCallId":"task","name":"run_command","kind":"execute","title":"Build","status":"in_progress","rawInput":{"CommandLine":"sleep 90","WaitMsBeforeAsync":10000}})),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!p.done);
+        assert_eq!(p.acp.stage, Stage::Drain);
+        assert!(!events.contains(&Event::Done));
+
+        let permission = p.frame(
+            json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"toolCallId":"task","kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}),
+            &mut out,
+        )
+        .unwrap();
+        assert!(permission.is_empty());
+        assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "yes");
+
+        // The task finishing is the wake trigger; the agent has not spoken yet.
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call_update","toolCallId":"task","status":"completed","content":{"text":"READY"}})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+
+        let events = p
+            .frame(
+                update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"The build finished."}})),
+                &mut out,
+            )
+            .unwrap();
+        assert!(events.contains(&Event::Text("The build finished.".into())));
+        assert!(!p.done, "a resumed answer must render inside the same turn");
+
+        p.frame(
+            update(json!({"sessionUpdate":"usage_update","used":10,"size":100})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !p.done,
+            "a tool call from the same response may still arrive"
+        );
+        p.acp.drain_finish = Some(Instant::now());
+        let events = p.acp_tick(&mut Vec::new()).unwrap();
+        assert_eq!(events, vec![Event::Done]);
+        assert!(p.done);
+    }
+
     #[test]
     fn hermes_sends_only_an_advertised_reasoning_effort() {
         let mut p = protocol(Kind::Hermes);
