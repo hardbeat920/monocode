@@ -4,7 +4,13 @@
 use super::*;
 use std::collections::VecDeque;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+/// Allow a tool requested alongside visible text to reach the client before
+/// settling. Silence, reasoning and usage alone never complete a yielded turn.
+const DRAIN_QUIET: Duration = Duration::from_secs(8);
+/// Bound a stuck yielded turn, but report a timeout rather than false success.
+const DRAIN_LIMIT: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Stage {
     #[default]
     Initialize,
@@ -15,6 +21,10 @@ enum Stage {
     New,
     Configure,
     Prompt,
+    /// Antigravity yields `end_turn` as soon as a background task starts and
+    /// keeps streaming once that task wakes the agent. Stay in the turn while
+    /// a tool is still running, then finish once the agent falls quiet.
+    Drain,
     Background,
     ThoughtProbe,
     DeleteProbe,
@@ -40,6 +50,11 @@ pub(super) struct State {
     cancelling: bool,
     background: HashMap<String, BackgroundDispatch>,
     background_poll: Option<Instant>,
+    drain_deadline: Option<Instant>,
+    drain_finish: Option<Instant>,
+    last_text: bool,
+    question_calls: std::collections::HashSet<String>,
+    question_answer: Option<String>,
     spent_effort: bool,
     probe_models: VecDeque<String>,
     probe_budget: Option<Instant>,
@@ -111,7 +126,11 @@ impl Protocol {
     }
     pub(super) fn acp_cancel(&mut self, stdin: &mut impl Write) -> Result<(), String> {
         self.acp.cancelling = true;
+        self.acp.question_answer = None;
         self.acp.deadline = None;
+        self.acp.drain_deadline = None;
+        self.acp.drain_finish = None;
+        self.acp.last_text = false;
         self.acp.background.clear();
         if matches!(self.request.kind, Kind::Antigravity | Kind::Devin) {
             for (_, (wire, _, _)) in self.approvals.drain() {
@@ -163,6 +182,26 @@ impl Protocol {
                 stdin,
             )?;
         }
+        if self.acp.stage == Stage::Drain && !self.acp_waiting_for_answer() {
+            let now = Instant::now();
+            let expired = self
+                .acp
+                .drain_deadline
+                .is_some_and(|deadline| now >= deadline);
+            if expired {
+                return Err("Antigravity background work did not settle within one hour. Stop or retry the turn.".into());
+            }
+            let quiet = self.acp.drain_finish.is_some_and(|finish| now >= finish);
+            if quiet {
+                let mut events = std::mem::take(&mut self.acp.notices);
+                self.acp.drain_deadline = None;
+                self.acp.drain_finish = None;
+                self.acp.last_text = false;
+                self.done = true;
+                events.push(Event::Done);
+                return Ok(events);
+            }
+        }
         if self.acp.stage == Stage::Background
             && self
                 .acp
@@ -177,9 +216,131 @@ impl Protocol {
         Ok(std::mem::take(&mut self.acp.notices))
     }
 
+    fn acp_waiting_for_answer(&self) -> bool {
+        self.questions
+            .values()
+            .any(|(_, kind, _, _)| kind == "antigravity")
+    }
+
+    /// `agy acp` exposes ask_question as a tool, then yields with a plain-text
+    /// fallback. The next session/prompt carries the user's selected answers.
+    fn acp_question(&mut self, update: &Value, events: &mut Vec<Event>) {
+        if self.request.kind != Kind::Antigravity || self.acp.cancelling {
+            return;
+        }
+        let kind = update["sessionUpdate"].as_str().unwrap_or("");
+        if !matches!(kind, "tool_call" | "tool_call_update") {
+            return;
+        }
+        let tool = update
+            .get("toolCall")
+            .or_else(|| update.get("tool_call"))
+            .unwrap_or(update);
+        let Some(id) = tool["toolCallId"]
+            .as_str()
+            .or_else(|| tool["tool_call_id"].as_str())
+        else {
+            return;
+        };
+        if self.acp.question_calls.contains(id)
+            || matches!(
+                tool["status"].as_str(),
+                Some("completed" | "failed" | "cancelled" | "canceled")
+            )
+        {
+            return;
+        }
+        let Some(call) = self.tools.get(id) else {
+            return;
+        };
+        if tool["name"] != "ask_question"
+            && call.name != "Run ask_question"
+            && call.name != "ask_question"
+        {
+            return;
+        }
+        let Ok(input) = serde_json::from_str::<Value>(&call.input) else {
+            return;
+        };
+        if !input["questions"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            return;
+        }
+        let wire = json!(id);
+        // This is a synthetic request, so validation failures must never write
+        // a JSON-RPC response for the tool-call id to the ACP server.
+        if self
+            .question(
+                wire.clone(),
+                "antigravity",
+                input,
+                events,
+                &mut std::io::sink(),
+            )
+            .is_ok()
+            && self.questions.contains_key(&wire.to_string())
+        {
+            self.acp.question_calls.insert(id.into());
+            self.acp.drain_finish = None;
+        }
+    }
+
+    pub(super) fn acp_answer_question(
+        &mut self,
+        wire: &Value,
+        question: &crate::agent::Question,
+        decision: Decision,
+        stdin: &mut impl Write,
+    ) -> Result<(), String> {
+        if self.acp.cancelling {
+            return Ok(());
+        }
+        let text = if let Decision::Answer(answers) = decision {
+            question
+                .items
+                .iter()
+                .zip(answers)
+                .map(|(item, answers)| format!("{}\n{}", item.prompt, answers.join("\n")))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        } else {
+            "The user skipped these questions. Do not assume a selected option or approval.".into()
+        };
+        if let Some(call) = wire.as_str().and_then(|id| self.tools.get_mut(id)) {
+            call.state = ToolState::Completed;
+            self.acp.notices.push(Event::Tool(call.clone()));
+        }
+        self.acp.question_answer = Some(text);
+        if self.acp.stage == Stage::Drain {
+            self.acp_send_answer(stdin)?;
+        }
+        Ok(())
+    }
+
+    fn acp_send_answer(&mut self, stdin: &mut impl Write) -> Result<(), String> {
+        let Some(text) = self.acp.question_answer.take() else {
+            return Ok(());
+        };
+        self.acp.drain_deadline = None;
+        self.acp.drain_finish = None;
+        self.acp.last_text = false;
+        self.acp.message += 1;
+        self.text_key = None;
+        self.acp_send(
+            Stage::Prompt,
+            "session/prompt",
+            json!({"sessionId":self.acp.session,"prompt":[{"type":"text","text":text}]}),
+            stdin,
+        )
+    }
+
     pub(super) fn acp_active_session(&self) -> Option<&str> {
-        (matches!(self.acp.stage, Stage::Prompt | Stage::Background)
-            && !self.acp.session.is_empty())
+        (matches!(
+            self.acp.stage,
+            Stage::Prompt | Stage::Drain | Stage::Background
+        ) && !self.acp.session.is_empty())
         .then_some(self.acp.session.as_str())
     }
 
@@ -237,6 +398,9 @@ impl Protocol {
         self.acp.options.clear();
         self.acp.settings_applied = false;
         self.acp.spent_effort = false;
+        self.acp.drain_deadline = None;
+        self.acp.drain_finish = None;
+        self.acp.last_text = false;
         let setup = self.acp.setup.clone();
         self.acp_options(&setup)?;
         self.acp_next(stdin)
@@ -318,6 +482,7 @@ impl Protocol {
                 stdin,
             )
         } else {
+            self.acp.last_text = false;
             self.acp_send(
                 Stage::Prompt,
                 "session/prompt",
@@ -705,7 +870,9 @@ impl Protocol {
                                 self.request.kind != Kind::Devin
                                     && !matches!(kind, Some("execute" | "other" | "fetch"))
                             });
-                    if self.acp.stage != Stage::Prompt || self.acp.cancelling {
+                    if !matches!(self.acp.stage, Stage::Prompt | Stage::Drain)
+                        || self.acp.cancelling
+                    {
                         self.approvals.remove(&id);
                         write_json(
                             stdin,
@@ -747,8 +914,10 @@ impl Protocol {
             } else if matches!(
                 method,
                 "session/update" | "_x.ai/session_notification" | "x.ai/session_notification"
-            ) && matches!(self.acp.stage, Stage::Prompt | Stage::Background)
-            {
+            ) && matches!(
+                self.acp.stage,
+                Stage::Prompt | Stage::Drain | Stage::Background
+            ) {
                 // session/load may replay the entire history. Only live prompt updates render.
                 if v["params"]["sessionId"]
                     .as_str()
@@ -757,7 +926,9 @@ impl Protocol {
                     return Ok(events);
                 }
                 let params = v["params"].get("notification").unwrap_or(&v["params"]);
-                self.acp_update(params.get("update").unwrap_or(params), &mut events);
+                let update = params.get("update").unwrap_or(params);
+                self.acp_update(update, &mut events);
+                self.acp_question(update, &mut events);
             }
             return Ok(events);
         }
@@ -905,6 +1076,30 @@ impl Protocol {
                         result["stopReason"].as_str().unwrap_or("")
                     ));
                 }
+                // `end_turn` can be a yield even after visible progress text
+                // in a short turn. Always listen for continuation, and settle
+                // only a visible answer with no outstanding tool work.
+                if self.request.kind == Kind::Antigravity
+                    && !self.acp.cancelling
+                    && result["stopReason"] == "end_turn"
+                {
+                    let running = self
+                        .tools
+                        .values()
+                        .any(|tool| tool.state == ToolState::Running);
+                    let now = Instant::now();
+                    self.acp.stage = Stage::Drain;
+                    if self.acp.question_answer.is_some() {
+                        self.acp_send_answer(stdin)?;
+                        events.append(&mut self.acp.notices);
+                        return Ok(events);
+                    }
+                    self.acp.drain_deadline = Some(now + DRAIN_LIMIT);
+                    self.acp.drain_finish =
+                        (self.acp.last_text && !running).then_some(now + DRAIN_QUIET);
+                    events.append(&mut self.acp.notices);
+                    return Ok(events);
+                }
                 if self.request.kind == Kind::Hermes
                     && !self.acp.background.is_empty()
                     && !self.acp.cancelling
@@ -916,7 +1111,7 @@ impl Protocol {
                     events.push(Event::Done);
                 }
             }
-            Stage::Background => {}
+            Stage::Drain | Stage::Background => {}
             Stage::ThoughtProbe => {
                 if let Some(catalog) = self.catalog_result.as_mut() {
                     let model = self.acp.pending_params["value"].as_str().unwrap_or("");
@@ -943,16 +1138,30 @@ impl Protocol {
             .or_else(|| update["type"].as_str())
             .unwrap_or("");
         match kind {
-            "agent_message_chunk" | "agent_message" => self.text(
-                &format!("acp-{}", self.acp.message),
-                &content_text(&update["content"]),
-                kind == "agent_message",
-                events,
-            ),
+            "agent_message_chunk" | "agent_message" => {
+                if self.request.kind == Kind::Antigravity
+                    && (self.acp_waiting_for_answer() || self.acp.question_answer.is_some())
+                {
+                    return;
+                }
+                let text = content_text(&update["content"]);
+                if text.is_empty() {
+                    return;
+                }
+                self.acp.last_text = true;
+                self.text(
+                    &format!("acp-{}", self.acp.message),
+                    &text,
+                    kind == "agent_message",
+                    events,
+                )
+            }
             "agent_thought_chunk" | "agent_thought" => {
+                self.acp.last_text = false;
                 events.push(Event::Reasoning(content_text(&update["content"])))
             }
             "tool_call" | "tool_call_update" | "tool_call_content_chunk" => {
+                self.acp.last_text = false;
                 let tool = update
                     .get("toolCall")
                     .or_else(|| update.get("tool_call"))
@@ -1062,6 +1271,31 @@ impl Protocol {
                     .collect::<Vec<_>>()
                     .join("\n");
                 events.push(Event::Status(text));
+            }
+            _ => {}
+        }
+        self.acp_drain_update(kind);
+    }
+    /// Keep listening across tool completions and silent model responses.
+    /// Usage/configuration notifications carry no turn-completion signal.
+    fn acp_drain_update(&mut self, kind: &str) {
+        if self.acp.stage != Stage::Drain || self.acp.cancelling {
+            return;
+        }
+        match kind {
+            "agent_message_chunk" | "agent_message" => {
+                let running = self
+                    .tools
+                    .values()
+                    .any(|tool| tool.state == ToolState::Running);
+                self.acp.drain_finish = (!running).then_some(Instant::now() + DRAIN_QUIET);
+            }
+            "agent_thought_chunk"
+            | "agent_thought"
+            | "tool_call"
+            | "tool_call_update"
+            | "tool_call_content_chunk" => {
+                self.acp.drain_finish = None;
             }
             _ => {}
         }
@@ -1432,6 +1666,404 @@ mod tests {
         serde_json::from_str(text.lines().last().unwrap()).unwrap()
     }
     #[test]
+    fn antigravity_ask_question_opens_a_form_and_answers_after_the_yield() {
+        let mut p = protocol(Kind::Antigravity);
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        let events = p.frame(update(json!({"sessionUpdate":"tool_call","toolCallId":"ask","name":"ask_question","title":"Run ask_question","status":"in_progress","rawInput":{"questions":[{"question":"Choose a color","options":["Red","Blue"],"is_multi_select":true},{"question":"Delivery?","options":["Download","Print"],"is_multi_select":false}]}})), &mut out).unwrap();
+        let question = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Question(q) => Some(q.clone()),
+                _ => None,
+            })
+            .expect("ask_question must open the native form");
+        assert_eq!(question.items.len(), 2);
+        assert!(question.items[0].multiple);
+        assert_eq!(question.items[0].options[1].label, "Blue");
+        assert!(question.auto_resolve_at.is_none());
+        let events = p.frame(update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Choose a color\n- [1] Red\n- [2] Blue"}})), &mut out).unwrap();
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Text(_))),
+            "the plain-text fallback must not duplicate the form"
+        );
+        p.respond(
+            Control {
+                id: question.id,
+                decision: Decision::Answer(vec![vec!["Blue".into()], vec!["Print".into()]]),
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            out.is_empty(),
+            "wait for the original prompt to yield before sending its answer"
+        );
+        p.frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        let answer = last(&mut out);
+        assert_eq!(answer["method"], "session/prompt");
+        assert_eq!(answer["params"]["sessionId"], "s");
+        let text = answer["params"]["prompt"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Choose a color\nBlue"));
+        assert!(text.contains("Delivery?\nPrint"));
+        assert_eq!(p.tools["ask"].state, ToolState::Completed);
+        assert!(!p.done);
+    }
+
+    #[test]
+    fn antigravity_question_updates_do_not_duplicate_forms_and_cancel_sends_no_answer() {
+        let mut p = protocol(Kind::Antigravity);
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |value: Value| json!({"method":"session/update","params":{"sessionId":"s","update":value}});
+        let mut tool = json!({"sessionUpdate":"tool_call","toolCallId":"ask","name":"ask_question","status":"in_progress"});
+        assert!(
+            !p.frame(update(tool.clone()), &mut out)
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, Event::Question(_)))
+        );
+        tool["sessionUpdate"] = json!("tool_call_update");
+        tool["rawInput"] = json!({"questions":[{"question":"Choose","options":["A","B"]}]});
+        let events = p.frame(update(tool.clone()), &mut out).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Question(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !p.frame(update(tool), &mut out)
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, Event::Question(_)))
+        );
+        p.frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        p.acp.drain_deadline = Some(Instant::now());
+        assert!(
+            p.acp_tick(&mut out).unwrap().is_empty(),
+            "waiting for a person has no background timeout"
+        );
+        p.acp_cancel(&mut out).unwrap();
+        assert_eq!(last(&mut out)["method"], "session/cancel");
+        assert!(p.acp.question_answer.is_none());
+        assert!(p.questions.is_empty());
+        assert!(p.done);
+    }
+
+    #[test]
+    fn antigravity_skipping_a_yielded_question_does_not_select_a_default() {
+        let mut p = protocol(Kind::Antigravity);
+        p.acp.stage = Stage::Drain;
+        p.acp.session = "s".into();
+        let mut events = Vec::new();
+        p.acp_update(&json!({"sessionUpdate":"tool_call","toolCallId":"ask","name":"ask_question","title":"Run ask_question","rawInput":{"questions":[{"question":"Choose","options":["A","B"]}]}}), &mut events);
+        p.acp_question(
+            &json!({"sessionUpdate":"tool_call","toolCallId":"ask","name":"ask_question"}),
+            &mut events,
+        );
+        let id = p.visible_question.clone().unwrap();
+        let mut out = Vec::new();
+        p.respond(
+            Control {
+                id,
+                decision: Decision::Deny,
+            },
+            &mut out,
+        )
+        .unwrap();
+        let answer = last(&mut out);
+        assert_eq!(answer["method"], "session/prompt");
+        assert!(
+            answer["params"]["prompt"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("user skipped")
+        );
+        assert!(!p.done);
+    }
+
+    #[test]
+    fn antigravity_drain_does_not_finish_on_usage_without_an_answer() {
+        for kind in [
+            "usage_update",
+            "agent_thought_chunk",
+            "config_option_update",
+        ] {
+            let mut p = protocol(Kind::Antigravity);
+            p.acp.stage = Stage::Drain;
+
+            p.acp_update(
+                &json!({"sessionUpdate":kind,"content":{"text":"Still thinking"},"used":42}),
+                &mut Vec::new(),
+            );
+            // Advance only an armed finish deadline; no wall-clock sleep.
+            if p.acp.drain_finish.is_some() {
+                p.acp.drain_finish = Some(Instant::now());
+            }
+            let events = p.acp_tick(&mut Vec::new()).unwrap();
+            assert!(!p.done, "{kind} is not a final answer");
+            assert!(!events.contains(&Event::Done));
+        }
+    }
+
+    #[test]
+    fn antigravity_drain_timeout_is_an_error_and_cancellation_still_finishes() {
+        let mut p = protocol(Kind::Antigravity);
+        p.acp.stage = Stage::Drain;
+        p.acp.drain_deadline = Some(Instant::now());
+        assert!(
+            p.acp_tick(&mut Vec::new())
+                .unwrap_err()
+                .contains("did not settle")
+        );
+        assert!(!p.done);
+        p.acp_cancel(&mut Vec::new()).unwrap();
+        assert!(p.done);
+    }
+
+    #[test]
+    fn antigravity_drain_empty_text_and_metadata_cannot_complete_work() {
+        let mut p = protocol(Kind::Antigravity);
+        p.acp.stage = Stage::Drain;
+        for update in [
+            json!({"sessionUpdate":"tool_call","toolCallId":"task","status":"in_progress"}),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"task","status":"completed"}),
+            json!({"sessionUpdate":"agent_message_chunk","content":{"text":""}}),
+            json!({"sessionUpdate":"usage_update","used":42}),
+        ] {
+            p.acp_update(&update, &mut Vec::new());
+            assert!(p.acp.drain_finish.is_none());
+            assert!(p.acp_tick(&mut Vec::new()).unwrap().is_empty());
+            assert!(!p.done);
+        }
+        // The next tool still belongs to the same turn after the quiet gap.
+        p.acp_update(
+            &json!({"sessionUpdate":"tool_call","toolCallId":"next","status":"in_progress"}),
+            &mut Vec::new(),
+        );
+        p.acp_update(
+            &json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Progress"}}),
+            &mut Vec::new(),
+        );
+        assert!(
+            p.acp.drain_finish.is_none(),
+            "progress cannot complete a running tool"
+        );
+        p.acp_update(
+            &json!({"sessionUpdate":"tool_call_update","toolCallId":"next","status":"completed"}),
+            &mut Vec::new(),
+        );
+        assert!(p.acp.drain_finish.is_none());
+        p.acp_update(
+            &json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Finished"}}),
+            &mut Vec::new(),
+        );
+        assert!(p.acp.drain_finish.is_some());
+        p.acp.drain_finish = Some(Instant::now());
+        assert_eq!(p.acp_tick(&mut Vec::new()).unwrap(), vec![Event::Done]);
+    }
+
+    #[test]
+    fn antigravity_keeps_the_turn_open_while_a_background_task_wakes_the_agent() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call","toolCallId":"task","name":"run_command","kind":"execute","title":"Build","status":"in_progress","rawInput":{"CommandLine":"sleep 90","WaitMsBeforeAsync":10000}})),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!p.done);
+        assert_eq!(p.acp.stage, Stage::Drain);
+        assert!(!events.contains(&Event::Done));
+
+        let permission = p.frame(
+            json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"toolCallId":"task","kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}),
+            &mut out,
+        )
+        .unwrap();
+        assert!(permission.is_empty());
+        assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "yes");
+
+        // The task finishing is the wake trigger; the agent has not spoken yet.
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call_update","toolCallId":"task","status":"completed","content":{"text":"READY"}})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+
+        let events = p
+            .frame(
+                update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"The build finished."}})),
+                &mut out,
+            )
+            .unwrap();
+        assert!(events.contains(&Event::Text("The build finished.".into())));
+        assert!(!p.done, "a resumed answer must render inside the same turn");
+
+        p.frame(
+            update(json!({"sessionUpdate":"usage_update","used":10,"size":100})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !p.done,
+            "a tool call from the same response may still arrive"
+        );
+        p.acp.drain_finish = Some(Instant::now());
+        let events = p.acp_tick(&mut Vec::new()).unwrap();
+        assert_eq!(events, vec![Event::Done]);
+        assert!(p.done);
+    }
+
+    #[test]
+    fn antigravity_waits_for_a_tool_call_the_yield_delayed() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        // The response ended in reasoning; its edit tool has not reached us.
+        p.frame(
+            update(
+                json!({"sessionUpdate":"agent_thought_chunk","content":{"text":"Editing files."}}),
+            ),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!p.done);
+        assert_eq!(p.acp.stage, Stage::Drain);
+        assert!(p.acp.drain_finish.is_none());
+        assert!(!events.contains(&Event::Done));
+
+        // The server's safety check releases the tool call later.
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call","toolCallId":"edit","name":"edit_file","kind":"edit","title":"Edit","status":"in_progress","rawInput":{"Path":"x"}})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        assert!(p.acp.drain_finish.is_none());
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call_update","toolCallId":"edit","status":"completed"})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        p.frame(
+            update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}})),
+            &mut out,
+        )
+        .unwrap();
+        p.frame(
+            update(json!({"sessionUpdate":"usage_update","used":1,"size":10})),
+            &mut out,
+        )
+        .unwrap();
+        p.acp.drain_finish = Some(Instant::now());
+        assert_eq!(p.acp_tick(&mut Vec::new()).unwrap(), vec![Event::Done]);
+    }
+
+    #[test]
+    fn antigravity_watches_visible_progress_for_out_of_turn_work() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+
+        let mut out = Vec::new();
+        let update = |update: Value| json!({"method":"session/update","params":{"sessionId":"s","update":update}});
+        p.frame(
+            update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Findings so far."}})),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!p.done);
+        assert_eq!(p.acp.stage, Stage::Drain);
+        assert!(p.acp.drain_finish.is_some());
+        assert!(!events.contains(&Event::Done));
+
+        // The agent keeps editing out-of-turn after the visible summary.
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call","toolCallId":"edit","name":"edit_file","kind":"edit","title":"Edit","status":"in_progress","rawInput":{"Path":"x"}})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        p.frame(
+            update(json!({"sessionUpdate":"tool_call_update","toolCallId":"edit","status":"completed"})),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!p.done);
+        p.frame(
+            update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}})),
+            &mut out,
+        )
+        .unwrap();
+        p.frame(
+            update(json!({"sessionUpdate":"usage_update","used":1,"size":10})),
+            &mut out,
+        )
+        .unwrap();
+        p.acp.drain_finish = Some(Instant::now());
+        assert_eq!(p.acp_tick(&mut Vec::new()).unwrap(), vec![Event::Done]);
+    }
+
+    #[test]
+    fn antigravity_finishes_a_turn_that_ends_with_visible_text() {
+        let mut p = protocol(Kind::Antigravity);
+        p.request.binary = "agy".into();
+        p.request.settings.access = AccessMode::FullAccess;
+        p.acp.stage = Stage::Prompt;
+        p.acp.session = "s".into();
+        p.acp.sequence = 7;
+        let mut out = Vec::new();
+        p.frame(
+            json!({"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"text":"All done."}}}}),
+            &mut out,
+        )
+        .unwrap();
+        let events = p
+            .frame(json!({"id":7,"result":{"stopReason":"end_turn"}}), &mut out)
+            .unwrap();
+        assert!(!events.contains(&Event::Done));
+        assert!(!p.done);
+        p.acp.drain_finish = Some(Instant::now());
+        assert_eq!(p.acp_tick(&mut out).unwrap(), vec![Event::Done]);
+        assert!(p.done);
+    }
+
+    #[test]
     fn every_acp_provider_runs_its_native_session_lifecycle() {
         for kind in Kind::ALL.into_iter().filter(|k| k.is_acp()) {
             let mut p = protocol(kind);
@@ -1447,14 +2079,18 @@ mod tests {
                     assert_eq!(request["params"]["prompt"][0]["text"], "Hello");
                     let live = p.frame(json!({"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}}),&mut out).unwrap();
                     assert!(live.contains(&Event::Text("Hello".into())));
-                    assert_eq!(
-                        p.frame(
+                    let mut events = p
+                        .frame(
                             json!({"id":request["id"],"result":{"stopReason":"end_turn"}}),
-                            &mut out
+                            &mut out,
                         )
-                        .unwrap(),
-                        vec![Event::Done]
-                    );
+                        .unwrap();
+                    if kind == Kind::Antigravity {
+                        assert!(events.is_empty());
+                        p.acp.drain_finish = Some(Instant::now());
+                        events = p.acp_tick(&mut out).unwrap();
+                    }
+                    assert_eq!(events, vec![Event::Done]);
                     break;
                 }
                 p.frame(json!({"id":request["id"],"result":{}}), &mut out)
@@ -1659,15 +2295,21 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(choices.len(), 3);
-        assert!(choices
-            .iter()
-            .any(|p| p["configId"] == "context" && p["value"] == "1m"));
-        assert!(choices
-            .iter()
-            .any(|p| p["configId"] == "effort" && p["value"] == "high"));
-        assert!(choices
-            .iter()
-            .any(|p| p["configId"] == "fast" && p["type"].is_null() && p["value"] == "false"));
+        assert!(
+            choices
+                .iter()
+                .any(|p| p["configId"] == "context" && p["value"] == "1m")
+        );
+        assert!(
+            choices
+                .iter()
+                .any(|p| p["configId"] == "effort" && p["value"] == "high")
+        );
+        assert!(
+            choices
+                .iter()
+                .any(|p| p["configId"] == "fast" && p["type"].is_null() && p["value"] == "false")
+        );
     }
     #[test]
     fn cursor_planning_denies_execution_without_requiring_a_session_mode() {
@@ -1689,11 +2331,12 @@ mod tests {
             p.acp_options(&json!({})).unwrap();
             p.acp_options(&json!({"modes":{"availableModes":[{"id":"agent"},{"id":"plan"}]}}))
                 .unwrap();
-            assert!(p
-                .acp
-                .options
-                .iter()
-                .all(|(method, _)| *method != "session/set_mode"));
+            assert!(
+                p.acp
+                    .options
+                    .iter()
+                    .all(|(method, _)| *method != "session/set_mode")
+            );
             p.acp.stage = Stage::Prompt;
             let mut out = Vec::new();
             let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
