@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { SessionPaneProps } from "../../sessions/ui/SessionPane";
 import type {
   Attachment,
@@ -20,7 +27,10 @@ import {
 import { notifyGitChanged } from "../../../platform/tauri/fs";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
-import { registerRemoteSessionActions } from "../model/remoteSessionActions";
+import {
+  registerRemoteSessionActions,
+  type RemoteSessionChoice,
+} from "../model/remoteSessionActions";
 import {
   clearPendingRemoteCommand,
   loadRemoteSession,
@@ -109,7 +119,8 @@ export async function preloadRemoteSession(
 ): Promise<void> {
   const key = snapshotKey(machineId, sessionId);
   if (cachedSessionSnapshots.has(key)) return;
-  rememberSessionSnapshot(key, await loadRemoteSession(machineId, sessionId));
+  const snapshot = await loadRemoteSession(machineId, sessionId);
+  if (!cachedSessionSnapshots.has(key)) rememberSessionSnapshot(key, snapshot);
 }
 
 /** A tab in a project on another machine. The host owns the session; this
@@ -205,6 +216,7 @@ function ConnectedRemoteSession({
   const [sessionId, setSessionId] = useState(() => remoteSessionFor(shell.id));
   const boundSession = useRef(sessionId);
   const bindingVersion = useRef(0);
+  const modelConfirmation = useRef<{ binding?: number }>({});
   const deletingSession = useRef<string | undefined>(undefined);
   useEffect(() => {
     const changed = () => {
@@ -212,6 +224,7 @@ function ConnectedRemoteSession({
       if (next !== boundSession.current) {
         bindingVersion.current++;
         boundSession.current = next;
+        modelConfirmation.current = {};
         setStarting(undefined);
         setUnseenSend(undefined);
         setChanges(undefined);
@@ -219,7 +232,11 @@ function ConnectedRemoteSession({
         setError("");
         setRemovingDraft(undefined);
         preparingRef.current = false;
-        setSnapshot(next ? cachedSessionSnapshots.get(snapshotKey(machine.id, next)) : undefined);
+        const restored = next
+          ? cachedSessionSnapshots.get(snapshotKey(machine.id, next))
+          : undefined;
+        snapshotRef.current = restored;
+        setSnapshot(restored);
       }
       setPending(pendingRemoteCommand(project.key, machine.environmentId, next ?? null, shell.id));
       setSessionId(next);
@@ -234,7 +251,17 @@ function ConnectedRemoteSession({
       : undefined,
   );
   const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
+  const publishSnapshot = useCallback(
+    (next?: HostSession) => {
+      snapshotRef.current = next;
+      setSnapshot(next);
+      if (next) {
+        rememberSessionSnapshot(snapshotKey(machine.id, next.session.id), next);
+        onSnapshot?.(shell.id, next);
+      }
+    },
+    [machine.id, onSnapshot, shell.id],
+  );
   const [refresh, setRefresh] = useState(0);
   const [catalog, setCatalog] = useState<HostModelCatalog | undefined>(() =>
     cachedCatalogs.get(catalogKey(machine.id, project.projectId)),
@@ -361,9 +388,14 @@ function ConnectedRemoteSession({
     // after a failure, when the host may have been replaced.
     let described = false;
     const poll = async () => {
-      let active = false;
+      const confirmation = modelConfirmation.current;
+      // A host restore can reuse revisions. Retire reads that overlap a
+      // model confirmation even if their revision looks newer.
+      const superseded = () =>
+        confirmation.binding === version ||
+        confirmation !== modelConfirmation.current;
       try {
-        if (!described) {
+        if (!described && !superseded()) {
           const host = requireHostDescriptor(
             await remoteRequest<HostDescriptor>(
               machine.id,
@@ -384,29 +416,33 @@ function ConnectedRemoteSession({
           snapshotRef.current?.session.id === sessionId
             ? snapshotRef.current
             : undefined;
-        const next = sessionId
+        const next = sessionId && !superseded()
           ? await loadRemoteSession(machine.id, sessionId, known)
           : undefined;
         if (stale()) return;
-        if (next && next.projectId !== project.projectId)
-          throw new Error("This session belongs to a different host project");
-        setOnline(true);
-        reportRemoteMachineStatus(machine.id, true);
-        // A catalog request that failed while offline is retried on recovery.
-        if (failed) setCatalogRefresh((value) => value + 1);
-        failed = 0;
-        if (next && sessionId)
-          rememberSessionSnapshot(snapshotKey(machine.id, sessionId), next);
-        setSnapshot(next);
-        if (next) onSnapshot?.(shell.id, next);
-        active = !!next?.session.busy;
-      } catch (reason) {
+        if (!superseded()) {
+          if (next && next.projectId !== project.projectId)
+            throw new Error("This session belongs to a different host project");
+          if (next && next.session.id !== sessionId)
+            throw new Error("The host returned a different conversation.");
+          setOnline(true);
+          reportRemoteMachineStatus(machine.id, true);
+          // A catalog request that failed while offline is retried on recovery.
+          if (failed) setCatalogRefresh((value) => value + 1);
+          failed = 0;
+          publishSnapshot(next);
+        }
+      } catch {
         if (stale()) return;
-        setOnline(false);
-        reportRemoteMachineStatus(machine.id, false);
-        described = false;
-        failed++;
+        if (!superseded()) {
+          setOnline(false);
+          reportRemoteMachineStatus(machine.id, false);
+          described = false;
+          failed++;
+        }
       }
+      const latest = snapshotRef.current?.session;
+      const active = latest?.id === sessionId && latest?.busy;
       if (!disposed)
         timer = setTimeout(
           () => void poll(),
@@ -431,7 +467,7 @@ function ConnectedRemoteSession({
     sessionId,
     refresh,
     visible,
-    onSnapshot,
+    publishSnapshot,
   ]);
 
   useEffect(() => {
@@ -535,8 +571,15 @@ function ConnectedRemoteSession({
 
   const run = async (
     command: HostCommand,
-    optimistic?: OptimisticTurn,
-    followup?: HostCommand,
+    {
+      optimistic,
+      followup,
+      refreshAfterReceipt = true,
+    }: {
+      optimistic?: OptimisticTurn;
+      followup?: HostCommand;
+      refreshAfterReceipt?: boolean;
+    } = {},
   ): Promise<CommandReceipt | undefined> => {
     if (sendingRef.current) return undefined;
     const version = bindingVersion.current;
@@ -612,7 +655,7 @@ function ConnectedRemoteSession({
           shell.id,
         ),
       );
-      setRefresh((value) => value + 1);
+      if (refreshAfterReceipt) setRefresh((value) => value + 1);
       return receipt;
     } catch (reason) {
       if (!alive.current || version !== bindingVersion.current) return undefined;
@@ -656,6 +699,7 @@ function ConnectedRemoteSession({
       });
       cachedSessionSnapshots.delete(snapshotKey(machine.id, id));
       if (!alive.current || version !== bindingVersion.current) return;
+      snapshotRef.current = undefined;
       setSnapshot(undefined);
       rememberRemoteSession(shell.id);
       onSnapshot?.(shell.id, undefined);
@@ -691,7 +735,10 @@ function ConnectedRemoteSession({
       return;
     }
     if (applied.current && same(changes, applied.current)) return;
-    if (busy || !online || pending || applying.current) return;
+    if (
+      busy || !online || pending || applying.current ||
+      modelConfirmation.current.binding === bindingVersion.current
+    ) return;
     applying.current = true;
     const sent = changes;
     void run({
@@ -709,6 +756,73 @@ function ConnectedRemoteSession({
         applying.current = false;
       });
   });
+
+  const configure = async (choice: RemoteSessionChoice) => {
+    const version = bindingVersion.current;
+    const current = snapshotRef.current?.session;
+    if (
+      !online || !current || current.id !== sessionId || current.id !== boundSession.current ||
+      current.busy || busy || pending || changes || sendingRef.current ||
+      modelConfirmation.current.binding === version
+    )
+      throw new Error("Wait for the host conversation to be ready before changing its model.");
+    if (choice.harness && choice.harness !== current.harness)
+      throw new Error("A started host conversation keeps its current provider.");
+    const picked = choice.model
+      ? findRemoteModel(catalog?.models[current.harness as RemoteProvider] ?? [], choice.model)
+      : undefined;
+    if (choice.model && choice.model !== current.model && !picked)
+      throw new Error("The selected model is unavailable on this host.");
+    const model = picked?.id ?? current.model;
+    const currentSettings = current.modelSettings ?? {};
+    const modelSettings = picked && model !== current.model
+      ? carryModelSettings(picked.settings ?? [], choice.modelSettings ?? currentSettings)
+      : { ...currentSettings, ...choice.modelSettings };
+    const runtimeMode = choice.runtimeMode ?? current.runtimeMode;
+    if (
+      model === current.model &&
+      runtimeMode === current.runtimeMode &&
+      sameModelSettings(modelSettings, currentSettings)
+    ) return;
+
+    const confirmation = { binding: version };
+    modelConfirmation.current = confirmation;
+    try {
+      const receipt = await run(
+        {
+          type: "configure",
+          commandId: crypto.randomUUID(),
+          sessionId: current.id,
+          model,
+          modelSettings,
+          runtimeMode,
+        },
+        { refreshAfterReceipt: false },
+      );
+      if (!receipt || !alive.current || bindingVersion.current !== version)
+        throw new Error("The host did not confirm the model change.");
+      const confirmed = await loadRemoteSession(machine.id, current.id);
+      if (
+        !alive.current ||
+        bindingVersion.current !== version ||
+        confirmed.projectId !== project.projectId ||
+        confirmed.session.id !== current.id ||
+        confirmed.revision < receipt.revision ||
+        confirmed.session.model !== model ||
+        confirmed.session.runtimeMode !== runtimeMode ||
+        !sameModelSettings(confirmed.session.modelSettings, modelSettings)
+      )
+        throw new Error("The host conversation changed before the model could be confirmed.");
+      publishSnapshot(confirmed);
+    } catch (reason) {
+      if (alive.current && bindingVersion.current === version)
+        setRefresh((value) => value + 1);
+      throw reason;
+    } finally {
+      if (modelConfirmation.current === confirmation)
+        modelConfirmation.current = {};
+    }
+  };
 
   const dispatchTurn = async (
     id: string,
@@ -739,7 +853,7 @@ function ConnectedRemoteSession({
             turn.draftBlockId,
             turn.planBlockId,
           ),
-      turn,
+      { optimistic: turn },
     );
   };
 
@@ -795,14 +909,14 @@ function ConnectedRemoteSession({
         model: draft.model,
         modelSettings: draft.settings,
         runtimeMode: draft.mode,
-      }, turn, followup);
+      }, { optimistic: turn, followup });
       if (version !== bindingVersion.current) return;
       if (!receipt) {
         if (alive.current) setStarting({ ...turn, failed: true });
         return;
       }
       if (version !== bindingVersion.current) return;
-      const sent = await run({ ...followup, sessionId: receipt.sessionId }, turn);
+      const sent = await run({ ...followup, sessionId: receipt.sessionId }, { optimistic: turn });
       if (alive.current && version === bindingVersion.current)
         if (!sent) setStarting({ ...turn, failed: true });
     } catch (reason) {
@@ -1160,10 +1274,11 @@ function ConnectedRemoteSession({
       saveDraft,
       stop: stopTurn,
       compact,
+      configure,
       approve,
       answer,
     }),
-    [shell.id, buildPlan, saveDraft, stopTurn, compact, approve, answer],
+    [shell.id, buildPlan, saveDraft, stopTurn, compact, configure, approve, answer],
   );
 
   const hostFilePath = (path: string) => {
