@@ -8,7 +8,7 @@ use crate::{
 use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
-use monocode_core::checkpoint::{CheckpointFile, CheckpointStatus};
+use monocode_core::checkpoint::{self, CheckpointFile, CheckpointStatus, Store};
 
 /// The card shows this many files until expanded.
 const COLLAPSED: usize = 3;
@@ -26,6 +26,12 @@ enum Action {
     Undo,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Refresh {
+    WhenVisible,
+    Requested,
+}
+
 pub(crate) struct SessionReview {
     session: i64,
     cwd: String,
@@ -37,8 +43,13 @@ pub(crate) struct SessionReview {
     busy: bool,
     /// Another session is running in this project.
     undo_locked: bool,
+    store: Option<Store>,
+    visible: bool,
+    /// A requested reread can replace any number of requests during a load.
+    refresh_pending: Option<Refresh>,
     generation: u64,
-    _load: Option<Task<()>>,
+    refresh_task: Option<Task<()>>,
+    _action: Option<Task<()>>,
 }
 impl EventEmitter<SessionReviewEvent> for SessionReview {}
 
@@ -53,8 +64,12 @@ impl SessionReview {
             acting: None,
             busy: false,
             undo_locked: false,
+            store: checkpoint::store().cloned(),
+            visible: false,
+            refresh_pending: None,
             generation: 0,
-            _load: None,
+            refresh_task: None,
+            _action: None,
         }
     }
     pub(crate) fn session(&self) -> (i64, &str) {
@@ -67,6 +82,8 @@ impl SessionReview {
     pub(crate) fn set_cwd(&mut self, cwd: String, cx: &mut Context<Self>) {
         if self.cwd != cwd {
             self.cwd = cwd;
+            self.generation += 1;
+            self.refresh_pending = None;
             self.publish(Ok(CheckpointStatus::default()), cx);
             self.refresh(cx);
         }
@@ -80,8 +97,10 @@ impl SessionReview {
         // The settled turn is reread by the conversation's refresh.
         if busy {
             self.generation += 1;
-            self._load = None;
+            self.refresh_pending = None;
             self.publish(Ok(CheckpointStatus::default()), cx);
+        } else {
+            self.start_refresh(cx);
         }
         cx.notify();
     }
@@ -95,26 +114,52 @@ impl SessionReview {
     pub(crate) fn set_files(&mut self, files: Vec<CheckpointFile>, cx: &mut Context<Self>) {
         self.publish(Ok(CheckpointStatus { files }), cx);
     }
-    /// Reread the recorded turn, as after a turn, Git change or reload.
+    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.visible = visible;
+        self.start_refresh(cx);
+    }
+    /// A cached, hidden conversation can update when its card is shown again.
+    pub(crate) fn git_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_pending.get_or_insert(Refresh::WhenVisible);
+        self.start_refresh(cx);
+    }
+    /// Reread the recorded turn, as after a turn or reload.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if !self.valid() || self.busy {
+        if self.busy {
             return;
         }
-        let Some(store) = monocode_core::checkpoint::store() else {
+        self.refresh_pending = Some(Refresh::Requested);
+        self.start_refresh(cx);
+    }
+    fn start_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.refresh_pending else {
             return;
         };
-        self.generation += 1;
+        if !self.valid()
+            || self.busy
+            || self.refresh_task.is_some()
+            || self.acting.is_some()
+            || (pending == Refresh::WhenVisible && !self.visible)
+        {
+            return;
+        }
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        self.refresh_pending = None;
         let generation = self.generation;
         let (session, cwd) = (self.session.to_string(), self.cwd.clone());
         let work = cx
             .background_executor()
             .spawn(async move { store.exclusive(|s| s.status(&session, &cwd)) });
-        self._load = Some(cx.spawn(async move |this, cx| {
+        self.refresh_task = Some(cx.spawn(async move |this, cx| {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.generation == generation && !this.busy {
+                this.refresh_task = None;
+                if this.generation == generation && this.refresh_pending.is_none() {
                     this.publish(status, cx);
                 }
+                this.start_refresh(cx);
             });
         }));
     }
@@ -136,7 +181,7 @@ impl SessionReview {
         if self.acting.is_some() {
             return;
         }
-        let Some(store) = monocode_core::checkpoint::store() else {
+        let Some(store) = self.store.clone() else {
             return;
         };
         self.acting = Some(action);
@@ -150,10 +195,11 @@ impl SessionReview {
                 Action::Undo => s.undo(&session, &cwd, None),
             })
         });
-        self._load = Some(cx.spawn(async move |this, cx| {
+        self._action = Some(cx.spawn(async move |this, cx| {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.acting = None;
+                this._action = None;
                 match status {
                     Ok(status) if this.generation == generation => {
                         this.publish(Ok(status), cx);
@@ -163,6 +209,7 @@ impl SessionReview {
                     // The workspace moved underneath; show what remains.
                     Err(_) => this.refresh(cx),
                 }
+                this.start_refresh(cx);
                 cx.notify();
             });
         }));
@@ -492,5 +539,80 @@ impl SessionReview {
 impl Render for SessionReview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.contents(card(), cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    fn review(cx: &mut TestAppContext) -> gpui::Entity<SessionReview> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let mut review = SessionReview::new(1, "/checkout".into());
+                // An empty store returns a settled status with no files.
+                review.store = Some(Store::new(std::env::temp_dir().join(format!(
+                    "monocode-empty-review-store-{}",
+                    std::process::id()
+                ))));
+                review.files.push(CheckpointFile {
+                    path: "/checkout/notes.txt".into(),
+                    relative: "notes.txt".into(),
+                    status: "modified".into(),
+                    additions: 1,
+                    deletions: 0,
+                    exact: true,
+                    undoable: false,
+                });
+                review
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn burst_of_requests_leaves_only_one_pending_refresh(cx: &mut TestAppContext) {
+        let review = review(cx);
+        review.update(cx, |review, cx| {
+            review.refresh(cx);
+            assert!(review.refresh_task.is_some());
+            assert!(review.refresh_pending.is_none());
+
+            for _ in 0..64 {
+                review.refresh(cx);
+            }
+            assert!(review.refresh_task.is_some());
+            assert!(review.refresh_pending == Some(Refresh::Requested));
+        });
+        cx.run_until_parked();
+        review.update(cx, |review, _| {
+            assert!(review.refresh_task.is_none());
+            assert!(review.refresh_pending.is_none());
+            assert!(review.files.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn git_change_refreshes_hidden_review_when_shown(cx: &mut TestAppContext) {
+        let review = review(cx);
+        review.update(cx, |review, cx| {
+            for _ in 0..64 {
+                review.git_changed(cx);
+            }
+        });
+        cx.run_until_parked();
+        review.update(cx, |review, cx| {
+            assert!(review.refresh_pending == Some(Refresh::WhenVisible));
+            assert!(review.refresh_task.is_none());
+            assert_eq!(review.files.len(), 1);
+            review.set_visible(true, cx);
+            assert!(review.refresh_task.is_some());
+            assert!(review.refresh_pending.is_none());
+        });
+        cx.run_until_parked();
+        review.update(cx, |review, _| {
+            assert!(review.refresh_pending.is_none());
+            assert!(review.files.is_empty());
+        });
     }
 }
