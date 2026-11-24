@@ -12,8 +12,15 @@ use gpui::{
     ImageFormat, ImageSource, KeyBinding, ObjectFit, PromptLevel, RenderImage, Role, SharedString,
     Subscription, Task, Window, actions, div, img, prelude::*, px, rgb,
 };
-use monocode_core::files::document::{self, Document, TextDocument};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use monocode_core::files::document::{self, Document, FileStamp, TextDocument};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
+const FILE_POLL: Duration = Duration::from_secs(2);
+const GIT_REPAIR: Duration = Duration::from_secs(30);
 
 mod chrome;
 mod diff;
@@ -156,6 +163,7 @@ pub(crate) struct FileEditor {
     change_index: usize,
     match_index: usize,
     document: Option<TextDocument>,
+    disk_stamp: Option<FileStamp>,
     image: Option<Arc<Image>>,
     media: Option<Entity<media::MediaPreview>>,
     media_events: Option<Subscription>,
@@ -175,7 +183,7 @@ pub(crate) struct FileEditor {
     markdown_source: SharedString,
     navigation: Option<(usize, usize)>,
     _subscriptions: Vec<Subscription>,
-    _poll: Task<()>,
+    poll: Option<Task<()>>,
 }
 impl EventEmitter<FileEvent> for FileEditor {}
 impl Focusable for FileEditor {
@@ -236,8 +244,8 @@ impl FileEditor {
             cx.subscribe(&replacement, |this, _, _: &input::Submitted, cx| {
                 this.replace_matches(false, cx)
             }),
-            cx.subscribe(&git, |this, _, _: &GitChanged, cx| {
-                if this.visible {
+            cx.subscribe(&git, |this, git, _: &GitChanged, cx| {
+                if this.visible && git.read(cx).project() == this.cwd {
                     this.refresh_git(cx);
                 }
             }),
@@ -249,22 +257,6 @@ impl FileEditor {
                 cx.notify();
             }),
         ];
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.visible && !this.saving {
-                            this.load(false, cx);
-                            this.refresh_git(cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
         cx.on_release(|this, cx| {
             if let Some(image) = this.svg_preview.take() {
                 cx.drop_image(image, None);
@@ -300,6 +292,7 @@ impl FileEditor {
             matches: Vec::new(),
             match_index: 0,
             document: None,
+            disk_stamp: None,
             image: None,
             media: None,
             media_events: None,
@@ -318,7 +311,7 @@ impl FileEditor {
             markdown_source: "".into(),
             navigation: None,
             _subscriptions: subscriptions,
-            _poll: poll,
+            poll: None,
         }
     }
     pub(crate) fn navigate(&mut self, line: usize, column: usize, cx: &mut Context<Self>) {
@@ -360,6 +353,7 @@ impl FileEditor {
         self.visible = visible;
         if !visible {
             self.selection.dismiss();
+            self.poll = None;
         }
         if let Some(media) = &self.media {
             media.update(cx, |m, _| m.set_visible(visible));
@@ -367,7 +361,36 @@ impl FileEditor {
         if visible && !was {
             self.load(false, cx);
             self.refresh_git(cx);
+            self.start_polling(cx);
         }
+    }
+    fn start_polling(&mut self, cx: &mut Context<Self>) {
+        let remote = monocode_core::files::remote::is_remote(Path::new(&self.path));
+        self.poll = Some(cx.spawn(async move |this, cx| {
+            let mut elapsed = Duration::ZERO;
+            loop {
+                cx.background_executor().timer(FILE_POLL).await;
+                elapsed += FILE_POLL;
+                // The shared watcher covers index-only edits in the active
+                // project. Repair intermittently when its events are missed.
+                let git_due = remote || elapsed >= GIT_REPAIR;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.saving {
+                            return;
+                        }
+                        this.load_document(false, !git_due, cx);
+                        if git_due {
+                            this.refresh_git(cx);
+                            elapsed = Duration::ZERO;
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
     fn is_markdown(&self) -> bool {
         matches!(
@@ -378,18 +401,34 @@ impl FileEditor {
         )
     }
     fn load(&mut self, force: bool, cx: &mut Context<Self>) {
+        self.load_document(force, false, cx);
+    }
+    fn load_document(&mut self, force: bool, update_git: bool, cx: &mut Context<Self>) {
         if self.loading || self.saving {
             return;
         }
         self.loading = true;
         let path = PathBuf::from(&self.path);
-        let work = cx
-            .background_executor()
-            .spawn(async move { document::read_document(&path).and_then(media::prepare_document) });
+        let previous = self.disk_stamp;
+        let work = cx.background_executor().spawn(async move {
+            let stamp = document::file_stamp(&path);
+            if !force && stamp.is_some() && stamp == previous {
+                return None;
+            }
+            let result = document::read_document(&path).and_then(media::prepare_document);
+            Some((stamp, result))
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
+                let Some((stamp, result)) = result else {
+                    return;
+                };
+                this.disk_stamp = if result.is_ok() { stamp } else { None };
+                if update_git && this.visible && (stamp.is_some() || previous.is_some()) {
+                    this.refresh_git(cx);
+                }
                 match result {
                     Ok(Document::Text(doc)) => {
                         if !force
@@ -569,13 +608,7 @@ impl FileEditor {
             return;
         };
         let work = cx.background_executor().spawn(async move {
-            let files = monocode_core::scm::diff_files(&cwd).ok()?;
-            let staged = files
-                .files
-                .iter()
-                .find(|f| f.relative == relative)
-                .is_some_and(|f| f.staged && !f.unstaged);
-            let diff = monocode_core::scm::file_diff(&cwd, &relative, staged).ok()?;
+            let (diff, staged) = monocode_core::scm::editor_file_diff(&cwd, &relative).ok()?;
             (!diff.binary && !diff.too_large).then(|| {
                 (
                     diff.original.replace("\r\n", "\n").replace('\r', "\n"),
@@ -1327,12 +1360,22 @@ mod tests {
             })
             .unwrap();
         git(&["add", "."]);
+        cx.executor().advance_clock(FILE_POLL);
+        finish_analysis(cx);
         window
-            .update(cx, |view, _, cx| view.refresh_git(cx))
+            .update(cx, |view, _, _| {
+                assert!(!view.git_staged, "an unchanged file skips the Git poll");
+            })
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.git.update(cx, |_, cx| cx.emit(GitChanged));
+            })
             .unwrap();
         finish_analysis(cx);
         window
             .update(cx, |view, _, _| {
+                assert!(view.git_staged);
                 assert_eq!(
                     view.git_original.as_deref(),
                     Some(base),
@@ -1341,9 +1384,7 @@ mod tests {
             })
             .unwrap();
         std::fs::write(&path, "const value = 2;\n").unwrap();
-        window
-            .update(cx, |view, _, cx| view.refresh_git(cx))
-            .unwrap();
+        cx.executor().advance_clock(FILE_POLL);
         finish_analysis(cx);
         window
             .update(cx, |view, _, cx| {
@@ -1517,8 +1558,12 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        std::fs::write(&path, "external\n").unwrap();
-        window.update(cx, |e, _, cx| e.load(false, cx)).unwrap();
+        let replacement = path.with_extension("swap");
+        std::fs::write(&replacement, "external\n").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        window
+            .update(cx, |e, _, cx| e.set_visible(true, cx))
+            .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |e, _, cx| {

@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub use review::{
-    commit_file_diff, commit_files, diff_files, file_diff, file_diff_versions, review_index,
-    stage_contents, FileDiff, FileDiffVersion, MAX_TEXT_FILE_BYTES,
+    commit_file_diff, commit_files, diff_files, editor_file_diff, file_diff, file_diff_versions,
+    review_index, stage_contents, FileDiff, FileDiffVersion, MAX_TEXT_FILE_BYTES,
 };
 pub(crate) use shell::{expand_home, path_to_js};
 
