@@ -1106,6 +1106,9 @@ impl Protocol {
             if self.visible_question.as_deref() == Some(control.id.as_str()) {
                 self.visible_question = None;
             }
+            if kind == "antigravity" {
+                return self.acp_answer_question(&wire, &question, control.decision, stdin);
+            }
             if kind == "codex-async" {
                 if let Decision::Answer(answers) = &control.decision {
                     let text = question

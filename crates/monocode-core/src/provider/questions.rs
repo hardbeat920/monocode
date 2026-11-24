@@ -135,7 +135,8 @@ impl Protocol {
             items.push(QuestionItem {
                 id,
                 prompt: prompt.into(),
-                multiple: row["multiSelect"] == true
+                multiple: row["is_multi_select"] == true
+                    || row["multiSelect"] == true
                     || row["multiple"] == true
                     || row["allowMultiple"] == true,
                 allow_custom,
@@ -283,6 +284,7 @@ pub(super) fn respond(
         "codex" => {
             json!({"answers":pairs.filter(|(_,a)|!a.is_empty()).map(|(q,a)|(q.id.clone(),json!({"answers":a}))).collect::<serde_json::Map<_,_>>()})
         }
+        "antigravity" => return Ok(()), // Synthetic ACP tool question; Protocol sends the next prompt.
         "codex-async" => return Ok(()), // Answers are sent through turn/steer by Protocol::respond.
         "claude" => {
             let mut input = request["input"].clone();
@@ -416,9 +418,11 @@ mod tests {
             let mut out = Vec::new();
             let events = p.frame(json!({"id":1,"method":"item/tool/requestUserInput","params":{"questions":rows}}), &mut out).unwrap();
             assert!(events.iter().any(|event| matches!(event, Event::Status(_))));
-            assert!(!events
-                .iter()
-                .any(|event| matches!(event, Event::Question(_) | Event::Done)));
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::Question(_) | Event::Done))
+            );
             let response: Value = serde_json::from_slice(&out).unwrap();
             assert_eq!(response["id"], 1);
             assert_eq!(response["result"]["answers"], json!({}));
