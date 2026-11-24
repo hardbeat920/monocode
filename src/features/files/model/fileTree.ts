@@ -7,10 +7,12 @@ const selectedByProject = new Map<string, string | null>();
 const dirs = new Map<string, FsEntry[]>();
 const listeners = new Set<() => void>();
 
-const REFRESH_MS = 150;
+const REFRESH_MS = 500;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
 let refreshAgain = false;
+/** Projets à re-lister au prochain tick. `null` = tout (focus, chemin inconnu). */
+let pendingScope: Set<string> | null = new Set<string>();
 
 export function loadExpanded(cwd: string): Set<string> {
   const saved = expandedByProject.get(cwd);
@@ -55,8 +57,28 @@ export function forgetDir(path: string) {
 }
 
 /** Re-list every cached folder. Agent writes and window focus use this. */
-export async function refreshCachedDirs(): Promise<void> {
-  const paths = [...dirs.keys()];
+export async function refreshCachedDirs(under?: string | null): Promise<void> {
+  await refreshScoped(under ? new Set([normalizeScope(under)]) : null);
+}
+
+function normalizeScope(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+function scopedPaths(scope: Set<string> | null): string[] {
+  const all = [...dirs.keys()];
+  if (!scope || scope.size === 0) return all;
+  const roots = [...scope];
+  const scoped = all.filter((path) =>
+    roots.some((root) => path === root || path.startsWith(`${root}/`)),
+  );
+  // Un scope qui ne correspond à aucune entrée connue (chemin non normalisé,
+  // projet fraîchement ouvert) doit rafraîchir largement, pas rien.
+  return scoped.length > 0 || all.length === 0 ? scoped : all;
+}
+
+async function refreshScoped(scope: Set<string> | null): Promise<void> {
+  const paths = scopedPaths(scope);
   if (paths.length === 0) return;
   await Promise.all(
     paths.map((path) =>
@@ -75,8 +97,13 @@ export function subscribeDirsChanged(listener: () => void): () => void {
 }
 
 /** Reload the explorer cache after an agent/shell write (debounced). */
-export function notifyDirsChanged() {
+export function notifyDirsChanged(under?: string) {
   if (typeof document !== "undefined" && document.hidden) return;
+  if (!under) {
+    pendingScope = null;
+  } else if (pendingScope !== null) {
+    pendingScope.add(normalizeScope(under));
+  }
   scheduleRefresh();
 }
 
@@ -94,12 +121,15 @@ async function runRefresh() {
     return;
   }
   refreshing = true;
+  const scope = pendingScope;
+  pendingScope = new Set<string>();
   try {
-    await refreshCachedDirs();
+    await refreshScoped(scope);
     for (const listener of listeners) listener();
   } finally {
     refreshing = false;
-    if (refreshAgain) {
+    const queued = pendingScope === null || pendingScope.size > 0;
+    if (refreshAgain || queued) {
       refreshAgain = false;
       scheduleRefresh();
     }
