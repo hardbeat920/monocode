@@ -149,6 +149,20 @@ fn keychain_service(config: Option<&std::path::Path>) -> String {
 #[cfg(target_os = "macos")]
 /// The raw Keychain secret, or None when there is no item (or it cannot be read).
 fn keychain(config: Option<&std::path::Path>) -> Option<String> {
+    let service = keychain_service(config);
+    if let Some(account) = crate::scm::shell::login_username() {
+        // A legacy entry with the same service can mask the current login.
+        match read_keychain(&service, Some(&account)) {
+            Ok(Some(raw)) => return Some(raw),
+            Err(()) => return None,
+            Ok(None) => {}
+        }
+    }
+    read_keychain(&service, None).ok().flatten()
+}
+
+#[cfg(target_os = "macos")]
+fn read_keychain(service: &str, account: Option<&str>) -> Result<Option<String>, ()> {
     use crate::process;
     use std::{
         process::{Command, Stdio},
@@ -157,17 +171,19 @@ fn keychain(config: Option<&std::path::Path>) -> Option<String> {
         time::Instant,
     };
 
-    let service = keychain_service(config);
     let mut command = Command::new("/usr/bin/security");
     command
-        .args(["find-generic-password", "-s", &service, "-w"])
+        .args(["find-generic-password", "-s", service, "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if let Some(account) = account {
+        command.args(["-a", account]);
+    }
     process::isolate(&mut command);
-    let mut child = command.spawn().ok()?;
+    let mut child = command.spawn().map_err(|_| ())?;
     let _registration = process::register(child.id());
-    let output = child.stdout.take()?;
+    let output = child.stdout.take().ok_or(())?;
     // Drain concurrently: waiting before reading can fill the pipe and hang.
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = thread::spawn(move || {
@@ -182,10 +198,13 @@ fn keychain(config: Option<&std::path::Path>) -> Option<String> {
                 break rx
                     .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     .ok()
-                    .flatten();
+                    .flatten()
+                    .map(Some)
+                    .ok_or(());
             }
-            Ok(Some(_)) | Err(_) => break None,
-            Ok(None) if Instant::now() >= deadline => break None,
+            Ok(Some(status)) if status.code() == Some(44) => break Ok(None),
+            Ok(Some(_)) | Err(_) => break Err(()),
+            Ok(None) if Instant::now() >= deadline => break Err(()),
             Ok(None) => thread::sleep(Duration::from_millis(20)),
         }
     };
