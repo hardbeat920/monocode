@@ -85,6 +85,26 @@ it("suspends project Git stats while the rail is hidden", async () => {
   expect(container.querySelector('nav[aria-label="Projects"]')).not.toBeNull();
 });
 
+it("collapses and expands every project group from the section header", async () => {
+  saveProjectGroups([
+    { id: "clients", name: "Client work", collapsed: false, colorIndex: 4 },
+    { id: "labs", name: "Labs", collapsed: true, colorIndex: 1 },
+  ]);
+  await renderRail();
+
+  act(() => button("Collapse all groups").click());
+  expect(loadProjectGroups().map((group) => group.collapsed)).toEqual([
+    true,
+    true,
+  ]);
+
+  act(() => button("Expand all groups").click());
+  expect(loadProjectGroups().map((group) => group.collapsed)).toEqual([
+    false,
+    false,
+  ]);
+});
+
 function button(label: string): HTMLButtonElement {
   const found = [
     ...document.querySelectorAll<HTMLButtonElement>("button"),
