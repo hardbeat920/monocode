@@ -71,6 +71,11 @@ struct PasswdIdentity {
     shell: String,
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn login_username() -> Option<String> {
+    passwd_identity().map(|identity| identity.user)
+}
+
 fn passwd_identity() -> Option<PasswdIdentity> {
     #[cfg(unix)]
     {
