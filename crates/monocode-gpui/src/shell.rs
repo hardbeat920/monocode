@@ -979,15 +979,14 @@ impl Shell {
             }
             cx.notify();
         });
-        // A real change, such as a discard from the Changes panel: chats in
-        // this checkout reread their recorded changes, which drops reverted
-        // files from the changes pill and its card.
+        // A real change, such as a discard from the Changes panel, invalidates
+        // recorded changes for chats in this checkout.
         let git_changes = cx.subscribe(&git, |this, git, _: &crate::git_status::GitChanged, cx| {
             let cwd = git.read(cx).root.clone();
             for view in this.sessions.values() {
                 if view.read(cx).review.read(cx).session().1 == cwd {
                     view.update(cx, |view, cx| {
-                        view.review.update(cx, |review, cx| review.refresh(cx))
+                        view.review.update(cx, |review, cx| review.git_changed(cx))
                     });
                 }
             }
@@ -1372,11 +1371,13 @@ impl Shell {
         }
         for (&id, view) in &self.sessions {
             view.update(cx, |v, cx| {
-                if shown.contains(&id) {
+                let visible = shown.contains(&id);
+                if visible {
                     v.load(cx);
                 }
-                v.transcript
-                    .update(cx, |t, cx| t.visible(shown.contains(&id), cx))
+                v.review
+                    .update(cx, |review, cx| review.set_visible(visible, cx));
+                v.transcript.update(cx, |t, cx| t.visible(visible, cx))
             });
         }
         self.trim_session_histories(&shown, cx);
