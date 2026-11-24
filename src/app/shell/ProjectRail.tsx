@@ -2,6 +2,7 @@ import {
   BellOff,
   ChevronDown,
   ChevronRight,
+  FoldVertical,
   FolderPlus,
   Internet,
   Inbox,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   Settings,
+  UnfoldVertical,
   Zap,
 } from "../../shared/ui/icons";
 import {
@@ -68,6 +70,7 @@ import {
   projectGroupColor,
   projectGroupIdForPath,
   reorderProjectGroups,
+  saveProjectGroups,
   updateProjectGroup,
   type ProjectGroup,
 } from "../../features/projects/model/projectGroups";
@@ -231,6 +234,19 @@ export function ProjectRail({
       }),
     [],
   );
+  // Header button: every group collapsed → offer expand all, otherwise
+  // collapse all. The choice is persisted like a manual toggle.
+  const allGroupsCollapsed =
+    projectGroups.length > 0 &&
+    projectGroups.every((group) => group.collapsed);
+  const toggleAllGroups = () => {
+    saveProjectGroups(
+      projectGroups.map((group) => ({
+        ...group,
+        collapsed: !allGroupsCollapsed,
+      })),
+    );
+  };
   const [inboxMenu, setInboxMenu] = useState<{
     x: number;
     y: number;
@@ -488,6 +504,10 @@ export function ProjectRail({
               <div className="mb-2 shrink-0">
                 <ProjectSectionHeader
                   label="Groups"
+                  allGroupsCollapsed={allGroupsCollapsed}
+                  onToggleAllGroups={
+                    projectGroups.length > 0 ? toggleAllGroups : undefined
+                  }
                   onAddGroup={(x, y) => projectMenu.createGroup(x, y)}
                 />
                 <div className="flex flex-col gap-px px-2">
@@ -697,10 +717,14 @@ function ProjectSectionHeader({
   label,
   onAdd,
   onAddGroup,
+  allGroupsCollapsed,
+  onToggleAllGroups,
 }: {
   label: string;
   onAdd?: () => void;
   onAddGroup?: (x: number, y: number) => void;
+  allGroupsCollapsed?: boolean;
+  onToggleAllGroups?: () => void;
 }) {
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
@@ -708,6 +732,25 @@ function ProjectSectionHeader({
       <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/50">
         {label}
       </span>
+      {onToggleAllGroups ? (
+        <button
+          type="button"
+          title={
+            allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"
+          }
+          aria-label={
+            allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"
+          }
+          onClick={onToggleAllGroups}
+          className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
+        >
+          {allGroupsCollapsed ? (
+            <UnfoldVertical className="size-3.5" strokeWidth={1.75} />
+          ) : (
+            <FoldVertical className="size-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      ) : null}
       {onAddGroup ? (
         <button
           type="button"
