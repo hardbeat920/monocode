@@ -1015,13 +1015,13 @@ it("uses the confirmed host configuration for another phone choice before a rend
   expect(host?.session.model).toBe(gpt.id);
 });
 
-it("keeps the confirmed phone model when an older poll finishes afterwards", async () => {
+it.each([false, true])("keeps the confirmed phone model after a delayed poll (host restored: %s)", async (restored) => {
   const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
   catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
-  const sessionId = "delayed-model-poll";
+  const sessionId = `delayed-model-poll-${restored}`;
   host = {
     projectId: "project",
-    revision: 1,
+    revision: restored ? 5 : 1,
     status: "idle",
     updatedAt: 0,
     session: { ...shell(), id: sessionId, harness: "codex", model: gpt.id },
@@ -1056,6 +1056,7 @@ it("keeps the confirmed phone model when an older poll finishes afterwards", asy
   await render(shell(), { onRemoteSnapshot });
   expect(pollStarted).toBe(true);
 
+  if (restored) host = { ...host, revision: 1 };
   await act(async () => {
     await remoteSessionActions("shell")!.configure({ model: nextModel.id });
     releasePoll();
@@ -1065,6 +1066,7 @@ it("keeps the confirmed phone model when an older poll finishes afterwards", asy
   expect(byLabel("Codex GPT Alt")).not.toBeNull();
   expect(onRemoteSnapshot).toHaveBeenCalledTimes(1);
   expect(onRemoteSnapshot).toHaveBeenLastCalledWith("shell", host);
+  if (restored) expect(host.revision).toBe(2);
   await act(async () => {
     await remoteSessionActions("shell")!.configure({ model: nextModel.id });
   });
@@ -1105,6 +1107,67 @@ it("accepts a confirmed phone model change after the host restores an older revi
     await remoteSessionActions("shell")!.configure({ model: nextModel.id });
   });
   expect(host).toMatchObject({ revision: 2, session: { model: nextModel.id } });
+  expect(byLabel("Codex GPT Alt")).not.toBeNull();
+
+  // A poll started after confirmation can still observe another host restore.
+  host = { ...host, revision: 1, session: { ...host.session, model: gpt.id } };
+  const onRemoteSnapshot = vi.fn();
+  await render(shell(), { onRemoteSnapshot });
+  expect(byLabel("Codex GPT Test")).not.toBeNull();
+  expect(onRemoteSnapshot).toHaveBeenLastCalledWith("shell", host);
+});
+
+it("uses one confirmation read and rejects a second choice while it is pending", async () => {
+  const nextModel = { ...gpt, id: "codex:gpt-alt", nativeId: "gpt-alt", name: "GPT Alt" };
+  catalog = { models: { codex: [gpt, nextModel] }, errors: {} };
+  const sessionId = "single-model-confirmation";
+  host = {
+    projectId: "project",
+    revision: 1,
+    status: "idle",
+    updatedAt: 0,
+    session: { ...shell(), id: sessionId, harness: "codex", model: gpt.id },
+  };
+  rememberRemoteSession("shell", sessionId);
+  await render();
+
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  const methods: string[] = [];
+  let started!: () => void;
+  const confirmStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const holdConfirmation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: { revision?: number } } | undefined;
+    if (request?.method) methods.push(request.method);
+    if (request?.method === "sessions.sync" && request.params?.revision === undefined) {
+      started();
+      await holdConfirmation;
+    }
+    return original(command, input);
+  });
+
+  await act(async () => {
+    const actions = remoteSessionActions("shell")!;
+    const changed = actions.configure({ model: nextModel.id });
+    await confirmStarted;
+    await expect(actions.configure({ model: gpt.id })).rejects.toThrow(
+      "Wait for the host conversation",
+    );
+    release();
+    await changed;
+  });
+  await settle();
+
+  expect(
+    methods.filter((method) =>
+      ["commands.dispatch", "environment.describe", "sessions.sync"].includes(method),
+    ),
+  ).toEqual(["commands.dispatch", "sessions.sync"]);
   expect(byLabel("Codex GPT Alt")).not.toBeNull();
 });
 
