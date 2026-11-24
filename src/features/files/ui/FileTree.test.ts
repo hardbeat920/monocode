@@ -2,8 +2,10 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { open } from "@tauri-apps/plugin-dialog";
 import { saveShowExcludedFiles } from "../../settings/model/appearance";
 import {
+  forgetDir,
   listCachedDir,
   notifyDirsChanged,
   refreshDir,
@@ -27,10 +29,16 @@ const { iconRender, directories, clipboardFiles, copied, dragDrop } =
       handler: null as null | ((event: { payload: unknown }) => void),
     },
   }));
+const missingDirectories = new Set<string>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, string>) => {
-    if (command === "list_dir") return directories.get(args.path) ?? [];
+    if (command === "list_dir") {
+      if (missingDirectories.has(args.path)) {
+        throw new Error(`${args.path}: No such file or directory`);
+      }
+      return directories.get(args.path) ?? [];
+    }
     if (command === "clipboard_file_paths") return [...clipboardFiles];
     if (command === "copy_path") {
       copied.push({ from: args.from, destParent: args.destParent });
@@ -49,6 +57,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
       };
     },
   }),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
 }));
 
 // Count row renders independently of FileTypeIcon's own memoization.
@@ -125,10 +137,33 @@ afterEach(() => {
   container.remove();
   localStorage.removeItem("monocode.showExcludedFiles");
   vi.clearAllMocks();
+  missingDirectories.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   clipboardFiles.length = 0;
   copied.length = 0;
+});
+
+it("offers to relink a missing project folder and rebases to the chosen path", async () => {
+  const projectPath = "/projects/current";
+  const onRemapProject = vi.fn();
+  props = { ...props, projectPath, onRemapProject };
+  missingDirectories.add(cwd);
+  forgetDir(cwd);
+
+  await act(async () => render());
+  expect(container.textContent).toContain("This project folder may have moved");
+
+  vi.mocked(open).mockResolvedValueOnce("/projects/relocated/");
+  const chooseButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Choose new folder…",
+  )!;
+  await act(async () => chooseButton.click());
+
+  expect(onRemapProject).toHaveBeenCalledWith(
+    projectPath,
+    "/projects/relocated",
+  );
 });
 
 describe("FileTree render isolation", () => {

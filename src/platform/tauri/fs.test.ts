@@ -11,6 +11,7 @@ import {
   gitHeadMessage,
   isCheckoutBlockedByChanges,
   listSkills,
+  pickFolder,
   pickFolders,
   resolveProjectLocation,
 } from "./fs";
@@ -27,7 +28,7 @@ describe("pickFolders", () => {
   it("returns every folder chosen in one pass", async () => {
     vi.mocked(open).mockResolvedValueOnce(["/a/one", "/a/two"]);
     await expect(pickFolders()).resolves.toEqual(["/a/one", "/a/two"]);
-    expect(vi.mocked(open).mock.calls[0]?.[0]).toMatchObject({
+    expect(vi.mocked(open).mock.calls.at(-1)?.[0]).toMatchObject({
       directory: true,
       multiple: true,
     });
@@ -41,6 +42,22 @@ describe("pickFolders", () => {
   it("returns nothing when the dialog is dismissed", async () => {
     vi.mocked(open).mockResolvedValueOnce(null);
     await expect(pickFolders()).resolves.toEqual([]);
+  });
+});
+
+describe("pickFolder", () => {
+  it("normalizes Windows separators in the selected folder", async () => {
+    vi.mocked(open).mockResolvedValueOnce("C:\\a\\relocated\\");
+    await expect(pickFolder()).resolves.toBe("C:/a/relocated/");
+    expect(vi.mocked(open).mock.calls.at(-1)?.[0]).toMatchObject({
+      directory: true,
+      multiple: false,
+    });
+  });
+
+  it("returns null when the dialog is dismissed", async () => {
+    vi.mocked(open).mockResolvedValueOnce(null);
+    await expect(pickFolder()).resolves.toBeNull();
   });
 });
 

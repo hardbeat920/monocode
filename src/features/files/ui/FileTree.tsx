@@ -54,12 +54,20 @@ import {
   copyPath,
   createPath,
   deletePath,
+  listDir,
   movePath,
+  pickFolder,
   renamePath,
   revealPath,
   type FsEntry,
 } from "../../../platform/tauri/fs";
 import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
+import {
+  isRemoteProjectPath,
+  knownProjectPaths,
+  normalizeProjectPath,
+  sameProjectPath,
+} from "../../projects/model/recents";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
 import type { OpenFileFn } from "../../search/model/search";
 import type { GitStatusMap } from "../../source-control/hooks/useGitFileStatuses";
@@ -81,6 +89,7 @@ const GIT_STATUS_COLOR: Record<string, string> = {
 
 type Props = {
   cwd: string;
+  projectPath?: string;
   compactHeader?: boolean;
   /** Display identity for the root when it differs from the physical folder. */
   rootLabel?: string;
@@ -88,6 +97,7 @@ type Props = {
   onOpenTerminal?: (cwd: string) => void;
   onFileMoved?: (from: string, to: string) => void;
   onFileDeleted?: (path: string) => void;
+  onRemapProject?: (from: string, to: string) => Promise<void> | void;
   onSearch?: () => void;
   gitStatuses?: GitStatusMap;
 };
@@ -251,12 +261,14 @@ function explorerItems(
 // intact unless file-tree props, local state, or subscriptions actually change.
 export const FileTree = memo(function FileTree({
   cwd,
+  projectPath = cwd,
   compactHeader = false,
   rootLabel,
   onOpenFile,
   onOpenTerminal,
   onFileMoved,
   onFileDeleted,
+  onRemapProject,
   onSearch,
   gitStatuses,
 }: Props) {
@@ -957,6 +969,34 @@ export const FileTree = memo(function FileTree({
     return () => window.clearInterval(timer);
   }, [cwd]);
 
+  const chooseReplacementProjectFolder = () =>
+    run(async () => {
+      if (!onRemapProject) return;
+      const replacement = await pickFolder("Choose relocated project folder");
+      if (!replacement) return;
+      const nextPath = normalizeProjectPath(replacement);
+      if (sameProjectPath(nextPath, projectPath)) {
+        throw new Error("Choose a different folder for this project.");
+      }
+      if (
+        knownProjectPaths().some(
+          (known) =>
+            !sameProjectPath(known, projectPath) &&
+            sameProjectPath(known, nextPath),
+        )
+      ) {
+        throw new Error("That folder is already in your project list.");
+      }
+      // Preflight the selected directory before rebasing stored project data.
+      await listDir(nextPath);
+      await onRemapProject(projectPath, nextPath);
+    });
+
+  const missingProjectFolder =
+    !!error && /no such file|not found|does not exist/i.test(error);
+  const canRemapProject =
+    !!onRemapProject && !isRemoteProjectPath(projectPath);
+
   useEffect(() => {
     const hit = peekDir(cwd);
     if (hit) {
@@ -1102,6 +1142,21 @@ export const FileTree = memo(function FileTree({
                 loading={children === null && !error}
                 error={error}
               />
+            </div>
+          ) : null}
+          {missingProjectFolder && canRemapProject ? (
+            <div className="px-3 py-2">
+              <p className="mb-2 text-[12px] leading-4 text-content/55">
+                This project folder may have moved. Choose its new location to
+                reconnect the project.
+              </p>
+              <button
+                type="button"
+                onClick={() => void chooseReplacementProjectFolder()}
+                className="rounded-md bg-content/8 px-2 py-1 text-[12px] text-content/80 hover:bg-content/12 hover:text-content"
+              >
+                Choose new folder…
+              </button>
             </div>
           ) : null}
         </div>

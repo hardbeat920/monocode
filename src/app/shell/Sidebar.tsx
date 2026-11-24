@@ -291,6 +291,7 @@ function projectPathBusy(
 
 type Props = {
   cwd: string;
+  projectPath?: string;
   /** Working copy for Changes / explorer git. Falls back to `cwd`. */
   gitCwd?: string;
   /** Branch identity shown for a worktree whose folder has a temporary name. */
@@ -365,6 +366,7 @@ type Props = {
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  onRemapProject?: (from: string, to: string) => Promise<void> | void;
   onNew?: () => string | void;
   onNewTerminal?: () => void;
   onSearch?: () => void;
@@ -419,6 +421,7 @@ type Props = {
 
 function SidebarComponent({
   cwd,
+  projectPath,
   gitCwd,
   explorerRootLabel,
   worktreeTabStats,
@@ -478,6 +481,7 @@ function SidebarComponent({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  onRemapProject,
   onNew,
   onSearch,
   onOpenInbox,
@@ -2491,12 +2495,14 @@ function SidebarComponent({
             <FileTree
               key={explorer.current.cwd}
               cwd={explorer.current.cwd}
+              projectPath={projectPath ?? cwd}
               compactHeader={inset}
               rootLabel={explorer.current.rootLabel}
               onOpenFile={onOpenFile}
               onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
               onFileMoved={onFileMoved}
               onFileDeleted={onFileDeleted}
+              onRemapProject={onRemapProject}
               onSearch={onOpenFilesSearch}
               gitStatuses={gitStatuses}
             />
@@ -3272,6 +3278,7 @@ function SidebarComponent({
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
+          onRemapProject={onRemapProject}
           settingsOpen={settingsOpen}
           settingsSection={settingsSection}
           onOpenSettings={onOpenSettings}

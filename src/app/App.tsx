@@ -14006,6 +14006,7 @@ function Workspace({
   const sessionSidebar = (
     <Sidebar
       cwd={sidebarCwd}
+      projectPath={projectCwd}
       gitCwd={gitCwd}
       worktreeTabStats={worktreeTabStats}
       onSelectWorkspace={onSelectWorkspace}
@@ -14062,6 +14063,7 @@ function Workspace({
       onOpenTerminal={onOpenTerminal}
       onFileMoved={onFileMoved}
       onFileDeleted={onFileDeleted}
+      onRemapProject={applyProjectLocationChange}
       canGoBack={
         !!monoViewId ||
         tabVisitNav.canBack ||
