@@ -2,6 +2,7 @@
 //! staging. Ported from fs.rs `git_file_diff_for`, `git_commit_files_for`,
 //! `git_commit_file_diff_for` and `git_stage_contents_for`.
 use super::*;
+use crate::files::document::FileStamp;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -105,16 +106,7 @@ pub fn review_index(cwd: &Path, previous: Option<&DiffIndex>) -> Result<DiffInde
 pub struct FileDiffVersion {
     index: String,
     head: Option<String>,
-    disk: Option<DiskVersion>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DiskVersion {
-    len: u64,
-    modified: Option<SystemTime>,
-    created: Option<SystemTime>,
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
+    disk: Option<FileStamp>,
 }
 
 pub fn file_diff_versions(
@@ -178,16 +170,7 @@ pub fn file_diff_versions(
         }
         if file.unstaged {
             let disk = match std::fs::metadata(root.join(&file.relative)) {
-                Ok(meta) => Some(DiskVersion {
-                    len: meta.len(),
-                    modified: meta.modified().ok(),
-                    created: meta.created().ok(),
-                    #[cfg(unix)]
-                    identity: {
-                        use std::os::unix::fs::MetadataExt;
-                        (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-                    },
-                }),
+                Ok(meta) => Some(FileStamp::from_metadata(&meta)),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
                 Err(error) => return Err(error.to_string()),
             };
@@ -202,6 +185,37 @@ pub fn file_diff_versions(
         }
     }
     Ok(versions)
+}
+
+/// The editor compares staged-only changes against HEAD, and other edits
+/// against the index. Resolve that choice with a status scoped to its file.
+pub fn editor_file_diff(cwd: &Path, relative: &str) -> Result<(FileDiff, bool), String> {
+    let staged = if remote_workspace::is_remote(cwd) {
+        diff_files(cwd)?
+            .files
+            .iter()
+            .find(|file| file.relative == relative)
+            .is_some_and(|file| file.staged && !file.unstaged)
+    } else {
+        let root = expand_home(cwd);
+        let path = resolve_repo_path(&root, relative)?;
+        let status = git_run(
+            &root,
+            &[
+                "--literal-pathspecs",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--no-renames",
+                "--",
+                &path,
+            ],
+        )
+        .ok_or_else(|| "Could not read Git status for the file".to_string())?;
+        matches!(status.as_bytes(), [index, b' ', b' ', ..] if *index != b' ')
+    };
+    Ok((file_diff(cwd, relative, staged)?, staged))
 }
 
 /// One file's index or HEAD side against its other side. `staged` compares

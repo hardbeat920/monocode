@@ -6,6 +6,39 @@ pub const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl FileStamp {
+    pub(crate) fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            created: meta.created().ok(),
+            #[cfg(unix)]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+            },
+        }
+    }
+}
+
+/// Local editor polling can cheaply skip unchanged files, including images.
+pub fn file_stamp(path: &Path) -> Option<FileStamp> {
+    if super::remote::is_remote(path) {
+        return None;
+    }
+    let meta = std::fs::metadata(expand_home(path)).ok()?;
+    meta.is_file().then(|| FileStamp::from_metadata(&meta))
+}
+
 #[derive(Clone, Debug)]
 pub struct TextDocument {
     pub text: String,
