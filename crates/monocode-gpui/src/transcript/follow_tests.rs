@@ -179,6 +179,10 @@ fn mono_new_turn_keeps_its_pending_message_below_the_previous_answer(cx: &mut Te
 fn mono_pending_messages_show_thinking_and_keep_the_same_height_on_delivery(
     cx: &mut TestAppContext,
 ) {
+    // Age the animation epoch before creating any views or scheduling timers.
+    cx.update(crate::pulse::elapsed);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(100 * 24 * 3600));
     for reduced in [false, true] {
         cx.update(|cx| cx.set_reduce_motion(reduced));
         for history in [false, true] {
@@ -217,6 +221,17 @@ fn mono_pending_messages_show_thinking_and_keep_the_same_height_on_delivery(
                 visual.debug_bounds("mono-turn-ticker").is_some(),
                 "a new message shows Thinking before the outbox is saved"
             );
+            if !reduced {
+                let phase = |cx: &mut gpui::VisualTestContext| {
+                    cx.update(|_, cx| cx.global::<crate::activity::PaintedSweep>().0)
+                };
+                let initial = phase(visual);
+                visual
+                    .executor()
+                    .advance_clock(std::time::Duration::from_millis(132));
+                visual.run_until_parked();
+                assert_ne!(initial, phase(visual), "pending Thinking sweep froze");
+            }
             let span = |visual: &mut gpui::VisualTestContext| {
                 let bottom = visual.debug_bounds("mono-turn-ticker").unwrap().bottom();
                 let top = window

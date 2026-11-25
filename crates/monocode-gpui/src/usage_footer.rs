@@ -193,6 +193,38 @@ impl UsageFooter {
             cx.notify();
         }
     }
+    fn refresh_button(&self, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let fetching = self.cache[index(self.kind)].fetching;
+        div()
+            .id("refresh-usage")
+            .role(Role::Button)
+            .aria_label("Refresh usage")
+            .when(fetching, |d| d.aria_description("Refreshing usage"))
+            .track_focus(&self.refresh_focus)
+            .tab_index(0)
+            .key_context("UsageRefresh")
+            .map(|d| {
+                if self.classic {
+                    d.size(px(18.)).rounded_md()
+                } else {
+                    d.size(px(20.)).ml(px(-4.)).rounded_full()
+                }
+            })
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .opacity(if fetching { 0.5 } else { 1. })
+            .when(!fetching, |d| d.hover(|s| s.bg(content(0.1))))
+            .child(if fetching {
+                crate::right_panel::spinner("usage-refresh-spin", "refresh", 12.)
+            } else {
+                icon("refresh", 12.).into_any_element()
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx)))
+            .on_action(cx.listener(|this, _: &RefreshUsage, _, cx| this.refresh(true, cx)))
+    }
     fn refresh(&mut self, force: bool, cx: &mut Context<Self>) {
         if let Some(center) = crate::accounts::get(cx) {
             let key = self.key.clone();
@@ -853,7 +885,6 @@ impl Render for UsageFooter {
             })
             .or_else(|| state.error.as_ref().map(|e| e.message.clone()))
             .unwrap_or_else(|| "Loading usage".into());
-        let fetching = state.fetching;
         let tightest = state
             .snapshot
             .as_ref()
@@ -922,32 +953,7 @@ impl Render for UsageFooter {
                         cx.listener(|this, _: &ToggleUsage, window, cx| this.toggle(window, cx)),
                     ),
             )
-            .child(
-                div()
-                    .id("refresh-usage")
-                    .role(Role::Button)
-                    .aria_label("Refresh usage")
-                    .track_focus(&self.refresh_focus)
-                    .tab_index(0)
-                    .key_context("UsageRefresh")
-                    .map(|d| {
-                        if classic {
-                            d.size(px(18.)).rounded_md()
-                        } else {
-                            d.size(px(20.)).ml(px(-4.)).rounded_full()
-                        }
-                    })
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .opacity(if fetching { 0.5 } else { 1. })
-                    .when(!fetching, |d| d.hover(|s| s.bg(content(0.1))))
-                    .child(icon("refresh", 12.))
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx)))
-                    .on_action(cx.listener(|this, _: &RefreshUsage, _, cx| this.refresh(true, cx))),
-            )
+            .child(self.refresh_button(cx))
             .when(self.open, |d| {
                 d.child(
                     popover("usage-details", Anchor::Slot(self.anchor.clone()))
@@ -972,6 +978,105 @@ impl Render for UsageFooter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui::test]
+    fn refresh_motion_follows_fetch_and_accessibility_state(cx: &mut gpui::TestAppContext) {
+        use crate::accounts::{UsageResponses, install};
+        use std::{
+            path::Path,
+            sync::{Arc, Mutex},
+        };
+        let fixture = |cx: &mut App, kind| {
+            let (tx, rx) = async_channel::bounded(1);
+            cx.default_global::<UsageResponses>()
+                .0
+                .insert(Key::new(kind, Default::default(), None), rx);
+            tx
+        };
+        let (first, claude) = cx.update(|cx| {
+            bind(cx);
+            cx.set_reduce_motion(false);
+            let store = monocode_core::store::Store::open(Path::new(":memory:")).unwrap();
+            install(Arc::new(Mutex::new(store)), cx);
+            (fixture(cx, Kind::Codex), fixture(cx, Kind::Claude))
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| UsageFooter::new(Kind::Codex, cx));
+        let check = |cx: &mut gpui::VisualTestContext, busy, spinning| {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(crate::pulse::running(cx), spinning));
+            view.update(cx, |footer, cx| {
+                use gpui::Element;
+                let button = footer.refresh_button(cx);
+                assert_eq!(button.a11y_role(), Some(Role::Button));
+                let mut node = gpui::accesskit::Node::new(Role::Button);
+                button.write_a11y_info(&mut node);
+                assert_eq!(node.label(), Some("Refresh usage"));
+                assert_eq!(
+                    node.description(),
+                    if busy { Some("Refreshing usage") } else { None }
+                );
+            });
+        };
+        check(cx, true, true);
+        first.try_send(Ok(Snapshot::default())).unwrap();
+        check(cx, false, false);
+        let retry = cx.update(|window, cx| {
+            let focus = view.read(cx).refresh_focus.clone();
+            window.focus(&focus, cx);
+            fixture(cx, Kind::Codex)
+        });
+        cx.simulate_keystrokes("enter");
+        check(cx, true, true);
+        view.update(cx, |footer, cx| {
+            footer.context(
+                Kind::Claude,
+                Default::default(),
+                None,
+                "/fixture".into(),
+                None,
+                cx,
+            );
+        });
+        retry
+            .try_send(Err(FetchError {
+                message: "Offline".into(),
+                unavailable: false,
+            }))
+            .unwrap();
+        check(cx, true, true);
+        view.update(cx, |footer, cx| {
+            assert!(footer.cache[index(Kind::Claude)].fetching);
+            let center = crate::accounts::get(cx).unwrap();
+            let codex = &center.read(cx).usage[&Key::new(Kind::Codex, Default::default(), None)];
+            assert_eq!(codex.error.as_ref().unwrap().message, "Offline");
+            assert!(codex.snapshot.is_some());
+            cx.set_reduce_motion(true);
+            cx.notify();
+        });
+        check(cx, true, false);
+        view.update(cx, |_, cx| {
+            cx.set_reduce_motion(false);
+            cx.notify();
+        });
+        check(cx, true, true);
+        claude
+            .try_send(Err(FetchError {
+                message: "Unavailable".into(),
+                unavailable: true,
+            }))
+            .unwrap();
+        check(cx, false, false);
+        view.read_with(cx, |footer, _| {
+            assert!(
+                footer.cache[index(Kind::Claude)]
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .unavailable
+            )
+        });
+    }
     #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
         cx: &mut gpui::TestAppContext,

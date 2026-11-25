@@ -25,6 +25,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct UsageResponses(
+    pub HashMap<Key, async_channel::Receiver<Result<Snapshot, FetchError>>>,
+);
+#[cfg(test)]
+impl Global for UsageResponses {}
+
 pub(crate) struct Shared(pub Entity<Accounts>);
 impl Global for Shared {}
 pub(crate) fn get(cx: &App) -> Option<Entity<Accounts>> {
@@ -77,6 +85,7 @@ impl Key {
             billing,
         }
     }
+    #[cfg(not(test))]
     fn model(&self) -> Option<String> {
         (!self.billing.is_empty()).then(|| format!("{}/", self.billing))
     }
@@ -368,7 +377,8 @@ impl Accounts {
         }
     }
     pub(crate) fn refresh(&mut self, key: Key, force: bool, cx: &mut Context<Self>) {
-        if cfg!(test) {
+        #[cfg(test)]
+        if cx.try_global::<UsageResponses>().is_none() {
             return;
         }
         let state = self.usage.entry(key.clone()).or_default();
@@ -392,10 +402,22 @@ impl Accounts {
         state.fetching = true;
         state.attempted = Some(Instant::now());
         let generation = state.generation;
-        let request = key.clone();
-        let work = cx.background_executor().spawn(async move {
-            usage::fetch_for(request.kind, &request.profile, request.model().as_deref())
-        });
+        #[cfg(not(test))]
+        let work = {
+            let request = key.clone();
+            cx.background_executor().spawn(async move {
+                usage::fetch_for(request.kind, &request.profile, request.model().as_deref())
+            })
+        };
+        #[cfg(test)]
+        let work = {
+            let response = cx
+                .global_mut::<UsageResponses>()
+                .0
+                .remove(&key)
+                .expect("expected a fixture response for this fetch");
+            async move { response.recv().await.expect("fixture dropped its response") }
+        };
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

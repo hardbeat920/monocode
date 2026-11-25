@@ -4,21 +4,34 @@ use gpui::{
     LayoutId, Pixels, StyledText, Window, point, prelude::*,
 };
 use monocode_core::tool::{ToolCall, ToolState};
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
+
+const SWEEP_PERIOD: Duration = Duration::from_millis(1600);
+
+fn sweep_phase(elapsed: Duration) -> f32 {
+    let period = SWEEP_PERIOD.as_nanos();
+    ((elapsed.as_nanos() % period) as f64 / period as f64) as f32
+}
 
 /// Shade a fixed glyph layout. Animated StyledText highlights change font-run
 /// boundaries (and kerning/ligatures) as neighboring colors become equal.
-pub(crate) fn shimmer(text: String, elapsed: f32) -> AnyElement {
+pub(crate) fn shimmer(text: String, elapsed: Duration) -> AnyElement {
     Shimmer {
         text: StyledText::new(text),
-        elapsed,
+        phase: sweep_phase(elapsed),
     }
     .into_any_element()
 }
 
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct PaintedSweep(pub f32);
+#[cfg(test)]
+impl gpui::Global for PaintedSweep {}
+
 struct Shimmer {
     text: StyledText,
-    elapsed: f32,
+    phase: f32,
 }
 impl IntoElement for Shimmer {
     type Element = Self;
@@ -65,8 +78,12 @@ impl Element for Shimmer {
         _: &mut (),
         _: &mut (),
         window: &mut Window,
-        _: &mut App,
+        _cx: &mut App,
     ) {
+        #[cfg(test)]
+        {
+            _cx.default_global::<PaintedSweep>().0 = self.phase;
+        }
         let layout = self.text.layout();
         let line_height = layout.line_height();
         // Both callers use a single truncated line; retain StyledText's layout
@@ -78,7 +95,7 @@ impl Element for Shimmer {
                     let line = &wrapped.unwrapped_layout;
                     let baseline = (line_height - line.ascent - line.descent) / 2. + line.ascent;
                     let width = f32::from(line.width).max(1.);
-                    let center = -0.25 + (self.elapsed / 1.6).fract() * 1.5;
+                    let center = -0.25 + self.phase * 1.5;
                     for run in &line.runs {
                         for glyph in &run.glyphs {
                             let x = f32::from(glyph.position.x + line.font_size * 0.25) / width;
@@ -368,6 +385,17 @@ mod shimmer_tests {
     use gpui::{Context, Render, TestAppContext, canvas, div, px};
     use std::{cell::RefCell, rc::Rc};
 
+    #[test]
+    fn long_uptime_preserves_subsecond_sweep_steps_and_wraps() {
+        let uptime = Duration::from_secs(100 * 24 * 3600);
+        for millis in [0, 66, 132, 1599, 1600, 1666] {
+            assert_eq!(
+                sweep_phase(uptime + Duration::from_millis(millis)),
+                (millis % 1600) as f32 / 1600.
+            );
+        }
+    }
+
     struct Preview {
         elapsed: f32,
         geometry: Rc<RefCell<Option<(Pixels, String)>>>,
@@ -386,7 +414,7 @@ mod shimmer_tests {
                             let text = "GPT-6.1-Sol working for 29s · office AV café 漢字";
                             let shimmer = Shimmer {
                                 text: StyledText::new(text),
-                                elapsed,
+                                phase: sweep_phase(Duration::from_secs_f32(elapsed)),
                             };
                             let layout = shimmer.text.layout().clone();
                             let mut shimmer = shimmer.into_any_element();

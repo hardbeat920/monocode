@@ -459,10 +459,7 @@ fn agent(
                             })
                         })
                         .child(if active && view.visible && !cx.reduce_motion() {
-                            crate::activity::shimmer(
-                                name.clone(),
-                                view.started_at.elapsed().as_secs_f32(),
-                            )
+                            crate::activity::shimmer(name.clone(), view.started_at.elapsed())
                         } else {
                             div().child(name).into_any_element()
                         }),
@@ -789,7 +786,7 @@ fn agent_trail(
                     )
                     .child(div().flex_1().min_w_0().truncate().child(
                         if live && view.visible && !cx.reduce_motion() {
-                            crate::activity::shimmer(title, view.started_at.elapsed().as_secs_f32())
+                            crate::activity::shimmer(title, view.started_at.elapsed())
                         } else {
                             div().child(title).into_any_element()
                         },

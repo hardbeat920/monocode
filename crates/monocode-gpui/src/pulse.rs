@@ -447,4 +447,25 @@ mod tests {
         assert_eq!(ticks.get(), 1);
         cx.update(|_, cx| assert!(!running(cx)));
     }
+
+    #[gpui::test]
+    fn delayed_working_mark_paint_reacquires_its_lease(cx: &mut TestAppContext) {
+        use crate::session_mark::{SessionMark, State};
+
+        cx.update(|cx| cx.set_reduce_motion(false));
+        let (mark, cx) = cx.add_window_view(|_, _| SessionMark::new("codex".into()));
+        mark.update(cx, |mark, cx| mark.set("codex", State::Working, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let leased = |cx: &App| cx.global::<Clock>().leases.contains_key(&mark.entity_id());
+            assert!(leased(cx));
+            // Hold the dirty view across two eligible ticks before allowing its paint.
+            for _ in 0..2 * BACKGROUND_STRIDE {
+                tick(cx);
+            }
+            assert!(!leased(cx));
+            window.draw(cx).clear(cx);
+            assert!(leased(cx));
+        });
+    }
 }

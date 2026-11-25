@@ -10586,6 +10586,75 @@ mod tests {
     }
 
     #[gpui::test]
+    fn working_squares_advance_after_returning_to_project(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| cx.set_reduce_motion(false));
+        let busy = |cx: &mut TestAppContext, busy| {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.sessions[&b].update(cx, |session, cx| {
+                        session.busy = busy;
+                        cx.emit(SessionChanged);
+                    });
+                })
+                .unwrap();
+            cx.run_until_parked();
+        };
+        let switch = |cx: &mut TestAppContext, project: &str| {
+            window
+                .update(cx, |shell, w, cx| {
+                    shell.select_project(project.into(), w, cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+        };
+        let selector = Box::leak(format!("title-tab-{b}").into_boxed_str());
+        let alphas = |cx: &mut TestAppContext| {
+            let bounds = gpui::VisualTestContext::from_window(window.into(), cx)
+                .debug_bounds(selector)
+                .unwrap();
+            window
+                .update(cx, |_, w, _| {
+                    let row: gpui::Hsla = gpui::rgb(crate::session_mark::SPINNER_ROWS[0]).into();
+                    w.painted_quads()
+                        .into_iter()
+                        .filter(|q| bounds.scale(w.scale_factor()).contains(&q.bounds.center()))
+                        .filter_map(|q| q.background.as_solid())
+                        .filter(|c| c.h == row.h && c.s == row.s && c.l == row.l)
+                        .map(|c| c.a)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap()
+        };
+        for starts_while_hidden in [false, true] {
+            busy(cx, !starts_while_hidden);
+            switch(cx, "/work/another-project");
+            if starts_while_hidden {
+                cx.simulate_window_visibility_change(window.into(), gpui::WindowVisibility::Hidden);
+                busy(cx, true);
+            }
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(2));
+            cx.run_until_parked();
+            switch(cx, "/work/monocode");
+            if starts_while_hidden {
+                cx.simulate_window_visibility_change(
+                    window.into(),
+                    gpui::WindowVisibility::Visible,
+                );
+                cx.run_until_parked();
+            }
+            let first = alphas(cx);
+            assert_eq!(first.len(), 3);
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(330));
+            cx.run_until_parked();
+            let next = alphas(cx);
+            assert_eq!(next.len(), 3);
+            assert_ne!(first, next);
+        }
+    }
+    #[gpui::test]
     fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
         let (window, a, _) = window(cx);
         window
