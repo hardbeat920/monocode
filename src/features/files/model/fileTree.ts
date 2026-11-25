@@ -70,7 +70,11 @@ function scopedPaths(scope: Set<string> | null): string[] {
   if (!scope || scope.size === 0) return all;
   const roots = [...scope];
   const scoped = all.filter((path) =>
-    roots.some((root) => path === root || path.startsWith(`${root}/`)),
+    roots.some((root) => {
+      if (path === root) return true;
+      const prefix = root.endsWith("/") ? root : `${root}/`;
+      return path.startsWith(prefix);
+    }),
   );
   // Un scope qui ne correspond à aucune entrée connue (chemin non normalisé,
   // projet fraîchement ouvert) doit rafraîchir largement, pas rien.

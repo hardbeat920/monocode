@@ -62,6 +62,21 @@ describe("fileTree cache", () => {
     expect(peekDir(root)).toEqual([entry("created.ts")]);
   });
 
+  it("refreshes descendants when the scope is the filesystem root", async () => {
+    vi.useFakeTimers();
+    listDir.mockResolvedValue([]);
+    await listCachedDir("/");
+    await listCachedDir(`${root}/nested`);
+    listDir.mockClear();
+
+    notifyDirsChanged("/");
+    await vi.runAllTimersAsync();
+
+    expect(listDir).toHaveBeenCalledWith("/");
+    expect(listDir).toHaveBeenCalledWith(`${root}/nested`);
+    forgetDir("/");
+  });
+
   it("notifyDirsChanged refreshes the cache and tells listeners", async () => {
     vi.useFakeTimers();
     listDir.mockResolvedValueOnce([]);
