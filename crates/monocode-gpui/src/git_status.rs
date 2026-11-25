@@ -142,11 +142,12 @@ impl ProjectGit {
         cx.emit(GitChanged);
         cx.notify();
         self.warm_choices(cx);
-        if self.poll.take().is_some() {
-            // Watch the new checkout instead; this reads it straight away.
+        let was_polling = self.poll.take().is_some();
+        // Queue or start the new checkout's reload before restarting polling so
+        // an in-flight read for the previous checkout always schedules a follow-up.
+        self.reload(cx);
+        if was_polling {
             self.set_polling(true, cx);
-        } else {
-            self.reload(cx);
         }
     }
     /// While the project's Git status is visible, read it again whenever the
