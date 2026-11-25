@@ -15048,7 +15048,7 @@ function trackSessionEdits(
 
 function nudgeWorkspace(cwd?: string) {
   invalidateProjectFiles(cwd);
-  notifyDirsChanged();
+  notifyDirsChanged(cwd);
 }
 
 function nudgeOpenEditors(event: HarnessEvent, cwd: string) {

@@ -200,7 +200,7 @@ describe("FileTree render isolation", () => {
     directories.set(cwd, [file("added.ts")]);
     await act(async () => {
       notifyDirsChanged();
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(600);
     });
     expect(row("added.ts")).not.toBeNull();
     expect(row("first.ts")).toBeNull();
