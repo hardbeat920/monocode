@@ -177,6 +177,24 @@ it("offers to relink a missing project folder and rebases to the chosen path", a
   );
 });
 
+it("rejects a non-project folder before relinking", async () => {
+  const projectPath = cwd;
+  const onRemapProject = vi.fn();
+  props = { ...props, projectPath, onRemapProject };
+  missingDirectories.add(cwd);
+  forgetDir(cwd);
+
+  await act(async () => render());
+  vi.mocked(open).mockResolvedValueOnce("/");
+  const chooseButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Choose new folder…",
+  )!;
+  await act(async () => chooseButton.click());
+
+  expect(onRemapProject).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Choose a project folder");
+});
+
 it("recognizes a Windows missing-folder error by OS code", async () => {
   const projectPath = cwd;
   const onRemapProject = vi.fn();

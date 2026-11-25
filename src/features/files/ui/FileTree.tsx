@@ -65,6 +65,7 @@ import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
 import {
   isRemoteProjectPath,
   knownProjectPaths,
+  looksLikeProject,
   normalizeProjectPath,
   sameProjectPath,
 } from "../../projects/model/recents";
@@ -977,6 +978,11 @@ export const FileTree = memo(function FileTree({
       const nextPath = normalizeProjectPath(replacement);
       if (sameProjectPath(nextPath, projectPath)) {
         throw new Error("Choose a different folder for this project.");
+      }
+      if (!looksLikeProject(nextPath)) {
+        throw new Error(
+          "Choose a project folder, not a drive root or home folder.",
+        );
       }
       if (
         knownProjectPaths().some(
