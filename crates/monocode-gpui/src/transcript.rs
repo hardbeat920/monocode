@@ -1272,7 +1272,7 @@ impl TranscriptView {
                             } else {
                                 crate::activity::shimmer(
                                     label,
-                                    self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                                    crate::pulse::elapsed(cx).as_secs_f32(),
                                 )
                             })
                             .when(turn < self.source.len(), |d| {

@@ -10586,6 +10586,49 @@ mod tests {
     }
 
     #[gpui::test]
+    fn working_squares_advance_after_returning_to_project(cx: &mut TestAppContext) {
+        let (window, _, b) = window(cx);
+        cx.update(|cx| cx.set_reduce_motion(false));
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&b].update(cx, |session, cx| {
+                    session.busy = true;
+                    cx.emit(SessionChanged);
+                });
+            })
+            .unwrap();
+        for project in ["/work/another-project", "/work/monocode"] {
+            window
+                .update(cx, |shell, w, cx| {
+                    shell.select_project(project.into(), w, cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(2));
+            cx.run_until_parked();
+        }
+        let alphas = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |_, w, _| {
+                    let row: gpui::Hsla = gpui::rgb(crate::session_mark::SPINNER_ROWS[0]).into();
+                    w.painted_quads()
+                        .into_iter()
+                        .filter_map(|q| q.background.as_solid())
+                        .filter(|c| c.h == row.h && c.s == row.s && c.l == row.l)
+                        .map(|c| c.a)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap()
+        };
+        let first = alphas(cx);
+        assert!(first.len() >= 3);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(330));
+        cx.run_until_parked();
+        assert_ne!(first, alphas(cx));
+    }
+    #[gpui::test]
     fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
         let (window, a, _) = window(cx);
         window

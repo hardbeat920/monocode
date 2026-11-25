@@ -16,6 +16,12 @@ pub(crate) fn shimmer(text: String, elapsed: f32) -> AnyElement {
     .into_any_element()
 }
 
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct PaintedSweep(pub f32);
+#[cfg(test)]
+impl gpui::Global for PaintedSweep {}
+
 struct Shimmer {
     text: StyledText,
     elapsed: f32,
@@ -65,8 +71,12 @@ impl Element for Shimmer {
         _: &mut (),
         _: &mut (),
         window: &mut Window,
-        _: &mut App,
+        _cx: &mut App,
     ) {
+        #[cfg(test)]
+        {
+            _cx.default_global::<PaintedSweep>().0 = self.elapsed;
+        }
         let layout = self.text.layout();
         let line_height = layout.line_height();
         // Both callers use a single truncated line; retain StyledText's layout
