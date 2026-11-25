@@ -94,7 +94,10 @@ export async function resolveHostWorktreeAsync(
   const actual = available(requested) ? realpathSync.native(requested) : requested;
   if (actual === projectCwd) return projectCwd;
   const listed = await hostWorktrees(projectCwd);
-  if (!listed.worktrees.some((tree) => tree.path === actual && !tree.missing))
+  if (
+    !listed.worktrees.some((tree) => tree.path === actual && !tree.missing) ||
+    !available(actual)
+  )
     throw new Error("Choose an available worktree of this project");
   return actual;
 }
@@ -141,11 +144,27 @@ async function worktreesFingerprint(cwd: string): Promise<string> {
         );
       const worktreesDir = resolve(common, "worktrees");
       const linkedNames = await readdir(worktreesDir).catch(() => []);
+      const headFiles = [
+        resolve(common, "HEAD"),
+        ...linkedNames.sort().map((name) => resolve(worktreesDir, name, "HEAD")),
+      ];
+      // Resolve attached symbolic HEAD refs so commits on checked-out branches
+      // invalidate the cached worktree head SHA immediately.
+      const branchRefs = (
+        await Promise.all(
+          headFiles.map(async (headFile) => {
+            const text = await readFile(headFile, "utf8").catch(() => "");
+            const ref = /^ref:\s*(.+)$/m.exec(text)?.[1]?.trim();
+            return ref ? resolve(common, ref) : null;
+          }),
+        )
+      ).filter((ref): ref is string => Boolean(ref));
       const probes = [
         worktreesDir,
-        resolve(common, "HEAD"),
         resolve(common, "config"),
-        ...linkedNames.sort().map((name) => resolve(worktreesDir, name, "HEAD")),
+        resolve(common, "packed-refs"),
+        ...headFiles,
+        ...branchRefs,
       ];
       return (await Promise.all(probes.map(sig))).join("|");
     }
@@ -161,7 +180,14 @@ export async function hostWorktrees(cwd: string): Promise<HostWorktrees> {
   const cached = worktreesCache.get(cwd);
   if (cached && Date.now() - cached.at < WORKTREES_TTL_MS) {
     const fingerprint = await worktreesFingerprint(cwd);
-    if (fingerprint !== "?" && fingerprint === cached.fingerprint)
+    const availabilityUnchanged = cached.value.worktrees.every(
+      (tree) => available(tree.path) === !tree.missing,
+    );
+    if (
+      fingerprint !== "?" &&
+      fingerprint === cached.fingerprint &&
+      availabilityUnchanged
+    )
       return cached.value;
   }
   const pending = worktreesInFlight.get(cwd);

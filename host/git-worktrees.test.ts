@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { HostEngine } from "./engine";
 import { HostStore } from "./store";
@@ -227,7 +227,7 @@ it("caches the worktree list and invalidates it on changes", async () => {
   expect((await hostWorktrees(cwd)).worktrees).toHaveLength(2);
 
   // A worktree added by an external git is noticed through the shared git dir.
-  const external = join(cwd, "..", `${cwd.split("/").pop()}-external`);
+  const external = join(cwd, "..", `${basename(cwd)}-external`);
   cleanups.push(() => rmSync(external, { recursive: true, force: true }));
   git("worktree", "add", "-q", "-b", "external", external);
   expect((await hostWorktrees(cwd)).worktrees).toHaveLength(3);

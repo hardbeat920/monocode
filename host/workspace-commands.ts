@@ -301,6 +301,15 @@ export class WorkspaceCommands {
       if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)))
         return { root, relative: rel };
     }
+    // A newly created external worktree may not be in the cached roots list yet.
+    if (this.roots.size > 0) {
+      this.invalidateRoots();
+      for (const root of await this.allowedRoots()) {
+        const rel = relative(root, actual);
+        if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)))
+          return { root, relative: rel };
+      }
+    }
     throw new Error("Path is outside this machine’s projects");
   }
 
@@ -405,7 +414,8 @@ export class WorkspaceCommands {
           if (!info.isFile()) return { path: String(path), mtimeMs: null };
           return {
             path: String(path),
-            mtimeMs: Number(info.mtimeMs),
+            // Derive legacy `mtimeMs` from `mtimeNs` to retain sub-millisecond precision.
+            mtimeMs: Number(info.mtimeNs) / 1e6,
             mtimeNs: info.mtimeNs.toString(),
             ctimeNs: info.ctimeNs.toString(),
             size: Number(info.size),
@@ -494,8 +504,11 @@ export class WorkspaceCommands {
         n === 0 ? name : n === 1 ? `${stem} copy${ext}` : `${stem} copy ${n}${ext}`;
       const to = resolve(parent, candidate);
       if (await lstat(to).then(() => true, () => false)) continue;
-      await cp(source, to, { recursive: true, errorOnExist: true });
-      invalidateGitIndexCache(parent);
+      try {
+        await cp(source, to, { recursive: true, errorOnExist: true });
+      } finally {
+        invalidateGitIndexCache(parent);
+      }
       return joined(destParent as string, candidate);
     }
   }

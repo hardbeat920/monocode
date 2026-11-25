@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -550,7 +551,10 @@ it("parses unborn, detached, renamed and awkwardly named entries", async () => {
   ]);
   git("commit", "-qm", "rename");
 
-  const odd = ["ünï cödé.txt", "tab\tname.txt", "new\nline.txt"];
+  const odd =
+    process.platform === "win32"
+      ? ["ünï cödé.txt"]
+      : ["ünï cödé.txt", "tab\tname.txt", "new\nline.txt"];
   for (const name of odd) writeFileSync(join(root, name), "x\n");
   const names = (await hostGitIndex(root)).files.map((file) => file.relative);
   expect(names.sort()).toEqual([...odd].sort());
@@ -601,4 +605,48 @@ it("does not skip unignored untracked folders named target when expanding", asyn
     status: "untracked",
     additions: 2,
   });
+});
+
+it("counts staged additions before the first commit and handles discard edge cases", async () => {
+  // 1. Unborn repo: staged additions are counted via `diff --cached --numstat`.
+  const { root: unbornRoot, git: unbornGit } = makeRepo();
+  writeFileSync(join(unbornRoot, "first.ts"), "one\ntwo\nthree\n");
+  unbornGit("add", "first.ts");
+  const unbornIndex = await hostGitIndex(unbornRoot);
+  expect(unbornIndex.head).toBeNull();
+  expect(unbornIndex.additions).toBe(3);
+  expect(unbornIndex.files[0]).toMatchObject({
+    relative: "first.ts",
+    additions: 3,
+    staged: true,
+  });
+
+  // 2. Staged deletion + recreated untracked file at the same path can be discarded.
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "dup.ts"), "old\n");
+  writeFileSync(join(root, "a1.ts"), "original-1\n");
+  writeFileSync(join(root, "a[1].ts"), "original-glob\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+
+  git("rm", "-q", "dup.ts");
+  writeFileSync(join(root, "dup.ts"), "recreated\n");
+  await hostGitAction(root, "discard", "dup.ts");
+  expect(() => readFileSync(join(root, "dup.ts"), "utf8")).toThrow();
+
+  // 3. Literal pathspecs: discarding `a[1].ts` does not restore `a1.ts`.
+  writeFileSync(join(root, "a1.ts"), "edited-1\n");
+  writeFileSync(join(root, "a[1].ts"), "edited-glob\n");
+  await hostGitAction(root, "discard", "a[1].ts");
+  expect(readFileSync(join(root, "a[1].ts"), "utf8")).toBe("original-glob\n");
+  expect(readFileSync(join(root, "a1.ts"), "utf8")).toBe("edited-1\n");
+
+  // 4. Discarding a collapsed untracked folder (>200 files) removes it cleanly.
+  mkdirSync(join(root, "bulk"));
+  for (let i = 0; i < 210; i++) writeFileSync(join(root, `bulk/f${i}.txt`), "x\n");
+  const before = await hostGitIndex(root);
+  expect(before.files.some((f) => f.relative === "bulk/")).toBe(true);
+  await hostGitAction(root, "discard", "bulk/");
+  const after = await hostGitIndex(root);
+  expect(after.files.some((f) => f.relative.startsWith("bulk"))).toBe(false);
 });

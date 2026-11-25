@@ -643,12 +643,12 @@ async function gitStateFingerprint(root: string): Promise<string> {
 
 async function filesFingerprint(
   root: string,
-  files: GitChangedFile[],
+  files: Pick<GitChangedFile, "relative">[],
 ): Promise<string> {
   const sigs = await Promise.all(
     files.slice(0, MAX_FINGERPRINT_FILES).map((file) =>
-      lstat(resolve(root, file.relative)).then(
-        (info) => `${info.mtimeMs}:${info.size}`,
+      lstat(resolve(root, file.relative), { bigint: true }).then(
+        (info) => `${info.mtimeNs}:${info.ctimeNs}:${info.size}`,
         () => "-",
       ),
     ),
@@ -692,12 +692,14 @@ function parseNumstat(text: string) {
 async function expandUntrackedDirectory(
   root: string,
   directory: string,
-  budget: { left: number },
+  budget: { left: number; dirsLeft: number },
 ): Promise<string[] | null> {
   const found: string[] = [];
   let left = budget.left;
+  let dirsLeft = budget.dirsLeft;
   const pending = [directory.replace(/\/+$/, "")];
   while (pending.length) {
+    if (--dirsLeft < 0) return null;
     const dir = pending.pop()!;
     const entries = await readdir(resolve(root, dir), {
       withFileTypes: true,
@@ -720,19 +722,27 @@ async function expandUntrackedDirectory(
         root,
         maybeIgnoredDirs.map((path) => `${path}/`),
       );
+      // If `check-ignore` failed (e.g. timeout), keep the directory collapsed
+      // rather than risking treating ignored files as untracked.
+      if (!ignored) return null;
       for (const path of maybeIgnoredDirs) {
         if (!ignored.has(`${path}/`) && !ignored.has(path)) pending.push(path);
       }
     }
   }
   budget.left = left;
+  budget.dirsLeft = dirsLeft;
   return found;
 }
 
+/**
+ * Returns the subset of `paths` ignored by Git, or `null` if `git check-ignore`
+ * failed for a reason other than exit code 1 ("no paths are ignored").
+ */
 async function ignoredPaths(
   root: string,
   paths: string[],
-): Promise<Set<string>> {
+): Promise<Set<string> | null> {
   if (!paths.length) return new Set();
   try {
     const output = await spawnGitWithInput(
@@ -742,14 +752,19 @@ async function ignoredPaths(
       true,
     );
     return new Set(output.split("\0").filter(Boolean));
-  } catch {
-    return new Set(); // exit 1: nothing is ignored
+  } catch (error) {
+    if ((error as { code?: number | null })?.code === 1) return new Set();
+    return null;
   }
 }
 
 async function computeGitIndex(
   root: string,
   full: boolean,
+  options?: {
+    strictIgnore?: boolean;
+    onTrackedFingerprint?: (stable: boolean) => void;
+  },
 ): Promise<GitDiffIndex> {
   let statusText: string;
   try {
@@ -838,32 +853,62 @@ async function computeGitIndex(
   if (!hasAheadBehind) upstream = null;
 
   const hasTrackedChanges = entries.some((entry) => entry.code !== "??");
-  const numstatPromise =
-    head && hasTrackedChanges
-      ? execGit(
-          root,
-          [
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--numstat",
-            "-z",
-            "HEAD",
-            "--",
-          ],
-          { readOnly: true, maxBuffer: 16 * 1024 * 1024 },
-        ).catch(() => "")
-      : Promise.resolve("");
+  // Snapshot changed tracked files BEFORE numstat so concurrent edits during
+  // diff computation are detected and never cached under a newer stat signature.
+  const preTrackedFp = hasTrackedChanges
+    ? await filesFingerprint(
+        root,
+        entries
+          .filter((entry) => entry.code !== "??")
+          .map((entry) => ({
+            relative: entry.path,
+            staged: entry.code[0] !== " ",
+            unstaged: entry.code[1] !== " ",
+            indexOid: entry.indexOid,
+          })),
+      )
+    : "";
+  const numstatPromise = hasTrackedChanges
+    ? execGit(
+        root,
+        head
+          ? [
+              "-c",
+              "core.quotepath=false",
+              "diff",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--numstat",
+              "-z",
+              "HEAD",
+              "--",
+            ]
+          : [
+              // Before the first commit (`head === null`), diff staged index against the empty tree.
+              "-c",
+              "core.quotepath=false",
+              "diff",
+              "--cached",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--numstat",
+              "-z",
+              "--",
+            ],
+        { readOnly: true, maxBuffer: 16 * 1024 * 1024 },
+      ).catch(() => "")
+    : Promise.resolve("");
   const metaPromise =
     full && head
       ? gitMetadata(root, head, upstream, hasAheadBehind)
       : Promise.resolve(null);
 
   // Expand collapsed untracked directories so each new file is individually
-  // listed and diffable, within a bounded budget.
-  const budget = { left: MAX_UNTRACKED_EXPAND };
+  // listed and diffable, within bounded file and directory traversal budgets.
+  const budget = {
+    left: MAX_UNTRACKED_EXPAND,
+    dirsLeft: MAX_UNTRACKED_EXPAND * 2,
+  };
   const expanded = new Map<string, string[] | null>();
   const candidates: string[] = [];
   for (const entry of entries) {
@@ -873,14 +918,19 @@ async function computeGitIndex(
     if (list) candidates.push(...list);
   }
   const ignored = await ignoredPaths(root, candidates);
+  if (candidates.length && !ignored) {
+    // Do not fall back to treating ignored files as untracked if check-ignore failed.
+    if (options?.strictIgnore)
+      throw new Error("Could not verify Git ignore rules for untracked files");
+  }
   const untracked: string[] = [];
   const collapsed: string[] = [];
   for (const entry of entries) {
     if (entry.code !== "??") continue;
     if (!entry.path.endsWith("/")) untracked.push(entry.path);
     else {
-      const list = expanded.get(entry.path);
-      if (list) untracked.push(...list.filter((path) => !ignored.has(path)));
+      const list = ignored ? expanded.get(entry.path) : null;
+      if (list) untracked.push(...list.filter((path) => !ignored!.has(path)));
       else collapsed.push(entry.path);
     }
   }
@@ -931,7 +981,7 @@ async function computeGitIndex(
 
   const meta = await metaPromise;
   const fallback = !upstream && meta?.defaultBranch;
-  return {
+  const result: GitDiffIndex = {
     branch,
     head,
     files,
@@ -945,6 +995,16 @@ async function computeGitIndex(
     aheadOfDefault: meta?.aheadOfDefault ?? 0,
     headPushed: meta?.headPushed ?? false,
   };
+  if (options?.onTrackedFingerprint) {
+    const postTrackedFp = hasTrackedChanges
+      ? await filesFingerprint(
+          root,
+          files.filter((file) => file.status !== "untracked"),
+        )
+      : "";
+    options.onTrackedFingerprint(preTrackedFp === postTrackedFp);
+  }
+  return result;
 }
 
 /** Low-frequency remote/default-branch facts, cached by refs fingerprint. */
@@ -994,7 +1054,7 @@ async function gitMetadata(
           "for-each-ref",
           "--count=1",
           "--contains",
-          "HEAD",
+          head,
           "refs/remotes",
         ]).catch(() => "")
       : Promise.resolve(""),
@@ -1003,7 +1063,7 @@ async function gitMetadata(
           "rev-list",
           "--left-right",
           "--count",
-          `origin/${defaultBranch}...HEAD`,
+          `origin/${defaultBranch}...${head}`,
         ]).catch(() => "")
       : Promise.resolve(""),
   ]);
@@ -1051,13 +1111,25 @@ export async function hostGitIndex(
 
   const generation = writeEpoch;
   const promise = (async () => {
-    const state = await gitStateFingerprint(root);
-    const value = await computeGitIndex(root, full);
-    const fingerprint = `${state}#${await filesFingerprint(root, value.files)}`;
-    if (generation === writeEpoch)
+    const stateBefore = await gitStateFingerprint(root);
+    let trackedStable = true;
+    const value = await computeGitIndex(root, full, {
+      onTrackedFingerprint: (stable) => {
+        trackedStable = stable;
+      },
+    });
+    const [stateAfter, filesFp] = await Promise.all([
+      gitStateFingerprint(root),
+      filesFingerprint(root, value.files),
+    ]);
+    if (
+      generation === writeEpoch &&
+      trackedStable &&
+      stateBefore === stateAfter
+    )
       remember(gitIndexCache, root, {
         at: Date.now(),
-        fingerprint,
+        fingerprint: `${stateAfter}#${filesFp}`,
         full,
         value,
       });
@@ -1082,8 +1154,13 @@ export async function hostGitStats(root: string) {
   };
 }
 
-/** Status of exactly one path, with a single targeted git process. */
-async function scopedStatus(root: string, relativePath: string) {
+/** Status of exactly one path (or a collapsed untracked folder), with a single targeted git process. */
+async function scopedStatus(
+  root: string,
+  relativePath: string,
+  options?: { unstagedOnly?: boolean; allowCollapsedUntrackedDir?: boolean },
+) {
+  const normalizedDir = relativePath.replace(/\/+$/, "");
   let text: string;
   try {
     text = await execGit(root, [
@@ -1093,7 +1170,7 @@ async function scopedStatus(root: string, relativePath: string) {
       "-z",
       "--untracked-files=all",
       "--",
-      relativePath,
+      normalizedDir,
     ]);
   } catch (error) {
     if (/not a git repository|must be run in a work tree/i.test(String(error)))
@@ -1101,19 +1178,53 @@ async function scopedStatus(root: string, relativePath: string) {
     throw error;
   }
   const parts = text.split("\0");
+  let sawAny = false;
+  let allUntrackedDescendants = true;
+  const dirPrefix = `${normalizedDir}/`;
   for (let index = 0; index < parts.length; index++) {
     const item = parts[index];
     if (!item || item.length < 4) continue;
     const code = item.slice(0, 2);
     const path = item.slice(3);
     if (code.includes("R") || code.includes("C")) index++;
-    if (path === relativePath)
+    const staged = code[0] !== " " && code !== "??";
+    const unstaged = code[1] !== " " || code === "??";
+    if (path === relativePath) {
+      if (options?.unstagedOnly && !unstaged) continue;
       return {
         code,
         status: statusName(code),
-        staged: code[0] !== " " && code !== "??",
-        unstaged: code[1] !== " " || code === "??",
+        staged,
+        unstaged,
       };
+    }
+    if (options?.allowCollapsedUntrackedDir && path.startsWith(dirPrefix)) {
+      sawAny = true;
+      if (code !== "??") allUntrackedDescendants = false;
+    }
+  }
+  if (
+    options?.allowCollapsedUntrackedDir &&
+    relativePath.endsWith("/") &&
+    sawAny &&
+    allUntrackedDescendants
+  ) {
+    // Confirm the directory contains no tracked files before permitting recursive clean.
+    const tracked = await execGit(root, [
+      "--literal-pathspecs",
+      "ls-files",
+      "-z",
+      "--",
+      normalizedDir,
+    ]).catch(() => "?");
+    if (tracked === "") {
+      return {
+        code: "??",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      };
+    }
   }
   return undefined;
 }
@@ -1197,9 +1308,20 @@ async function runGitAction(
   const discard = async (file: { relative: string; status: string }) => {
     const path = relative(root, workspacePath(root, file.relative));
     if (file.status === "untracked" && file.relative.endsWith("/"))
-      await git(root, ["clean", "-fd", "--", path], undefined, false);
+      await git(
+        root,
+        ["--literal-pathspecs", "clean", "-fd", "--", path],
+        undefined,
+        false,
+      );
     else if (file.status === "untracked") await rm(resolve(root, path));
-    else await git(root, ["restore", "--worktree", "--", path], undefined, false);
+    else
+      await git(
+        root,
+        ["--literal-pathspecs", "restore", "--worktree", "--", path],
+        undefined,
+        false,
+      );
   };
   switch (action) {
     case "stageContents": {
@@ -1246,15 +1368,22 @@ async function runGitAction(
       await git(root, ["reset", "-q", "--", "."], undefined, false);
       return;
     case "discard": {
-      const path = relative(root, workspacePath(root, input)).split(sep).join("/");
-      const file = await scopedStatus(root, path);
+      const requestedDir = typeof input === "string" && input.endsWith("/");
+      const normalized = relative(root, workspacePath(root, input))
+        .split(sep)
+        .join("/");
+      const path = requestedDir ? `${normalized}/` : normalized;
+      const file = await scopedStatus(root, path, {
+        unstagedOnly: true,
+        allowCollapsedUntrackedDir: requestedDir,
+      });
       if (!file?.unstaged) throw new Error("File has no changes to discard");
       await discard({ relative: path, status: file.status });
       return;
     }
     case "discardAll":
       for (const file of (
-        await hostGitIndex(root, { includeSync: false, bypassCache: true })
+        await computeGitIndex(root, false, { strictIgnore: true })
       ).files.filter((entry) => entry.unstaged))
         await discard(file);
       return;

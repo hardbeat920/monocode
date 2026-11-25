@@ -310,9 +310,11 @@ export function createHostServer(
             const project = engine.store.project(projectId);
             const summaries = engine.store.summaries(projectId);
             const paths = [...new Set(summaries.map((session) => session.cwd ?? project.cwd))];
+            const deadline = Date.now() + 2_000;
             const branches = new Map(await Promise.all(paths.map(async (cwd) => {
               const branch = await execGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
                 timeout: 2_000,
+                deadline,
               }).then((stdout) => stdout.trim()).catch(() => "");
               return [cwd, branch] as const;
             })));
