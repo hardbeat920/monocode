@@ -4,15 +4,14 @@ import {
   type ServerResponse,
 } from "node:http";
 import { hostname, homedir } from "node:os";
-import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
-import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
   type HostModelCatalog,
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import { HostEngine } from "./engine";
+import { execGit } from "./git-exec";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
@@ -66,7 +65,6 @@ import {
   resolvePiBinary,
 } from "../src/integrations/harness/core/child";
 
-const exec = promisify(execFile);
 // Providers also add models server-side, without a CLI update.
 const CATALOG_MAX_AGE_MS = 5 * 60_000;
 const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
@@ -313,9 +311,9 @@ export function createHostServer(
             const summaries = engine.store.summaries(projectId);
             const paths = [...new Set(summaries.map((session) => session.cwd ?? project.cwd))];
             const branches = new Map(await Promise.all(paths.map(async (cwd) => {
-              const branch = await exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-                cwd, timeout: 2_000,
-              }).then(({ stdout }) => stdout.trim()).catch(() => "");
+              const branch = await execGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+                timeout: 2_000,
+              }).then((stdout) => stdout.trim()).catch(() => "");
               return [cwd, branch] as const;
             })));
             result = summaries.map((session) => ({
@@ -425,24 +423,11 @@ export function createHostServer(
             const project = engine.store.project(
               String(params.projectId ?? ""),
             );
-            const diff = await exec(
-              "git",
-              [
-                "-c",
-                "core.pager=cat",
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "HEAD",
-                "--",
-              ],
-              {
-                cwd: await resolveHostWorktreeAsync(project.cwd, params.cwd),
-                timeout: 10_000,
-                maxBuffer: 2 * 1024 * 1024,
-              },
+            result = await execGit(
+              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              ["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+              { readOnly: true, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
             );
-            result = diff.stdout;
             break;
           }
           case "git.branches": {

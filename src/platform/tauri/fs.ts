@@ -191,6 +191,7 @@ export type GitChangedFile = {
   deletions: number;
   staged: boolean;
   unstaged: boolean;
+  indexOid?: string;
 };
 
 export type GitDiffIndex = {
@@ -583,6 +584,11 @@ export function readFilePreview(
 export type FileMtime = {
   path: string;
   mtimeMs: number | null;
+  mtimeNs?: string | null;
+  ctimeNs?: string | null;
+  size?: number | null;
+  ino?: string | null;
+  missing?: boolean;
 };
 
 export function statFiles(paths: string[]): Promise<FileMtime[]> {

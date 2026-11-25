@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
+import { execGit, execGitBuffer } from "./git-exec";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
 import type { HostStore } from "./store";
@@ -24,7 +25,9 @@ import {
   hostFileDiff,
   hostGitAction,
   hostGitIndex,
+  hostGitStats,
   indexHostFiles,
+  invalidateGitIndexCache,
   listHostFiles,
   searchHostContent,
   workspacePath,
@@ -87,7 +90,26 @@ export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];
 const MAX_TEXT_FILE = 1024 * 1024;
 const MAX_PREVIEW_FILE = 10 * 1024 * 1024;
 const MAX_STAT_FILES = 64;
-const ROOTS_TTL_MS = 5_000;
+const ROOTS_TTL_MS = 30_000;
+
+/** Git subcommands that change the repository, so need index locks and
+ * invalidate cached snapshots. Everything else is read-only. */
+const GIT_WRITE_COMMANDS = new Set([
+  "add",
+  "commit",
+  "pull",
+  "push",
+  "stash",
+  "read-tree",
+  "reset",
+  "restore",
+  "checkout",
+  "switch",
+  "fetch",
+  "merge",
+]);
+const isGitWrite = (args: string[]) =>
+  GIT_WRITE_COMMANDS.has(args.find((arg) => !arg.startsWith("-")) ?? "");
 
 const slashed = (path: string) => path.replace(/\\/g, "/");
 const joined = (parent: string, name: string) =>
@@ -99,11 +121,13 @@ type Located = { root: string; relative: string };
 
 export class WorkspaceCommands {
   private roots = new Map<string, { at: number; roots: string[] }>();
+  private rootsInFlight = new Map<string, Promise<string[]>>();
   private rootsGeneration = 0;
 
   invalidateRoots(): void {
     this.rootsGeneration++;
     this.roots.clear();
+    this.rootsInFlight.clear();
   }
 
   constructor(
@@ -144,14 +168,11 @@ export class WorkspaceCommands {
       case "move_path":
         return this.move(input.from, input.destParent);
       case "git_diff_index":
-      case "git_diff_files":
         return this.gitIndex(input.cwd);
+      case "git_diff_files":
+        return this.gitIndex(input.cwd, false);
       case "git_diff_stats":
-        return this.gitIndex(input.cwd).then((index) => ({
-          files: index.files.length,
-          additions: index.additions,
-          deletions: index.deletions,
-        }));
+        return this.gitRoot(input.cwd).then((root) => hostGitStats(root));
       case "git_file_diff":
         return this.gitFileDiff(input.cwd, input.relative, input.staged);
       case "git_stage_contents":
@@ -219,17 +240,28 @@ export class WorkspaceCommands {
         out.push(...cached.roots);
         continue;
       }
-      const roots = await hostWorktrees(project.cwd)
-        .then((listed) => [
-          project.cwd,
-          ...listed.worktrees
-            .filter((tree) => !tree.missing && tree.path !== project.cwd)
-            .map((tree) => tree.path),
-        ])
-        .catch(() => [project.cwd]);
-      if (generation === this.rootsGeneration)
-        this.roots.set(project.cwd, { at: Date.now(), roots });
-      out.push(...roots);
+      let pending = this.rootsInFlight.get(project.cwd);
+      if (!pending) {
+        pending = hostWorktrees(project.cwd)
+          .then((listed) => [
+            project.cwd,
+            ...listed.worktrees
+              .filter((tree) => !tree.missing && tree.path !== project.cwd)
+              .map((tree) => tree.path),
+          ])
+          .catch(() => [project.cwd])
+          .then((roots) => {
+            if (generation === this.rootsGeneration)
+              this.roots.set(project.cwd, { at: Date.now(), roots });
+            return roots;
+          })
+          .finally(() => {
+            if (this.rootsInFlight.get(project.cwd) === pending)
+              this.rootsInFlight.delete(project.cwd);
+          });
+        this.rootsInFlight.set(project.cwd, pending);
+      }
+      out.push(...(await pending));
     }
     return out;
   }
@@ -257,6 +289,12 @@ export class WorkspaceCommands {
       if (parent === actual) break;
       missing = missing ? `${basename(actual)}/${missing}` : basename(actual);
       actual = parent;
+    }
+    // A path inside a registered project folder needs no worktree scan.
+    for (const project of this.store.projects()) {
+      const rel = relative(project.cwd, actual);
+      if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)))
+        return { root: project.cwd, relative: rel };
     }
     for (const root of await this.allowedRoots()) {
       const rel = relative(root, actual);
@@ -353,18 +391,33 @@ export class WorkspaceCommands {
       await rm(temporary, { force: true });
       throw reason;
     });
+    invalidateGitIndexCache(root);
   }
 
   private async statFiles(input: unknown): Promise<FileMtime[]> {
     if (!Array.isArray(input) || input.length > MAX_STAT_FILES)
       throw new Error("Too many paths");
     return Promise.all(
-      input.map(async (path) => {
-        const mtimeMs = await this.existing(path)
-          .then(({ path: actual }) => stat(actual))
-          .then((info) => (info.isFile() ? Math.floor(info.mtimeMs) : null))
-          .catch(() => null);
-        return { path: String(path), mtimeMs };
+      input.map(async (path): Promise<FileMtime> => {
+        try {
+          const { path: actual } = await this.existing(path);
+          const info = await stat(actual, { bigint: true });
+          if (!info.isFile()) return { path: String(path), mtimeMs: null };
+          return {
+            path: String(path),
+            mtimeMs: Number(info.mtimeMs),
+            mtimeNs: info.mtimeNs.toString(),
+            ctimeNs: info.ctimeNs.toString(),
+            size: Number(info.size),
+            ino: info.ino.toString(),
+          };
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          if (code === "ENOENT" || code === "ENOTDIR") {
+            return { path: String(path), mtimeMs: null, missing: true };
+          }
+          return { path: String(path), mtimeMs: null };
+        }
       }),
     );
   }
@@ -381,6 +434,8 @@ export class WorkspaceCommands {
       if ((reason as NodeJS.ErrnoException).code === "EEXIST")
         throw new Error(alreadyExists(String(name)));
       throw reason;
+    } finally {
+      invalidateGitIndexCache(root);
     }
     return joined(parent as string, name as string);
   }
@@ -406,12 +461,14 @@ export class WorkspaceCommands {
       throw new Error("Cannot move a folder into itself.");
     await mkdir(dirname(to), { recursive: true });
     await rename(from, to);
+    invalidateGitIndexCache(root);
     return target;
   }
 
   private async delete(input: unknown): Promise<void> {
-    const { path } = await this.existing(input);
+    const { root, path } = await this.existing(input);
     await rm(path, { recursive: true });
+    invalidateGitIndexCache(root);
   }
 
   private async destination(from: unknown, destParent: unknown) {
@@ -438,6 +495,7 @@ export class WorkspaceCommands {
       const to = resolve(parent, candidate);
       if (await lstat(to).then(() => true, () => false)) continue;
       await cp(source, to, { recursive: true, errorOnExist: true });
+      invalidateGitIndexCache(parent);
       return joined(destParent as string, candidate);
     }
   }
@@ -450,6 +508,8 @@ export class WorkspaceCommands {
     if (await lstat(to).then(() => true, () => false))
       throw new Error(alreadyExists(name));
     await rename(source, to);
+    invalidateGitIndexCache(parent);
+    invalidateGitIndexCache(source);
     return joined(destParent as string, name);
   }
 
@@ -466,8 +526,14 @@ export class WorkspaceCommands {
     return searchHostContent(await this.gitRoot(options.cwd), options);
   }
 
-  private async gitIndex(input: unknown) {
-    return hostGitIndex(await this.gitRoot(input));
+  private async gitIndex(input: unknown, includeSync = true) {
+    return hostGitIndex(await this.gitRoot(input), { includeSync });
+  }
+
+  private async gitBranchName(input: unknown): Promise<string | null> {
+    const root = await this.gitRoot(input);
+    const name = await execGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "");
+    return name.trim() || null;
   }
 
   private async gitFileDiff(cwd: unknown, relative: unknown, staged: unknown) {
@@ -486,13 +552,17 @@ export class WorkspaceCommands {
 
   private async gitCommand(cwd: unknown, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
     const root = await this.gitRoot(cwd);
-    return (await exec("git", ["-c", "core.pager=cat", ...args], {
-      cwd: root,
-      timeout: 30_000,
-      maxBuffer: 4 * 1024 * 1024,
-      encoding: "utf8",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
-    })).stdout;
+    const write = isGitWrite(args);
+    try {
+      return await execGit(root, args, {
+        readOnly: !write,
+        timeout: 30_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env,
+      });
+    } finally {
+      if (write && !env?.GIT_INDEX_FILE) invalidateGitIndexCache(root);
+    }
   }
 
   private async gitCommit(cwd: unknown, message: unknown, amend: unknown, paths: unknown) {
@@ -534,9 +604,9 @@ export class WorkspaceCommands {
     }
     let top: string;
     try {
-      top = (await exec("git", ["-C", directory, "rev-parse", "--show-toplevel"], {
-        timeout: 30_000, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      })).stdout.replace(/[\r\n]+$/, "");
+      top = (await execGit(directory, ["rev-parse", "--show-toplevel"], {
+        timeout: 30_000,
+      })).replace(/[\r\n]+$/, "");
     } catch (error) {
       if (String(error).includes("not a git repository")) return null;
       throw error;
@@ -703,14 +773,11 @@ export class WorkspaceCommands {
 
   private async gitBlob(root: string, spec: string) {
     try {
-      const { stdout } = await exec("git", ["show", spec], {
-        cwd: root,
+      const bytes = await execGitBuffer(root, ["show", spec], {
         timeout: 30_000,
         maxBuffer: MAX_TEXT_FILE + 1024,
-        encoding: "buffer",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       });
-      return { bytes: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout), tooLarge: false };
+      return { bytes, tooLarge: false };
     } catch (reason) {
       return { bytes: Buffer.alloc(0), tooLarge: String(reason).includes("maxBuffer") };
     }
@@ -727,22 +794,22 @@ export class WorkspaceCommands {
         const hasHead = await this.gitCommand(root, ["rev-parse", "--verify", "HEAD"]).then(() => true, () => false);
         await run(["read-tree", hasHead ? "HEAD" : "--empty"]);
         await run(["add", "-A", "--", ...selected]);
-        const [index, summary, patch] = await Promise.all([
-          this.gitIndex(root),
+        const [branch, summary, patch] = await Promise.all([
+          this.gitBranchName(root),
           run(["diff", "--cached", "--stat", "--no-renames"]),
           run(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames"]),
         ]);
-        return { branch: index.branch, summary, patch };
+        return { branch, summary, patch };
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
     }
-    const [index, summary, patch] = await Promise.all([
-      this.gitIndex(cwd),
+    const [branch, summary, patch] = await Promise.all([
+      this.gitBranchName(cwd),
       this.gitCommand(cwd, ["diff", "--cached", "--stat"]),
       this.gitCommand(cwd, ["diff", "--cached", "--no-ext-diff"]),
     ]);
-    return { branch: index.branch, summary, patch };
+    return { branch, summary, patch };
   }
 
   private async gitRangeContext(cwd: unknown) {

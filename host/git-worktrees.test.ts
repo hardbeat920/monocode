@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,9 +8,12 @@ import { HostStore } from "./store";
 import {
   createHostWorktree,
   hostWorktrees,
+  invalidateWorktreesCache,
   renameHostWorktreeBranch,
   resolveHostWorktree,
+  resolveHostWorktreeAsync,
 } from "./git-worktrees";
+import { getGitExecStats, resetGitExecStats } from "./git-exec";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -194,4 +197,38 @@ it("creates registered host worktrees and binds new sessions to the selected che
   ).rejects.toThrow("already has a working copy");
   const existing = await createHostWorktree(cwd, "existing", "HEAD", true);
   expect(existing.branch).toBe("existing");
+});
+
+it("caches the worktree list and invalidates it on changes", async () => {
+  const cwd = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-host-wtcache-")));
+  cleanups.push(() => rmSync(cwd, { recursive: true, force: true }));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.com");
+  git("config", "commit.gpgsign", "false");
+  writeFileSync(join(cwd, "file.txt"), "initial\n");
+  git("add", "file.txt");
+  git("commit", "-qm", "initial");
+
+  invalidateWorktreesCache();
+  resetGitExecStats();
+  const first = await hostWorktrees(cwd);
+  expect(getGitExecStats().spawned).toBe(1);
+  expect(first.worktrees).toHaveLength(1);
+
+  resetGitExecStats();
+  await Promise.all([hostWorktrees(cwd), hostWorktrees(cwd)]);
+  await resolveHostWorktreeAsync(cwd, cwd);
+  expect(getGitExecStats().spawned).toBe(0);
+
+  const created = await createHostWorktree(cwd, "feature", "HEAD", false);
+  cleanups.push(() => rmSync(created.path, { recursive: true, force: true }));
+  expect((await hostWorktrees(cwd)).worktrees).toHaveLength(2);
+
+  // A worktree added by an external git is noticed through the shared git dir.
+  const external = join(cwd, "..", `${cwd.split("/").pop()}-external`);
+  cleanups.push(() => rmSync(external, { recursive: true, force: true }));
+  git("worktree", "add", "-q", "-b", "external", external);
+  expect((await hostWorktrees(cwd)).worktrees).toHaveLength(3);
 });

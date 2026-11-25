@@ -1,12 +1,11 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execGit } from "./git-exec";
+import { invalidateWorktreesCache } from "./git-worktrees";
+import { invalidateGitIndexCache } from "./workspace";
 
-const exec = promisify(execFile);
-const options = (cwd: string) => ({
-  cwd,
-  timeout: 10_000,
-  maxBuffer: 1024 * 1024,
-});
+const read = (cwd: string, args: string[]) =>
+  execGit(cwd, args, { readOnly: true, maxBuffer: 1024 * 1024 });
+const write = (cwd: string, args: string[]) =>
+  execGit(cwd, args, { readOnly: false, maxBuffer: 1024 * 1024 });
 
 export type HostBranches = {
   current: string | null;
@@ -15,26 +14,17 @@ export type HostBranches = {
 };
 
 export async function hostBranches(cwd: string): Promise<HostBranches> {
-  const [{ stdout: names }, { stdout: remoteNames }, current] =
-    await Promise.all([
-      exec(
-        "git",
-        ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-        options(cwd),
-      ),
-      exec(
-        "git",
-        [
-          "for-each-ref",
-          "--format=%(refname:short)%00%(symref)",
-          "refs/remotes",
-        ],
-        options(cwd),
-      ),
-      exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], options(cwd))
-        .then(({ stdout }) => stdout.trim())
-        .catch(() => null),
-    ]);
+  const [names, remoteNames, current] = await Promise.all([
+    read(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
+    read(cwd, [
+      "for-each-ref",
+      "--format=%(refname:short)%00%(symref)",
+      "refs/remotes",
+    ]),
+    read(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+      .then((stdout) => stdout.trim())
+      .catch(() => null),
+  ]);
   const remotes = remoteNames
     .split("\n")
     .filter(Boolean)
@@ -73,22 +63,23 @@ export async function switchHostBranch(
   if (!state.branches.includes(branch) && !remoteRef)
     throw new Error("Choose an existing local branch");
   if (state.current === branch) return state;
-  const { stdout: changes } = await exec(
-    "git",
-    ["status", "--porcelain", "--untracked-files=all"],
-    options(cwd),
-  );
+  const changes = await read(cwd, [
+    "status",
+    "--porcelain",
+    "--untracked-files=normal",
+  ]);
   if (changes)
     throw new Error(
       "Commit or stash changes on the host before switching branches",
     );
-  if (remoteRef && !state.branches.includes(branch))
-    await exec(
-      "git",
-      ["switch", "--track", "-c", branch, remoteRef],
-      options(cwd),
-    );
-  else await exec("git", ["switch", branch], options(cwd));
+  try {
+    if (remoteRef && !state.branches.includes(branch))
+      await write(cwd, ["switch", "--track", "-c", branch, remoteRef]);
+    else await write(cwd, ["switch", branch]);
+  } finally {
+    invalidateGitIndexCache(cwd);
+    invalidateWorktreesCache(cwd);
+  }
   return hostBranches(cwd);
 }
 
@@ -104,18 +95,23 @@ export async function createHostBranch(
     branch.startsWith("@")
   )
     throw new Error("Enter a valid branch name");
-  await exec("git", ["check-ref-format", "--branch", branch], options(cwd));
+  await read(cwd, ["check-ref-format", "--branch", branch]);
   const state = await hostBranches(cwd);
   if (state.branches.includes(branch)) throw new Error("Branch already exists");
-  const { stdout: changes } = await exec(
-    "git",
-    ["status", "--porcelain", "--untracked-files=all"],
-    options(cwd),
-  );
+  const changes = await read(cwd, [
+    "status",
+    "--porcelain",
+    "--untracked-files=normal",
+  ]);
   if (changes)
     throw new Error(
       "Commit or stash changes on the host before switching branches",
     );
-  await exec("git", ["switch", "-c", branch], options(cwd));
+  try {
+    await write(cwd, ["switch", "-c", branch]);
+  } finally {
+    invalidateGitIndexCache(cwd);
+    invalidateWorktreesCache(cwd);
+  }
   return hostBranches(cwd);
 }
