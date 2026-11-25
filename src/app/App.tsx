@@ -728,14 +728,27 @@ import {
   OPEN_CONNECTIONS_EVENT,
   OPEN_REMOTE_PROJECT_EVENT,
   REMOTE_HISTORY_UPDATED,
-  cachedRemoteProjectSessions,
   cachedRemoteSessionSummary,
+  loadRemoteSession,
+  refreshRemoteProjectSessions,
+  refreshRemoteProjectSessionsNow,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
+  remoteMachineFor,
   remotePendingWorktree,
+  remoteRequest,
   remoteTabCwd,
   remoteSessionFor,
+  updateCachedRemoteProjectSessions,
 } from "../features/connections/model/connections";
+import {
+  draftRemoteAgentSession,
+  loadRemoteAgentSession,
+  removeRemoteAgentSession,
+  resolveRemoteAgentSessionTarget,
+  sendRemoteAgentSession,
+  stopRemoteAgentSession,
+} from "../features/connections/model/remoteAgentSessions";
 import {
   buildRemotePlan,
   remoteSessionActions,
@@ -4006,6 +4019,13 @@ function Workspace({
     },
     [onClearTabSession, onCloseTab, tabCloseScope],
   );
+  const onRemoteSessionDeletedRef = useRef(onRemoteSessionDeleted);
+  onRemoteSessionDeletedRef.current = onRemoteSessionDeleted;
+  const remoteSessionProjectHints = useRef(new Map<string, string>());
+  const lastRemoteSnapshot = useRef(new Map<string, HostSession>());
+  const onRemoteSnapshotRef = useRef<
+    ((shellId: string, snapshot?: HostSession) => void) | undefined
+  >(undefined);
 
   const seedSession = useCallback((cwd: string) => {
     const seed = sessionsRef.current[0];
@@ -11315,7 +11335,7 @@ function Workspace({
             { awaitAcceptance: true },
           );
           return Object.assign(
-            (outcome: ControlOutcome) =>
+            (outcome: ControlOutcome, resolvedSession?: Session) =>
               settle(
                 monoSessionCompletionResult({
                   requestId,
@@ -11323,12 +11343,14 @@ function Workspace({
                   project,
                   prompt,
                   outcome,
-                  session: sessionsRef.current.find(
-                    (session) =>
-                      session.id === sessionId ||
-                      (isRemoteProjectPath(session.cwd) &&
-                        remoteSessionFor(session.id) === sessionId),
-                  ),
+                  session:
+                    resolvedSession ??
+                    sessionsRef.current.find(
+                      (session) =>
+                        session.id === sessionId ||
+                        (isRemoteProjectPath(session.cwd) &&
+                          remoteSessionFor(session.id) === sessionId),
+                    ),
                 }),
               ),
             { accept: settle.accept, discard: settle.discard },
@@ -11346,6 +11368,39 @@ function Workspace({
               ),
             ),
           );
+        };
+        const findOpenSession = (id: string) => {
+          const openIds = openSessionIds(tabsRef.current);
+          return sessionsRef.current.find((session) => {
+            if (isRemoteProjectPath(session.cwd)) {
+              return (
+                openIds.has(session.id) &&
+                (session.id === id || remoteSessionFor(session.id) === id)
+              );
+            }
+            return session.id === id;
+          });
+        };
+        const resolveRemote = (
+          id: string,
+          cwd?: string,
+          openShell = findOpenSession(id),
+        ) =>
+          resolveRemoteAgentSessionTarget(id, {
+            cwd,
+            openShell,
+            hintedProjectCwd: remoteSessionProjectHints.current.get(id),
+          });
+        const remoteDeps = {
+          remoteMachineFor,
+          loadRemoteSession,
+          remoteRequest,
+          updateCachedRemoteProjectSessions,
+          refreshRemoteProjectSessions,
+          onRemoteSessionDeleted: (remoteSessionId: string) =>
+            onRemoteSessionDeletedRef.current(remoteSessionId),
+          randomId: () => crypto.randomUUID(),
+          pollIntervalMs: 1_000,
         };
         const promise = handleAgentApp(
           source,
@@ -11426,7 +11481,9 @@ function Workspace({
               }
             },
             sessions: async (cwd): Promise<AppSessionListing[]> => {
-              const stored = await listSessionsByProject(cwd);
+              const stored = isRemoteProjectPath(cwd)
+                ? []
+                : await listSessionsByProject(cwd);
               const byId = new Map<string, AppSessionListing>();
               for (const session of stored) {
                 if (session.orchestrationLeadId) continue;
@@ -11441,7 +11498,10 @@ function Workspace({
                 });
               }
               if (isRemoteProjectPath(cwd)) {
-                for (const session of cachedRemoteProjectSessions(cwd)) {
+                const remoteSessions = await refreshRemoteProjectSessionsNow(cwd);
+                const remoteKey = remoteProjectFor(cwd)?.key ?? cwd;
+                for (const session of remoteSessions) {
+                  remoteSessionProjectHints.current.set(session.id, remoteKey);
                   byId.set(session.id, {
                     id: session.id,
                     title: session.title,
@@ -11453,6 +11513,7 @@ function Workspace({
                   });
                 }
               }
+              const openIds = openSessionIds(tabsRef.current);
               for (const session of sessionsRef.current) {
                 if (
                   session.orchestrationLeadId ||
@@ -11460,31 +11521,46 @@ function Workspace({
                   !sameProjectPath(session.cwd, cwd)
                 )
                   continue;
-                const id =
-                  isRemoteProjectPath(session.cwd) && remoteSessionFor(session.id)
-                    ? remoteSessionFor(session.id)!
-                    : session.id;
+                if (isRemoteProjectPath(session.cwd) && !openIds.has(session.id))
+                  continue;
+                const remoteId = isRemoteProjectPath(session.cwd)
+                  ? remoteSessionFor(session.id)
+                  : undefined;
+                const id = remoteId ?? session.id;
                 const existing = byId.get(id);
+                const hasSyncedSnapshot =
+                  !remoteId || lastRemoteSnapshot.current.has(session.id);
                 byId.set(id, {
                   id,
                   title: existing?.title ?? session.title,
                   harness: existing?.harness ?? session.harness,
-                  model: session.model || (existing?.model ?? ""),
-                  busy: !!session.busy,
-                  hasDraft: !!sessionDraftBlock(session),
+                  model: hasSyncedSnapshot
+                    ? session.model || (existing?.model ?? "")
+                    : existing?.model || session.model || "",
+                  busy: hasSyncedSnapshot ? !!session.busy : !!existing?.busy,
+                  hasDraft: hasSyncedSnapshot
+                    ? !!sessionDraftBlock(session)
+                    : !!existing?.hasDraft,
                   archived: existing?.archived ?? false,
                 });
               }
               return [...byId.values()];
             },
-            session: async (id) => {
-              const target =
-                sessionsRef.current.find(
-                  (session) =>
-                    session.id === id ||
-                    (isRemoteProjectPath(session.cwd) &&
-                      remoteSessionFor(session.id) === id),
-                ) ?? (await getSession(id));
+            session: async (id, cwd) => {
+              const open = findOpenSession(id);
+              const remoteTarget = resolveRemote(id, cwd, open);
+              if (remoteTarget) {
+                if (!canAccessProject(remoteTarget.project.key)) return null;
+                remoteSessionProjectHints.current.set(
+                  remoteTarget.hostId,
+                  remoteTarget.project.key,
+                );
+                return loadRemoteAgentSession(remoteTarget, remoteDeps, {
+                  onSnapshot: (shellId, snapshot) =>
+                    onRemoteSnapshotRef.current?.(shellId, snapshot),
+                });
+              }
+              const target = open ?? (await getSession(id));
               return target &&
                 !target.orchestrationLeadId &&
                 canAccessProject(target.cwd)
@@ -11496,6 +11572,42 @@ function Workspace({
                 ? readMonoConversation(target, options)
                 : sessionConversationPage(target, options),
             send: async (id, prompt, requestId, notifyMonoId) => {
+              const open = findOpenSession(id);
+              const remoteTarget = resolveRemote(id, undefined, open);
+              if (remoteTarget) {
+                if (!canAccessProject(remoteTarget.project.key))
+                  throw new Error("Session is unavailable in this project");
+                const rememberRemoteFollowUp = (current: Session) => {
+                  rememberSession({
+                    sessionId: remoteTarget.hostId,
+                    cwd: current.cwd,
+                    title: current.title,
+                    harness: current.harness,
+                    model: current.model,
+                  });
+                };
+                return sendRemoteAgentSession(
+                  remoteTarget,
+                  prompt,
+                  requestId,
+                  {
+                    rememberFollowUp: rememberRemoteFollowUp,
+                    onSnapshot: (shellId, snapshot) =>
+                      onRemoteSnapshotRef.current?.(shellId, snapshot),
+                    createSettler: notifyMonoId
+                      ? (current) =>
+                          monitorCompletion(
+                            notifyMonoId,
+                            remoteTarget.hostId,
+                            requestId,
+                            current.cwd,
+                            prompt,
+                          )
+                      : undefined,
+                  },
+                  remoteDeps,
+                );
+              }
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -11567,6 +11679,22 @@ function Workspace({
               return { alreadySubmitted: false };
             },
             draft: async (id, prompt, requestId) => {
+              const open = findOpenSession(id);
+              const remoteTarget = resolveRemote(id, undefined, open);
+              if (remoteTarget) {
+                if (!canAccessProject(remoteTarget.project.key))
+                  throw new Error("Session is unavailable in this project");
+                return draftRemoteAgentSession(
+                  remoteTarget,
+                  prompt,
+                  requestId,
+                  {
+                    onSnapshot: (shellId, snapshot) =>
+                      onRemoteSnapshotRef.current?.(shellId, snapshot),
+                  },
+                  remoteDeps,
+                );
+              }
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -11598,12 +11726,17 @@ function Workspace({
               return { alreadySaved: false, draft: true };
             },
             stop: async (id) => {
-              const target = sessionsRef.current.find(
-                (session) =>
-                  session.id === id ||
-                  (isRemoteProjectPath(session.cwd) &&
-                    remoteSessionFor(session.id) === id),
-              );
+              const open = findOpenSession(id);
+              const remoteTarget = resolveRemote(id, undefined, open);
+              if (remoteTarget) {
+                if (!canAccessProject(remoteTarget.project.key))
+                  throw new Error("Session is unavailable in this project");
+                await stopRemoteAgentSession(remoteTarget, remoteDeps);
+                dismissCompletion(remoteTarget.hostId);
+                if (id !== remoteTarget.hostId) dismissCompletion(id);
+                return;
+              }
+              const target = open;
               if (!target) {
                 dismissCompletion(id);
                 return;
@@ -11627,6 +11760,22 @@ function Workspace({
               dismissCompletion(id);
             },
             remove: async (id, mode) => {
+              const open = findOpenSession(id);
+              const remoteTarget = resolveRemote(id, undefined, open);
+              if (remoteTarget) {
+                if (!canAccessProject(remoteTarget.project.key))
+                  throw new Error("Session is unavailable in this project");
+                await removeRemoteAgentSession(remoteTarget, mode, remoteDeps);
+                if (remoteTarget.openShell) {
+                  lastRemoteSnapshot.current.delete(remoteTarget.openShell.id);
+                }
+                if (mode === "delete") {
+                  remoteSessionProjectHints.current.delete(remoteTarget.hostId);
+                }
+                dismissCompletion(remoteTarget.hostId);
+                if (id !== remoteTarget.hostId) dismissCompletion(id);
+                return;
+              }
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -13440,7 +13589,6 @@ function Workspace({
   ]);
   useEffect(() => () => dockAnimation.current?.stop(), []);
 
-  const lastRemoteSnapshot = useRef(new Map<string, HostSession>());
   const onRemoteSnapshot = useCallback(
     (shellId: string, snapshot?: HostSession) => {
       if (!snapshot) {
@@ -13475,6 +13623,7 @@ function Workspace({
     },
     [],
   );
+  onRemoteSnapshotRef.current = onRemoteSnapshot;
 
   const onManageWorktrees = useCallback(
     () => openSettings("worktrees"),

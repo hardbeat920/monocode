@@ -114,6 +114,10 @@ export function rememberRemoteProject(
   return remote;
 }
 
+export function allRemoteProjects(): RemoteProject[] {
+  return Object.values(readAll());
+}
+
 export function remoteProjectsOn(environmentId: string): RemoteProject[] {
   return Object.values(readAll()).filter(
     (project) => project.environmentId === environmentId,
