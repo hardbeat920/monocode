@@ -1,0 +1,85 @@
+From 486388c308454b5c3702e40d7bc6ec96a8ccef61 Mon Sep 17 00:00:00 2001
+From: Yegor Chsherbakov <yegor.rb@gmail.com>
+Date: Wed, 25 Nov 2026 14:03:30 +0200
+Subject: [PATCH] Highlight Rails .erb templates in the file editor
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Map compound ERB extensions (html.erb, js.erb, css.erb, …) so CodeMirror
+no longer treats them as plain text when only the final .erb suffix is seen.
+
+---
+ .../files/editor/editorLanguage.test.ts       | 17 ++++++++++++
+ src/features/files/editor/editorLanguage.ts   | 27 +++++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+diff --git a/src/features/files/editor/editorLanguage.test.ts b/src/features/files/editor/editorLanguage.test.ts
+index fb892885..fc3f3829 100644
+--- a/src/features/files/editor/editorLanguage.test.ts
++++ b/src/features/files/editor/editorLanguage.test.ts
+@@ -23,6 +23,23 @@ describe("languageForPath", () => {
+     expect(languageName(extension!)).toBe(name);
+   });
+
++  it.each([
++    ["app/views/api/releases/show.html.erb", "html"],
++    ["mailer.text.erb", "html"],
++    ["_row.turbo_stream.erb", "html"],
++    ["icon.svg.erb", "html"],
++    ["partial.erb", "html"],
++    ["update.js.erb", "javascript"],
++    ["widget.tsx.erb", "javascript"],
++    ["theme.css.erb", "css"],
++    ["theme.scss.erb", "sass"],
++  ])("maps ERB template %s to %s", async (path, name) => {
++    const extension = await languageForPath(path);
++
++    expect(extension).not.toBeNull();
++    expect(languageName(extension!)).toBe(name);
++  });
++
+   it.each([
+     "index.php",
+     "Program.cs",
+diff --git a/src/features/files/editor/editorLanguage.ts b/src/features/files/editor/editorLanguage.ts
+index 02c2f46b..f13f6c79 100644
+--- a/src/features/files/editor/editorLanguage.ts
++++ b/src/features/files/editor/editorLanguage.ts
+@@ -148,6 +148,33 @@ export async function languageForPath(path: string): Promise<Extension | null> {
+     const { html } = await import("@codemirror/lang-html");
+     return html();
+   }
++  // Rails templates use compound extensions (show.html.erb). languageForPath
++  // only sees the final ".erb", so map common ERB forms explicitly.
++  if (extension === ".erb") {
++    if (
++      name.endsWith(".js.erb") ||
++      name.endsWith(".jsx.erb") ||
++      name.endsWith(".ts.erb") ||
++      name.endsWith(".tsx.erb")
++    ) {
++      const { javascript } = await import("@codemirror/lang-javascript");
++      return javascript({
++        jsx: name.endsWith(".jsx.erb") || name.endsWith(".tsx.erb"),
++        typescript: name.endsWith(".ts.erb") || name.endsWith(".tsx.erb"),
++      });
++    }
++    if (name.endsWith(".css.erb")) {
++      const { css } = await import("@codemirror/lang-css");
++      return css();
++    }
++    if (name.endsWith(".scss.erb") || name.endsWith(".sass.erb")) {
++      const { sass } = await import("@codemirror/lang-sass");
++      return sass({ indented: name.endsWith(".sass.erb") });
++    }
++    // .html.erb, .turbo_stream.erb, .svg.erb, bare .erb, etc.
++    const { html } = await import("@codemirror/lang-html");
++    return html();
++  }
+   if (extension === ".vue") {
+     const { vue } = await import("@codemirror/lang-vue");
+     return vue();
+--
+2.53.0
+
