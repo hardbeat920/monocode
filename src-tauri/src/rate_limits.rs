@@ -446,6 +446,7 @@ fn read_claude_credentials(config_dir: Option<&std::path::Path>) -> Option<Claud
             return Some(ClaudeCredentials {
                 access_token,
                 expires_at_ms: None,
+                refreshable: false,
             });
         }
     }
