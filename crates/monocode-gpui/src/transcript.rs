@@ -1270,10 +1270,7 @@ impl TranscriptView {
                             .child(if cx.reduce_motion() {
                                 div().child(label).into_any_element()
                             } else {
-                                crate::activity::shimmer(
-                                    label,
-                                    crate::pulse::elapsed(cx).as_secs_f32(),
-                                )
+                                crate::activity::shimmer(label, crate::pulse::elapsed(cx))
                             })
                             .when(turn < self.source.len(), |d| {
                                 d.role(Role::Button).aria_label("Show activity").on_click(
@@ -4988,7 +4985,7 @@ impl TranscriptView {
                         if live && !cx.reduce_motion() {
                             crate::activity::shimmer(
                                 title,
-                                self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                                self.started.map(|s| s.elapsed()).unwrap_or_default(),
                             )
                         } else {
                             div().child(title).into_any_element()
@@ -5066,7 +5063,7 @@ impl TranscriptView {
                         if active && !cx.reduce_motion() {
                             crate::activity::shimmer(
                                 title,
-                                self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                                self.started.map(|s| s.elapsed()).unwrap_or_default(),
                             )
                         } else {
                             div().child(title).into_any_element()
