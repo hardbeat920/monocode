@@ -24,6 +24,23 @@ describe("languageForPath", () => {
   });
 
   it.each([
+    ["app/views/api/releases/show.html.erb", "html"],
+    ["mailer.text.erb", "html"],
+    ["_row.turbo_stream.erb", "html"],
+    ["icon.svg.erb", "html"],
+    ["partial.erb", "html"],
+    ["update.js.erb", "javascript"],
+    ["widget.tsx.erb", "javascript"],
+    ["theme.css.erb", "css"],
+    ["theme.scss.erb", "sass"],
+  ])("maps ERB template %s to %s", async (path, name) => {
+    const extension = await languageForPath(path);
+
+    expect(extension).not.toBeNull();
+    expect(languageName(extension!)).toBe(name);
+  });
+
+  it.each([
     "index.php",
     "Program.cs",
     "main.go",

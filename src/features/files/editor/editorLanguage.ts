@@ -148,6 +148,33 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { html } = await import("@codemirror/lang-html");
     return html();
   }
+  // Rails templates use compound extensions (show.html.erb). languageForPath
+  // only sees the final ".erb", so map common ERB forms explicitly.
+  if (extension === ".erb") {
+    if (
+      name.endsWith(".js.erb") ||
+      name.endsWith(".jsx.erb") ||
+      name.endsWith(".ts.erb") ||
+      name.endsWith(".tsx.erb")
+    ) {
+      const { javascript } = await import("@codemirror/lang-javascript");
+      return javascript({
+        jsx: name.endsWith(".jsx.erb") || name.endsWith(".tsx.erb"),
+        typescript: name.endsWith(".ts.erb") || name.endsWith(".tsx.erb"),
+      });
+    }
+    if (name.endsWith(".css.erb")) {
+      const { css } = await import("@codemirror/lang-css");
+      return css();
+    }
+    if (name.endsWith(".scss.erb") || name.endsWith(".sass.erb")) {
+      const { sass } = await import("@codemirror/lang-sass");
+      return sass({ indented: name.endsWith(".sass.erb") });
+    }
+    // .html.erb, .turbo_stream.erb, .svg.erb, bare .erb, etc.
+    const { html } = await import("@codemirror/lang-html");
+    return html();
+  }
   if (extension === ".vue") {
     const { vue } = await import("@codemirror/lang-vue");
     return vue();
