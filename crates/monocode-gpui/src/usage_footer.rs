@@ -944,7 +944,11 @@ impl Render for UsageFooter {
                     .cursor_pointer()
                     .opacity(if fetching { 0.5 } else { 1. })
                     .when(!fetching, |d| d.hover(|s| s.bg(content(0.1))))
-                    .child(icon("refresh", 12.))
+                    .child(if fetching {
+                        crate::right_panel::spinner("usage-refresh-spin", "refresh", 12.)
+                    } else {
+                        icon("refresh", 12.).into_any_element()
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx)))
                     .on_action(cx.listener(|this, _: &RefreshUsage, _, cx| this.refresh(true, cx))),
             )
@@ -972,6 +976,26 @@ impl Render for UsageFooter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui::test]
+    fn refresh_motion_follows_fetch_and_accessibility_state(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| UsageFooter::new(Kind::Codex, cx));
+        for (fetching, reduced, spinning) in [
+            (true, false, true),
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            view.update(cx, |footer, cx| {
+                cx.set_reduce_motion(reduced);
+                footer.cache[index(footer.kind)].fetching = fetching;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(crate::pulse::running(cx), spinning));
+        }
+    }
     #[gpui::test]
     fn details_open_with_keyboard_escape_restores_focus_and_provider_caches_stay_separate(
         cx: &mut gpui::TestAppContext,
