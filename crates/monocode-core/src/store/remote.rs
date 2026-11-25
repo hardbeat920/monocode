@@ -565,6 +565,17 @@ impl Store {
                 .lock()
                 .map_err(|_| "Session store lock poisoned".to_owned())
         };
+        let remove_local = |guard: &Store| -> Result<Option<std::path::PathBuf>, String> {
+            let dir = guard.thread_dir(id).ok().flatten();
+            let mut sessions = guard.remote_sessions()?;
+            sessions.remove(&id);
+            guard.hide_legacy_remote_sessions([id])?;
+            guard.save_setting(
+                SESSIONS,
+                &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
+            )?;
+            Ok(dir)
+        };
         let remote_call = {
             let mut guard = lock()?;
             let Some(remote) = guard.remote_session(id)? else {
@@ -573,32 +584,29 @@ impl Store {
             if let Some(session_id) = &remote.session_id {
                 let client = crate::remote::default_connections()?;
                 let machine = remote.machine(&client)?;
-                Some((
+                (
                     client,
                     machine.id,
                     session_id.clone(),
                     remote.project.project_id.clone(),
-                ))
+                )
             } else {
-                None
+                // Draft has no host identity yet: delete atomically under this
+                // lock without opening a window where `session_id` could appear.
+                let dir = remove_local(&guard)?;
+                drop(guard);
+                crate::store::thread_files::remove_dir(dir);
+                return Ok(());
             }
         };
-        if let Some((client, machine_id, session_id, project_id)) = remote_call {
-            client.request(
-                &machine_id,
-                "sessions.delete",
-                json!({"sessionId": session_id, "projectId": project_id}),
-            )?;
-        }
-        let guard = lock()?;
-        let dir = guard.thread_dir(id).ok().flatten();
-        let mut sessions = guard.remote_sessions()?;
-        sessions.remove(&id);
-        guard.hide_legacy_remote_sessions([id])?;
-        guard.save_setting(
-            SESSIONS,
-            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
+        let (client, machine_id, session_id, project_id) = remote_call;
+        client.request(
+            &machine_id,
+            "sessions.delete",
+            json!({"sessionId": session_id, "projectId": project_id}),
         )?;
+        let guard = lock()?;
+        let dir = remove_local(&guard)?;
         drop(guard);
         crate::store::thread_files::remove_dir(dir);
         Ok(())
