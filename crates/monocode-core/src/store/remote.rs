@@ -454,6 +454,155 @@ impl Store {
             shared::project_turns(&blocks)?,
         ))
     }
+    /// Patches a remote session without holding `store`'s mutex across the
+    /// blocking `sessions.update` RPC. Returns `Ok(true)` if the session was
+    /// remote and handled, `Ok(false)` if it is a local session.
+    pub fn patch_remote_session_shared(
+        store: &std::sync::Mutex<Store>,
+        id: i64,
+        patch: Value,
+    ) -> Result<bool, String> {
+        let lock = || {
+            store
+                .lock()
+                .map_err(|_| "Session store lock poisoned".to_owned())
+        };
+        let remote_call = {
+            let guard = lock()?;
+            let Some(remote) = guard.remote_session(id)? else {
+                return Ok(false);
+            };
+            if let Some(session_id) = &remote.session_id {
+                let client = crate::remote::default_connections()?;
+                let machine = remote.machine(&client)?;
+                Some((
+                    client,
+                    machine.id,
+                    session_id.clone(),
+                    remote.project.project_id.clone(),
+                ))
+            } else {
+                None
+            }
+        };
+        if let Some((client, machine_id, session_id, project_id)) = remote_call {
+            let mut params = patch.clone();
+            params["sessionId"] = json!(session_id);
+            params["projectId"] = json!(project_id);
+            client.request(&machine_id, "sessions.update", params)?;
+        }
+        let guard = lock()?;
+        if let Some(mut fresh) = guard.remote_session(id)? {
+            if let Some(title) = patch["title"].as_str() {
+                fresh.summary.title = title.into();
+            }
+            if let Some(archived) = patch["archived"].as_bool() {
+                fresh.summary.archived = archived;
+            }
+            if let Some(pinned) = patch["pinned"].as_bool() {
+                fresh.summary.pinned = pinned;
+            }
+            if let Some(item) = patch.get("linkedWorkItem") {
+                fresh.summary.work_item = serde_json::from_value(item.clone()).ok();
+            }
+            guard.save_remote_session(&fresh)?;
+        }
+        Ok(true)
+    }
+    /// Archives or unarchives a session without holding `store`'s mutex across a
+    /// blocking remote `sessions.update` RPC.
+    pub fn set_archived_shared(
+        store: &std::sync::Mutex<Store>,
+        id: i64,
+        archived: bool,
+    ) -> Result<(), String> {
+        if Self::patch_remote_session_shared(store, id, json!({"archived": archived}))? {
+            return Ok(());
+        }
+        store
+            .lock()
+            .map_err(|_| "Session store lock poisoned".to_owned())?
+            .set_archived(id, archived)
+    }
+    /// Renames a session without holding `store`'s mutex across a blocking remote RPC.
+    pub fn set_title_shared(
+        store: &std::sync::Mutex<Store>,
+        id: i64,
+        title: &str,
+    ) -> Result<(), String> {
+        if Self::patch_remote_session_shared(store, id, json!({"title": title}))? {
+            return Ok(());
+        }
+        store
+            .lock()
+            .map_err(|_| "Session store lock poisoned".to_owned())?
+            .title(id, title)
+    }
+    /// Pins or unpins sessions without holding `store`'s mutex across blocking remote RPCs.
+    pub fn set_pinned_shared(
+        store: &std::sync::Mutex<Store>,
+        ids: &[i64],
+        pinned: bool,
+    ) -> Result<(), String> {
+        let mut local = Vec::new();
+        for &id in ids {
+            if !Self::patch_remote_session_shared(store, id, json!({"pinned": pinned}))? {
+                local.push(id);
+            }
+        }
+        if !local.is_empty() {
+            store
+                .lock()
+                .map_err(|_| "Session store lock poisoned".to_owned())?
+                .set_pinned(&local, pinned)?;
+        }
+        Ok(())
+    }
+    /// Deletes a session without holding `store`'s mutex across a blocking remote RPC.
+    pub fn delete_shared(store: &std::sync::Mutex<Store>, id: i64) -> Result<(), String> {
+        let lock = || {
+            store
+                .lock()
+                .map_err(|_| "Session store lock poisoned".to_owned())
+        };
+        let remote_call = {
+            let mut guard = lock()?;
+            let Some(remote) = guard.remote_session(id)? else {
+                return guard.delete(id);
+            };
+            if let Some(session_id) = &remote.session_id {
+                let client = crate::remote::default_connections()?;
+                let machine = remote.machine(&client)?;
+                Some((
+                    client,
+                    machine.id,
+                    session_id.clone(),
+                    remote.project.project_id.clone(),
+                ))
+            } else {
+                None
+            }
+        };
+        if let Some((client, machine_id, session_id, project_id)) = remote_call {
+            client.request(
+                &machine_id,
+                "sessions.delete",
+                json!({"sessionId": session_id, "projectId": project_id}),
+            )?;
+        }
+        let guard = lock()?;
+        let dir = guard.thread_dir(id).ok().flatten();
+        let mut sessions = guard.remote_sessions()?;
+        sessions.remove(&id);
+        guard.hide_legacy_remote_sessions([id])?;
+        guard.save_setting(
+            SESSIONS,
+            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
+        )?;
+        drop(guard);
+        crate::store::thread_files::remove_dir(dir);
+        Ok(())
+    }
     pub fn patch_remote_session(&self, id: i64, patch: Value) -> Result<(), String> {
         let mut remote = self
             .remote_session(id)?
@@ -797,5 +946,182 @@ mod configuration_tests {
                 .as_deref(),
             Some("claude:next-external")
         );
+    }
+    #[test]
+    fn shared_remote_mutations_release_store_mutex_during_blocking_rpc() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
+        // Local session path still delegates cleanly without remote connections.
+        let local = store.lock().unwrap().create("codex", "/repo").unwrap();
+        Store::set_archived_shared(&store, local.id, true).unwrap();
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == local.id)
+                .unwrap()
+                .archived
+        );
+        Store::set_title_shared(&store, local.id, "Renamed local").unwrap();
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == local.id)
+                .unwrap()
+                .title,
+            "Renamed local"
+        );
+        Store::set_pinned_shared(&store, &[local.id], true).unwrap();
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == local.id)
+                .unwrap()
+                .pinned
+        );
+
+        // Bind a gated loopback host so `sessions.update` blocks in-flight while
+        // the test verifies another thread can lock `store` immediately.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let entered_srv = entered.clone();
+        let release_srv = release.clone();
+        let server = std::thread::spawn(move || {
+            for step in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let mut header_end = None;
+                let mut content_len = 0usize;
+                loop {
+                    let n = stream.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&chunk[..n]);
+                    if header_end.is_none() {
+                        if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                            header_end = Some(pos + 4);
+                            let headers = String::from_utf8_lossy(&raw[..pos]);
+                            for line in headers.lines() {
+                                if let Some((k, v)) = line.split_once(':') {
+                                    if k.eq_ignore_ascii_case("content-length") {
+                                        content_len = v.trim().parse().unwrap_or(0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(end) = header_end {
+                        if raw.len() >= end + content_len {
+                            break;
+                        }
+                    }
+                }
+                let body = if step == 0 {
+                    r#"{"result":{"protocolVersion":1,"environmentId":"env-unlock-test","name":"Unlock Test","platform":"darwin","providers":["codex"],"capabilities":[]}}"#
+                } else {
+                    entered_srv.store(true, std::sync::atomic::Ordering::SeqCst);
+                    while !release_srv.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    r#"{"result":{"archived":true}}"#
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-remote-unlock-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let connections = crate::remote::Connections::new(&dir);
+        let machine = connections
+            .connect(
+                "Unlock Test".into(),
+                format!("http://127.0.0.1:{port}"),
+                "a".repeat(43),
+            )
+            .unwrap();
+        crate::remote::set_default_connections(Arc::new(connections));
+
+        let remote_id = {
+            let guard = store.lock().unwrap();
+            let proj = guard
+                .remember_remote_project(
+                    &machine.environment_id,
+                    &json!({"id":"proj-1","cwd":"/host/repo"}),
+                )
+                .unwrap();
+            let row = json!({
+                "id": "remote-sess-1",
+                "harness": "codex",
+                "title": "Remote conversation",
+                "model": "codex:live",
+                "runtimeMode": "auto",
+                "updatedAt": 20,
+                "archived": false,
+                "pinned": false
+            });
+            guard.register_remote_summary(&proj, &row).unwrap().id
+        };
+
+        let store_bg = store.clone();
+        let worker =
+            std::thread::spawn(move || Store::set_archived_shared(&store_bg, remote_id, true));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !entered.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "RPC did not reach loopback host"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        // While the remote RPC is blocked in-flight, the Store mutex MUST be free.
+        assert!(
+            store.try_lock().is_ok(),
+            "Store mutex remained locked across blocking sessions.update RPC"
+        );
+
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        worker.join().unwrap().unwrap();
+        server.join().unwrap();
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .remote_session(remote_id)
+                .unwrap()
+                .unwrap()
+                .summary
+                .archived
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -472,7 +472,9 @@ impl Shell {
                             self.app_background(
                                 call,
                                 move |store| {
-                                    locked(&store)?.set_archived(id, true)?;
+                                    monocode_core::store::Store::set_archived_shared(
+                                        &store, id, true,
+                                    )?;
                                     Ok((
                                         json!({"sessionId":id,"archived":true}),
                                         Effect::Archive(id),

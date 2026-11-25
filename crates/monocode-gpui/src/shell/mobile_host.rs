@@ -1410,7 +1410,9 @@ impl Shell {
                 if let Some(view) = self.sessions.get(&id) {
                     view.update(cx, |v, cx| v.rename(title.clone(), cx));
                 }
-                self.store_write("rename the session", cx, move |s| s.title(id, &title));
+                self.store_write_shared("rename the session", cx, move |s| {
+                    monocode_core::store::Store::set_title_shared(s, id, &title)
+                });
                 self.invalidate_chrome(cx);
                 cx.notify();
                 Ok(reply)
