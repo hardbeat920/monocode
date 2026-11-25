@@ -1,6 +1,6 @@
 import { listDir, type FsEntry } from "../../../platform/tauri/fs";
 import { pathSegments } from "./fileName";
-import { joinPath, parentPath } from "../../../shared/lib/paths";
+import { joinPath, parentPath, slash } from "../../../shared/lib/paths";
 
 const expandedByProject = new Map<string, Set<string>>();
 const selectedByProject = new Map<string, string | null>();
@@ -62,23 +62,30 @@ export async function refreshCachedDirs(under?: string | null): Promise<void> {
 }
 
 function normalizeScope(path: string): string {
-  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+  const normalized = slash(path);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
+}
+
+function inScope(path: string, root: string): boolean {
+  if (path === root) return true;
+  return path.startsWith(root.endsWith("/") ? root : `${root}/`);
 }
 
 function scopedPaths(scope: Set<string> | null): string[] {
   const all = [...dirs.keys()];
   if (!scope || scope.size === 0) return all;
   const roots = [...scope];
-  const scoped = all.filter((path) =>
-    roots.some((root) => {
-      if (path === root) return true;
-      const prefix = root.endsWith("/") ? root : `${root}/`;
-      return path.startsWith(prefix);
-    }),
-  );
+  const scoped = all.filter((path) => {
+    const key = slash(path);
+    return roots.some((root) => inScope(key, root));
+  });
   // Un scope qui ne correspond à aucune entrée connue (chemin non normalisé,
-  // projet fraîchement ouvert) doit rafraîchir largement, pas rien.
-  return scoped.length > 0 || all.length === 0 ? scoped : all;
+  // projet fraîchement ouvert) doit rafraîchir largement, pas rien. Un scope
+  // sans correspondance ne doit pas être masqué par un autre qui matche.
+  const allMatched = roots.every((root) =>
+    all.some((path) => inScope(slash(path), root)),
+  );
+  return allMatched || all.length === 0 ? scoped : all;
 }
 
 async function refreshScoped(scope: Set<string> | null): Promise<void> {

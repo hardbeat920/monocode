@@ -77,6 +77,42 @@ describe("fileTree cache", () => {
     forgetDir("/");
   });
 
+  it("matches descendants when the scope uses Windows separators", async () => {
+    vi.useFakeTimers();
+    const project = "C:\\project";
+    const nested = `${project}\\src`;
+    listDir.mockResolvedValue([]);
+    await listCachedDir(project);
+    await listCachedDir(nested);
+    listDir.mockClear();
+
+    notifyDirsChanged(project);
+    await vi.runAllTimersAsync();
+
+    expect(listDir).toHaveBeenCalledWith(project);
+    expect(listDir).toHaveBeenCalledWith(nested);
+    forgetDir(project);
+    forgetDir(nested);
+  });
+
+  it("falls back to all cached folders when one queued scope is unknown", async () => {
+    vi.useFakeTimers();
+    const parent = "/workspace";
+    const known = `${parent}/a`;
+    listDir.mockResolvedValue([]);
+    await listCachedDir(parent);
+    await listCachedDir(known);
+    listDir.mockClear();
+
+    notifyDirsChanged(known);
+    notifyDirsChanged(`${parent}/b`);
+    await vi.runAllTimersAsync();
+
+    expect(listDir).toHaveBeenCalledWith(parent);
+    expect(listDir).toHaveBeenCalledWith(known);
+    forgetDir(parent);
+  });
+
   it("notifyDirsChanged refreshes the cache and tells listeners", async () => {
     vi.useFakeTimers();
     listDir.mockResolvedValueOnce([]);
