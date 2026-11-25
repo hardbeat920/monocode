@@ -6733,11 +6733,17 @@ function Workspace({
           ...tab,
           editorPanes: tab.editorPanes.map((pane) => ({
             ...pane,
-            files: pane.files.map((file) =>
-              isFilesystemTab(file)
-                ? { ...file, path: rebasePath(file.path, from, to) }
-                : file,
-            ),
+            files: pane.files.map((file) => {
+              if (!isFilesystemTab(file)) return file;
+              return {
+                ...file,
+                path: rebasePath(file.path, from, to),
+                ...(sameProjectPath(file.cwd, from) ? { cwd: to } : {}),
+                ...(file.projectCwd && sameProjectPath(file.projectCwd, from)
+                  ? { projectCwd: to }
+                  : {}),
+              };
+            }),
           })),
         };
       }),
@@ -6788,6 +6794,9 @@ function Workspace({
       if (sameProjectPath(projectCwdRef.current, from)) {
         projectCwdRef.current = to;
         setProjectCwd(to);
+      }
+      for (const [id, pinned] of workspacePins.current) {
+        if (sameProjectPath(pinned, from)) workspacePins.current.set(id, to);
       }
       const nextDocks = projectTerminalsRef.current.map((dock) =>
         sameProjectPath(dock.projectPath, from)

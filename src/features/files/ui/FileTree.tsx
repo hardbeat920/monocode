@@ -993,9 +993,12 @@ export const FileTree = memo(function FileTree({
     });
 
   const missingProjectFolder =
-    !!error && /no such file|not found|does not exist/i.test(error);
+    !!error &&
+    /no such file|not found|does not exist|\(os error (2|3)\)/i.test(error);
   const canRemapProject =
-    !!onRemapProject && !isRemoteProjectPath(projectPath);
+    !!onRemapProject &&
+    !isRemoteProjectPath(projectPath) &&
+    sameProjectPath(cwd, projectPath);
 
   useEffect(() => {
     const hit = peekDir(cwd);

@@ -19,23 +19,33 @@ import {
 } from "../../../shared/lib/drag";
 import { FileTree } from "./FileTree";
 
-const { iconRender, directories, clipboardFiles, copied, dragDrop } =
-  vi.hoisted(() => ({
-    iconRender: vi.fn(),
-    directories: new Map<string, FsEntry[]>(),
-    clipboardFiles: [] as string[],
-    copied: [] as { from: string; destParent: string }[],
-    dragDrop: {
-      handler: null as null | ((event: { payload: unknown }) => void),
-    },
-  }));
+const {
+  iconRender,
+  directories,
+  directoryErrors,
+  clipboardFiles,
+  copied,
+  dragDrop,
+} = vi.hoisted(() => ({
+  iconRender: vi.fn(),
+  directories: new Map<string, FsEntry[]>(),
+  directoryErrors: new Map<string, string>(),
+  clipboardFiles: [] as string[],
+  copied: [] as { from: string; destParent: string }[],
+  dragDrop: {
+    handler: null as null | ((event: { payload: unknown }) => void),
+  },
+}));
 const missingDirectories = new Set<string>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, string>) => {
     if (command === "list_dir") {
       if (missingDirectories.has(args.path)) {
-        throw new Error(`${args.path}: No such file or directory`);
+        throw new Error(
+          directoryErrors.get(args.path) ??
+            `${args.path}: No such file or directory`,
+        );
       }
       return directories.get(args.path) ?? [];
     }
@@ -138,6 +148,7 @@ afterEach(() => {
   localStorage.removeItem("monocode.showExcludedFiles");
   vi.clearAllMocks();
   missingDirectories.clear();
+  directoryErrors.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   clipboardFiles.length = 0;
@@ -145,7 +156,7 @@ afterEach(() => {
 });
 
 it("offers to relink a missing project folder and rebases to the chosen path", async () => {
-  const projectPath = "/projects/current";
+  const projectPath = cwd;
   const onRemapProject = vi.fn();
   props = { ...props, projectPath, onRemapProject };
   missingDirectories.add(cwd);
@@ -163,6 +174,42 @@ it("offers to relink a missing project folder and rebases to the chosen path", a
   expect(onRemapProject).toHaveBeenCalledWith(
     projectPath,
     "/projects/relocated",
+  );
+});
+
+it("recognizes a Windows missing-folder error by OS code", async () => {
+  const projectPath = cwd;
+  const onRemapProject = vi.fn();
+  props = { ...props, projectPath, onRemapProject };
+  missingDirectories.add(cwd);
+  directoryErrors.set(
+    cwd,
+    "C:\\gone: The system cannot find the path specified. (os error 3)",
+  );
+  forgetDir(cwd);
+
+  await act(async () => render());
+
+  expect(container.textContent).toContain("This project folder may have moved");
+});
+
+it("does not offer project relinking for a missing worktree", async () => {
+  const projectPath = "/projects/current";
+  const worktree = "/worktrees/feature";
+  cwd = worktree;
+  props = {
+    ...props,
+    cwd,
+    projectPath,
+    onRemapProject: vi.fn(),
+  };
+  missingDirectories.add(worktree);
+  forgetDir(worktree);
+
+  await act(async () => render());
+
+  expect(container.textContent).not.toContain(
+    "This project folder may have moved",
   );
 });
 
