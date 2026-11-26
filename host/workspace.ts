@@ -645,11 +645,14 @@ async function filesFingerprint(
   root: string,
   files: Pick<GitChangedFile, "relative">[],
 ): Promise<string> {
+  const ordered = [...files]
+    .sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0))
+    .slice(0, MAX_FINGERPRINT_FILES);
   const sigs = await Promise.all(
-    files.slice(0, MAX_FINGERPRINT_FILES).map((file) =>
+    ordered.map((file) =>
       lstat(resolve(root, file.relative), { bigint: true }).then(
-        (info) => `${info.mtimeNs}:${info.ctimeNs}:${info.size}`,
-        () => "-",
+        (info) => `${file.relative}:${info.mtimeNs}:${info.ctimeNs}:${info.size}`,
+        () => `${file.relative}:-`,
       ),
     ),
   );
@@ -659,13 +662,26 @@ async function filesFingerprint(
 async function refsFingerprint(root: string): Promise<string> {
   const dirs = await resolveGitDirs(root);
   if (!dirs) return "";
-  return (
-    await Promise.all(
-      ["config", "packed-refs", "refs/remotes", "refs/remotes/origin"].map(
-        (name) => statSignature(resolve(dirs.commonDir, name)),
-      ),
-    )
-  ).join("|");
+  const probes = [
+    resolve(dirs.commonDir, "config"),
+    resolve(dirs.commonDir, "packed-refs"),
+    resolve(dirs.commonDir, "FETCH_HEAD"),
+  ];
+  const pending = [resolve(dirs.commonDir, "refs/remotes")];
+  let visited = 0;
+  while (pending.length && visited < 64) {
+    const dir = pending.pop()!;
+    visited++;
+    probes.push(dir);
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) pending.push(full);
+      else probes.push(full);
+    }
+  }
+  return (await Promise.all(probes.map((path) => statSignature(path)))).join("|");
 }
 
 function parseNumstat(text: string) {
@@ -696,10 +712,10 @@ async function expandUntrackedDirectory(
 ): Promise<string[] | null> {
   const found: string[] = [];
   let left = budget.left;
-  let dirsLeft = budget.dirsLeft;
   const pending = [directory.replace(/\/+$/, "")];
   while (pending.length) {
-    if (--dirsLeft < 0) return null;
+    if (budget.dirsLeft <= 0) return null;
+    budget.dirsLeft--;
     const dir = pending.pop()!;
     const entries = await readdir(resolve(root, dir), {
       withFileTypes: true,
@@ -731,7 +747,6 @@ async function expandUntrackedDirectory(
     }
   }
   budget.left = left;
-  budget.dirsLeft = dirsLeft;
   return found;
 }
 
@@ -880,7 +895,7 @@ async function computeGitIndex(
               "--no-textconv",
               "--numstat",
               "-z",
-              "HEAD",
+              head,
               "--",
             ]
           : [
@@ -952,19 +967,29 @@ async function computeGitIndex(
     });
   }
   let counted = 0;
+  let untrackedStable = true;
   for (const path of [...untracked, ...collapsed]) {
     let additions = 0;
     if (!path.endsWith("/") && counted++ < MAX_UNTRACKED_LINE_COUNT_FILES) {
       try {
-        const info = await lstat(resolve(root, path));
-        if (info.size <= MAX_FILE && info.isFile()) {
-          const content = await readFile(resolve(root, path), "utf8");
+        const fullPath = resolve(root, path);
+        const before = await lstat(fullPath, { bigint: true });
+        if (before.size <= BigInt(MAX_FILE) && before.isFile()) {
+          const content = await readFile(fullPath, "utf8");
+          const after = await lstat(fullPath, { bigint: true });
+          if (
+            before.mtimeNs !== after.mtimeNs ||
+            before.ctimeNs !== after.ctimeNs ||
+            before.size !== after.size
+          ) {
+            untrackedStable = false;
+          }
           additions = content
             ? content.split("\n").length - Number(content.endsWith("\n"))
             : 0;
         }
       } catch {
-        /* a file may change during refresh */
+        untrackedStable = false;
       }
     }
     files.push({
@@ -1002,7 +1027,9 @@ async function computeGitIndex(
           files.filter((file) => file.status !== "untracked"),
         )
       : "";
-    options.onTrackedFingerprint(preTrackedFp === postTrackedFp);
+    options.onTrackedFingerprint(
+      preTrackedFp === postTrackedFp && untrackedStable,
+    );
   }
   return result;
 }

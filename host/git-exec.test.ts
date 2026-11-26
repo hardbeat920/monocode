@@ -63,3 +63,24 @@ it("caps concurrent git work and counts spawns", async () => {
   await expect(withGitSlot(async () => Promise.reject(new Error("x")))).rejects.toThrow("x");
   expect(await withGitSlot(async () => 1)).toBe(1);
 });
+
+it("expires queued callers at their deadline without waiting for held slots", async () => {
+  const release: (() => void)[] = [];
+  const holders = Array.from({ length: MAX_CONCURRENT_GIT }, () =>
+    withGitSlot(
+      () =>
+        new Promise<void>((resolve) => {
+          release.push(resolve);
+        }),
+    ),
+  );
+  // Let all slots enter the active section.
+  await new Promise((r) => setTimeout(r, 10));
+  const started = Date.now();
+  await expect(
+    withGitSlot(async () => "never", Date.now() + 40),
+  ).rejects.toThrow(/deadline exceeded/);
+  expect(Date.now() - started).toBeLessThan(500);
+  for (const done of release) done();
+  await Promise.all(holders);
+});

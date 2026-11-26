@@ -144,10 +144,14 @@ async function worktreesFingerprint(cwd: string): Promise<string> {
         );
       const worktreesDir = resolve(common, "worktrees");
       const linkedNames = await readdir(worktreesDir).catch(() => []);
+      const sortedLinked = linkedNames.sort();
       const headFiles = [
         resolve(common, "HEAD"),
-        ...linkedNames.sort().map((name) => resolve(worktreesDir, name, "HEAD")),
+        ...sortedLinked.map((name) => resolve(worktreesDir, name, "HEAD")),
       ];
+      const gitdirFiles = sortedLinked.map((name) =>
+        resolve(worktreesDir, name, "gitdir"),
+      );
       // Resolve attached symbolic HEAD refs so commits on checked-out branches
       // invalidate the cached worktree head SHA immediately.
       const branchRefs = (
@@ -164,6 +168,7 @@ async function worktreesFingerprint(cwd: string): Promise<string> {
         resolve(common, "config"),
         resolve(common, "packed-refs"),
         ...headFiles,
+        ...gitdirFiles,
         ...branchRefs,
       ];
       return (await Promise.all(probes.map(sig))).join("|");

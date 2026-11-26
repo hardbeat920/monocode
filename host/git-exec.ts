@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -35,7 +35,7 @@ export function isExecutableNativeBinary(path: string): boolean {
 function resolvePosixPathGit(): string {
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, "git");
+    const candidate = resolve(dir, "git");
     if (isExecutableNativeBinary(candidate)) return candidate;
   }
   return "git";
@@ -90,11 +90,40 @@ const waiting: (() => void)[] = [];
 let spawned = 0;
 let peak = 0;
 
-/** FIFO semaphore capping concurrent git children. */
-export async function withGitSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= MAX_CONCURRENT_GIT)
-    await new Promise<void>((resolve) => waiting.push(resolve));
-  else active++;
+/** FIFO semaphore capping concurrent git children, with optional queue deadline. */
+export async function withGitSlot<T>(
+  fn: () => Promise<T>,
+  deadline?: number,
+): Promise<T> {
+  if (deadline !== undefined && deadline - Date.now() <= 0) {
+    throw new Error("git deadline exceeded before spawn");
+  }
+  if (active >= MAX_CONCURRENT_GIT) {
+    await new Promise<void>((resolveSlot, rejectSlot) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter = () => {
+        if (timer) clearTimeout(timer);
+        resolveSlot();
+      };
+      if (deadline !== undefined) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          rejectSlot(new Error("git deadline exceeded before spawn"));
+          return;
+        }
+        timer = setTimeout(() => {
+          const idx = waiting.indexOf(waiter);
+          if (idx === -1) return;
+          waiting.splice(idx, 1);
+          rejectSlot(new Error("git deadline exceeded while queued"));
+        }, remaining);
+        timer.unref?.();
+      }
+      waiting.push(waiter);
+    });
+  } else {
+    active++;
+  }
   peak = Math.max(peak, active);
   try {
     return await fn();
@@ -165,7 +194,7 @@ export function execGit(
       env: gitEnv(readOnly, opts.env),
     });
     return result.stdout;
-  });
+  }, opts.deadline);
 }
 
 /** Like {@link execGit} but returns raw stdout bytes (e.g. for `git show`). */
@@ -226,15 +255,31 @@ export function spawnGitWithInput(
         const stderr: Buffer[] = [];
         let stdinError: Error | null = null;
         let settled = false;
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
         const finish = (fn: () => void) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
           fn();
         };
-        const timer = setTimeout(() => {
-          child.kill();
-        }, 10_000);
+        const terminateChild = () => {
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            /* already exited */
+          }
+          if (!killTimer) {
+            killTimer = setTimeout(() => {
+              try {
+                child.kill("SIGKILL");
+              } catch {
+                /* already exited */
+              }
+            }, 2_000);
+          }
+        };
+        const timer = setTimeout(terminateChild, 10_000);
         child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
         child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
         // Hold the concurrency slot until the child actually exits; record any
@@ -242,7 +287,7 @@ export function spawnGitWithInput(
         child.stdin.on("error", (error: NodeJS.ErrnoException) => {
           if (error.code === "EPIPE") return;
           stdinError = error;
-          child.kill();
+          terminateChild();
         });
         child.on("error", (error) => {
           finish(() => reject(error));
