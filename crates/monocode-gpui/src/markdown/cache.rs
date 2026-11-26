@@ -115,6 +115,7 @@ fn row_bytes(row: &MarkdownRow) -> usize {
                     + std::mem::size_of_val(align.as_slice())
             }
             Part::Math(text) => text.capacity(),
+            Part::Image { url, alt } => url.capacity() + alt.capacity(),
             _ => 0,
         }
 }

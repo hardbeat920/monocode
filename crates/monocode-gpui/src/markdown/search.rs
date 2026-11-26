@@ -26,6 +26,7 @@ pub(crate) fn row_text(row: &MarkdownRow) -> String {
         Part::Math(text) => text.clone(),
         Part::Mermaid { fence } => fence.code.to_string(),
         Part::Visual { caption, .. } => caption.clone(),
+        Part::Image { alt, .. } => alt.clone(),
         Part::Rule => String::new(),
     }
 }
@@ -141,6 +142,7 @@ mod tests {
             marker: None,
             gap: 0.,
             word_start: 0,
+            source_cwd: None,
         };
         mark_row(&mut row, "café", true);
         assert_eq!(row_text(&row), "Find café here");

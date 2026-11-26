@@ -12,6 +12,7 @@ struct LayoutStyle {
 #[derive(Default)]
 pub(super) struct Measurements {
     diagram_generation: u64,
+    image_generation: u64,
     style: Option<LayoutStyle>,
     viewport: gpui::Size<Pixels>,
     rows: HashMap<usize, Pixels>,
@@ -162,6 +163,19 @@ impl TranscriptView {
             });
             for (ix, row) in self.rows.iter().enumerate() {
                 if matches!(&row.body, Body::Markdown(md) if matches!(md.part, markdown::Part::Mermaid { .. }))
+                {
+                    self.list.remeasure_items(ix..ix + 1);
+                }
+            }
+        }
+        let image_generation = markdown::media::generation(cx);
+        if self.measurements.image_generation != image_generation {
+            self.measurements.image_generation = image_generation;
+            self.measurements.retained.retain(|_, entry| {
+                !matches!(&entry.row.body, Body::Markdown(md) if matches!(md.part, markdown::Part::Image { .. }))
+            });
+            for (ix, row) in self.rows.iter().enumerate() {
+                if matches!(&row.body, Body::Markdown(md) if matches!(md.part, markdown::Part::Image { .. }))
                 {
                     self.list.remeasure_items(ix..ix + 1);
                 }

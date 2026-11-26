@@ -10,7 +10,16 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
     Path(PathBuf),
-    Embedded { data: Arc<str>, mime: SharedString },
+    Embedded {
+        data: Arc<str>,
+        mime: SharedString,
+    },
+    RemoteImage {
+        environment: SharedString,
+        cwd: SharedString,
+        path: SharedString,
+    },
+    Url(SharedString),
 }
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
@@ -119,6 +128,57 @@ impl ImageLightbox {
             let renderer = cx.svg_renderer();
             let work = cx.background_executor().spawn(async move {
                 let bytes = monocode_core::composer::decode_image_data(&data).ok()?;
+                Image::from_bytes(format, bytes)
+                    .to_image_data(renderer)
+                    .ok()
+            });
+            cx.spawn(async move |this, cx| {
+                let image = work.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.failed = image.is_none();
+                    this.image = image;
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else if let Source::RemoteImage {
+            environment,
+            cwd,
+            path,
+        } = &open.source
+        {
+            let environment = environment.clone();
+            let cwd = cwd.clone();
+            let path = path.clone();
+            let renderer = cx.svg_renderer();
+            let work = cx.background_executor().spawn(async move {
+                let (bytes, mime) = monocode_core::remote::attachments::read_remote_image(
+                    &environment,
+                    &cwd,
+                    &path,
+                )
+                .ok()?;
+                let format = ImageFormat::from_mime_type(&mime).unwrap_or(ImageFormat::Png);
+                Image::from_bytes(format, bytes)
+                    .to_image_data(renderer)
+                    .ok()
+            });
+            cx.spawn(async move |this, cx| {
+                let image = work.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.failed = image.is_none();
+                    this.image = image;
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else if let Source::Url(url) = &open.source {
+            let url = url.clone();
+            let renderer = cx.svg_renderer();
+            let work = cx.background_executor().spawn(async move {
+                let (bytes, mime) =
+                    monocode_core::remote::attachments::read_http_image(&url).ok()?;
+                let format = ImageFormat::from_mime_type(&mime).unwrap_or(ImageFormat::Png);
                 Image::from_bytes(format, bytes)
                     .to_image_data(renderer)
                     .ok()
