@@ -526,15 +526,29 @@ impl ModelList {
             search,
             _changed: changed,
         };
+        let mut should_discover = true;
+        let mut silent_refresh = false;
+        if let Some(project) = list.remote_project.clone()
+            && let Some((catalog, stale)) =
+                monocode_core::catalog::cached_full_remote_catalog(&project)
+        {
+            list.apply_remote_catalog(catalog);
+            should_discover = false;
+            silent_refresh = stale;
+        }
         list.highlighted = list.current_index(cx);
         list.probe_installed(cx);
-        list.discover(
-            match list.tab {
-                ModelTab::Harness(kind) => kind,
-                ModelTab::Favorites => provider,
-            },
-            cx,
-        );
+        if should_discover {
+            list.discover(
+                match list.tab {
+                    ModelTab::Harness(kind) => kind,
+                    ModelTab::Favorites => provider,
+                },
+                cx,
+            );
+        } else if silent_refresh {
+            list.refresh_remote_catalog_silent(cx);
+        }
         list
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
@@ -643,6 +657,44 @@ impl ModelList {
         })
         .detach();
     }
+    fn apply_remote_catalog(&mut self, catalog: monocode_core::catalog::RemoteCatalog) {
+        self.missing = Kind::ALL
+            .into_iter()
+            .filter(|kind| !catalog.providers.contains(kind))
+            .collect();
+        self.remote_providers = Some(catalog.providers);
+        self.catalogs = catalog.models.into_iter().collect();
+        self.errors = catalog.errors.into_iter().collect();
+        if let ModelTab::Harness(selected) = self.tab
+            && self.missing.contains(&selected)
+            && selected != self.provider
+        {
+            self.tab = ModelTab::Harness(self.provider);
+        }
+    }
+    fn refresh_remote_catalog_silent(&mut self, cx: &mut Context<Self>) {
+        if cfg!(test) {
+            return;
+        }
+        let Some(project) = self.remote_project.clone() else {
+            return;
+        };
+        let work = cx
+            .background_executor()
+            .spawn(async move { catalog::remote_catalog(&project) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(catalog) = work.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.apply_remote_catalog(catalog);
+                    if this.query(cx).is_empty() {
+                        this.highlighted = this.current_index(cx);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
@@ -657,21 +709,7 @@ impl ModelList {
                 let _ = this.update(cx, |this, cx| {
                     this.loading.clear();
                     match result {
-                        Ok(catalog) => {
-                            this.missing = Kind::ALL
-                                .into_iter()
-                                .filter(|kind| !catalog.providers.contains(kind))
-                                .collect();
-                            this.remote_providers = Some(catalog.providers);
-                            this.catalogs = catalog.models.into_iter().collect();
-                            this.errors = catalog.errors.into_iter().collect();
-                            if let ModelTab::Harness(selected) = this.tab
-                                && this.missing.contains(&selected)
-                                && selected != this.provider
-                            {
-                                this.tab = ModelTab::Harness(this.provider);
-                            }
-                        }
+                        Ok(catalog) => this.apply_remote_catalog(catalog),
                         Err(error) => {
                             this.errors = Kind::ALL
                                 .into_iter()
@@ -871,6 +909,7 @@ impl ModelList {
         if let ModelTab::Harness(kind) = tab
             && !self.catalogs.iter().any(|(k, _)| *k == kind)
             && !self.errors.iter().any(|(k, _)| *k == kind)
+            && !self.missing.contains(&kind)
         {
             self.discover(kind, cx);
         }

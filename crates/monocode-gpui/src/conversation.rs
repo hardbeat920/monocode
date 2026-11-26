@@ -1922,6 +1922,27 @@ impl Conversation {
         }
         let kind = Kind::from_id(&self.summary.provider);
         self.attach_account(cx);
+        if self.is_remote()
+            && let Some((cached, false)) =
+                monocode_core::catalog::cached_full_remote_catalog(&self.summary.cwd)
+            && let Some(models) = cached.models.get(&kind).filter(|m| !m.is_empty())
+        {
+            self.catalog_epoch += 1;
+            self.catalog = models.clone();
+            if self.model.is_none() {
+                self.model = self
+                    .catalog
+                    .iter()
+                    .find(|model| model.default)
+                    .or_else(|| self.catalog.first())
+                    .map(|model| model.id.clone());
+                self.settings.model = self.model.clone();
+                self.save_settings(cx);
+            }
+            cx.emit(SessionChanged);
+            cx.notify();
+            return;
+        }
         self.catalog_epoch += 1;
         let epoch = self.catalog_epoch;
         let account = self.settings.account.clone();

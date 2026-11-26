@@ -9,22 +9,81 @@ use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
-    sync::{mpsc, Mutex, OnceLock},
+    sync::{mpsc, Arc, Condvar, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
 
 const CATALOG_BYTES: usize = 2 * 1024 * 1024;
+const REMOTE_CATALOG_TTL: Duration = Duration::from_secs(300);
 
 /// Installed providers and their project-specific catalogs on a remote host.
 /// The host owns discovery, credentials, catalog caching, and model defaults.
+#[derive(Clone)]
 pub struct RemoteCatalog {
     pub providers: Vec<Kind>,
     pub models: std::collections::HashMap<Kind, Vec<Model>>,
     pub errors: std::collections::HashMap<Kind, String>,
 }
 
-pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
+type InflightCatalog = Arc<(Mutex<Option<Result<RemoteCatalog, String>>>, Condvar)>;
+fn remote_inflight() -> &'static Mutex<std::collections::HashMap<String, InflightCatalog>> {
+    static INFLIGHT: OnceLock<Mutex<std::collections::HashMap<String, InflightCatalog>>> =
+        OnceLock::new();
+    INFLIGHT.get_or_init(Default::default)
+}
+
+fn remote_full_cache() -> &'static Mutex<std::collections::HashMap<String, (RemoteCatalog, Instant)>>
+{
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, (RemoteCatalog, Instant)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn remote_env_cache() -> &'static Mutex<std::collections::HashMap<String, (RemoteCatalog, Instant)>>
+{
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, (RemoteCatalog, Instant)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Stores the latest remote catalog in memory (never on disk) for `cwd` and
+/// its remote environment so subsequent picker opens render immediately.
+pub fn remember_remote_catalog(cwd: &str, catalog: &RemoteCatalog) {
+    let now = Instant::now();
+    remote_full_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(cwd.into(), (catalog.clone(), now));
+    if let Some(remote) = crate::remote::parse_remote_path(cwd) {
+        remote_env_cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(remote.environment_id, (catalog.clone(), now));
+    }
+}
+
+/// Returns `(catalog, is_stale)` for `cwd` if cached in memory. Falls back to
+/// the latest catalog from the same remote environment (marked stale) so
+/// switching projects on the same host renders immediately while refreshing.
+pub fn cached_full_remote_catalog(cwd: &str) -> Option<(RemoteCatalog, bool)> {
+    if let Some((catalog, at)) = remote_full_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(cwd)
+        .cloned()
+    {
+        return Some((catalog, at.elapsed() >= REMOTE_CATALOG_TTL));
+    }
+    let remote = crate::remote::parse_remote_path(cwd)?;
+    remote_env_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&remote.environment_id)
+        .map(|(catalog, _)| (catalog.clone(), true))
+}
+
+fn fetch_remote_catalog_uncached(cwd: &str) -> Result<RemoteCatalog, String> {
     let remote = crate::remote::parse_remote_path(cwd).ok_or("Invalid remote project")?;
     let connections = crate::remote::default_connections()?;
     let machine = connections.machine_for_environment(&remote.environment_id)?;
@@ -76,12 +135,52 @@ pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
         "models.list",
         json!({"projectId":project["id"]}),
     )?;
-    remote_catalog_response(&response, providers)
+    let catalog = remote_catalog_response(&response, providers)?;
+    remember_remote_catalog(cwd, &catalog);
+    Ok(catalog)
+}
+
+pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
+    let (slot, leader) = {
+        let mut inflight = remote_inflight().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = inflight.get(cwd) {
+            (existing.clone(), false)
+        } else {
+            let created = Arc::new((Mutex::new(None), Condvar::new()));
+            inflight.insert(cwd.to_owned(), created.clone());
+            (created, true)
+        }
+    };
+    if !leader {
+        let (lock, cvar) = &*slot;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while guard.is_none() {
+            guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+        return guard
+            .clone()
+            .unwrap_or_else(|| Err("Remote catalog fetch canceled".into()));
+    }
+    let result = fetch_remote_catalog_uncached(cwd);
+    {
+        let (lock, cvar) = &*slot;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(result.clone());
+        cvar.notify_all();
+    }
+    remote_inflight()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(cwd);
+    result
 }
 
 pub fn remote_models(cwd: &str, provider: &str) -> Result<Vec<Model>, String> {
     let kind = Kind::parse(provider).ok_or("Unknown remote provider")?;
-    let mut catalog = remote_catalog(cwd)?;
+    let mut catalog = match cached_full_remote_catalog(cwd) {
+        Some((cached, false)) => cached,
+        _ => remote_catalog(cwd)?,
+    };
     if !catalog.providers.contains(&kind) {
         return Err(format!(
             "{} CLI is not installed on this machine",
@@ -932,6 +1031,29 @@ mod tests {
         assert!(catalog.models[&Kind::Claude][0].thinking);
         assert_eq!(catalog.errors[&Kind::Devin], "Sign in on the host");
         assert!(!catalog.models.contains_key(&Kind::Cursor));
+    }
+    #[test]
+    fn remote_catalog_caches_per_cwd_and_falls_back_by_environment() {
+        let cwd = "remote://catalog-cache-test/repo-a";
+        let sibling = "remote://catalog-cache-test/repo-b";
+        assert!(cached_full_remote_catalog(cwd).is_none());
+        let catalog = RemoteCatalog {
+            providers: vec![Kind::Codex],
+            models: std::collections::HashMap::from([(
+                Kind::Codex,
+                vec![model("codex:gpt-test", "Test")],
+            )]),
+            errors: Default::default(),
+        };
+        remember_remote_catalog(cwd, &catalog);
+        let (hit, stale) = cached_full_remote_catalog(cwd).unwrap();
+        assert!(!stale);
+        assert_eq!(hit.providers, [Kind::Codex]);
+        assert_eq!(hit.models[&Kind::Codex][0].id, "codex:gpt-test");
+        let (fallback, fallback_stale) = cached_full_remote_catalog(sibling).unwrap();
+        assert!(fallback_stale);
+        assert_eq!(fallback.providers, [Kind::Codex]);
+        assert!(cached_full_remote_catalog("remote://other-env/repo-a").is_none());
     }
     #[test]
     fn acp_catalogs_accept_grouped_options_and_legacy_models() {
