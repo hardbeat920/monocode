@@ -77,7 +77,7 @@ impl Kind {
             Self::Grok => &[".grok/bin"],
             Self::OpenCode => &[".opencode/bin"],
             Self::Fx => &[".fx/bin"],
-            Self::Antigravity => &[".local/share/agy-acp"],
+            Self::Antigravity => &[".local/share/agy-acp", ".gemini/bin"],
             Self::Hermes => &[
                 ".hermes/hermes-agent/venv/bin",
                 ".hermes/hermes-agent/.venv/bin",

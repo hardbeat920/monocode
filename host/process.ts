@@ -51,6 +51,7 @@ const providerDirectories = (provider: RemoteProvider): string[] => {
     ],
     antigravity: [
       join(home, ".local", "share", "agy-acp"),
+      join(home, ".gemini", "bin"),
       ...(process.platform === "win32"
         ? [
             join(

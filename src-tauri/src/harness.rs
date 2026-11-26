@@ -2560,6 +2560,7 @@ fn resolve_antigravity() -> Option<PathBuf> {
         cli_candidates.push(from_shell);
     }
     if let Some(home) = dirs_home().map(PathBuf::from) {
+        cli_candidates.push(home.join(".gemini/bin/agy"));
         cli_candidates.push(home.join(".local/bin/agy"));
     }
     if cfg!(windows) {
