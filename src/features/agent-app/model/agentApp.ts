@@ -99,7 +99,7 @@ export type AgentAppHost = {
     notifyMonoId?: string,
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
-  session(id: string): Promise<Session | null>;
+  session(id: string, cwd?: string): Promise<Session | null>;
   readConversation?(session: Session, options: SessionReadOptions): Promise<ReturnType<typeof sessionConversationPage>>;
   send(
     id: string,
@@ -353,7 +353,7 @@ async function projectSession(
   const cwd = requireProject(source, input, host);
   if (!(await host.sessions(cwd)).some((session) => session.id === id))
     throw new Error("Session was not found in this project");
-  const target = await host.session(id);
+  const target = await host.session(id, cwd);
   if (!target || pathKey(target.cwd) !== pathKey(cwd))
     throw new Error("Session was not found in this project");
   return target;

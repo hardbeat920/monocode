@@ -372,8 +372,54 @@ function cachedSessions(project: string): HostSessionSummary[] {
     return [];
   }
 }
+export function cachedRemoteProjectSessions(project: string): HostSessionSummary[] {
+  return cachedSessions(project);
+}
+
 export function cachedRemoteSessionSummary(project: string, sessionId: string) {
   return cachedSessions(project).find((session) => session.id === sessionId);
+}
+
+const historyWriteGen = new Map<string, number>();
+const historyGen = (project: string) => historyWriteGen.get(project) ?? 0;
+
+function writeCachedSessions(project: string, sessions: HostSessionSummary[]) {
+  historyWriteGen.set(project, historyGen(project) + 1);
+  try {
+    localStorage.setItem(historyKey(project), JSON.stringify(sessions));
+    window.dispatchEvent(new Event(REMOTE_HISTORY_UPDATED));
+  } catch {
+    /* the list is refetched next time */
+  }
+}
+
+export function updateCachedRemoteProjectSessions(
+  project: string,
+  update: (sessions: HostSessionSummary[]) => HostSessionSummary[],
+): void {
+  writeCachedSessions(project, update(cachedSessions(project)));
+}
+
+export async function refreshRemoteProjectSessionsNow(
+  project: string,
+): Promise<HostSessionSummary[]> {
+  const remote = remoteProjectFor(project);
+  if (!remote) return [];
+  const startGen = historyGen(project);
+  try {
+    const machine = await remoteMachineFor(remote.environmentId);
+    if (!machine) return cachedSessions(project);
+    const next = await remoteRequest<HostSessionSummary[]>(
+      machine.id,
+      "sessions.list",
+      { projectId: remote.projectId },
+    );
+    if (historyGen(project) !== startGen) return cachedSessions(project);
+    writeCachedSessions(project, next);
+    return next;
+  } catch {
+    return cachedSessions(project);
+  }
 }
 
 export type RemoteProjectSessions = {
@@ -413,6 +459,7 @@ export function useRemoteProjectSessions(
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
     const poll = async () => {
+      const startGen = historyGen(project);
       try {
         const next = await remoteRequest<HostSessionSummary[]>(
           machine.id,
@@ -421,13 +468,12 @@ export function useRemoteProjectSessions(
         );
         if (disposed) return;
         failures = 0;
-        setSessions(next);
-        setLoaded(true);
-        try {
-          localStorage.setItem(historyKey(project), JSON.stringify(next));
-          window.dispatchEvent(new Event(REMOTE_HISTORY_UPDATED));
-        } catch {
-          /* the list is refetched next time */
+        if (historyGen(project) !== startGen) {
+          setSessions(cachedSessions(project));
+        } else {
+          setSessions(next);
+          setLoaded(true);
+          writeCachedSessions(project, next);
         }
       } catch {
         // Keep the cached list and back off while SSH is unavailable.

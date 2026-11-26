@@ -1514,4 +1514,53 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("body is required");
   });
+  it("passes project cwd when resolving remote sessions for read and removal", async () => {
+    const { source, host } = fixture();
+    const remoteCwd = "remote://env-1/srv/project";
+    const remoteSession = newSession("codex", remoteCwd, "codex:test");
+    remoteSession.id = "remote-1";
+    remoteSession.title = "Remote thread";
+    remoteSession.blocks = [
+      { id: "u1", role: "user", text: "Check logs" },
+      { id: "a1", role: "assistant", text: "Found issue" },
+    ];
+    host.monoOf = () => ({ id: "m1", projects: [remoteCwd] });
+    host.isMono = (id) => id === source.id;
+    host.sessions = vi.fn(async () => [
+      {
+        id: "remote-1",
+        title: "Remote thread",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: false,
+        archived: false,
+      },
+    ]);
+    host.session = vi.fn(async (id, cwd) =>
+      id === "remote-1" && cwd === remoteCwd ? remoteSession : null,
+    );
+
+    const page = await handleAgentApp(
+      source,
+      "read-remote",
+      "sessions.read",
+      { project: remoteCwd, sessionId: "remote-1" },
+      host,
+    );
+    expect(host.session).toHaveBeenCalledWith("remote-1", remoteCwd);
+    expect(page).toMatchObject({
+      sessionId: "remote-1",
+      title: "Remote thread",
+    });
+
+    await handleAgentApp(
+      source,
+      "archive-remote",
+      "sessions.archive",
+      { project: remoteCwd, sessionId: "remote-1" },
+      host,
+    );
+    expect(host.remove).toHaveBeenCalledWith("remote-1", "archive");
+  });
 });
