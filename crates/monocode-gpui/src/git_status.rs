@@ -89,6 +89,7 @@ pub(crate) struct ProjectGit {
     poll: Option<Task<()>>,
     last_reload_ok: bool,
     last_reload_duration: Duration,
+    reload_waiters: Vec<async_channel::Sender<(bool, Duration)>>,
 }
 impl EventEmitter<GitChanged> for ProjectGit {}
 
@@ -111,6 +112,7 @@ impl ProjectGit {
             poll: None,
             last_reload_ok: true,
             last_reload_duration: Duration::ZERO,
+            reload_waiters: Vec::new(),
         };
         this.set_project(project, cx);
         this
@@ -143,6 +145,7 @@ impl ProjectGit {
         cx.notify();
         self.warm_choices(cx);
         let was_polling = self.poll.take().is_some();
+        self.reload_waiters.clear();
         // Queue or start the new checkout's reload before restarting polling so
         // an in-flight read for the previous checkout always schedules a follow-up.
         self.reload(cx);
@@ -186,13 +189,21 @@ impl ProjectGit {
                 let mut interval = if remote { REMOTE_POLL_BASE } else { LOCAL_POLL };
                 loop {
                     cx.background_executor().timer(interval).await;
-                    let Ok((ok, took)) = this.update(cx, |this, cx| {
+                    let (tx, rx) = async_channel::bounded(1);
+                    let Ok(waiting) = this.update(cx, |this, cx| {
+                        if !this.available() {
+                            return false;
+                        }
+                        this.reload_waiters.push(tx);
                         this.reload(cx);
-                        (this.last_reload_ok, this.last_reload_duration)
+                        true
                     }) else {
                         return;
                     };
-                    if remote {
+                    if waiting
+                        && let Ok((ok, took)) = rx.recv().await
+                        && remote
+                    {
                         interval = next_remote_poll_interval(interval, ok, took);
                     }
                 }
@@ -307,6 +318,11 @@ impl ProjectGit {
                 }
                 if std::mem::take(&mut this.pending) {
                     this.reload(cx);
+                } else {
+                    let outcome = (this.last_reload_ok, this.last_reload_duration);
+                    for waiter in this.reload_waiters.drain(..) {
+                        let _ = waiter.try_send(outcome);
+                    }
                 }
             });
         })
