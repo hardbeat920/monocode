@@ -1,0 +1,2 @@
+gpui-pre-wgpu 0.3.9, published snapshot of Zed (Apache-2.0).
+Monocode changes: GPU compositing for vertical scroll-edge masks, with pixel regression tests.
