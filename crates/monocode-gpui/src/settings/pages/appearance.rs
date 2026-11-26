@@ -255,6 +255,10 @@ impl SettingsView {
             "Translucency",
             Some(if light {
                 "Translucency is available in dark mode.".into()
+            } else if cfg!(target_os = "linux") && cx.compositor_name() == "Wayland" {
+                "How much of the desktop shows through MonoCode. Background blur depends on your Wayland compositor.".into()
+            } else if cfg!(target_os = "linux") && cx.compositor_name() == "X11" {
+                "How much of the desktop shows through MonoCode. Requires compositing; configure background blur in your compositor.".into()
             } else {
                 "How much of the desktop shows through MonoCode.".into()
             }),
