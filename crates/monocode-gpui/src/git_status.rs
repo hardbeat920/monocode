@@ -11,8 +11,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Without a file watcher, visible status polls on this interval.
-const POLL: Duration = Duration::from_secs(2);
+/// Without a file watcher, a visible local checkout polls on this interval.
+const LOCAL_POLL: Duration = Duration::from_secs(2);
+/// A project on another machine can't be watched locally. It polls this often,
+/// backing off up to `REMOTE_POLL_MAX` while reads are slow or failing.
+const REMOTE_POLL_BASE: Duration = Duration::from_secs(15);
+const REMOTE_POLL_MAX: Duration = Duration::from_secs(60);
+const SLOW_RELOAD: Duration = Duration::from_secs(1);
+/// Focus and visibility changes within this long of a read don't repeat it.
+const FOCUS_DEDUPE: Duration = Duration::from_secs(2);
 const RESUME_TTL: Duration = Duration::from_secs(30);
 /// A burst of writes settles into one read this long after the last.
 const SETTLE: Duration = Duration::from_millis(300);
@@ -79,7 +86,10 @@ pub(crate) struct ProjectGit {
     pending: bool,
     stats_loaded: Option<Instant>,
     /// Reads while status is visible: a file watcher, or a timer without one.
-    poll: Option<[Task<()>; 2]>,
+    poll: Option<Task<()>>,
+    last_reload_ok: bool,
+    last_reload_duration: Duration,
+    reload_waiters: Vec<async_channel::Sender<(bool, Duration)>>,
 }
 impl EventEmitter<GitChanged> for ProjectGit {}
 
@@ -100,6 +110,9 @@ impl ProjectGit {
             pending: false,
             stats_loaded: None,
             poll: None,
+            last_reload_ok: true,
+            last_reload_duration: Duration::ZERO,
+            reload_waiters: Vec::new(),
         };
         this.set_project(project, cx);
         this
@@ -131,16 +144,19 @@ impl ProjectGit {
         cx.emit(GitChanged);
         cx.notify();
         self.warm_choices(cx);
-        if self.poll.take().is_some() {
-            // Watch the new checkout instead; this reads it straight away.
+        let was_polling = self.poll.take().is_some();
+        self.reload_waiters.clear();
+        // Queue or start the new checkout's reload before restarting polling so
+        // an in-flight read for the previous checkout always schedules a follow-up.
+        self.reload(cx);
+        if was_polling {
             self.set_polling(true, cx);
-        } else {
-            self.reload(cx);
         }
     }
     /// While the project's Git status is visible, read it again whenever the
     /// checkout or its Git directory changes on disk, and every 30s besides.
-    /// Without a file watcher, poll every 2s instead.
+    /// Without a file watcher, poll instead: every 2s for a local checkout,
+    /// every 15s (backing off up to 60s) for a remote project.
     pub(crate) fn set_polling(&mut self, polling: bool, cx: &mut Context<Self>) {
         if polling == self.poll.is_some() {
             return;
@@ -149,28 +165,62 @@ impl ProjectGit {
             self.poll = None;
             return;
         }
-        self.reload(cx);
-        let project = PathBuf::from(&self.project);
-        let watched = cx.spawn(async move |this, cx| {
-            let watch = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut roots = vec![project.clone()];
-                    roots.extend(
-                        scm::git_dirs(&project)
-                            .into_iter()
-                            .filter(|dir| !dir.starts_with(&project)),
-                    );
-                    crate::fs_watch::watch(&roots)
-                })
-                .await;
+        self.reload_unless_fresh(cx);
+        let remote = self.project.starts_with("remote://");
+        let watch_dir = (!remote).then(|| PathBuf::from(&self.project));
+        self.poll = Some(cx.spawn(async move |this, cx| {
+            let watch = match watch_dir {
+                Some(dir) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let mut roots = vec![dir.clone()];
+                            roots.extend(
+                                scm::git_dirs(&dir)
+                                    .into_iter()
+                                    .filter(|git| !git.starts_with(&dir)),
+                            );
+                            crate::fs_watch::watch(&roots)
+                        })
+                        .await
+                }
+                None => None,
+            };
             let Some((_watch, changes)) = watch else {
+                let mut interval = if remote { REMOTE_POLL_BASE } else { LOCAL_POLL };
                 loop {
-                    cx.background_executor().timer(POLL).await;
-                    if this.update(cx, |this, cx| this.reload(cx)).is_err() {
+                    cx.background_executor().timer(interval).await;
+                    let (tx, rx) = async_channel::bounded(1);
+                    let Ok(waiting) = this.update(cx, |this, cx| {
+                        if !this.available() {
+                            return false;
+                        }
+                        this.reload_waiters.push(tx);
+                        this.reload(cx);
+                        true
+                    }) else {
                         return;
+                    };
+                    if waiting
+                        && let Ok((ok, took)) = rx.recv().await
+                        && remote
+                    {
+                        interval = next_remote_poll_interval(interval, ok, took);
                     }
                 }
+            };
+            // Only alongside a watcher: a missed event is repaired by a slow
+            // read. It stops with the watcher when `poll` drops.
+            let Ok(_repair) = this.update(cx, |_, cx| {
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor().timer(REPAIR).await;
+                        if this.update(cx, |this, cx| this.reload(cx)).is_err() {
+                            break;
+                        }
+                    }
+                })
+            }) else {
+                return;
             };
             while changes.recv().await.is_ok() {
                 cx.background_executor().timer(SETTLE).await;
@@ -179,16 +229,19 @@ impl ProjectGit {
                     return;
                 }
             }
-        });
-        let repair = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(REPAIR).await;
-                if this.update(cx, |this, cx| this.reload(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-        self.poll = Some([watched, repair]);
+        }));
+    }
+    /// Reads now unless one just ran or is running: focus and visibility
+    /// changes arrive together and would otherwise read twice.
+    fn reload_unless_fresh(&mut self, cx: &mut Context<Self>) {
+        if self.in_flight
+            || self
+                .stats_loaded
+                .is_some_and(|at| at.elapsed() < FOCUS_DEDUPE)
+        {
+            return;
+        }
+        self.reload(cx);
     }
     /// useProjectDiffStats reads again on focus once its snapshot is 30s old.
     pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
@@ -198,7 +251,7 @@ impl ProjectGit {
             || self.poll.is_some()
         {
             self.warm_choices(cx);
-            self.reload(cx);
+            self.reload_unless_fresh(cx);
         }
     }
     /// A mutation or file operation: reread now and tell every view.
@@ -231,6 +284,7 @@ impl ProjectGit {
         self.in_flight = true;
         let project = self.project.clone();
         let path = PathBuf::from(&project);
+        let started = Instant::now();
         let work = cx.background_executor().spawn(async move {
             let index = scm::diff_index(&path)?;
             let versions = scm::file_diff_versions(&path, &index).ok();
@@ -240,6 +294,8 @@ impl ProjectGit {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.in_flight = false;
+                this.last_reload_ok = result.is_ok();
+                this.last_reload_duration = started.elapsed();
                 // A slow or unavailable checkout keeps its last snapshot, and
                 // never takes another checkout's.
                 if this.project == project
@@ -262,6 +318,11 @@ impl ProjectGit {
                 }
                 if std::mem::take(&mut this.pending) {
                     this.reload(cx);
+                } else {
+                    let outcome = (this.last_reload_ok, this.last_reload_duration);
+                    for waiter in this.reload_waiters.drain(..) {
+                        let _ = waiter.try_send(outcome);
+                    }
                 }
             });
         })
@@ -290,6 +351,16 @@ impl ProjectGit {
     }
     pub(crate) fn has_changes(&self) -> bool {
         self.stats.as_ref().is_some_and(|s| s.files > 0)
+    }
+}
+
+/// The next remote poll wait: back off while reads are slow or failing,
+/// reset to `REMOTE_POLL_BASE` once a read succeeds quickly.
+fn next_remote_poll_interval(current: Duration, ok: bool, took: Duration) -> Duration {
+    if !ok || took >= SLOW_RELOAD {
+        current.saturating_mul(2).min(REMOTE_POLL_MAX)
+    } else {
+        REMOTE_POLL_BASE
     }
 }
 fn stats_of(index: &DiffIndex) -> DiffStats {
@@ -330,5 +401,24 @@ mod tests {
         assert_eq!(map.dirs["/r/a"], "modified");
         assert!(!map.dirs.contains_key("/r"));
         assert_eq!(map.files["/r/a/gone.rs"], "deleted");
+    }
+
+    #[test]
+    fn remote_polls_back_off_on_slow_or_failed_reads_and_reset_when_quick() {
+        let fast = Duration::from_millis(50);
+        let slow = Duration::from_secs(1);
+        let mut at = REMOTE_POLL_BASE;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            at = next_remote_poll_interval(at, true, slow);
+            seen.push(at.as_secs());
+        }
+        assert_eq!(seen, [30, 60, 60, 60]);
+        assert_eq!(next_remote_poll_interval(at, false, fast).as_secs(), 60);
+        assert_eq!(next_remote_poll_interval(at, true, fast), REMOTE_POLL_BASE);
+        assert_eq!(
+            next_remote_poll_interval(REMOTE_POLL_BASE, false, fast).as_secs(),
+            30
+        );
     }
 }

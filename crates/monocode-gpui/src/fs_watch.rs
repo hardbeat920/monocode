@@ -57,6 +57,9 @@ fn relevant(path: &Path) -> bool {
         return false;
     }
     let mut in_git = false;
+    // Components since the last Git directory, for its own and each linked
+    // worktree's index.
+    let mut since_git: Option<Vec<&str>> = None;
     for component in path.components() {
         let Component::Normal(name) = component else {
             continue;
@@ -72,8 +75,19 @@ fn relevant(path: &Path) -> bool {
         }
         // A main checkout's `.git`, or a common dir such as `repo.git`.
         in_git = name == ".git" || name.ends_with(".git");
+        if in_git {
+            since_git = Some(Vec::new());
+        } else if let Some(names) = &mut since_git {
+            names.push(name);
+        }
     }
-    true
+    // Git rewrites the index on every status read and add, which is not a
+    // change of its own: `.git/index` and `.git/worktrees/<name>/index`.
+    // `refs/heads/index` and a source file named `index` still count.
+    !matches!(
+        since_git.as_deref(),
+        Some(["index"] | ["worktrees", _, "index"])
+    )
 }
 
 #[cfg(test)]
@@ -84,7 +98,12 @@ mod tests {
     #[test]
     fn source_index_and_refs_wake_readers_but_build_output_does_not() {
         assert!(relevant(Path::new("/repo/src/main.rs")));
-        assert!(relevant(Path::new("/repo/.git/index")));
+        assert!(!relevant(Path::new("/repo/.git/index")));
+        assert!(!relevant(Path::new("/repo/.git/worktrees/wt1/index")));
+        assert!(!relevant(Path::new("/other.git/index")));
+        assert!(relevant(Path::new("/repo/.git/worktrees/wt1/HEAD")));
+        assert!(relevant(Path::new("/repo/src/index")));
+        assert!(relevant(Path::new("/repo/.git/refs/heads/index")));
         assert!(relevant(Path::new("/repo/.git/HEAD")));
         assert!(relevant(Path::new("/repo/.git/refs/heads/main")));
         assert!(!relevant(Path::new("/repo/.git/objects/ab/cdef")));
