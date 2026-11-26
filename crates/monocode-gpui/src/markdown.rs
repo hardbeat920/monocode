@@ -1,5 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod cache;
+pub(crate) mod media;
 pub(crate) mod mermaid;
 mod search;
 use crate::markdown_model::{Block, InlineRun, TableAlign};
@@ -171,6 +172,10 @@ pub(crate) enum Part {
         id: String,
         caption: String,
     },
+    Image {
+        url: String,
+        alt: String,
+    },
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct MarkdownRow {
@@ -180,6 +185,7 @@ pub(crate) struct MarkdownRow {
     pub marker: Option<String>,
     pub gap: f32,
     pub word_start: usize,
+    pub source_cwd: Option<String>,
 }
 
 pub(crate) fn rows(block: &Block) -> Vec<MarkdownRow> {
@@ -203,6 +209,7 @@ fn flatten(
             marker: None,
             gap,
             word_start: 0,
+            source_cwd: None,
         })
     };
     match block {
@@ -290,6 +297,13 @@ fn flatten(
                 caption: caption.clone(),
             },
             16.,
+        ),
+        Block::Image { url, alt } => add(
+            Part::Image {
+                url: url.clone(),
+                alt: alt.clone(),
+            },
+            12.,
         ),
     }
     if let Some(row) = out.get_mut(first)
@@ -691,6 +705,7 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
             }
         }
     }
+    row.source_cwd = Some(base.to_owned());
     match &mut row.part {
         Part::Text { runs, .. } => resolve(runs, base),
         Part::Table { cells, .. } => {
@@ -876,6 +891,14 @@ pub(crate) fn body_selected(
                 id,
                 fence: fence.clone(),
                 selection,
+            })
+            .into_any_element(),
+        Part::Image { url, alt } => body
+            .child(media::MarkdownImage {
+                id,
+                url: url.clone(),
+                alt: alt.clone(),
+                source_cwd: row.source_cwd.clone(),
             })
             .into_any_element(),
     }

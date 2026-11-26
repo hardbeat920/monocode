@@ -64,6 +64,11 @@ pub(crate) enum Block {
         id: String,
         caption: String,
     },
+    /// A Markdown image `![alt](url)` rendered inline as a media block.
+    Image {
+        url: String,
+        alt: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TopBlock {
@@ -494,9 +499,7 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                         out.push(visual);
                         continue;
                     }
-                    out.push(Block::Paragraph {
-                        runs: inlines(events, TagEnd::Paragraph),
-                    })
+                    paragraph_blocks(events, TagEnd::Paragraph, &mut out);
                 }
                 Tag::Heading { level, .. } => {
                     let number = match level {
@@ -582,6 +585,23 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                         align,
                     });
                 }
+                Tag::Image { dest_url, .. } => {
+                    let alt = collect_image_alt(events);
+                    let url = dest_url.into_string();
+                    if !url.trim().is_empty() && !url.starts_with("visual:") {
+                        out.push(Block::Image { url, alt });
+                    } else if !alt.is_empty() {
+                        let run = InlineRun {
+                            text: alt,
+                            style: InlineStyle::default(),
+                        };
+                        if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
+                            previous.push(run);
+                        } else {
+                            out.push(Block::Paragraph { runs: vec![run] });
+                        }
+                    }
+                }
                 tag @ (Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }) => {
                     let mut runs = Vec::new();
                     inline_span(events, tag, InlineStyle::default(), &mut runs);
@@ -610,7 +630,11 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                     if matches!(
                         next,
                         Event::Start(
-                            Tag::List(_) | Tag::BlockQuote(_) | Tag::CodeBlock(_) | Tag::Paragraph
+                            Tag::List(_)
+                                | Tag::BlockQuote(_)
+                                | Tag::CodeBlock(_)
+                                | Tag::Paragraph
+                                | Tag::Image { .. }
                         ) | Event::End(TagEnd::Item)
                     ) {
                         break;
@@ -680,6 +704,82 @@ fn placed_visual(events: &mut Events<'_>) -> Option<Block> {
         caption = format!("{caption} {}", rest.trim()).trim().to_owned();
     }
     Some(Block::Visual { id, caption })
+}
+fn collect_image_alt(events: &mut Events<'_>) -> String {
+    let mut alt = String::new();
+    let mut depth = 0usize;
+    for event in events.by_ref() {
+        match event {
+            Event::Start(Tag::Image { .. }) => depth += 1,
+            Event::End(TagEnd::Image) => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            Event::Text(text) | Event::Code(text) => alt.push_str(&text),
+            Event::SoftBreak => alt.push(' '),
+            Event::HardBreak => alt.push('\n'),
+            _ => {}
+        }
+    }
+    alt
+}
+fn runs_have_visible_text(runs: &[InlineRun]) -> bool {
+    runs.iter()
+        .any(|run| run.style.task.is_some() || !run.text.trim().is_empty())
+}
+fn trim_boundary_breaks(runs: &mut Vec<InlineRun>) {
+    while runs
+        .first()
+        .is_some_and(|run| run.style.task.is_none() && run.text.trim().is_empty())
+    {
+        runs.remove(0);
+    }
+    while runs
+        .last()
+        .is_some_and(|run| run.style.task.is_none() && run.text.trim().is_empty())
+    {
+        runs.pop();
+    }
+}
+fn paragraph_blocks(events: &mut Events<'_>, end: TagEnd, out: &mut Vec<Block>) {
+    let mut runs = Vec::new();
+    let mut saw_image = false;
+    while let Some(event) = events.next() {
+        match event {
+            Event::End(tag) if tag == end => break,
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                let alt = collect_image_alt(events);
+                let url = dest_url.into_string();
+                if !url.trim().is_empty() && !url.starts_with("visual:") {
+                    if runs_have_visible_text(&runs) {
+                        trim_boundary_breaks(&mut runs);
+                        out.push(Block::Paragraph {
+                            runs: std::mem::take(&mut runs),
+                        });
+                    } else {
+                        runs.clear();
+                    }
+                    out.push(Block::Image { url, alt });
+                    saw_image = true;
+                } else if !alt.is_empty() {
+                    runs.push(InlineRun {
+                        text: alt,
+                        style: InlineStyle::default(),
+                    });
+                }
+            }
+            Event::Start(tag) => inline_span(events, tag, InlineStyle::default(), &mut runs),
+            event => append_run(&mut runs, event, InlineStyle::default()),
+        }
+    }
+    if !saw_image {
+        out.push(Block::Paragraph { runs });
+    } else if runs_have_visible_text(&runs) {
+        trim_boundary_breaks(&mut runs);
+        out.push(Block::Paragraph { runs });
+    }
 }
 fn inlines(events: &mut Events<'_>, end: TagEnd) -> Vec<InlineRun> {
     let mut out = Vec::new();
@@ -757,6 +857,67 @@ mod note_break_tests {
             panic!("expected code")
         };
         assert_eq!(code, "one\ntwo\n");
+    }
+
+    #[test]
+    fn parses_markdown_images_while_preserving_visuals_and_linked_badges() {
+        let single = parse_full("\n\n![Image](file:///Users/me/shot.jpg)\n\n");
+        assert_eq!(single.blocks.len(), 1);
+        assert_eq!(
+            single.blocks[0].block,
+            Block::Image {
+                url: "file:///Users/me/shot.jpg".into(),
+                alt: "Image".into(),
+            }
+        );
+
+        let mixed =
+            parse_full("Before\n![First](file:///a.png)\n![Second](https://x.test/b.png)\nAfter");
+        assert_eq!(mixed.blocks.len(), 4);
+        assert!(
+            matches!(&mixed.blocks[0].block, Block::Paragraph { runs } if runs[0].text == "Before")
+        );
+        assert_eq!(
+            mixed.blocks[1].block,
+            Block::Image {
+                url: "file:///a.png".into(),
+                alt: "First".into(),
+            }
+        );
+        assert_eq!(
+            mixed.blocks[2].block,
+            Block::Image {
+                url: "https://x.test/b.png".into(),
+                alt: "Second".into(),
+            }
+        );
+        assert!(
+            matches!(&mixed.blocks[3].block, Block::Paragraph { runs } if runs[0].text == "After")
+        );
+
+        let visual = parse_full("![Chart](visual:chart-1)");
+        assert_eq!(
+            visual.blocks[0].block,
+            Block::Visual {
+                id: "chart-1".into(),
+                caption: "Chart".into(),
+            }
+        );
+
+        let badge = parse_full("[![CI](https://img.shields.io/badge.svg)](https://example.com)");
+        assert!(matches!(badge.blocks[0].block, Block::Paragraph { .. }));
+
+        let list = parse_full("- ![Item](file:///item.png)");
+        let Block::List { items, .. } = &list.blocks[0].block else {
+            panic!("expected list");
+        };
+        assert_eq!(
+            items[0][0],
+            Block::Image {
+                url: "file:///item.png".into(),
+                alt: "Item".into(),
+            }
+        );
     }
 }
 
