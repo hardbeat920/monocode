@@ -8,6 +8,20 @@ import { join, resolve } from "node:path";
 import { HostChildBackend } from "./child-backend";
 import { REMOTE_PROVIDERS } from "../src/features/connections/model/protocol";
 
+it("resolves the embedded Antigravity ACP launch arguments", async () => {
+  const backend = new HostChildBackend({
+    antigravity:
+      process.platform === "win32" ? "C:/tools/agy.exe" : "/tools/agy",
+  });
+  try {
+    expect(await backend.invoke("harness_resolve_antigravity")).toMatchObject({
+      args: ["acp"],
+    });
+  } finally {
+    await backend.close();
+  }
+});
+
 it("resolves every provider and runs only allowed provider commands", async () => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-catalog-test-"));
   const file = join(directory, "provider.cjs");

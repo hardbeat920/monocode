@@ -19,6 +19,7 @@ import {
   antigravitySpawnCwd,
   permissionOptionId,
   permissionRequestFromAcp,
+  readAvailableModeIds,
   readConfigOptions,
   resolveSettingConfigId,
   sessionIdFromResult,
@@ -35,6 +36,7 @@ type SessionSetupResult = {
   sessionId?: string;
   session_id?: string;
   configOptions?: unknown;
+  modes?: unknown;
 };
 
 type Live = {
@@ -48,6 +50,8 @@ type Live = {
   cwd: string;
   modelConfigId: string;
   configOptions: SessionConfigOption[];
+  /** Standard ACP mode IDs retained from new, resumed, or loaded session setup. */
+  availableModes?: string[];
   muteUpdates: boolean;
   cancelled: boolean;
   /** Server state is unknowable after a mid-prompt cancel; recycle before reuse. */
@@ -130,7 +134,7 @@ const pendingSetupByThread = new Map<
 const turnsByThread = new Map<string, Promise<void>>();
 let childSeq = 0;
 
-/** Live Antigravity adapter. Spawns `agy_acp_server.par`, not `agy acp`. */
+/** Live Antigravity adapter for the standalone runtime and `agy acp`. */
 export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
   const epoch = cancelEpoch.get(input.sessionId) ?? 0;
   const cancelled = () => (cancelEpoch.get(input.sessionId) ?? 0) !== epoch;
@@ -557,6 +561,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       cwd: input.cwd,
       modelConfigId: extractModelConfigId(configOptions),
       configOptions,
+      availableModes: readAvailableModeIds(setup?.modes),
       muteUpdates: didLoad,
       cancelled: false,
       stale: false,
@@ -622,6 +627,7 @@ async function applyModelSelection(
   }
 }
 
+/** Apply the requested permission mode before sending a prompt; reject failed mode changes. */
 async function applyRuntimeMode(
   live: Live,
   runtimeMode: RuntimeMode,
@@ -633,7 +639,14 @@ async function applyRuntimeMode(
       "session/set_mode",
       {
         sessionId: live.acpSessionId,
-        modeId: antigravityModeId(runtimeMode, planning),
+        modeId: antigravityModeId(
+          runtimeMode,
+          planning,
+          live.availableModes ??
+            live.configOptions.find(
+              (option) => option.category === "mode" || option.id === "mode",
+            )?.choices,
+        ),
       },
       CONTROL_TIMEOUT_MS,
     );

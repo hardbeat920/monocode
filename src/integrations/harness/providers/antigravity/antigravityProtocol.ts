@@ -12,7 +12,7 @@ import {
 } from "../../core/preview";
 import { acpAgentInfo } from "../../core/acpSubagents";
 
-export type AntigravityModeId = "default" | "auto_edit" | "yolo";
+export type AntigravityModeId = "default" | "auto_edit" | "yolo" | "accept-edits" | "plan";
 
 export type AntigravityPermissionRequest = {
   title: string;
@@ -39,16 +39,38 @@ export function antigravityPromptBlocks(
   return promptBlocks(text, attachments);
 }
 
-/** The raw .par locates sibling resources relative to its process directory. */
+/** Use the workspace for CLI launchers and the binary directory for standalone resources. */
 export function antigravitySpawnCwd(binary: string, fallback: string): string {
   const separator = Math.max(binary.lastIndexOf("/"), binary.lastIndexOf("\\"));
+  if (/^agy(?:\.(?:exe|cmd|bat|com))?$/i.test(binary.slice(separator + 1))) return fallback;
   return separator >= 0 ? binary.slice(0, separator + 1) : fallback;
 }
 
+/** Read standard ACP mode IDs, preserving absent metadata as the legacy fallback signal. */
+export function readAvailableModeIds(raw: unknown): string[] | undefined {
+  const availableModes = asRecord(raw)?.availableModes;
+  if (!Array.isArray(availableModes)) return undefined;
+  return availableModes.flatMap((mode) => {
+    const id = asRecord(mode)?.id;
+    return typeof id === "string" && id.trim() ? [id] : [];
+  });
+}
+
+/** Map permissions to advertised ACP modes, falling back to the legacy server contract. */
 export function antigravityModeId(
   runtimeMode: RuntimeMode,
   planning = false,
+  availableModes?: readonly string[],
 ): AntigravityModeId {
+  if (availableModes) {
+    if (planning) return availableModes.includes("plan") ? "plan" : "default";
+    if (runtimeMode === "full-access") return availableModes.includes("yolo") ? "yolo" : "default";
+    if (runtimeMode === "auto-accept-edits") {
+      if (availableModes.includes("accept-edits")) return "accept-edits";
+      if (availableModes.includes("auto_edit")) return "auto_edit";
+    }
+    return "default";
+  }
   // No native plan mode. Use default and deny non-read permissions on the client.
   if (planning) return "default";
   if (runtimeMode === "full-access") return "yolo";

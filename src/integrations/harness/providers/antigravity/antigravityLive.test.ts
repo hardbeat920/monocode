@@ -23,6 +23,7 @@ const mock = vi.hoisted(() => {
     blockWrites: false,
     resolveGates: null as Array<() => void> | null,
     setupConfigOptions: null as unknown[] | null,
+    setupModes: undefined as unknown,
     setConfigResult: null as unknown,
   };
 });
@@ -66,6 +67,7 @@ vi.mock("../../core/child", () => ({
       }
       const setup = {
         sessionId: "provider-session",
+        modes: mock.setupModes,
         configOptions: mock.setupConfigOptions ?? [
           { id: "model", category: "model", currentValue: "m1", options: [
             { value: "m1", name: "Model One" }, { value: "m2", name: "Model Two" },
@@ -134,6 +136,7 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     mock.blockWrites = false;
     mock.resolveGates = null;
     mock.setupConfigOptions = null;
+    mock.setupModes = undefined;
     mock.setConfigResult = null;
     mock.spawn.mockClear();
     mock.kill.mockClear();
@@ -174,6 +177,67 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     await turn;
     expect(events).toContainEqual({ type: "session.providerBound", providerSessionId: "provider-session" });
     expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it.each([
+    ["auto-accept-edits", undefined, "accept-edits", "edit", "yes"],
+    ["full-access", undefined, "default", "execute", "yes"],
+    ["full-access", "plan", "plan", "edit", "no"],
+  ] as const)("uses advertised CLI modes for %s / %s and preserves permissions", async (runtimeMode, intent, modeId, kind, optionId) => {
+    mock.setupConfigOptions = [{ id: "mode", category: "mode", type: "select", options: [
+      { value: "default" }, { value: "accept-edits" }, { value: "plan" },
+    ] }];
+    const turn = provider.send({ ...input, runtimeMode, intent });
+    await waitPrompt();
+    expect(mock.sent.find((m) => m.method === "session/set_mode")?.params?.modeId).toBe(modeId);
+    permission(kind);
+    await vi.waitFor(() => expect(response()).toEqual({ outcome: { outcome: "selected", optionId } }));
+    finishPrompt();
+    await turn;
+  });
+
+  it.each((["new", "resume", "load"] as const).flatMap((branch) => [
+    { branch, runtimeMode: "auto-accept-edits" as const, intent: undefined, expectedMode: "accept-edits" },
+    { branch, runtimeMode: "full-access" as const, intent: "plan" as const, expectedMode: "plan" },
+  ]))("retains standard ACP modes for $branch / $expectedMode without a mode config option", async ({ branch, runtimeMode, intent, expectedMode }) => {
+    mock.setupConfigOptions = [];
+    mock.setupModes = { availableModes: [
+      { id: "default" }, { id: "accept-edits" }, { id: "plan" },
+    ] };
+    mock.autoPrompt = true;
+    if (branch !== "new") provider.bind("thread", "saved-session", input.cwd);
+    if (branch === "load") mock.fail.add("session/resume");
+    const turn = { ...input, runtimeMode, intent };
+    await provider.send(turn);
+    expect(mock.sent.some((message) => message.method === `session/${branch}`)).toBe(true);
+    expect(mock.sent.find((message) => message.method === "session/set_mode")?.params?.modeId).toBe(expectedMode);
+
+    // A later turn on the same process must retain the setup's advertised modes.
+    mock.sent.length = 0;
+    await provider.send({ ...turn, text: "next" });
+    expect(mock.sent.find((message) => message.method === "session/set_mode")?.params?.modeId).toBe(expectedMode);
+    expect(mock.sent.some((message) => ["session/new", "session/resume", "session/load"].includes(message.method ?? ""))).toBe(false);
+  });
+
+  it("prefers standard advertised modes over legacy config-option choices", async () => {
+    mock.setupConfigOptions = [{ id: "mode", category: "mode", options: [
+      { value: "default" }, { value: "auto_edit" }, { value: "yolo" },
+    ] }];
+    mock.setupModes = { availableModes: [{ id: "default" }, { id: "accept-edits" }] };
+    mock.autoPrompt = true;
+    await provider.send({ ...input, runtimeMode: "auto-accept-edits" });
+    expect(mock.sent.find((message) => message.method === "session/set_mode")?.params?.modeId).toBe("accept-edits");
+  });
+
+  it.each([
+    ["auto-accept-edits", undefined, "auto_edit"],
+    ["full-access", undefined, "yolo"],
+    ["full-access", "plan", "default"],
+  ] as const)("keeps the legacy mode fallback for %s / %s when no modes are advertised", async (runtimeMode, intent, expectedMode) => {
+    mock.setupConfigOptions = [];
+    mock.autoPrompt = true;
+    await provider.send({ ...input, runtimeMode, intent });
+    expect(mock.sent.find((message) => message.method === "session/set_mode")?.params?.modeId).toBe(expectedMode);
   });
 
   it("denies edits in plan intent even with full access selected", async () => {
