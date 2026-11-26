@@ -1529,9 +1529,9 @@ impl Shell {
         self.close_preview(cx);
         let archived = !self.session_metadata(id, cx).summary.archived;
         let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { locked(&store)?.set_archived(id, archived) });
+        let work = cx.background_executor().spawn(async move {
+            monocode_core::store::Store::set_archived_shared(&store, id, archived)
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {

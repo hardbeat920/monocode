@@ -308,15 +308,23 @@ impl Shell {
         cx: &mut Context<Self>,
         write: impl FnOnce(&mut monocode_core::store::Store) -> Result<(), String> + Send + 'static,
     ) {
+        self.store_write_shared(what, cx, move |store| write(&mut *locked(store)?));
+    }
+    pub(super) fn store_write_shared(
+        &mut self,
+        what: &'static str,
+        cx: &mut Context<Self>,
+        write: impl FnOnce(&Arc<Mutex<monocode_core::store::Store>>) -> Result<(), String>
+        + Send
+        + 'static,
+    ) {
         let store = self.store.clone();
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let work = cx
-                .background_executor()
-                .spawn(async move { write(&mut *locked(&store)?) });
+            let work = cx.background_executor().spawn(async move { write(&store) });
             if let Err(error) = work.await {
                 let _ = this.update(cx, |this, cx| {
                     this.error = Some(format!("Could not {what}: {error}"));
@@ -548,7 +556,9 @@ impl Shell {
                         view.update(cx, |s, _| s.summary.pinned = pinned);
                     }
                 }
-                self.store_write("pin the session", cx, move |s| s.set_pinned(&ids, pinned));
+                self.store_write_shared("pin the session", cx, move |s| {
+                    monocode_core::store::Store::set_pinned_shared(s, &ids, pinned)
+                });
                 self.invalidate_chrome(cx);
             }
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
@@ -794,7 +804,7 @@ impl Shell {
                 previous.await;
             }
             let work = cx.background_executor().spawn(async move {
-                locked(&store)?.delete(id)?;
+                monocode_core::store::Store::delete_shared(&store, id)?;
                 // Drop the session's recorded turns and their Git refs.
                 if let Some(checkpoints) = monocode_core::checkpoint::store() {
                     let _ = checkpoints.exclusive(|c| c.forget(&id.to_string()));
@@ -938,7 +948,9 @@ impl Shell {
                                 s.rename(name.clone(), cx);
                             });
                         }
-                        self.store_write("rename the session", cx, move |s| s.title(id, &name));
+                        self.store_write_shared("rename the session", cx, move |s| {
+                            monocode_core::store::Store::set_title_shared(s, id, &name)
+                        });
                     }
                 }
                 RenameTarget::Folder(folder) => {
