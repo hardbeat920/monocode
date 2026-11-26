@@ -1,15 +1,11 @@
-import { execFile, execFileSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { promisify } from "node:util";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { execGit, execGitSync } from "./git-exec";
+import { invalidateGitIndexCache } from "./workspace";
 
-const exec = promisify(execFile);
-const options = (cwd: string) => ({
-  cwd,
-  timeout: 10_000,
-  maxBuffer: 1024 * 1024,
-});
+const WORKTREES_TTL_MS = 15_000;
+const CACHE_LIMIT = 64;
 
 function available(path: string): boolean {
   try {
@@ -51,14 +47,10 @@ function parse(text: string): HostWorktree[] {
 }
 
 function registeredSync(cwd: string): HostWorktree[] {
-  const output = execFileSync(
-    "git",
-    ["worktree", "list", "--porcelain", "-z"],
-    {
-      ...options(cwd),
-      encoding: "utf8",
-    },
-  );
+  const output = execGitSync(cwd, ["worktree", "list", "--porcelain", "-z"], {
+    readOnly: true,
+    maxBuffer: 1024 * 1024,
+  });
   return parse(output).map((tree) => ({
     ...tree,
     path: available(tree.path) ? realpathSync.native(tree.path) : tree.path,
@@ -102,17 +94,134 @@ export async function resolveHostWorktreeAsync(
   const actual = available(requested) ? realpathSync.native(requested) : requested;
   if (actual === projectCwd) return projectCwd;
   const listed = await hostWorktrees(projectCwd);
-  if (!listed.worktrees.some((tree) => tree.path === actual && !tree.missing))
+  if (
+    !listed.worktrees.some((tree) => tree.path === actual && !tree.missing) ||
+    !available(actual)
+  )
     throw new Error("Choose an available worktree of this project");
   return actual;
 }
 
+type WorktreesEntry = { at: number; fingerprint: string; value: HostWorktrees };
+const worktreesCache = new Map<string, WorktreesEntry>();
+const worktreesInFlight = new Map<string, Promise<HostWorktrees>>();
+let worktreesEpoch = 0;
+
+/** Forget cached worktree lists for `cwd` (all projects when omitted). */
+export function invalidateWorktreesCache(cwd?: string) {
+  worktreesEpoch++;
+  for (const key of [...worktreesCache.keys()])
+    if (!cwd || key === cwd || key.startsWith(cwd + sep) || cwd.startsWith(key + sep))
+      worktreesCache.delete(key);
+  for (const key of [...worktreesInFlight.keys()])
+    if (!cwd || key === cwd || key.startsWith(cwd + sep) || cwd.startsWith(key + sep))
+      worktreesInFlight.delete(key);
+}
+
+/** The `worktrees` directory of the shared git dir, found without git. */
+async function worktreesFingerprint(cwd: string): Promise<string> {
+  let dir = cwd;
+  for (let depth = 0; depth < 64; depth++) {
+    const dotGit = resolve(dir, ".git");
+    const info = await stat(dotGit).catch(() => null);
+    let common: string | undefined;
+    if (info?.isDirectory()) common = dotGit;
+    else if (info?.isFile()) {
+      const text = await readFile(dotGit, "utf8").catch(() => "");
+      const target = /^gitdir:\s*(.+)$/m.exec(text)?.[1]?.trim();
+      if (!target) return "?";
+      const gitDir = resolve(dir, target);
+      const shared = (
+        await readFile(resolve(gitDir, "commondir"), "utf8").catch(() => "")
+      ).trim();
+      common = shared ? resolve(gitDir, shared) : gitDir;
+    }
+    if (common) {
+      const sig = (path: string) =>
+        stat(path, { bigint: true }).then(
+          (value) => `${value.mtimeNs}:${value.ctimeNs}:${value.size}`,
+          () => "-",
+        );
+      const worktreesDir = resolve(common, "worktrees");
+      const linkedNames = await readdir(worktreesDir).catch(() => []);
+      const sortedLinked = linkedNames.sort();
+      const headFiles = [
+        resolve(common, "HEAD"),
+        ...sortedLinked.map((name) => resolve(worktreesDir, name, "HEAD")),
+      ];
+      const gitdirFiles = sortedLinked.map((name) =>
+        resolve(worktreesDir, name, "gitdir"),
+      );
+      // Resolve attached symbolic HEAD refs so commits on checked-out branches
+      // invalidate the cached worktree head SHA immediately.
+      const branchRefs = (
+        await Promise.all(
+          headFiles.map(async (headFile) => {
+            const text = await readFile(headFile, "utf8").catch(() => "");
+            const ref = /^ref:\s*(.+)$/m.exec(text)?.[1]?.trim();
+            return ref ? resolve(common, ref) : null;
+          }),
+        )
+      ).filter((ref): ref is string => Boolean(ref));
+      const probes = [
+        worktreesDir,
+        resolve(common, "config"),
+        resolve(common, "packed-refs"),
+        ...headFiles,
+        ...gitdirFiles,
+        ...branchRefs,
+      ];
+      return (await Promise.all(probes.map(sig))).join("|");
+    }
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "?";
+}
+
+/** Worktree list, shared between concurrent callers and cached for a few seconds. */
 export async function hostWorktrees(cwd: string): Promise<HostWorktrees> {
-  const { stdout } = await exec(
-    "git",
-    ["worktree", "list", "--porcelain", "-z"],
-    options(cwd),
-  );
+  const cached = worktreesCache.get(cwd);
+  if (cached && Date.now() - cached.at < WORKTREES_TTL_MS) {
+    const fingerprint = await worktreesFingerprint(cwd);
+    const availabilityUnchanged = cached.value.worktrees.every(
+      (tree) => available(tree.path) === !tree.missing,
+    );
+    if (
+      fingerprint !== "?" &&
+      fingerprint === cached.fingerprint &&
+      availabilityUnchanged
+    )
+      return cached.value;
+  }
+  const pending = worktreesInFlight.get(cwd);
+  if (pending) return pending;
+  const epoch = worktreesEpoch;
+  const promise = (async () => {
+    const fingerprint = await worktreesFingerprint(cwd);
+    const value = await listWorktrees(cwd);
+    if (epoch === worktreesEpoch) {
+      worktreesCache.delete(cwd);
+      worktreesCache.set(cwd, { at: Date.now(), fingerprint, value });
+      while (worktreesCache.size > CACHE_LIMIT)
+        worktreesCache.delete(worktreesCache.keys().next().value as string);
+    }
+    return value;
+  })();
+  worktreesInFlight.set(cwd, promise);
+  try {
+    return await promise;
+  } finally {
+    if (worktreesInFlight.get(cwd) === promise) worktreesInFlight.delete(cwd);
+  }
+}
+
+async function listWorktrees(cwd: string): Promise<HostWorktrees> {
+  const stdout = await execGit(cwd, ["worktree", "list", "--porcelain", "-z"], {
+    readOnly: true,
+    maxBuffer: 1024 * 1024,
+  });
   const worktrees = parse(stdout).map((tree) => ({
     ...tree,
     path: available(tree.path) ? realpathSync.native(tree.path) : tree.path,
@@ -141,7 +250,7 @@ export async function createHostWorktree(
     branch.startsWith("@")
   )
     throw new Error("Enter a valid branch name");
-  await exec("git", ["check-ref-format", "--branch", branch], options(cwd));
+  await execGit(cwd, ["check-ref-format", "--branch", branch], { readOnly: true });
   if (
     typeof base !== "string" ||
     base.length > 255 ||
@@ -158,12 +267,12 @@ export async function createHostWorktree(
   if (existsSync(path))
     throw new Error(`${path} already exists. Choose another branch name.`);
   const refs = (
-    await exec(
-      "git",
+    await execGit(
+      cwd,
       ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"],
-      options(cwd),
+      { readOnly: true, maxBuffer: 1024 * 1024 },
     )
-  ).stdout
+  )
     .split("\n")
     .filter(Boolean);
   const source = existing
@@ -177,21 +286,29 @@ export async function createHostWorktree(
   if (!source || (existing && !refs.includes(source)))
     throw new Error("Choose an available base branch");
   const commit = (
-    await exec(
-      "git",
+    await execGit(
+      sourceCwd,
       ["rev-parse", "--verify", "--end-of-options", `${source}^{commit}`],
-      options(sourceCwd),
+      { readOnly: true, maxBuffer: 1024 * 1024 },
     )
-  ).stdout.trim();
+  ).trim();
   await mkdir(listed.defaultRoot, { recursive: true });
-  if (existing)
-    await exec("git", ["worktree", "add", "--", path, branch], options(cwd));
-  else
-    await exec(
-      "git",
-      ["worktree", "add", "--no-track", "-b", branch, "--", path, commit],
-      options(cwd),
-    );
+  try {
+    if (existing)
+      await execGit(cwd, ["worktree", "add", "--", path, branch], {
+        readOnly: false,
+        maxBuffer: 1024 * 1024,
+      });
+    else
+      await execGit(
+        cwd,
+        ["worktree", "add", "--no-track", "-b", branch, "--", path, commit],
+        { readOnly: false, maxBuffer: 1024 * 1024 },
+      );
+  } finally {
+    invalidateWorktreesCache(cwd);
+    invalidateGitIndexCache(cwd);
+  }
   const created = (await hostWorktrees(cwd)).worktrees.find(
     (tree) => tree.path === path,
   );
@@ -219,19 +336,23 @@ export async function renameHostWorktreeBranch(
     branch.startsWith("@")
   )
     throw new Error("Enter a valid branch name");
-  await exec("git", ["check-ref-format", "--branch", branch], options(cwd));
-  const tree = (await hostWorktrees(cwd)).worktrees.find(
+  await execGit(cwd, ["check-ref-format", "--branch", branch], { readOnly: true });
+  const tree = (await listWorktrees(cwd)).worktrees.find(
     (entry) => entry.path === path && !entry.missing,
   );
   if (!tree || tree.isMain || tree.branch !== expectedBranch)
     throw new Error("The worktree branch has changed");
   if (branch === expectedBranch) return tree;
   if (!stillOwned()) throw new Error("The session no longer owns this branch");
-  await exec(
-    "git",
-    ["branch", "-m", expectedBranch, branch],
-    options(tree.path),
-  );
+  try {
+    await execGit(tree.path, ["branch", "-m", expectedBranch, branch], {
+      readOnly: false,
+      maxBuffer: 1024 * 1024,
+    });
+  } finally {
+    invalidateWorktreesCache(cwd);
+    invalidateGitIndexCache(tree.path);
+  }
   const renamed = (await hostWorktrees(cwd)).worktrees.find(
     (entry) => entry.path === path,
   );

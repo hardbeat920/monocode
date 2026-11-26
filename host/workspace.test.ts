@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -15,12 +16,15 @@ import {
   hostFileDiff,
   hostGitAction,
   hostGitIndex,
+  hostGitStats,
+  invalidateGitIndexCache,
   listHostFiles,
   readHostFile,
   searchHostContent,
   searchHostFiles,
   writeHostFile,
 } from "./workspace";
+import { getGitExecStats, resetGitExecStats } from "./git-exec";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -338,4 +342,311 @@ it("stages selected host diff content without replacing the working file", async
   await expect(
     hostGitAction(root, "stageContents", "../escape", undefined, "x"),
   ).rejects.toThrow("outside");
+});
+
+function makeRepo(prefix = "monocode-f0-") {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  roots.push(root);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  git("init", "-q", "-b", "main");
+  git("config", "core.autocrlf", "false");
+  git("config", "user.name", "Workspace Test");
+  git("config", "user.email", "workspace@example.test");
+  git("config", "commit.gpgsign", "false");
+  return { root, git };
+}
+
+async function spawns<T>(run: () => Promise<T>): Promise<[T, number]> {
+  resetGitExecStats();
+  const value = await run();
+  return [value, getGitExecStats().spawned];
+}
+
+function withRemote(root: string, git: (...args: string[]) => string) {
+  const remote = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "monocode-f0-remote-")),
+  );
+  roots.push(remote);
+  execFileSync("git", ["init", "--bare", "-q", "-b", "main"], { cwd: remote });
+  git("remote", "add", "origin", remote);
+  git("push", "-q", "-u", "origin", "HEAD");
+  void root;
+}
+
+it("serves a dirty repository with few git processes and caches it", async () => {
+  const { root, git } = makeRepo();
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src/app.ts"), "before\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  withRemote(root, git);
+  writeFileSync(join(root, "src/app.ts"), "after\n");
+  mkdirSync(join(root, "src/added"));
+  writeFileSync(join(root, "src/added/new.ts"), "new\n");
+  invalidateGitIndexCache();
+
+  const [cold, coldSpawns] = await spawns(() => hostGitIndex(root));
+  expect(cold).toMatchObject({
+    branch: "main",
+    remote: "origin",
+    upstream: "origin/main",
+    defaultBranch: "main",
+    ahead: 0,
+    behind: 0,
+    headPushed: true,
+  });
+  expect(cold.files.map((file) => [file.relative, file.status])).toEqual([
+    ["src/added/new.ts", "untracked"],
+    ["src/app.ts", "modified"],
+  ]);
+  expect(coldSpawns).toBeLessThanOrEqual(8);
+
+  // Within the TTL and with nothing changed, polling spawns nothing.
+  const [again, againSpawns] = await spawns(() => hostGitIndex(root));
+  expect(again).toBe(cold);
+  expect(againSpawns).toBe(0);
+
+  // A fresh edit refreshes the snapshot but reuses the cached remote facts.
+  writeFileSync(join(root, "src/app.ts"), "after, longer\n");
+  const [warm, warmSpawns] = await spawns(() => hostGitIndex(root));
+  expect(warm.files.find((file) => file.relative === "src/app.ts")).toMatchObject(
+    { additions: 1, deletions: 1 },
+  );
+  expect(warmSpawns).toBeLessThanOrEqual(3);
+
+  // Concurrent callers share one run.
+  invalidateGitIndexCache();
+  const [, single] = await spawns(() => hostGitIndex(root));
+  invalidateGitIndexCache();
+  const [results, shared] = await spawns(() =>
+    Promise.all([1, 2, 3, 4, 5].map(() => hostGitIndex(root))),
+  );
+  expect(shared).toBe(single);
+  expect(new Set(results).size).toBe(1);
+});
+
+it("needs one git process for a clean snapshot without sync metadata", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "a.txt"), "a\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  invalidateGitIndexCache();
+  const [index, count] = await spawns(() =>
+    hostGitIndex(root, { includeSync: false }),
+  );
+  expect(index.files).toEqual([]);
+  expect(count).toBe(1);
+  expect(index.remote).toBeNull();
+});
+
+it("notices external git changes without waiting for the TTL", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "app.ts"), "before\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  writeFileSync(join(root, "app.ts"), "after\n");
+  expect((await hostGitIndex(root)).files).toHaveLength(1);
+  const headBefore = (await hostGitIndex(root)).head;
+
+  git("add", "app.ts");
+  git("commit", "-qm", "second");
+  const committed = await hostGitIndex(root);
+  expect(committed.files).toEqual([]);
+  expect(committed.head).not.toBe(headBefore);
+
+  expect((await hostGitIndex(root)).remote).toBeNull();
+  git("remote", "add", "origin", root);
+  expect((await hostGitIndex(root)).remote).toBe("origin");
+
+  // A working-tree edit to an already changed file is visible at once.
+  writeFileSync(join(root, "app.ts"), "edit\n");
+  git("add", "app.ts");
+  writeFileSync(join(root, "app.ts"), "edit\nedit two\n");
+  const first = await hostGitIndex(root);
+  writeFileSync(join(root, "app.ts"), "edit\nedit two\nthree\n");
+  const second = await hostGitIndex(root);
+  expect(second.files[0].additions).toBeGreaterThan(first.files[0].additions);
+});
+
+it("invalidates cached snapshots after host writes", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "app.ts"), "before\n");
+  writeFileSync(join(root, "other.ts"), "other\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  writeFileSync(join(root, "app.ts"), "after\n");
+  expect((await hostGitIndex(root)).files[0].staged).toBe(false);
+  await hostGitAction(root, "stage", "app.ts");
+  expect((await hostGitIndex(root)).files[0].staged).toBe(true);
+  await hostGitAction(root, "unstage", "app.ts");
+  expect((await hostGitIndex(root)).files[0].staged).toBe(false);
+  await hostGitAction(root, "discard", "app.ts");
+  expect((await hostGitIndex(root)).files).toEqual([]);
+  await writeHostFile(root, "other.ts", "other\n", "changed\n");
+  expect((await hostGitIndex(root)).files.map((file) => file.relative)).toEqual([
+    "other.ts",
+  ]);
+  await createHostPath(root, "", "fresh.ts", false);
+  expect((await hostGitIndex(root)).files.map((file) => file.relative)).toEqual([
+    "fresh.ts",
+    "other.ts",
+  ]);
+  await hostGitAction(root, "discardAll");
+  expect((await hostGitIndex(root)).files).toEqual([]);
+});
+
+it("diffs one file without a full index, and stats reuse the cache", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "app.ts"), "before\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  writeFileSync(join(root, "app.ts"), "after\n");
+  writeFileSync(join(root, "new.ts"), "new\n");
+  invalidateGitIndexCache();
+
+  const [modified, modifiedSpawns] = await spawns(() =>
+    hostFileDiff(root, "app.ts", false),
+  );
+  expect(modified).toMatchObject({ original: "before\n", current: "after\n" });
+  expect(modifiedSpawns).toBeLessThanOrEqual(2);
+
+  const [untracked, untrackedSpawns] = await spawns(() =>
+    hostFileDiff(root, "new.ts", false),
+  );
+  expect(untracked).toMatchObject({
+    status: "untracked",
+    original: "",
+    current: "new\n",
+  });
+  expect(untrackedSpawns).toBe(1);
+  await expect(hostFileDiff(root, "missing.ts", false)).rejects.toThrow(
+    "no uncommitted changes",
+  );
+
+  invalidateGitIndexCache();
+  const [stats, coldSpawns] = await spawns(() => hostGitStats(root));
+  expect(stats).toEqual({ files: 2, additions: 2, deletions: 1 });
+  expect(coldSpawns).toBeLessThanOrEqual(2);
+  const [, warmSpawns] = await spawns(() => hostGitStats(root));
+  expect(warmSpawns).toBe(0);
+  await hostGitIndex(root);
+  const [, fullWarm] = await spawns(() => hostGitStats(root));
+  expect(fullWarm).toBe(0);
+});
+
+it("parses unborn, detached, renamed and awkwardly named entries", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "first.txt"), "first\n");
+  const unborn = await hostGitIndex(root);
+  expect(unborn).toMatchObject({ head: null, branch: "main" });
+  expect(unborn.files).toMatchObject([{ relative: "first.txt", status: "untracked" }]);
+
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  git("mv", "first.txt", "second one.txt");
+  const renamed = await hostGitIndex(root);
+  expect(renamed.files).toMatchObject([
+    { relative: "second one.txt", staged: true, unstaged: false },
+  ]);
+  git("commit", "-qm", "rename");
+
+  const odd =
+    process.platform === "win32"
+      ? ["ünï cödé.txt"]
+      : ["ünï cödé.txt", "tab\tname.txt", "new\nline.txt"];
+  for (const name of odd) writeFileSync(join(root, name), "x\n");
+  const names = (await hostGitIndex(root)).files.map((file) => file.relative);
+  expect(names.sort()).toEqual([...odd].sort());
+
+  git("add", ".");
+  git("commit", "-qm", "odd");
+  git("checkout", "-q", "--detach");
+  expect(await hostGitIndex(root)).toMatchObject({ branch: null });
+});
+
+it("reports tracked blobs by indexOid, and expands untracked folders within a cap", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "app.ts"), "before\n");
+  writeFileSync(join(root, ".gitignore"), "*.log\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  writeFileSync(join(root, "app.ts"), "after\n");
+  mkdirSync(join(root, "pkg"));
+  writeFileSync(join(root, "pkg/a.ts"), "a\n");
+  writeFileSync(join(root, "pkg/debug.log"), "ignored\n");
+  mkdirSync(join(root, "dist"));
+  for (let i = 0; i < 250; i++) writeFileSync(join(root, `dist/f${i}.js`), "x\n");
+
+  const index = await hostGitIndex(root);
+  const byPath = new Map(index.files.map((file) => [file.relative, file]));
+  expect(byPath.get("app.ts")?.indexOid).toMatch(/^[0-9a-f]{40,64}$/);
+  expect(byPath.get("pkg/a.ts")?.indexOid).toBeUndefined();
+  expect(byPath.get("pkg/a.ts")?.additions).toBe(1);
+  expect(byPath.has("pkg/debug.log")).toBe(false);
+  // Oversized untracked folders stay collapsed instead of listing every file.
+  expect(byPath.get("dist/")).toMatchObject({ status: "untracked", additions: 0 });
+  expect(index.files.some((file) => file.relative.startsWith("dist/f"))).toBe(
+    false,
+  );
+});
+
+it("does not skip unignored untracked folders named target when expanding", async () => {
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "README.md"), "hi\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  mkdirSync(join(root, "new/target"), { recursive: true });
+  writeFileSync(join(root, "new/target/result.txt"), "line1\nline2\n");
+
+  const index = await hostGitIndex(root);
+  const byPath = new Map(index.files.map((file) => [file.relative, file]));
+  expect(byPath.get("new/target/result.txt")).toMatchObject({
+    status: "untracked",
+    additions: 2,
+  });
+});
+
+it("counts staged additions before the first commit and handles discard edge cases", async () => {
+  // 1. Unborn repo: staged additions are counted via `diff --cached --numstat`.
+  const { root: unbornRoot, git: unbornGit } = makeRepo();
+  writeFileSync(join(unbornRoot, "first.ts"), "one\ntwo\nthree\n");
+  unbornGit("add", "first.ts");
+  const unbornIndex = await hostGitIndex(unbornRoot);
+  expect(unbornIndex.head).toBeNull();
+  expect(unbornIndex.additions).toBe(3);
+  expect(unbornIndex.files[0]).toMatchObject({
+    relative: "first.ts",
+    additions: 3,
+    staged: true,
+  });
+
+  // 2. Staged deletion + recreated untracked file at the same path can be discarded.
+  const { root, git } = makeRepo();
+  writeFileSync(join(root, "dup.ts"), "old\n");
+  writeFileSync(join(root, "a1.ts"), "original-1\n");
+  writeFileSync(join(root, "a[1].ts"), "original-glob\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+
+  git("rm", "-q", "dup.ts");
+  writeFileSync(join(root, "dup.ts"), "recreated\n");
+  await hostGitAction(root, "discard", "dup.ts");
+  expect(() => readFileSync(join(root, "dup.ts"), "utf8")).toThrow();
+
+  // 3. Literal pathspecs: discarding `a[1].ts` does not restore `a1.ts`.
+  writeFileSync(join(root, "a1.ts"), "edited-1\n");
+  writeFileSync(join(root, "a[1].ts"), "edited-glob\n");
+  await hostGitAction(root, "discard", "a[1].ts");
+  expect(readFileSync(join(root, "a[1].ts"), "utf8")).toBe("original-glob\n");
+  expect(readFileSync(join(root, "a1.ts"), "utf8")).toBe("edited-1\n");
+
+  // 4. Discarding a collapsed untracked folder (>200 files) removes it cleanly.
+  mkdirSync(join(root, "bulk"));
+  for (let i = 0; i < 210; i++) writeFileSync(join(root, `bulk/f${i}.txt`), "x\n");
+  const before = await hostGitIndex(root);
+  expect(before.files.some((f) => f.relative === "bulk/")).toBe(true);
+  await hostGitAction(root, "discard", "bulk/");
+  const after = await hostGitIndex(root);
+  expect(after.files.some((f) => f.relative.startsWith("bulk"))).toBe(false);
 });
