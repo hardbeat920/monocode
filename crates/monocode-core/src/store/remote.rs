@@ -462,6 +462,10 @@ impl Store {
         id: i64,
         patch: Value,
     ) -> Result<bool, String> {
+        let op_lock = remote_mutation_lock(store, id);
+        let _op_guard = op_lock
+            .lock()
+            .map_err(|_| "Remote session mutation lock poisoned".to_owned())?;
         let lock = || {
             store
                 .lock()
@@ -469,42 +473,34 @@ impl Store {
         };
         let remote_call = {
             let guard = lock()?;
-            let Some(remote) = guard.remote_session(id)? else {
+            let Some(mut remote) = guard.remote_session(id)? else {
                 return Ok(false);
             };
             if let Some(session_id) = &remote.session_id {
                 let client = crate::remote::default_connections()?;
                 let machine = remote.machine(&client)?;
-                Some((
+                (
                     client,
                     machine.id,
                     session_id.clone(),
                     remote.project.project_id.clone(),
-                ))
+                )
             } else {
-                None
+                // Draft has no host identity yet: persist atomically under this
+                // lock so a concurrent host registration cannot interleave.
+                apply_remote_patch(&mut remote, &patch);
+                guard.save_remote_session(&remote)?;
+                return Ok(true);
             }
         };
-        if let Some((client, machine_id, session_id, project_id)) = remote_call {
-            let mut params = patch.clone();
-            params["sessionId"] = json!(session_id);
-            params["projectId"] = json!(project_id);
-            client.request(&machine_id, "sessions.update", params)?;
-        }
+        let (client, machine_id, session_id, project_id) = remote_call;
+        let mut params = patch.clone();
+        params["sessionId"] = json!(session_id);
+        params["projectId"] = json!(project_id);
+        client.request(&machine_id, "sessions.update", params)?;
         let guard = lock()?;
         if let Some(mut fresh) = guard.remote_session(id)? {
-            if let Some(title) = patch["title"].as_str() {
-                fresh.summary.title = title.into();
-            }
-            if let Some(archived) = patch["archived"].as_bool() {
-                fresh.summary.archived = archived;
-            }
-            if let Some(pinned) = patch["pinned"].as_bool() {
-                fresh.summary.pinned = pinned;
-            }
-            if let Some(item) = patch.get("linkedWorkItem") {
-                fresh.summary.work_item = serde_json::from_value(item.clone()).ok();
-            }
+            apply_remote_patch(&mut fresh, &patch);
             guard.save_remote_session(&fresh)?;
         }
         Ok(true)
@@ -560,6 +556,10 @@ impl Store {
     }
     /// Deletes a session without holding `store`'s mutex across a blocking remote RPC.
     pub fn delete_shared(store: &std::sync::Mutex<Store>, id: i64) -> Result<(), String> {
+        let op_lock = remote_mutation_lock(store, id);
+        let _op_guard = op_lock
+            .lock()
+            .map_err(|_| "Remote session mutation lock poisoned".to_owned())?;
         let lock = || {
             store
                 .lock()
@@ -658,6 +658,44 @@ impl Store {
             &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
         )
     }
+}
+
+fn apply_remote_patch(fresh: &mut RemoteSession, patch: &Value) {
+    if let Some(title) = patch["title"].as_str() {
+        fresh.summary.title = title.into();
+    }
+    if let Some(archived) = patch["archived"].as_bool() {
+        fresh.summary.archived = archived;
+    }
+    if let Some(pinned) = patch["pinned"].as_bool() {
+        fresh.summary.pinned = pinned;
+    }
+    if let Some(item) = patch.get("linkedWorkItem") {
+        fresh.summary.work_item = serde_json::from_value(item.clone()).ok();
+    }
+}
+
+/// Per-(store, session) lock that serializes remote mutations across their
+/// unlocked RPC + local save without blocking unrelated sessions or UI reads.
+fn remote_mutation_lock(
+    store: &std::sync::Mutex<Store>,
+    id: i64,
+) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::sync::{Arc, Mutex, OnceLock, Weak};
+    type LockMap = std::collections::HashMap<(usize, i64), Weak<Mutex<()>>>;
+    static LOCKS: OnceLock<Mutex<LockMap>> = OnceLock::new();
+    let map = LOCKS.get_or_init(|| Mutex::new(LockMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let key = (store as *const _ as usize, id);
+    if let Some(existing) = guard.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    if guard.len() >= 64 {
+        guard.retain(|_, weak| weak.strong_count() > 0);
+    }
+    let created = Arc::new(Mutex::new(()));
+    guard.insert(key, Arc::downgrade(&created));
+    created
 }
 
 #[cfg(test)]
