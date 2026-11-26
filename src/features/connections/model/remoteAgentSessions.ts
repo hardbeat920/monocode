@@ -71,27 +71,56 @@ const defaultDeps: RemoteAgentSessionDeps = {
   pollIntervalMs: 1_000,
 };
 
-const activeWatchers = new Map<string, Set<() => void>>();
+type ActiveWatcher = { requestId: string; cancel: () => void };
+const activeWatchers = new Map<string, Set<ActiveWatcher>>();
+const settledRequests = new Set<string>();
+const settledKey = (hostId: string, requestId: string) => `${hostId}\0${requestId}`;
 
-function registerWatcher(hostId: string, cancel: () => void): () => void {
+function markSettled(hostId: string, requestId: string): void {
+  settledRequests.add(settledKey(hostId, requestId));
+  if (settledRequests.size > 512) {
+    const first = settledRequests.values().next().value;
+    if (first !== undefined) settledRequests.delete(first);
+  }
+}
+
+function hasActiveWatcher(hostId: string, requestId: string): boolean {
+  const set = activeWatchers.get(hostId);
+  if (!set) return false;
+  for (const entry of set) {
+    if (entry.requestId === requestId) return true;
+  }
+  return false;
+}
+
+function registerWatcher(
+  hostId: string,
+  requestId: string,
+  cancel: () => void,
+): () => void {
   let set = activeWatchers.get(hostId);
   if (!set) {
     set = new Set();
     activeWatchers.set(hostId, set);
   }
-  set.add(cancel);
+  const entry: ActiveWatcher = { requestId, cancel };
+  set.add(entry);
   return () => {
     const current = activeWatchers.get(hostId);
     if (!current) return;
-    current.delete(cancel);
+    current.delete(entry);
     if (current.size === 0) activeWatchers.delete(hostId);
   };
 }
 
 export function cancelRemoteSessionWatchers(hostId: string): void {
+  const prefix = `${hostId}\0`;
+  for (const key of settledRequests) {
+    if (key.startsWith(prefix)) settledRequests.delete(key);
+  }
   const set = activeWatchers.get(hostId);
   if (!set) return;
-  for (const cancel of [...set]) cancel();
+  for (const entry of [...set]) entry.cancel();
   activeWatchers.delete(hostId);
 }
 
@@ -201,7 +230,7 @@ export function remoteCompletionOutcome(
       block.text.trim()
     ) {
       reply = block.text;
-    } else if (block.role === "system" && block.text.trim()) {
+    } else if (block.role === "system" && !block.interjection && block.text.trim()) {
       systemMessage = block.text.trim();
     }
   }
@@ -275,7 +304,7 @@ export function watchRemoteSessionCompletion(
     if (timer !== undefined) clearTimeout(timer);
     unregister();
   };
-  const unregister = registerWatcher(target.hostId, cleanup);
+  const unregister = registerWatcher(target.hostId, requestId, cleanup);
 
   const poll = async () => {
     if (cancelled) return;
@@ -288,6 +317,7 @@ export function watchRemoteSessionCompletion(
       }
       if (latest.status !== "running") {
         cleanup();
+        markSettled(target.hostId, requestId);
         onSettled(
           remoteCompletionOutcome(latest, requestId),
           remoteHostSessionToSession(latest, target.project, target.openShell),
@@ -298,6 +328,7 @@ export function watchRemoteSessionCompletion(
       if (cancelled) return;
       if (isRemoteSessionNotFoundError(error)) {
         cleanup();
+        markSettled(target.hostId, requestId);
         onSettled({
           status: "failed",
           text: "",
@@ -308,6 +339,7 @@ export function watchRemoteSessionCompletion(
       failures += 1;
       if (failures >= 20) {
         cleanup();
+        markSettled(target.hostId, requestId);
         onSettled({
           status: "failed",
           text: "",
@@ -354,9 +386,11 @@ export async function sendRemoteAgentSession(
     target.project,
     target.openShell,
   );
-  const previous = snapshot.session.blocks.find(
+  const previousIndex = snapshot.session.blocks.findIndex(
     (block) => block.appRequestId === requestId || block.id === requestId,
   );
+  const previous =
+    previousIndex >= 0 ? snapshot.session.blocks[previousIndex] : undefined;
   if (previous) {
     if (previous.text !== prompt) {
       throw new Error("Request ID was already used with another prompt");
@@ -365,6 +399,34 @@ export async function sendRemoteAgentSession(
       throw new Error("Request ID belongs to an unsent draft");
     }
     options.rememberFollowUp?.(session);
+    if (
+      !hasActiveWatcher(target.hostId, requestId) &&
+      !settledRequests.has(settledKey(target.hostId, requestId))
+    ) {
+      const onSettled = options.createSettler?.(session);
+      if (onSettled) {
+        onSettled.accept();
+        const turnDone =
+          snapshot.status !== "running" ||
+          snapshot.session.blocks
+            .slice(previousIndex + 1)
+            .some((block) => block.role === "user" && !block.draft);
+        if (turnDone) {
+          markSettled(target.hostId, requestId);
+          onSettled(remoteCompletionOutcome(snapshot, requestId), session);
+        } else {
+          watchRemoteSessionCompletion(
+            machine.id,
+            target,
+            requestId,
+            snapshot,
+            onSettled,
+            deps,
+            { onSnapshot: options.onSnapshot },
+          );
+        }
+      }
+    }
     return { alreadySubmitted: true };
   }
   if (snapshot.status === "running" || snapshot.session.busy) {

@@ -380,7 +380,11 @@ export function cachedRemoteSessionSummary(project: string, sessionId: string) {
   return cachedSessions(project).find((session) => session.id === sessionId);
 }
 
+const historyWriteGen = new Map<string, number>();
+const historyGen = (project: string) => historyWriteGen.get(project) ?? 0;
+
 function writeCachedSessions(project: string, sessions: HostSessionSummary[]) {
+  historyWriteGen.set(project, historyGen(project) + 1);
   try {
     localStorage.setItem(historyKey(project), JSON.stringify(sessions));
     window.dispatchEvent(new Event(REMOTE_HISTORY_UPDATED));
@@ -401,6 +405,7 @@ export async function refreshRemoteProjectSessionsNow(
 ): Promise<HostSessionSummary[]> {
   const remote = remoteProjectFor(project);
   if (!remote) return [];
+  const startGen = historyGen(project);
   try {
     const machine = await remoteMachineFor(remote.environmentId);
     if (!machine) return cachedSessions(project);
@@ -409,6 +414,7 @@ export async function refreshRemoteProjectSessionsNow(
       "sessions.list",
       { projectId: remote.projectId },
     );
+    if (historyGen(project) !== startGen) return cachedSessions(project);
     writeCachedSessions(project, next);
     return next;
   } catch {
@@ -453,6 +459,7 @@ export function useRemoteProjectSessions(
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
     const poll = async () => {
+      const startGen = historyGen(project);
       try {
         const next = await remoteRequest<HostSessionSummary[]>(
           machine.id,
@@ -461,9 +468,13 @@ export function useRemoteProjectSessions(
         );
         if (disposed) return;
         failures = 0;
-        setSessions(next);
-        setLoaded(true);
-        writeCachedSessions(project, next);
+        if (historyGen(project) !== startGen) {
+          setSessions(cachedSessions(project));
+        } else {
+          setSessions(next);
+          setLoaded(true);
+          writeCachedSessions(project, next);
+        }
       } catch {
         // Keep the cached list and back off while SSH is unavailable.
         failures = Math.min(4, failures + 1);

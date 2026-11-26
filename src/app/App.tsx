@@ -489,6 +489,7 @@ import {
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
+import { removeSessionFromWorkspace } from "../features/sessions/model/sessionWorkspaceLifecycle";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
@@ -743,6 +744,7 @@ import {
 } from "../features/connections/model/connections";
 import {
   draftRemoteAgentSession,
+  isRemoteSessionNotFoundError,
   loadRemoteAgentSession,
   removeRemoteAgentSession,
   resolveRemoteAgentSessionTarget,
@@ -760,7 +762,10 @@ import {
   remoteProjectFor,
   remoteSessionGitCwd,
 } from "../features/connections/model/remoteProjects";
-import type { HostSession } from "../features/connections/model/protocol";
+import type {
+  HostSession,
+  HostSessionSummary,
+} from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
@@ -3999,33 +4004,86 @@ function Workspace({
     [tabs, persistSession, refreshHistory, sidebarCwd],
   );
 
-  const onRemoteSessionDeleted = useCallback(
-    (remoteSessionId: string) => {
-      const tab = tabsRef.current.find((entry) =>
-        leafIds(entry.layout).some(
-          (shellId) => remoteSessionFor(shellId) === remoteSessionId,
-        ),
-      );
-      if (!tab) return;
-      const closePlan = planWorkspaceTabClose({
-        tabs: tabsRef.current,
-        sessions: sessionsRef.current,
-        closingTabId: tab.id,
-        scope: tabCloseScope,
-        worktreeOf: tabWorktreeOf,
-      });
-      if (closePlan.action === "keep") onClearTabSession(tab.id);
-      else onCloseTab(tab.id);
-    },
-    [onClearTabSession, onCloseTab, tabCloseScope],
-  );
-  const onRemoteSessionDeletedRef = useRef(onRemoteSessionDeleted);
-  onRemoteSessionDeletedRef.current = onRemoteSessionDeleted;
   const remoteSessionProjectHints = useRef(new Map<string, string>());
   const lastRemoteSnapshot = useRef(new Map<string, HostSession>());
   const onRemoteSnapshotRef = useRef<
-    ((shellId: string, snapshot?: HostSession) => void) | undefined
+    | ((shellId: string, snapshot?: HostSession, expectedHostId?: string) => void)
+    | undefined
   >(undefined);
+  const onRemoteSessionDeleted = useCallback(
+    (remoteSessionId: string) => {
+      const shellIds = new Set(
+        sessionsRef.current
+          .filter(
+            (session) =>
+              isRemoteProjectPath(session.cwd) &&
+              remoteSessionFor(session.id) === remoteSessionId,
+          )
+          .map((session) => session.id),
+      );
+      for (const tab of tabsRef.current) {
+        for (const shellId of leafIds(tab.layout)) {
+          if (remoteSessionFor(shellId) === remoteSessionId) {
+            shellIds.add(shellId);
+          }
+        }
+      }
+      if (shellIds.size === 0) return;
+
+      let nextTabs = tabsRef.current;
+      let nextSessions = sessionsRef.current;
+      let nextActiveTabId = activeTabIdRef.current;
+      const closedTabs: WorkspaceTab[] = [];
+      for (const shellId of shellIds) {
+        lastRemoteSnapshot.current.delete(shellId);
+        rememberRemoteSession(shellId);
+        rememberRemotePendingWorktree(shellId);
+        openingSessionIds.current.delete(shellId);
+        const removal = removeSessionFromWorkspace({
+          tabs: nextTabs,
+          sessions: nextSessions,
+          sessionId: shellId,
+          activeTabId: nextActiveTabId,
+          scope: tabCloseScope,
+          createReplacement: (seed) =>
+            newDefaultSession(seed?.cwd ?? sidebarCwd, sessionDefaults?.runtimeMode),
+          canCloseTab: (tab) =>
+            tab.editorPanes.length === 0 &&
+            (tab.terminalPanes?.length ?? 0) === 0,
+        });
+        nextTabs = removal.tabs;
+        nextSessions = removal.sessions;
+        nextActiveTabId = removal.activeTabId;
+        closedTabs.push(...removal.closedTabs);
+      }
+
+      const closingFiles = filesInWorkspaceTabs(closedTabs);
+      if (closingFiles.length > 0) {
+        setDirtyFiles((current) => {
+          const next = new Set(current);
+          for (const file of closingFiles) next.delete(file.id);
+          return next;
+        });
+      }
+      sessionsRef.current = nextSessions;
+      tabsRef.current = nextTabs;
+      setSessions(nextSessions);
+      setTabs(nextTabs);
+      if (nextActiveTabId !== activeTabIdRef.current) {
+        activateTab(nextActiveTabId);
+      }
+      if (
+        shownMonoSessionIdRef.current === remoteSessionId ||
+        (shownMonoSessionIdRef.current &&
+          shellIds.has(shownMonoSessionIdRef.current))
+      ) {
+        setMonoShownSession(null);
+      }
+    },
+    [activateTab, sessionDefaults?.runtimeMode, sidebarCwd, tabCloseScope],
+  );
+  const onRemoteSessionDeletedRef = useRef(onRemoteSessionDeleted);
+  onRemoteSessionDeletedRef.current = onRemoteSessionDeleted;
 
   const seedSession = useCallback((cwd: string) => {
     const seed = sessionsRef.current[0];
@@ -4791,7 +4849,77 @@ function Workspace({
 
       openingSessionIds.current.add(sessionId);
       const restored = await loadStoredSession(sessionId);
-      if (!restored || removingSessionIds.current.has(sessionId)) {
+      if (!restored) {
+        if (!removingSessionIds.current.has(sessionId)) {
+          const hintedProjectCwd =
+            remoteSessionProjectHints.current.get(sessionId) ??
+            sessionsRef.current
+              .flatMap((session) => session.blocks)
+              .flatMap((block) => block.monoSpawnedSessions ?? [])
+              .find((entry) => entry.sessionId === sessionId)?.cwd;
+          const remoteTarget = resolveRemoteAgentSessionTarget(sessionId, {
+            hintedProjectCwd,
+          });
+          if (remoteTarget) {
+            const existing = sessionsRef.current.find(
+              (session) =>
+                session.id === sessionId ||
+                (isRemoteProjectPath(session.cwd) &&
+                  remoteSessionFor(session.id) === sessionId),
+            );
+            if (existing) {
+              openingSessionIds.current.delete(sessionId);
+              return existing;
+            }
+            const machine = await remoteMachineFor(
+              remoteTarget.project.environmentId,
+            );
+            let snapshot: HostSession | undefined;
+            if (machine) {
+              try {
+                snapshot = await loadRemoteSession(
+                  machine.id,
+                  remoteTarget.hostId,
+                );
+              } catch (error) {
+                if (isRemoteSessionNotFoundError(error)) {
+                  openingSessionIds.current.delete(sessionId);
+                  return null;
+                }
+              }
+            }
+            const appeared = removingSessionIds.current.has(sessionId)
+              ? null
+              : sessionsRef.current.find(
+                  (session) =>
+                    session.id === sessionId ||
+                    (isRemoteProjectPath(session.cwd) &&
+                      remoteSessionFor(session.id) === sessionId),
+                );
+            openingSessionIds.current.delete(sessionId);
+            if (removingSessionIds.current.has(sessionId)) return null;
+            if (appeared) return appeared;
+            const shellBase = newDefaultSession(
+              remoteTarget.project.key,
+              sessionDefaults?.runtimeMode,
+            );
+            const shell = snapshot
+              ? remoteSessionState(shellBase, snapshot, remoteTarget.project)
+              : shellBase;
+            if (snapshot) lastRemoteSnapshot.current.set(shell.id, snapshot);
+            rememberRemoteSession(shell.id, remoteTarget.hostId);
+            openingSessionIds.current.add(shell.id);
+            const next = [...sessionsRef.current, shell];
+            sessionsRef.current = next;
+            setSessions(next);
+            return shell;
+          }
+        }
+        openingSessionIds.current.delete(sessionId);
+        void refreshHistory(sidebarCwd);
+        return null;
+      }
+      if (removingSessionIds.current.has(sessionId)) {
         openingSessionIds.current.delete(sessionId);
         void refreshHistory(sidebarCwd);
         return null;
@@ -5299,7 +5427,11 @@ function Workspace({
   // the Mono started; opening the one already shown hides it again.
   const showMonoLaunchedSession = useCallback(
     async (monoSessionId: string, launchedId: string) => {
-      if (shownMonoSessionIdRef.current === launchedId) {
+      if (
+        shownMonoSessionIdRef.current === launchedId ||
+        (shownMonoSessionIdRef.current &&
+          remoteSessionFor(shownMonoSessionIdRef.current) === launchedId)
+      ) {
         setMonoShownSession(null);
         return;
       }
@@ -11497,11 +11629,13 @@ function Workspace({
                   archived: !!session.archived,
                 });
               }
+              const remoteSummaries = new Map<string, HostSessionSummary>();
               if (isRemoteProjectPath(cwd)) {
                 const remoteSessions = await refreshRemoteProjectSessionsNow(cwd);
                 const remoteKey = remoteProjectFor(cwd)?.key ?? cwd;
                 for (const session of remoteSessions) {
                   remoteSessionProjectHints.current.set(session.id, remoteKey);
+                  remoteSummaries.set(session.id, session);
                   byId.set(session.id, {
                     id: session.id,
                     title: session.title,
@@ -11528,8 +11662,19 @@ function Workspace({
                   : undefined;
                 const id = remoteId ?? session.id;
                 const existing = byId.get(id);
+                const snapshot = remoteId
+                  ? lastRemoteSnapshot.current.get(session.id)
+                  : undefined;
+                const summary = remoteId
+                  ? remoteSummaries.get(remoteId)
+                  : undefined;
                 const hasSyncedSnapshot =
-                  !remoteId || lastRemoteSnapshot.current.has(session.id);
+                  !remoteId ||
+                  (snapshot?.session.id === remoteId &&
+                    (!summary ||
+                      snapshot.revision > summary.revision ||
+                      (snapshot.revision === summary.revision &&
+                        snapshot.updatedAt >= summary.updatedAt)));
                 byId.set(id, {
                   id,
                   title: existing?.title ?? session.title,
@@ -11557,7 +11702,11 @@ function Workspace({
                 );
                 return loadRemoteAgentSession(remoteTarget, remoteDeps, {
                   onSnapshot: (shellId, snapshot) =>
-                    onRemoteSnapshotRef.current?.(shellId, snapshot),
+                    onRemoteSnapshotRef.current?.(
+                      shellId,
+                      snapshot,
+                      remoteTarget.hostId,
+                    ),
                 });
               }
               const target = open ?? (await getSession(id));
@@ -11593,7 +11742,11 @@ function Workspace({
                   {
                     rememberFollowUp: rememberRemoteFollowUp,
                     onSnapshot: (shellId, snapshot) =>
-                      onRemoteSnapshotRef.current?.(shellId, snapshot),
+                      onRemoteSnapshotRef.current?.(
+                        shellId,
+                        snapshot,
+                        remoteTarget.hostId,
+                      ),
                     createSettler: notifyMonoId
                       ? (current) =>
                           monitorCompletion(
@@ -11690,7 +11843,11 @@ function Workspace({
                   requestId,
                   {
                     onSnapshot: (shellId, snapshot) =>
-                      onRemoteSnapshotRef.current?.(shellId, snapshot),
+                      onRemoteSnapshotRef.current?.(
+                        shellId,
+                        snapshot,
+                        remoteTarget.hostId,
+                      ),
                   },
                   remoteDeps,
                 );
@@ -13590,7 +13747,10 @@ function Workspace({
   useEffect(() => () => dockAnimation.current?.stop(), []);
 
   const onRemoteSnapshot = useCallback(
-    (shellId: string, snapshot?: HostSession) => {
+    (shellId: string, snapshot?: HostSession, expectedHostId?: string) => {
+      if (expectedHostId && remoteSessionFor(shellId) !== expectedHostId) {
+        return;
+      }
       if (!snapshot) {
         lastRemoteSnapshot.current.delete(shellId);
         setSessions((current) =>
@@ -13809,7 +13969,12 @@ function Workspace({
   }, [unopenedLaunchesKey]);
   const monoLaunchesKey = JSON.stringify(
     monoLaunches.map((launch) => {
-      const live = sessions.find((entry) => entry.id === launch.sessionId);
+      const live = sessions.find(
+        (entry) =>
+          entry.id === launch.sessionId ||
+          (isRemoteProjectPath(entry.cwd) &&
+            remoteSessionFor(entry.id) === launch.sessionId),
+      );
       return live
         ? [launch.sessionId, launchedSessionState(live), live.title]
         : [
@@ -13833,7 +13998,12 @@ function Workspace({
     [monoLaunchesKey],
   );
   const monoShownSessionPane = shownMonoSessionId
-    ? sessions.find((session) => session.id === shownMonoSessionId)
+    ? sessions.find(
+        (session) =>
+          session.id === shownMonoSessionId ||
+          (isRemoteProjectPath(session.cwd) &&
+            remoteSessionFor(session.id) === shownMonoSessionId),
+      )
     : undefined;
   const monoShownSessionActive =
     !!monoShownSessionPane && monoShownSessionFocused;

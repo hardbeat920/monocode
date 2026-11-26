@@ -375,6 +375,85 @@ describe("sendRemoteAgentSession & draftRemoteAgentSession", () => {
     expect(discard).toHaveBeenCalledTimes(1);
   });
 
+  it("restores or settles completion monitoring on retry without re-dispatching", async () => {
+    vi.useFakeTimers();
+    const runningWithReq = hostSession({
+      status: "running",
+      runId: "run-2",
+      blocks: [{ id: "u-retry", appRequestId: "req-retry", role: "user", text: "Fix it" }],
+    });
+    const completedWithReq = hostSession({
+      status: "idle",
+      blocks: [
+        { id: "u-retry", appRequestId: "req-retry", role: "user", text: "Fix it" },
+        { id: "a-retry", role: "assistant", text: "Done." },
+      ],
+    });
+    const loadRemoteSession = vi
+      .fn()
+      .mockResolvedValueOnce(runningWithReq)
+      .mockResolvedValueOnce(runningWithReq)
+      .mockResolvedValueOnce(completedWithReq);
+    const deps = makeDeps({ loadRemoteSession });
+    const createSettler = vi.fn(() =>
+      Object.assign(vi.fn(), { accept: vi.fn(), discard: vi.fn() }),
+    );
+
+    await expect(
+      sendRemoteAgentSession(target, "Fix it", "req-retry", { createSettler }, deps),
+    ).resolves.toEqual({ alreadySubmitted: true });
+    expect(deps.remoteRequest).not.toHaveBeenCalled();
+    expect(createSettler).toHaveBeenCalledTimes(1);
+    const settler = createSettler.mock.results[0].value;
+    expect(settler.accept).toHaveBeenCalledTimes(1);
+
+    // Replaying while active watcher is running reuses it without a duplicate settler.
+    await expect(
+      sendRemoteAgentSession(target, "Fix it", "req-retry", { createSettler }, deps),
+    ).resolves.toEqual({ alreadySubmitted: true });
+    expect(createSettler).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15);
+    expect(settler).toHaveBeenCalledWith(
+      { status: "completed", text: "Done." },
+      expect.objectContaining({ id: "host-sess-1" }),
+    );
+
+    // Replaying when host already finished settles directly.
+    const settledImmediate = vi.fn();
+    const acceptImmediate = vi.fn();
+    await expect(
+      sendRemoteAgentSession(
+        target,
+        "Fix it",
+        "req-done",
+        {
+          createSettler: () =>
+            Object.assign(settledImmediate, {
+              accept: acceptImmediate,
+              discard: vi.fn(),
+            }),
+        },
+        makeDeps({
+          loadRemoteSession: vi.fn(async () =>
+            hostSession({
+              status: "idle",
+              blocks: [
+                { id: "req-done", role: "user", text: "Fix it" },
+                { id: "a-done", role: "assistant", text: "Already done." },
+              ],
+            }),
+          ),
+        }),
+      ),
+    ).resolves.toEqual({ alreadySubmitted: true });
+    expect(acceptImmediate).toHaveBeenCalledTimes(1);
+    expect(settledImmediate).toHaveBeenCalledWith(
+      { status: "completed", text: "Already done." },
+      expect.objectContaining({ id: "host-sess-1" }),
+    );
+  });
+
   it("saves drafts remotely and handles duplicate draft requestId idempotently", async () => {
     const deps = makeDeps();
     await expect(
@@ -439,6 +518,24 @@ describe("remoteCompletionOutcome", () => {
       status: "failed",
       text: "",
       error: "Provider exited with status 1.",
+    });
+
+    const interjected = hostSession({
+      status: "idle",
+      blocks: [
+        { id: "req-3", role: "user", text: "Do work" },
+        {
+          id: "s3",
+          role: "system",
+          text: "Advisor check-in note",
+          interjection: { customType: "advisor" },
+        },
+        { id: "a3", role: "assistant", text: "Finished cleanly." },
+      ],
+    });
+    expect(remoteCompletionOutcome(interjected, "req-3")).toEqual({
+      status: "completed",
+      text: "Finished cleanly.",
     });
   });
 });
