@@ -4050,7 +4050,10 @@ mod tests {
             in_flight_kill_all,
             in_flight_live,
         );
-        assert!(rejected.is_some(), "in-flight spawn must be rejected after kill_session");
+        assert!(
+            rejected.is_some(),
+            "in-flight spawn must be rejected after kill_session"
+        );
         let _ = in_flight_child.kill();
         let _ = in_flight_child.wait();
 
@@ -4071,7 +4074,12 @@ mod tests {
         let (epoch_base, kill_all_base, _) = host.begin_spawn("scoped-session");
         let (live_base, mut child_base) = live_child();
         assert!(host
-            .install_spawn("scoped-session".into(), epoch_base, kill_all_base, live_base)
+            .install_spawn(
+                "scoped-session".into(),
+                epoch_base,
+                kill_all_base,
+                live_base
+            )
             .is_none());
 
         let roots = host.process_roots();
@@ -4083,7 +4091,10 @@ mod tests {
 
         let killed = host.kill_session("scoped-session");
         assert!(killed.is_some());
-        assert!(sse_stop.load(Ordering::SeqCst), "scoped session SSE stream must be stopped on kill_session");
+        assert!(
+            sse_stop.load(Ordering::SeqCst),
+            "scoped session SSE stream must be stopped on kill_session"
+        );
         // Both exact and scoped children must have been removed from inner.children.
         assert!(host.lock_inner().children.is_empty());
         let _ = child0.kill();
