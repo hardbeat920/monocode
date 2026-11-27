@@ -337,7 +337,3 @@ it("does not leak unreferenced mappings when referenced items reach the limit", 
   expect(habitRunMono("ref-0")).toBe("mono-0");
   expect(habitRunMono("ref-199")).toBe("mono-199");
 });
-
-
-
-
