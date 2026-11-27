@@ -174,9 +174,18 @@ fn private_entry(name: &str) -> bool {
         || name.ends_with(".db-wal")
         || name.ends_with(".db-shm")
         || name.starts_with(".monocode-")
+        || name == "session_index.jsonl.lock"
 }
 
+// ponytail: one process-wide lock rather than one per home; preparation is a
+// few filesystem calls, so contention is negligible. Add a per-home map if
+// that ever changes. Only serializes this process, not other Codex CLIs.
+static PREPARE_LOCK: Mutex<()> = Mutex::new(());
+
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
+    // link_entry and the lock cleanup below are check-then-act sequences, so
+    // concurrent preparations of the same home would otherwise race.
+    let _serialized = PREPARE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::create_dir_all(source)
         .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
     std::fs::create_dir_all(home)
@@ -197,6 +206,20 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             return Err("Mono Codex state must remain in its private storage directory".into());
         }
     }
+    // Monos provisioned before session_index.jsonl.lock became private may
+    // still have it symlinked (or, on Windows, hard-linked) to the account
+    // home from an earlier sync; drop the link so a fresh private lock
+    // takes its place.
+    let mono_lock = home.join("session_index.jsonl.lock");
+    if std::fs::symlink_metadata(&mono_lock).is_ok_and(|m| m.file_type().is_symlink()) {
+        match std::fs::remove_file(&mono_lock) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    #[cfg(windows)]
+    remove_if_same_file(&mono_lock, &source.join("session_index.jsonl.lock"))?;
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
@@ -219,6 +242,77 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     std::fs::create_dir_all(source.join("secrets")).map_err(|e| e.to_string())?;
     link_entry(&source.join("secrets"), &home.join("secrets"))?;
     std::fs::create_dir_all(home.join("sessions")).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Removes `path` only if it identifies the same on-disk file as
+/// `reference` (matching volume serial and file index) — the Windows
+/// counterpart of the Unix symlink cleanup, for a stale hard link.
+/// `std::os::windows::fs::MetadataExt` exposes the same identity fields but
+/// is still gated behind the unstable `windows_by_handle` feature, so this
+/// goes through the raw API directly.
+///
+/// Deletes through the same handle the identity check was made on, rather
+/// than re-resolving `path` for the delete: `prepare_files` has no lock
+/// serializing concurrent preparations of the same home, so whatever sits
+/// at `path` by the time of a separate path-based delete could already be a
+/// different file — e.g. a fresh private lock the real Codex CLI just wrote.
+/// Fails closed throughout: any open/query failure is treated as "nothing
+/// to remove", never as a reason to fall back to deleting by path.
+#[cfg(windows)]
+fn remove_if_same_file(path: &Path, reference: &Path) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, DELETE, FILE_DISPOSITION_INFO, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    fn identity(file: &std::fs::File) -> Option<(u32, u64)> {
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        Some((info.dwVolumeSerialNumber, index))
+    }
+
+    // FileDispositionInfo requires DELETE access on the handle; plain read
+    // access (GENERIC_READ via `.read(true)`) does not include it.
+    fn open_shared(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)
+    }
+
+    let Ok(target) = open_shared(path) else {
+        return Ok(());
+    };
+    let Ok(reference) = open_shared(reference) else {
+        return Ok(());
+    };
+    let (Some(target_id), Some(reference_id)) = (identity(&target), identity(&reference)) else {
+        return Ok(());
+    };
+    if target_id != reference_id {
+        return Ok(());
+    }
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            target.as_raw_handle() as _,
+            FileDispositionInfo,
+            &disposition as *const FILE_DISPOSITION_INFO as *const core::ffi::c_void,
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
     Ok(())
 }
 
@@ -799,6 +893,146 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(source.join("secrets/shared")).unwrap(),
             "encrypted"
+        );
+    }
+
+    #[test]
+    fn does_not_fight_the_codex_subprocess_over_the_session_index_lock() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        // The real codex CLI writes its own lock locally in each home it's
+        // pointed at, independently of this sync.
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("session_index.jsonl.lock"), "mono").unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            std::fs::symlink_metadata(home.join("session_index.jsonl.lock"))
+                .unwrap()
+                .file_type()
+                .is_file(),
+            "the mono's own lock must stay a private local file, not get linked to the account home's"
+        );
+        // A hard link would also report is_file(), so prove independence by
+        // content: writing to the account's lock must not reach the mono's.
+        std::fs::write(source.join("session_index.jsonl.lock"), "account changed").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl.lock")).unwrap(),
+            "mono"
+        );
+    }
+
+    // Windows file sharing uses hard links, not symlinks (see link_entry),
+    // so the two platforms need separate reproductions of the stale state.
+    #[cfg(unix)]
+    #[test]
+    fn drops_a_stale_lock_link_from_before_the_lock_became_private() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // A mono provisioned before the lock became private can still have
+        // this symlink left over from an earlier sync.
+        std::os::unix::fs::symlink(
+            source.join("session_index.jsonl.lock"),
+            home.join("session_index.jsonl.lock"),
+        )
+        .unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            !home.join("session_index.jsonl.lock").exists(),
+            "the stale link must be removed, leaving the mono's own writer to recreate a private lock"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "removing the link must not touch its target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_preparations_all_survive_a_stale_lock_link() {
+        for _ in 0..50 {
+            let fixture = Fixture::new();
+            let source = fixture.source();
+            let home = fixture.home();
+            std::fs::create_dir_all(source.join("sessions")).unwrap();
+            std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+            std::fs::create_dir_all(&home).unwrap();
+            std::os::unix::fs::symlink(
+                source.join("session_index.jsonl.lock"),
+                home.join("session_index.jsonl.lock"),
+            )
+            .unwrap();
+            let start = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            prepare_files(&source, &home)
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    worker.join().unwrap().unwrap();
+                }
+            });
+            assert!(!home.join("session_index.jsonl.lock").exists());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drops_a_stale_lock_hard_link_from_before_the_lock_became_private() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // A mono provisioned before the lock became private can still have
+        // this hard link left over from an earlier sync (link_entry shares
+        // files via hard_link on Windows, not a symlink).
+        std::fs::hard_link(
+            source.join("session_index.jsonl.lock"),
+            home.join("session_index.jsonl.lock"),
+        )
+        .unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert!(
+            !home.join("session_index.jsonl.lock").exists(),
+            "the stale hard link must be removed, leaving the mono's own writer to recreate a private lock"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "removing the hard link must not touch its target"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn does_not_remove_an_unrelated_lock_with_the_same_name() {
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let home = fixture.home();
+        std::fs::create_dir_all(source.join("sessions")).unwrap();
+        std::fs::write(source.join("session_index.jsonl.lock"), "account").unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        // Not a link to the account's lock, just a file that happens to
+        // share its name and content — must be left alone.
+        std::fs::write(home.join("session_index.jsonl.lock"), "account").unwrap();
+        prepare_files(&source, &home).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl.lock")).unwrap(),
+            "account",
+            "an unrelated file must survive, only a genuine link to the source should be removed"
         );
     }
 

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import { MobileSettings } from "../../mobile/ui/MobileSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -643,7 +644,12 @@ export function SettingsView({
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
               ) : null}
-              {section === "connections" ? <ConnectionsSettings /> : null}
+              {section === "connections" ? (
+                <div className="flex flex-col gap-10">
+                  <ConnectionsSettings />
+                  <MobileSettings />
+                </div>
+              ) : null}
               {section === "appearance" ? (
                 <AppearancePage appearance={appearance} />
               ) : null}
@@ -2460,13 +2466,17 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       <Group title="Layout">
         <Row
           id="inset-layout"
-          label="New layout"
-          description="Use the redesigned sidebar, project switcher, workspace tabs and right panel. Turn off to return to the classic layout."
+          label="Layout"
+          description="Classic keeps everything in one sidebar. Focused adds a project switcher, workspace tabs and a right panel."
         >
-          <Toggle
-            label="New layout"
-            on={appearance.insetLayout}
-            onChange={appearance.onInsetLayout}
+          <Segmented
+            label="Layout"
+            value={appearance.insetLayout ? "focused" : "classic"}
+            options={[
+              { value: "classic", label: "Classic" },
+              { value: "focused", label: "Focused" },
+            ]}
+            onChange={(value) => appearance.onInsetLayout(value === "focused")}
           />
         </Row>
         <Row

@@ -56,7 +56,10 @@ export function EmptySession({ cwd, composer, hasChatBackground }: Props) {
         // it when there's room. Once the pane is narrower than the composer
         // (or too short), the bottom spacer gives way so the input sits where
         // it will dock, and the title drops so it reads as the docked composer.
-        <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-4xl flex-1 flex-col px-1.5 pt-6 pb-1.5">
+        // `overflow-clip` keeps the composer's blur bleed (`::before`) from
+        // counting as scrollable overflow once the input is flush with the
+        // pane edges, which let the pane scroll a few pixels both ways.
+        <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-4xl flex-1 flex-col overflow-clip px-1.5 pt-6 pb-1.5">
           <div aria-hidden className="flex-[1_1_0px]" />
           <div className="pointer-events-auto mb-4 shrink-0 px-2.5 @max-4xl:hidden">
             <h1

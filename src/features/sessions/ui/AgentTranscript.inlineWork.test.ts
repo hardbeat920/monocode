@@ -362,7 +362,7 @@ it("shows reused sessions in the requesting Mono after its handoff reply, before
       durationMs: 1000,
     },
     receipt("list", "sessions.list", {
-      cwd: "/repo/formshare",
+      cwd: "/repo/example-project",
       sessions: launches,
     }),
     // This prose splits the listing and sends into separate folded groups.

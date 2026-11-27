@@ -1,0 +1,91 @@
+<style>
+  #search-tool-preview { color-scheme: light dark; }
+  #search-tool-preview .stage { min-height: 290px; display: flex; align-items: center; padding: 24px 12px; box-sizing: border-box; }
+  #search-tool-preview .mono-ui {
+    --mono-bg: light-dark(#ffffff, #191919);
+    --mono-fg: light-dark(#292929, #dcdcdc);
+    --mono-subtle: light-dark(#696969, #9c9c9c);
+    --mono-chip: light-dark(#f1f1f1, #2b2b2b);
+    --mono-line: light-dark(#e5e5e5, #363636);
+    width: 100%; min-width: 0; padding: 20px; box-sizing: border-box;
+    background: var(--mono-bg); color: var(--mono-fg);
+    border: 1px solid var(--mono-line); border-radius: 10px;
+    font: 13px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  #search-tool-preview .search-top { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+  #search-tool-preview .search-label { display: inline-flex; gap: 7px; align-items: center; font-weight: 500; }
+  #search-tool-preview .search-label svg { width: 15px; height: 15px; color: var(--mono-subtle); }
+  #search-tool-preview .terms { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  #search-tool-preview .chip { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--mono-chip); padding: 2px 9px; border-radius: var(--pill-radius, 6px); overflow-wrap: anywhere; }
+  #search-tool-preview .more { color: var(--mono-subtle); background: transparent; border: 1px solid var(--mono-line); border-radius: 6px; padding: 2px 7px; font: inherit; }
+  #search-tool-preview .scope { margin-top: 9px; color: var(--mono-subtle); display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+  #search-tool-preview .scope code { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  #search-tool-preview .mode { color: var(--mono-subtle); font: 11px/1.6 -apple-system, BlinkMacSystemFont, sans-serif; border: 1px solid var(--mono-line); padding: 0 5px; border-radius: 4px; }
+  #search-tool-preview details { margin-top: 13px; color: var(--mono-subtle); }
+  #search-tool-preview summary { width: fit-content; font-size: 12px; }
+  #search-tool-preview pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--mono-fg); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #search-tool-preview .stacked .terms { margin-top: 13px; }
+  #search-tool-preview .stacked .scope { margin-top: 13px; }
+  #search-tool-preview [hidden] { display: none; }
+  @media (max-width: 440px) { #search-tool-preview .stage { min-height: 390px; padding: 18px 6px; } #search-tool-preview .mono-ui { padding: 16px; } }
+  @media (pointer: coarse) { #search-tool-preview .more, #search-tool-preview summary { min-height: 44px; display: inline-flex; align-items: center; } }
+</style>
+<div id="search-tool-preview" class="viz-carousel viz-dotted-background" aria-label="Search command display options">
+  <section class="stage" data-variant="Compact" aria-label="Compact search row">
+    <div class="mono-ui" id="search-compact" aria-label="Compact search appearance">
+      <div class="search-top">
+        <span class="search-label"><i data-lucide="search" aria-hidden="true"></i>Search</span>
+        <div class="terms" aria-label="Match any of these regex alternatives">
+          <span class="chip">model_settings_menu</span>
+          <span class="chip">render_model_settings</span>
+          <span class="chip" data-extra hidden>self.models</span>
+          <span class="chip" data-extra hidden>models.clone</span>
+          <button type="button" class="more" aria-expanded="false" aria-label="Show two more search patterns">+2</button>
+        </div>
+      </div>
+      <div class="scope"><span>in</span><code>crates/monocode-gpui/src/</code><span class="mode">Regex</span></div>
+      <details><summary>Command</summary><pre>rg -n "model_settings_menu|render_model_settings|self.models|models.clone" crates/monocode-gpui/src/</pre></details>
+    </div>
+  </section>
+  <section class="stage" data-variant="Stacked" aria-label="Stacked search row" hidden>
+    <div class="mono-ui stacked" id="search-stacked" aria-label="Stacked search appearance">
+      <div class="search-top"><span class="search-label"><i data-lucide="search" aria-hidden="true"></i>Search</span><span class="mode">Regex · any of</span></div>
+      <div class="terms" aria-label="Match any of these regex alternatives"><span class="chip">model_settings_menu</span><span class="chip">render_model_settings</span><span class="chip">self.models</span><span class="chip">models.clone</span></div>
+      <div class="scope"><span>in</span><code>crates/monocode-gpui/src/</code></div>
+      <details><summary>Command</summary><pre>rg -n "model_settings_menu|render_model_settings|self.models|models.clone" crates/monocode-gpui/src/</pre></details>
+    </div>
+  </section>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('search-tool-preview');
+  const more = root.querySelector('.more');
+  function restore(saved) {
+    const expanded = !!saved?.privateContent?.expanded;
+    root.querySelectorAll('[data-extra]').forEach(el => { el.hidden = !expanded; });
+    more.setAttribute('aria-expanded', String(expanded));
+    more.setAttribute('aria-label', expanded ? 'Hide additional search patterns' : 'Show two more search patterns');
+    more.textContent = expanded ? 'Less' : '+2';
+  }
+  restore(window.openai?.widgetState);
+  window.addEventListener('openai:set_globals', event => {
+    if (event.detail?.globals?.widgetState) restore(event.detail.globals.widgetState);
+  });
+  more.addEventListener('click', () => {
+    const expanded = more.getAttribute('aria-expanded') !== 'true';
+    const snapshot = { privateContent: { expanded } };
+    restore(snapshot);
+    window.openai?.setWidgetState?.(snapshot)?.catch(() => {});
+  });
+  if (globalThis.Tweak) {
+    ['search-compact', 'search-stacked'].forEach(id => {
+      const component = document.getElementById(id);
+      const appearance = { rounded: false };
+      const tweak = new Tweak({ container: component, onChange: () => {
+        component.style.setProperty('--pill-radius', appearance.rounded ? '20px' : '6px');
+      }});
+      tweak.addToggle(appearance, 'rounded', { label: 'Round pills' });
+    });
+  }
+})();
+</script>

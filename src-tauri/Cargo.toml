@@ -16,13 +16,19 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+monocode-mobile-link = { path = "../crates/mobile-link" }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+tokio = { version = "1", features = ["sync", "time"] }
+if-addrs = "0.15"
+hostname = "0.4"
+igd-next = "0.18"
+natpmp = "0.5"
 tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true
 serde_json.workspace = true
 toml = "0.9.12"
-tokio = { version = "1", features = ["sync"] }
 sha2 = "0.10"
 zstd = "0.13"
 unicode-normalization = "0.1"

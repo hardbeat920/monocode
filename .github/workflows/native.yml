@@ -1,0 +1,65 @@
+name: Monocode Native Preview
+
+on:
+  push:
+    branches: [main, mc/migrate-monocode-to-gpui]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/monocode-core/**'
+      - 'crates/monocode-gpui/**'
+      - 'crates/mobile-link/**'
+      - 'vendor/gpui-pre*/**'
+      - 'scripts/*native*'
+      - 'scripts/native-editor/**'
+      - 'scripts/native-settings/**'
+      - 'package.json'
+      - '.github/workflows/native.yml'
+      - '.github/workflows/native-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux core dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libdbus-1-dev pkg-config
+      - run: npm run native:test:dev
+      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --all-targets --profile native-dev -- -D warnings
+      - run: cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --profile native-dev
+
+  desktop:
+    name: Monocode Native (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --manifest-path crates/monocode-gpui/Cargo.toml --all --check
+      - run: cargo clippy --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core -p monocode-gpui --all-targets --profile native-dev -- -D warnings
+      - run: cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-core --profile native-dev
+      - run: cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev -- --test-threads=1
+      - run: cargo build --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev
+
