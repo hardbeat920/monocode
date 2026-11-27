@@ -13,8 +13,10 @@ import {
 } from "../../shared/ui/icons";
 import {
   basename,
+  listDir,
   listExternalEditors,
   openInExternalEditor,
+  pickFolder,
   revealPath,
   type ExternalEditor,
 } from "../../platform/tauri/fs";
@@ -22,6 +24,10 @@ import { IS_MAC, IS_WIN } from "../../platform/tauri/platform";
 import { projectKey, projectName } from "../../shared/lib/paths";
 import {
   loadPinnedProjects,
+  knownProjectPaths,
+  isRemoteProjectPath,
+  looksLikeProject,
+  normalizeProjectPath,
   sameProjectPath,
   subscribeProjectPathsChanged,
   toggleProjectPin,
@@ -92,6 +98,7 @@ function projectMenuExtraItems(
   projectGroups: ProjectGroup[],
   currentProjectGroupId: string | undefined,
   railOptions: boolean,
+  canRemap: boolean,
 ): TabGroupMenuExtraItem[] {
   const groupSubmenu: ExplorerMenuItem[] = [
     { kind: "item", id: "project-group:new", label: "New group…" },
@@ -116,6 +123,17 @@ function projectMenuExtraItems(
       label: "Background image",
       icon: ImagePlus,
     },
+    ...(canRemap
+      ? [
+          {
+            id: "remap-project",
+            label: "Relink project folder…",
+            description: "Choose the folder after it was moved",
+            icon: FolderOpen,
+            sepBefore: true,
+          },
+        ]
+      : []),
     ...(railOptions
       ? [
           {
@@ -189,6 +207,7 @@ type Point = { x: number; y: number };
 
 type Options = {
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  onRemapProject?: (from: string, to: string) => Promise<void> | void;
   onOpenNotificationSettings?: (projectPath?: string) => void;
   /** Called when a project or group menu opens, so hosts can close sibling menus. */
   onOpen?: () => void;
@@ -205,6 +224,7 @@ type Options = {
  */
 export function useProjectMenu({
   onRemoveProject,
+  onRemapProject,
   onOpenNotificationSettings,
   onOpen,
   railOptions = true,
@@ -386,6 +406,42 @@ export function useProjectMenu({
         project: key,
         name: resolveTabGroupLabel(key, groupLabels, basename(path)),
       });
+    } else if (action === "remap-project") {
+      void (async () => {
+        try {
+          const replacement = await pickFolder(
+            "Choose relocated project folder",
+          );
+          if (!replacement) return;
+          const nextPath = normalizeProjectPath(replacement);
+          if (sameProjectPath(path, nextPath)) {
+            throw new Error("Choose a different folder for this project.");
+          }
+          if (!looksLikeProject(nextPath)) {
+            throw new Error(
+              "Choose a project folder, not a drive root or home folder.",
+            );
+          }
+          if (
+            knownProjectPaths().some(
+              (known) =>
+                !sameProjectPath(known, path) &&
+                sameProjectPath(known, nextPath),
+            )
+          ) {
+            throw new Error("That folder is already in your project list.");
+          }
+          await listDir(nextPath);
+          await onRemapProject?.(path, nextPath);
+          setProjectMenu(null);
+          restoreFocus();
+        } catch (error) {
+          setMenuError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })();
+      return false;
     } else if (action === "reveal") void revealPath(path);
     else if (action === "archive") {
       onRemoveProject?.(path, { purgeData: false });
@@ -459,6 +515,8 @@ export function useProjectMenu({
             loadProjectGroupAssignments(),
           ),
           railOptions,
+          Boolean(onRemapProject) &&
+            !isRemoteProjectPath(projectMenu.path),
         )}
         footer={
           menuError ? (
