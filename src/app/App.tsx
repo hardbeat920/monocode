@@ -1787,6 +1787,11 @@ function Workspace({
   const pendingPersist = useRef(new Map<string, Session>());
   const removingSessionIds = useRef(new Set<string>());
   const loadedSessionCache = useRef(new Map<string, Session>());
+  /** Project moves that can still race with an in-flight session read. */
+  const projectMoves = useRef<Array<{ seq: number; from: string; to: string }>>(
+    [],
+  );
+  const projectMoveSeq = useRef(0);
   const sessionLoads = useRef(new Map<string, Promise<Session | null>>());
   const sessionLoadEpochs = useRef(new Map<string, number>());
   const openingSessionIds = useRef(new Set<string>());
@@ -4721,6 +4726,23 @@ function Workspace({
     );
   }, []);
 
+  /**
+   * A read that started before a project move must not bring the old cwd back
+   * into `sessionsRef`, `loadedSessionCache`, or `pendingPersist`.
+   */
+  const rebaseLoadedSession = useCallback(
+    (session: Session, sinceSeq: number): Session => {
+      if (sinceSeq >= projectMoveSeq.current) return session;
+      let cwd = session.cwd;
+      for (const move of projectMoves.current) {
+        if (move.seq <= sinceSeq) continue;
+        if (sameProjectPath(cwd, move.from)) cwd = move.to;
+      }
+      return cwd === session.cwd ? session : { ...session, cwd };
+    },
+    [],
+  );
+
   const loadStoredSession = useCallback(
     (sessionId: string): Promise<Session | null> => {
       const cached = loadedSessionCache.current.get(sessionId);
@@ -4735,6 +4757,7 @@ function Workspace({
       if (pending) return pending;
 
       const epoch = sessionLoadEpochs.current.get(sessionId) ?? 0;
+      const moveSeq = projectMoveSeq.current;
       const loading = readSession(sessionId)
         .then((loaded) => {
           if (
@@ -4744,7 +4767,7 @@ function Workspace({
           ) {
             return null;
           }
-          return loaded;
+          return rebaseLoadedSession(loaded, moveSeq);
         })
         .catch(() => null);
       sessionLoads.current.set(sessionId, loading);
@@ -4755,7 +4778,7 @@ function Workspace({
       });
       return loading;
     },
-    [],
+    [rebaseLoadedSession],
   );
 
   const ensureOpenSession = useCallback(
@@ -4766,12 +4789,14 @@ function Workspace({
       if (open) return open;
 
       openingSessionIds.current.add(sessionId);
-      const restored = await loadStoredSession(sessionId);
-      if (!restored || removingSessionIds.current.has(sessionId)) {
+      const moveSeq = projectMoveSeq.current;
+      const loaded = await loadStoredSession(sessionId);
+      if (!loaded || removingSessionIds.current.has(sessionId)) {
         openingSessionIds.current.delete(sessionId);
         void refreshHistory(sidebarCwd);
         return null;
       }
+      const restored = rebaseLoadedSession(loaded, moveSeq);
       loadedSessionCache.current.delete(sessionId);
       const appeared = sessionsRef.current.find(
         (session) => session.id === sessionId,
@@ -4821,7 +4846,7 @@ function Workspace({
       }
       return restored;
     },
-    [loadStoredSession, refreshHistory, sidebarCwd],
+    [loadStoredSession, rebaseLoadedSession, refreshHistory, sidebarCwd],
   );
 
   const onPrefetchHistorySession = useCallback(
@@ -4835,22 +4860,24 @@ function Workspace({
       ) {
         return;
       }
+      const moveSeq = projectMoveSeq.current;
       const loading = loadStoredSession(sessionId);
       activeSessionPrefetch.current = loading;
       void loading.then((loaded) => {
+        const restored = loaded && rebaseLoadedSession(loaded, moveSeq);
         if (
-          loaded &&
+          restored &&
           !removingSessionIds.current.has(sessionId) &&
           !sessionsRef.current.some((session) => session.id === sessionId)
         ) {
-          rememberLoadedSession(loadedSessionCache.current, loaded);
+          rememberLoadedSession(loadedSessionCache.current, restored);
         }
         if (activeSessionPrefetch.current === loading) {
           activeSessionPrefetch.current = null;
         }
       });
     },
-    [loadStoredSession],
+    [loadStoredSession, rebaseLoadedSession],
   );
 
   const revealLinkedSessionUpdate = useCallback(
@@ -6753,6 +6780,14 @@ function Workspace({
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
       await rebaseProjectSessions(from, to);
+      // Record the move once Rust has rebased stored rows: a read that starts
+      // during the update still sees the old sequence and is rewritten when it
+      // arrives. Frontend caches are rebased synchronously below.
+      projectMoves.current.push({
+        seq: ++projectMoveSeq.current,
+        from,
+        to,
+      });
       rebaseCiRepairs(from, to);
 
       const nextSessions = sessionsRef.current.map((session) =>
