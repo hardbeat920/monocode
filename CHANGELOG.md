@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-19
+
+### Added
+
+- Pair an iPhone from **Settings → Connections → Your phones** to browse projects and conversations, start and continue sessions, follow streamed replies, stop responses, and view code changes. The iPhone companion is currently an **invite-only TestFlight beta**.
+- Swipe between projects in the new sidebar.
+- Project and Inbox actions have keyboard-accessible context menus in the new sidebar.
+
+### Fixed
+
+- The new sidebar keeps **Open project** and **Settings** available before a project is selected.
+- The empty conversation view no longer scrolls a few pixels around the message input.
+- The message input's blurred background stays within its rounded corners on Windows.
+- Phone connections on Windows accept both IPv4 and IPv6.
+
 ## [0.15.0] - 2026-10-18
 
 ### Added
@@ -1566,7 +1581,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/hardbeat920/monocode/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/hardbeat920/monocode/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/hardbeat920/monocode/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/hardbeat920/monocode/compare/v0.12.0...v0.13.0

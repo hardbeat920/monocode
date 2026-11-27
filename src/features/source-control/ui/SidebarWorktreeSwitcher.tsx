@@ -51,6 +51,8 @@ export type WorktreeSwitcherProject = {
   /** Opens the project's own menu (name, look, pinning, removal) as a flyout
    * beside the given row, the same one right-clicking a project shows. */
   onOpenProjectSettings?: (row: HTMLElement) => void;
+  /** Opens the project's settings directly from its title. */
+  onContextMenu?: (x: number, y: number, trigger: HTMLElement) => void;
   onCloseProjectSettings?: () => void;
   projectSettingsOpen?: boolean;
 };
@@ -251,7 +253,34 @@ export function SidebarWorktreeSwitcher({
             if (menuOpen) closePicker();
             else setMenuOpen(true);
           }}
+          onContextMenu={
+            project.onContextMenu
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.focus();
+                  closePicker();
+                  project.onContextMenu?.(
+                    event.clientX,
+                    event.clientY,
+                    event.currentTarget,
+                  );
+                }
+              : undefined
+          }
           onKeyDown={(event) => {
+            if (
+              project.onContextMenu &&
+              (event.key === "ContextMenu" ||
+                (event.shiftKey && event.key === "F10"))
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              closePicker();
+              project.onContextMenu(rect.left, rect.bottom, event.currentTarget);
+              return;
+            }
             if (menuOpen || event.key !== "ArrowDown") return;
             event.preventDefault();
             setMenuOpen(true);

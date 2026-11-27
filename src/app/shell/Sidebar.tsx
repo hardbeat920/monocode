@@ -42,6 +42,7 @@ import {
   type IconComponent,
 } from "../../shared/ui/icons";
 import { createPortal } from "react-dom";
+import { useProjectSwipe } from "./useProjectSwipe";
 import {
   Fragment,
   memo,
@@ -990,13 +991,12 @@ function SidebarComponent({
   // Likewise the session they cover stays current but isn't shown selected.
   const highlightedSessionId =
     otherViewActive || monoViewActive ? undefined : activeListedSessionId;
-  // A blank session has no project to browse, so the shell stands alone until
-  // one is picked — whether or not the rail is open.
   // The inset sidebar holds the links to search, inbox, notes and
-  // automations, and lists the project's Monos, so it stays beside them;
-  // only settings take its place.
+  // automations, and lets new users open their first project and Settings.
+  // It stays available without a project; only settings take its place.
+  // The classic sidebar only has project-scoped tools and sessions.
   const sidebarAvailable = inset
-    ? !settingsOpen && inProject
+    ? !settingsOpen
     : !otherViewActive && !monoViewActive && inProject;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
@@ -2112,9 +2112,18 @@ function SidebarComponent({
   });
 
   const projectLabel = useProjectLabel(cwd);
+  const [insetInboxMenu, setInsetInboxMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const insetInboxTrigger = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!inset || !panelOpen || !sidebarAvailable) setInsetInboxMenu(null);
+  }, [inset, panelOpen, sidebarAvailable]);
   const headerProjectMenu = useProjectMenu({
     onRemoveProject,
     onOpenNotificationSettings,
+    onOpen: () => setInsetInboxMenu(null),
     // Only the inset layout uses this menu, and it has no project rail.
     railOptions: false,
   });
@@ -2138,6 +2147,8 @@ function SidebarComponent({
           const rect = row.getBoundingClientRect();
           headerProjectMenu.open(cwd, rect.right, rect.top - 8, row);
         },
+        onContextMenu: (x: number, y: number, trigger: HTMLElement) =>
+          headerProjectMenu.open(cwd, x, y, trigger),
         onCloseProjectSettings: headerProjectMenu.close,
         projectSettingsOpen: headerProjectMenu.isOpen,
         renderProjectPicker: onSelectProject
@@ -2163,6 +2174,26 @@ function SidebarComponent({
     () =>
       inset ? projectRailItems(recents, cwd).map((item) => item.path) : [],
     [inset, recents, cwd],
+  );
+  const swipeDestination = useRef<{ from: string; to: string } | null>(null);
+  const onSwipeProject = useCallback(
+    (path: string) => {
+      swipeDestination.current = { from: cwd, to: path };
+      onSelectProject?.(path);
+    },
+    [cwd, onSelectProject],
+  );
+  const projectSwipeRef = useProjectSwipe(inset, {
+    cwd,
+    projects: spaceProjects,
+    onSelectProject: onSelectProject ? onSwipeProject : undefined,
+  });
+  const setSidebarRef = useCallback(
+    (el: HTMLElement | null) => {
+      resize.setPaneRef(el);
+      projectSwipeRef(el);
+    },
+    [resize.setPaneRef, projectSwipeRef],
   );
   // Projects the rail never placed fall back to most-recent-first, which
   // reshuffles the spaces on every switch. The rail is not mounted in this
@@ -2203,6 +2234,7 @@ function SidebarComponent({
   spaceProjectsRef.current = spaceProjects;
   const spaceSlide = useRef<{
     direction: number;
+    swipe: boolean;
     overlay: HTMLDivElement | null;
     started: boolean;
     timer?: number;
@@ -2226,7 +2258,9 @@ function SidebarComponent({
     window.clearTimeout(slide.timer);
     const aside = slideRefs.current[0]?.closest("aside");
     const distance = aside?.clientWidth ?? 240;
-    const timing = { duration: 440, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
+    const timing = slide.swipe
+      ? { duration: 180, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+      : { duration: 440, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
     for (const el of slideRefs.current) {
       if (!el || typeof el.animate !== "function") continue;
       el.style.opacity = "";
@@ -2272,6 +2306,12 @@ function SidebarComponent({
     const outgoing = outgoingSpace.current;
     outgoingSpace.current = null;
     if (sameProjectPath(from, cwd)) return;
+    const destination = swipeDestination.current;
+    swipeDestination.current = null;
+    const swipe =
+      !!destination &&
+      sameProjectPath(destination.from, from) &&
+      sameProjectPath(destination.to, cwd);
     const step = projectStep;
     projectStep = null;
     if (!inset) return;
@@ -2310,8 +2350,8 @@ function SidebarComponent({
       });
       aside.append(overlay);
     }
-    // The incoming project waits, hidden, for its first sessions, so it is
-    // not pushed in empty and filled afterwards.
+    // Clicks and shortcuts can wait for first-load sessions. A swipe starts
+    // immediately so disk/network latency does not hold the gesture still.
     for (const el of slideRefs.current) if (el) el.style.opacity = "0";
     spaceSlide.current = {
       // A step past either end wraps around but keeps moving the same way.
@@ -2322,10 +2362,12 @@ function SidebarComponent({
             ? 1
             : -1,
       overlay,
+      swipe,
       started: false,
       animations: [],
-      timer: window.setTimeout(startSpaceSlide, 400),
+      timer: swipe ? undefined : window.setTimeout(startSpaceSlide, 400),
     };
+    if (swipe) startSpaceSlide();
   }, [cwd, inset, endSpaceSlide, startSpaceSlide]);
   useLayoutEffect(() => {
     if (spaceSlide.current && !pendingFirstLoad) startSpaceSlide();
@@ -2404,6 +2446,14 @@ function SidebarComponent({
           active: inboxActive,
           dot: inboxUnseen,
           onClick: onOpenInbox,
+          onOpenContextMenu: (x, y) => {
+            headerProjectMenu.close();
+            insetInboxTrigger.current =
+              document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null;
+            setInsetInboxMenu({ x, y });
+          },
         },
         notesEnabled &&
           onOpenNotes && {
@@ -2501,7 +2551,7 @@ function SidebarComponent({
 
   const sidebarContent = (
     <aside
-      ref={resize.setPaneRef}
+      ref={setSidebarRef}
       // The inset card's own edge separates it from the sidebar.
       className={`relative flex h-full min-h-0 shrink-0 flex-col${
         inset
@@ -2625,9 +2675,19 @@ function SidebarComponent({
             <MonoRailSection {...railMonos} project={cwd} />
           ) : null}
           {!cwd || cwd === "~" ? (
-            <p className="px-3 py-2 text-[12px] text-content/50">
-              No project folder
-            </p>
+            <div className="px-3 py-2 text-[12px] text-content/50">
+              <p>No project folder</p>
+              {inset && onOpenProject ? (
+                <button
+                  type="button"
+                  onClick={onOpenProject}
+                  className="mt-2 flex items-center gap-1.5 rounded-md bg-content/5 px-2 py-1.5 text-content/70 hover:bg-content/10 hover:text-content"
+                >
+                  <Plus className="size-3.5" strokeWidth={1.75} />
+                  Open project
+                </button>
+              ) : null}
+            </div>
           ) : (
             <div>
               {/*
@@ -3034,8 +3094,8 @@ function SidebarComponent({
             />
             <div className="flex shrink-0 flex-col gap-px p-2 empty:hidden">
               <GithubStarPrompt />
-              {/* The inset header's project menu carries Settings. */}
-              {!compactProjectRail && !inset ? (
+              {/* Without a project, the inset header has no Settings menu. */}
+              {(inset ? !inProject : !compactProjectRail) ? (
                 <RailAction
                   label="Settings"
                   icon={Settings}
@@ -3053,9 +3113,21 @@ function SidebarComponent({
             cwd={cwd}
             busyProjectPaths={busyProjectPaths}
             onSelectProject={onSelectProject}
+            onProjectContextMenu={headerProjectMenu.open}
           />
         ) : null}
       </>
+      {insetInboxMenu ? (
+        <InboxNotificationMenu
+          {...insetInboxMenu}
+          projectPaths={[...collectRailProjects(recents, cwd).keys()]}
+          onOpenSettings={onOpenNotificationSettings}
+          onClose={() => {
+            setInsetInboxMenu(null);
+            insetInboxTrigger.current?.focus();
+          }}
+        />
+      ) : null}
       {sessionMenu ? (
         <ExplorerMenu
           x={sessionMenu.x}
@@ -3881,11 +3953,18 @@ function ProjectSpacesBar({
   cwd,
   busyProjectPaths,
   onSelectProject,
+  onProjectContextMenu,
 }: {
   projects: readonly string[];
   cwd: string;
   busyProjectPaths?: Iterable<string>;
   onSelectProject: (path: string) => void;
+  onProjectContextMenu: (
+    path: string,
+    x: number,
+    y: number,
+    trigger: HTMLElement,
+  ) => void;
 }) {
   const projectTooltip = useRailTooltip("top");
   const shortcuts = useSyncExternalStore(subscribeKeybindings, () =>
@@ -3980,6 +4059,9 @@ function ProjectSpacesBar({
               busy={projectPathBusy(busyProjectPaths, path)}
               shortcuts={shortcuts}
               onSelect={() => onSelectProject(path)}
+              onContextMenu={(x, y, trigger) =>
+                onProjectContextMenu(path, x, y, trigger)
+              }
             />
           ))}
         </div>
@@ -3996,12 +4078,14 @@ function ProjectSpaceButton({
   busy,
   shortcuts,
   onSelect,
+  onContextMenu,
 }: {
   path: string;
   active: boolean;
   busy: boolean;
   shortcuts: string;
   onSelect: () => void;
+  onContextMenu: (x: number, y: number, trigger: HTMLElement) => void;
 }) {
   const label = useProjectLabel(path);
   return (
@@ -4014,6 +4098,23 @@ function ProjectSpaceButton({
       data-rail-tip-detail={shortcuts || undefined}
       data-tauri-drag-region="false"
       onClick={active ? undefined : onSelect}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.focus();
+        onContextMenu(event.clientX, event.clientY, event.currentTarget);
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key !== "ContextMenu" &&
+          !(event.shiftKey && event.key === "F10")
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onContextMenu(rect.left, rect.bottom, event.currentTarget);
+      }}
       className={`relative grid h-5 min-w-0 flex-1 place-items-center rounded-md transition-[opacity,background-color] duration-200 ease-out motion-reduce:transition-none ${
         active
           ? "bg-content/10 opacity-100"
@@ -4200,6 +4301,7 @@ type SidebarNavItem = {
   active?: boolean;
   dot?: boolean;
   onClick: () => void;
+  onOpenContextMenu?: (x: number, y: number) => void;
 };
 
 /** The inset sidebar's links to the app-wide views, under the project. */
@@ -4233,18 +4335,21 @@ function SidebarNavList({
           <div className="mt-0.5" />
         </>
       ) : null}
-      {shown.map(({ label, icon, shortcut, active, dot, onClick }) => (
-        <RailAction
-          key={label}
-          label={label}
-          icon={icon}
-          shortcut={shortcut}
-          active={active}
-          dot={dot}
-          ariaLabel={dot ? `${label}, new items` : undefined}
-          onClick={onClick}
-        />
-      ))}
+      {shown.map(
+        ({ label, icon, shortcut, active, dot, onClick, onOpenContextMenu }) => (
+          <RailAction
+            key={label}
+            label={label}
+            icon={icon}
+            shortcut={shortcut}
+            active={active}
+            dot={dot}
+            ariaLabel={dot ? `${label}, new items` : undefined}
+            onClick={onClick}
+            onOpenContextMenu={onOpenContextMenu}
+          />
+        ),
+      )}
     </nav>
   );
 }

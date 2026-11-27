@@ -1,0 +1,288 @@
+name: Native preview release
+
+on:
+  push:
+    tags: ["native-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-preview-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Native preview (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Like release.yml: AppKit draws its controls (traffic lights, menus)
+          # for the SDK the app links against, and only the newest Apple
+          # silicon images ship a current one, so Intel cross-compiles there.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch: aarch64
+            kind: macos
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            arch: x86_64
+            kind: macos
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            kind: linux
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x86_64
+            kind: windows
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: 2
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/monocode-gpui
+          key: native-release-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Configure native channel and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#native-v}"
+          node --input-type=module -e 'import { previewVersion } from "./scripts/package-native.mjs"; previewVersion(process.argv[1]);' "$VERSION"
+          test -n "$TAURI_UPDATER_PUBKEY"
+          test -n "$R2_PUBLIC_BASE_URL"
+          echo "MONOCODE_NATIVE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_ENDPOINT=${R2_PUBLIC_BASE_URL%/}/native-preview/latest.json" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$TAURI_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+      - name: Install native Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config libfontconfig1-dev libfreetype6-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libasound2-dev libx11-xcb-dev libegl1-mesa-dev libvulkan-dev libdbus-1-dev squashfs-tools desktop-file-utils
+          curl --fail --location --retry 3 https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -o "$RUNNER_TEMP/appimagetool"
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+      - name: Install native Windows packaging tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'RUSTFLAGS=-C target-feature=+crt-static' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Import existing Apple distribution credentials
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          certificate = root / 'native-signing.p12'
+          certificate.write_bytes(base64.b64decode(os.environ['APPLE_CERTIFICATE']))
+          certificate.chmod(0o600)
+          key = root / 'native-notary.p8'
+          key.write_text(os.environ['APPLE_API_KEY_P8'])
+          key.chmod(0o600)
+          PY
+          KEYCHAIN="$RUNNER_TEMP/native-signing.keychain-db"
+          PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/native-signing.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/native-notary.p8" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: node --test scripts/native-release.test.mjs scripts/package-native.test.mjs
+      - name: Test native update backend
+        run: cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --profile native-dev app_update
+      - name: Reclaim Mac updater-test build space
+        if: runner.os == 'macOS'
+        run: |
+          df -h .
+          cargo clean --manifest-path crates/monocode-gpui/Cargo.toml --profile native-dev
+          df -h .
+      - name: Require a current macOS SDK
+        if: runner.os == 'macOS'
+        run: |
+          sdk=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macOS SDK $sdk"
+          if (( ${sdk%%.*} < 26 )); then
+            echo "macOS SDK $sdk would draw pre-macOS 26 window controls" >&2
+            exit 1
+          fi
+          # Xcode 26 ships the Metal compiler GPUI's shaders need separately.
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun metal --version
+          fi
+      - name: Install Rosetta to run the Intel build while packaging
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || arch -x86_64 /usr/bin/true
+      - name: Build optimized native app
+        run: cargo build --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --target ${{ matrix.target }} --release
+      - name: Use TCP for Mac notarization
+        if: runner.os == 'macOS'
+        run: |
+          # Mac runners can drop HTTP/3 connections to Apple's ticket service.
+          # Scope this workaround to the disposable runners; preserve
+          # notarization, ticket validation and Gatekeeper checks.
+          # https://github.com/actions/runner-images/issues/14924
+          echo 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
+      - name: Package native app
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          BINARY="crates/monocode-gpui/target/${{ matrix.target }}/release/monocode-gpui"
+          if [ "$RUNNER_OS" = Windows ]; then BINARY="$BINARY.exe"; fi
+          node scripts/package-native.mjs '${{ matrix.kind }}' "$BINARY" native-dist '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            native-dist/*.json
+            native-dist/*.dmg
+            native-dist/*.tar.gz
+            native-dist/*.AppImage
+            native-dist/*.deb
+            native-dist/*.exe
+          if-no-files-found: error
+      - name: Remove Apple credentials
+        if: always() && runner.os == 'macOS'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/native-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/native-signing.p12" "$RUNNER_TEMP/native-notary.p8"
+
+  rpm:
+    name: Native preview (Enterprise Linux rpm)
+    runs-on: ubuntu-latest
+    container: almalinux:10
+    env:
+      CARGO_BUILD_JOBS: 2
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+    steps:
+      - run: dnf install -y git
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install native rpm build dependencies
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y epel-release
+          dnf install -y clang gcc-c++ cmake ninja-build pkgconf-pkg-config fontconfig-devel freetype-devel libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel alsa-lib-devel libX11-devel libX11-xcb mesa-libEGL-devel vulkan-loader-devel dbus-devel rpm-build perl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure native rpm channel
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#native-v}"
+          node --input-type=module -e 'import { previewVersion } from "./scripts/package-native.mjs"; previewVersion(process.argv[1]);' "$VERSION"
+          test -n "$TAURI_UPDATER_PUBKEY"
+          test -n "$R2_PUBLIC_BASE_URL"
+          echo "MONOCODE_NATIVE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_ENDPOINT=${R2_PUBLIC_BASE_URL%/}/native-preview/latest.json" >> "$GITHUB_ENV"
+          echo "MONOCODE_NATIVE_UPDATER_PUBKEY=$TAURI_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+      - run: cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --profile native-dev app_update
+      - run: cargo build --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --release
+      - run: node scripts/package-native.mjs rpm crates/monocode-gpui/target/release/monocode-gpui native-dist x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-rpm
+          path: |
+            native-dist/*.json
+            native-dist/*.rpm
+          if-no-files-found: error
+
+  publish:
+    name: Publish native preview and its update feed
+    needs: [build, rpm]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: native-dist
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/monocode-gpui
+          key: native-publication-verifier
+      - name: Sign all update packages and the native manifest
+        run: |
+          echo "MONOCODE_NATIVE_VERSION=${GITHUB_REF_NAME#native-v}" >> "$GITHUB_ENV"
+          MONOCODE_NATIVE_VERSION="${GITHUB_REF_NAME#native-v}" node scripts/native-release.mjs native-dist
+      - name: Verify the signed feed and all packages with the native client
+        run: cargo run --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --example verify_native_update --profile native-dev -- native-dist
+      - name: Publish native preview assets
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; for (const file of JSON.parse(readFileSync("native-dist/release-files.json"))) console.log(file);' > "$RUNNER_TEMP/native-files.txt"
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft --prerelease --latest=false --target "$GITHUB_SHA" --title "Monocode Native ${MONOCODE_NATIVE_VERSION}" --notes-file docs/native/preview-release-notes.md
+          fi
+          IS_DRAFT=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [ "$IS_DRAFT" != true ]; then
+            echo 'Published native previews are immutable. Use a new preview tag.' >&2
+            exit 1
+          fi
+          FILES=()
+          while IFS= read -r file; do
+            aws s3 cp "native-dist/$file" "s3://${R2_BUCKET_NAME}/native-preview/${MONOCODE_NATIVE_VERSION}/$file" --cache-control 'public,max-age=31536000,immutable' --endpoint-url "$ENDPOINT"
+            FILES+=("native-dist/$file")
+          done < "$RUNNER_TEMP/native-files.txt"
+          gh release upload "$GITHUB_REF_NAME" "${FILES[@]}" --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false
+          # This is the only mutable feed written by the native release job.
+          # Publish after every platform asset and the GitHub release exist.
+          aws s3 cp native-dist/latest.json "s3://${R2_BUCKET_NAME}/native-preview/latest.json" --content-type application/json --cache-control 'no-store,max-age=0,must-revalidate' --endpoint-url "$ENDPOINT"

@@ -1234,7 +1234,7 @@ type ChangeDir = {
   status: string | null;
 };
 
-async function remotePrContent(cwd: string) {
+export async function remotePrContent(cwd: string) {
   const range = await gitRangeContext(cwd);
   const commits = range.commitSummary.trim();
   const firstCommit = commits
